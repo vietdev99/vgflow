@@ -26,23 +26,22 @@ jobs:
 
       - name: Build tarball
         run: |
+          # Collect paths that exist (gemini-skills optional — git doesn't track empty dirs)
+          PATHS=()
+          for p in commands skills codex-skills gemini-skills scripts templates \
+                   install.sh sync.sh vg.config.template.md VERSION CHANGELOG.md README.md LICENSE; do
+            [ -e "$p" ] && PATHS+=("$p")
+          done
+          echo "Packing: ${PATHS[@]}"
+
           tar czf "vgflow-${GITHUB_REF_NAME}.tar.gz" \
             --exclude='.git' \
             --exclude='.github' \
             --exclude='.gitignore' \
             --exclude='*.pyc' \
             --exclude='__pycache__' \
-            --transform 's,^,vgflow/,' \
-            commands/ skills/ codex-skills/ gemini-skills/ scripts/ templates/ \
-            install.sh sync.sh vg.config.template.md VERSION CHANGELOG.md README.md LICENSE 2>/dev/null || \
-          tar czf "vgflow-${GITHUB_REF_NAME}.tar.gz" \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='.gitignore' \
-            --exclude='*.pyc' \
-            --exclude='__pycache__' \
-            commands/ skills/ codex-skills/ gemini-skills/ scripts/ templates/ \
-            install.sh sync.sh vg.config.template.md VERSION CHANGELOG.md README.md LICENSE
+            --transform "s,^,vgflow/," \
+            "${PATHS[@]}"
           ls -la "vgflow-${GITHUB_REF_NAME}.tar.gz"
 
       - name: Compute SHA256
