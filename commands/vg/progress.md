@@ -21,6 +21,35 @@ Pipeline steps: specs → scope → blueprint → build → review → test → 
 Read .claude/commands/vg/_shared/config-loader.md first.
 </step>
 
+<step name="0b_version_banner">
+Show VG version + update availability. Daily cache to avoid hammering GitHub API (60/hr unauth quota).
+
+```bash
+VGFLOW_VERSION=$(cat .claude/VGFLOW-VERSION 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+CACHE_DIR=".cache"
+CACHE_FILE="${CACHE_DIR}/vgflow-latest-check.json"
+mkdir -p "$CACHE_DIR" 2>/dev/null || true
+
+# Refresh cache if older than 1 day (or missing). Don't fail banner on network error.
+if [ ! -f "$CACHE_FILE" ] || [ -n "$(find "$CACHE_FILE" -mtime +1 2>/dev/null)" ]; then
+  if [ -f ".claude/scripts/vg_update.py" ]; then
+    timeout 3 python3 .claude/scripts/vg_update.py check --repo "vietdev99/vgflow" > "$CACHE_FILE" 2>/dev/null || true
+  fi
+fi
+
+LATEST=$(grep -oE 'latest=[^ ]+' "$CACHE_FILE" 2>/dev/null | cut -d= -f2)
+
+if [ -n "$LATEST" ] && [ "$LATEST" != "unknown" ] && [ "$LATEST" != "$VGFLOW_VERSION" ]; then
+  echo "VG v${VGFLOW_VERSION} (latest v${LATEST} available — run /vg:update)"
+else
+  echo "VG v${VGFLOW_VERSION}"
+fi
+echo ""
+```
+
+Gracefully degrades: no VGFLOW-VERSION → "VG vunknown"; offline → no update hint (cached or nothing).
+</step>
+
 <step name="1_scan_phases">
 **Scan all phase directories for artifacts:**
 
