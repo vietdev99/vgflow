@@ -40,11 +40,52 @@ bug_reporter_enabled() {
   return 0
 }
 
+# Write a disabled bug_reporting block to vg.config.md (precondition unmet).
+bug_reporter_write_config_disabled() {
+  local config="$1"
+  local reason="$2"
+  if ! grep -qE "^bug_reporting:" "$config" 2>/dev/null; then
+    cat >> "$config" <<EOF
+
+# ─── Bug Reporting (auto-disabled) ─────────────────────────────────
+# $reason
+# To enable later: install gh + auth, then /vg:bug-report --enable
+bug_reporting:
+  enabled: false
+  disabled_reason: "$reason"
+  repo: "vietdev99/vgflow"
+EOF
+  fi
+}
+
 # Check if user has consented (first run). Write consent decision to config.
+# HARD requirement: gh CLI installed + authenticated. If missing → auto-disable + recommend install.
 bug_reporter_consent_prompt() {
   local config=".claude/vg.config.md"
   if [ -f "$config" ] && grep -qE "^bug_reporting:" "$config"; then
     return 0  # already configured
+  fi
+
+  # Hard precondition: gh CLI must be installed AND authenticated.
+  # No URL fallback — silent fallbacks mask delivery failures (URL never opened = bug lost).
+  if ! command -v gh >/dev/null 2>&1; then
+    echo ""
+    echo "ℹ Bug reporting requires GitHub CLI (gh) — not installed."
+    echo "  Auto-disabling bug_reporting. To enable later:"
+    echo "    1. Install: https://cli.github.com  (Mac: brew install gh, Win: winget install GitHub.cli)"
+    echo "    2. Auth:    gh auth login"
+    echo "    3. Run:     /vg:bug-report --enable"
+    echo ""
+    bug_reporter_write_config_disabled "$config" "gh CLI not installed at consent-time"
+    return 0
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    echo ""
+    echo "ℹ Bug reporting requires GitHub CLI auth — not logged in."
+    echo "  Run: gh auth login   then: /vg:bug-report --enable"
+    echo ""
+    bug_reporter_write_config_disabled "$config" "gh auth not configured at consent-time"
+    return 0
   fi
 
   echo ""
@@ -287,9 +328,53 @@ _severity_gte() {
   [ "$actual_idx" -ge "$threshold_idx" ]
 }
 
-# Convenience: report_bug SIGNATURE TYPE CONTEXT [SEVERITY]
+# Convenience: report_bug SIGNATURE_HINT TYPE CONTEXT [SEVERITY]
+#
+# Args (POSITIONAL — order matters, easy to swap by mistake):
+#   $1 SIGNATURE_HINT  — short kebab-case identifier of the bug class
+#                        e.g. "config-paths-missing-parent" / "install-missing-lib-sh-v1.11.0"
+#                        Used as data.signature_hint; auto-hashed to short ID for dedup.
+#                        DO NOT pass a generic type here ("schema_violation") — that's $2.
+#   $2 TYPE            — bug taxonomy enum, one of:
+#                        schema_violation | helper_error | user_pushback |
+#                        ai_inconsistency | gate_loop | self_discovery | self_found
+#                        DO NOT pass severity here ("high") — that's $4.
+#   $3 CONTEXT         — free-form prose, the WHAT-and-WHY of the bug. 1-3 sentences.
+#                        Will be json-encoded into data.context. Avoid unescaped quotes.
+#   $4 SEVERITY        — optional enum, default "medium":
+#                        info | minor | medium | high | critical
+#                        Anything else (long string, etc.) → _severity_gte fails →
+#                        bug silently queued, NOT sent. See issue vietdev99/vgflow#7.
+#
+# Example (CORRECT):
+#   report_bug "config-paths-missing-parent" "schema_violation" \
+#              "vg.config.md missing 'paths:' parent key after sed-replace" \
+#              "high"
+#
+# Example (WRONG — will silently fail to send):
+#   report_bug "schema_violation" "high" "<context>" "<severity-as-context>"
+#   #          ^^^ this is type     ^^^ this is severity (now in $2!)
+#
 report_bug() {
   local sig="$1" type="$2" context="$3" severity="${4:-medium}"
+
+  # Argument-shape guard (catch swap mistakes early — issue #7)
+  case "$severity" in
+    info|minor|medium|high|critical) ;;
+    *)
+      echo "⚠ report_bug: severity='${severity}' invalid (expected: info|minor|medium|high|critical)" >&2
+      echo "  Likely arg-order swap. Function signature: report_bug SIG_HINT TYPE CONTEXT [SEVERITY]" >&2
+      echo "  Defaulting severity=medium for this call. See issue vietdev99/vgflow#7." >&2
+      severity="medium"
+      ;;
+  esac
+  case "$type" in
+    schema_violation|helper_error|user_pushback|ai_inconsistency|gate_loop|self_discovery|self_found) ;;
+    *)
+      echo "⚠ report_bug: type='${type}' not in standard taxonomy. Continuing but consider standard enum." >&2
+      ;;
+  esac
+
   local data
   data=$(${PYTHON_BIN:-python3} -c "
 import json
@@ -360,28 +445,51 @@ print(f\"\"\"**Auto-reported via vg bug-reporter** (v{ev.get('version','?')})
       return 0
     fi
 
-    if gh issue create --repo "$repo" --title "$title" --body "$body" --label "$labels" --assignee "$assignee" >/dev/null 2>&1; then
+    # Try issue create. If fails due to missing labels (404), auto-create + retry.
+    local create_err
+    create_err=$(gh issue create --repo "$repo" --title "$title" --body "$body" --label "$labels" --assignee "$assignee" 2>&1 >/dev/null)
+    if [ $? -eq 0 ]; then
       bug_reporter_mark_sent "$sig"
       return 0
     fi
+
+    # Auto-create missing labels (one-time per session) then retry once
+    if echo "$create_err" | grep -q "label.*not found"; then
+      bug_reporter_ensure_labels "$repo" "$labels" >/dev/null 2>&1
+      if gh issue create --repo "$repo" --title "$title" --body "$body" --label "$labels" --assignee "$assignee" >/dev/null 2>&1; then
+        bug_reporter_mark_sent "$sig"
+        return 0
+      fi
+    fi
+
+    # gh CLI present but issue create failed (network, perms, repo missing) — keep in queue, do NOT mark sent
+    echo "⚠ Bug report sig ${sig} create failed via gh: ${create_err}" >&2
+    echo "  Will retry next /vg:bug-report --flush. Run: gh issue create manually if urgent." >&2
+    return 1
   fi
 
-  # Tier 2: URL fallback (browser submit)
-  local encoded_title encoded_body
-  encoded_title=$(${PYTHON_BIN:-python3} -c "
-import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))
-" "$title" 2>/dev/null)
-  encoded_body=$(${PYTHON_BIN:-python3} -c "
-import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))
-" "$body" 2>/dev/null)
+  # gh CLI unavailable — leave bug in queue, don't lose it.
+  # User opted in via consent but gh disappeared (uninstalled / PATH change / auth expired).
+  echo "⚠ Bug report sig ${sig}: gh CLI not available." >&2
+  echo "  Install: https://cli.github.com  OR  disable: /vg:bug-report --disable-all" >&2
+  echo "  Bug kept in queue (.claude/.bug-reports-queue.jsonl) — will retry on next flush." >&2
+  return 1
+}
 
-  local url="https://github.com/${repo}/issues/new?title=${encoded_title}&body=${encoded_body}&labels=${labels}"
-  echo "" >&2
-  echo "⚠ GitHub auth not configured. Submit bug via browser (anonymous):" >&2
-  echo "  $url" >&2
-  echo "" >&2
-  bug_reporter_mark_sent "$sig"  # mark as "handled" to avoid re-prompt
-  return 0
+# Ensure required labels exist on repo (idempotent — safe to call repeatedly)
+bug_reporter_ensure_labels() {
+  local repo="$1"
+  local labels_csv="$2"
+  local IFS=','
+  for label in $labels_csv; do
+    label=$(echo "$label" | xargs)  # trim
+    [ -z "$label" ] && continue
+    case "$label" in
+      bug-auto)     gh label create "$label" --repo "$repo" --color "d73a4a" --description "Auto-reported by vg bug-reporter" 2>/dev/null || true ;;
+      needs-triage) gh label create "$label" --repo "$repo" --color "fbca04" --description "Needs human triage" 2>/dev/null || true ;;
+      *)            gh label create "$label" --repo "$repo" --color "ededed" --description "vg bug-reporter label" 2>/dev/null || true ;;
+    esac
+  done
 }
 
 bug_reporter_mark_sent() {

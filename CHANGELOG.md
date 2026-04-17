@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.12.3] - 2026-04-18
+
+### Fixed (bug-reporter delivery)
+- **bug-reporter: gh CLI hard requirement** — removed misleading URL fallback. Previously when labels missing or gh auth failing, bug-reporter generated a github.com/issues/new URL and marked the bug as "sent" in cache. Result: bugs never reached GitHub but appeared delivered. Now: gh missing → consent prompt auto-disables bug_reporting + recommends install. gh present + create fails → bug stays in queue (not silently lost).
+- **bug-reporter: auto-create labels** — `bug_reporter_ensure_labels` creates `bug-auto`/`needs-triage` labels on first issue create failure (404 label not found), then retries.
+- **bug-reporter: report_bug arg-shape guard** — validates severity arg against `info|minor|medium|high|critical` enum + warns on non-standard type. Previously: arg-order swap silently passed long context as severity → `_severity_gte` failed → bug queued never sent. Reported as issue #7 (sig 3aba6b9d).
+- **bug-reporter: `report_bug` doc comments** — clarified positional arg semantics with examples of correct vs wrong call patterns.
+
+### Added
+- **blueprint: Recommended-pattern requirement** — when escalating CrossAI concerns to user via AskUserQuestion, orchestrator MUST present recommended option first with " (Recommended)" suffix + WHY explanation in description. Stops "list 3 options, force user to re-derive analysis CrossAI just did" anti-pattern.
+
+### Bug telemetry
+Self-reported bugs from this session (vietdev99/vgflow):
+- #3 install-missing-lib (sig 68724e27, v1.11.1)
+- #4 vg-still-uses-planning-not-vg (sig ee869e02, v1.12.1)
+- #6 config-paths-missing-parent (sig f993b787, v1.12.2)
+- #7 report-bug-api-misuse-orchestrator (sig 3aba6b9d, v1.12.2)
+- #9 bug-reporter-labels-not-auto-created (sig ba0c86e9, v1.12.2)
+
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
 ## [1.11.0] - 2026-04-18
