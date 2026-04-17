@@ -87,6 +87,9 @@ expand_dimensions() {
     foundation_excerpt=$(head -c 8000 "$foundation_path" 2>/dev/null || true)
   fi
 
+  # v1.9.5 R3.4: emit prompt CONTENT on fd 3 (not path), because Task subagents
+  # have sandbox isolation and cannot read /tmp files from parent process.
+  # Orchestrator: PROMPT=$(expand_dimensions ... 3>&1 1>/dev/null 2>/dev/null)
   cat > "$prompt_path" <<PROMPT
 You are a Dimension Expander. ZERO context about parent session.
 Your ONLY job: identify dimensions the user HAS NOT covered yet in this scope round.
@@ -187,9 +190,10 @@ OUTPUT FORMAT — exactly ONE line of strict JSON, no prose before/after
  ]}
 PROMPT
 
-  # Emit prompt path on fd 3 for orchestrator pickup; log path on stderr for debug
-  echo "$prompt_path" >&3 2>/dev/null || true
-  echo "dimension-expander prompt: $prompt_path" >&2
+  # v1.9.5 R3.4 FIX: emit prompt CONTENT on fd 3 (subagent sandbox can't read /tmp).
+  # Main orchestrator captures + passes inline to Agent tool.
+  cat "$prompt_path" >&3 2>/dev/null || true
+  echo "dimension-expander prompt emitted on fd 3 | audit file: $prompt_path" >&2
 
   # Fallback when Task tool unavailable (pure shell): fail open (no missing) with reason
   echo '{"dimensions_total":0,"dimensions_addressed":0,"dimensions_missing":0,"critical_missing":[],"nice_to_have_missing":[],"_skipped":"task_tool_unavailable"}'

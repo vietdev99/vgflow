@@ -100,6 +100,10 @@ challenge_answer() {
     foundation_excerpt=$(head -c 8000 ".planning/FOUNDATION.md" 2>/dev/null || true)
   fi
 
+  # v1.9.5 R3.4: emit prompt CONTENT on fd 3 (not just path), because Task
+  # subagents have sandbox isolation and cannot read /tmp files from parent.
+  # Orchestrator captures fd 3 via: PROMPT=$(challenge_answer ... 3>&1 1>/dev/null 2>/dev/null)
+  # then passes inline to Agent(prompt=$PROMPT).
   cat > "$prompt_path" <<PROMPT
 You are an Adversarial Answer Challenger. You have ZERO context about the parent session.
 Your ONLY job: challenge a user's design answer in a ${scope_kind} discussion round.
@@ -201,9 +205,11 @@ OUTPUT FORMAT — exactly ONE line of strict JSON, no prose before/after
  "proposed_alternative": "<≤200 char VN concrete alternative phrasing>"}
 PROMPT
 
-  # Emit prompt path on fd 3 for orchestrator pickup; log path on stderr for debug
-  echo "$prompt_path" >&3 2>/dev/null || true
-  echo "answer-challenger prompt: $prompt_path" >&2
+  # v1.9.5 R3.4 FIX: emit prompt CONTENT on fd 3 (subagent sandbox can't read /tmp).
+  # Main orchestrator captures fd 3 output + passes inline to Agent tool.
+  # Path on stderr for audit/debug only.
+  cat "$prompt_path" >&3 2>/dev/null || true
+  echo "answer-challenger prompt emitted on fd 3 | audit file: $prompt_path" >&2
 
   # Fallback when Task tool unavailable (pure shell): fail open (has_issue=false)
   # with reason code so caller can log. Adversarial check is ADDITIVE — missing it

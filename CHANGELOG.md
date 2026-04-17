@@ -2,6 +2,72 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.9.5] - 2026-04-18
+
+### R3.4 — Subagent sandbox isolation fix (BUG phát hiện qua live test v1.9.3)
+
+**Bug:** Khi test v1.9.3 adversarial challenger + dimension expander trong `/vg:scope 13`, phát hiện rằng Task subagents (spawned qua Agent tool) có **sandbox isolation** — không đọc được `/tmp` files của parent process. Workflow v1.9.3 documented pattern: "helper writes prompt to /tmp, orchestrator reads path, passes path to Task tool". Subagent receives path nhưng không thể đọc file → fail với "Prompt file not found".
+
+**Impact:** Cả 2 v1.9.3 features (8-lens adversarial + dimension-expander) không hoạt động nếu orchestrator follow documented pattern literally. Workaround: orchestrator phải đọc file content via Read tool FIRST, then pass content inline. Nhưng docs không nói rõ step này → dev sẽ fail khi dispatch Task với path.
+
+### Fix
+
+**answer-challenger.sh + dimension-expander.sh — emit prompt CONTENT on fd 3 (không phải path):**
+
+Helper vẫn write tmp file (để audit/debug), nhưng fd 3 giờ emit FULL PROMPT CONTENT thay vì path:
+
+```bash
+# Before (v1.9.3):
+echo "$prompt_path" >&3
+
+# After (v1.9.5):
+cat "$prompt_path" >&3
+```
+
+Orchestrator pattern đổi từ:
+```bash
+# OLD (broken)
+PATH=$(challenge_answer ... 3>&1 1>/dev/null)
+# Then: Read file at PATH, pass to Agent
+```
+
+Sang:
+```bash
+# NEW (works)
+PROMPT=$(challenge_answer "$answer" "$round" "$scope" "$acc" 3>&1 1>/dev/null 2>/dev/null)
+# $PROMPT = full inline content, pass directly to Agent(prompt=$PROMPT)
+```
+
+**scope.md docs updated:** Explicit bash pattern + explanation "subagent sandbox can't read /tmp" + thay tất cả "Read the prompt file" references bằng "Capture fd 3 via pattern".
+
+### Test verification
+
+```bash
+source answer-challenger.sh
+PROMPT=$(challenge_answer "test" "r1" "phase-scope" "acc" 3>&1 1>/dev/null 2>/dev/null)
+echo "${#PROMPT}"  # → 6473 chars (full prompt content)
+echo "${PROMPT:0:80}"  # → "You are an Adversarial Answer Challenger. You have ZERO context..."
+
+source dimension-expander.sh
+PROMPT=$(expand_dimensions "1" "Domain" "acc" ".planning/FOUNDATION.md" 3>&1 1>/dev/null 2>/dev/null)
+echo "${#PROMPT}"  # → 6010 chars
+```
+
+### Files
+
+- **MODIFIED** `commands/vg/_shared/lib/answer-challenger.sh` — fd 3 emits CONTENT via `cat "$prompt_path" >&3` (was path)
+- **MODIFIED** `commands/vg/_shared/lib/dimension-expander.sh` — same pattern
+- **MODIFIED** `commands/vg/scope.md` — updated orchestrator instructions with explicit bash capture pattern + subagent sandbox explanation
+- **BUMP** `VERSION` 1.9.4 → 1.9.5
+
+### Migration
+
+Auto via `/vg:update` (3-way merge). Projects với custom scope orchestration phải update pattern từ path-based sang content-based. Recommend re-read updated scope.md.
+
+### Lesson learned
+
+**Test v1.9.3 features end-to-end là cần thiết.** Unit test passing không đảm bảo orchestration pattern works trong real Claude Code harness. Live scope test phát hiện bug ngay round 2 — shipped v1.9.5 trong 15 min sau phát hiện.
+
 ## [1.9.4] - 2026-04-18
 
 ### R3.3 — Scanner spawn mode (mobile sequential gate) + README rewrite

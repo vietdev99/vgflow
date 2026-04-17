@@ -36,9 +36,17 @@ Pipeline: specs -> **scope** -> blueprint -> build -> review -> test -> accept
 
 **Config:** Read .claude/commands/vg/_shared/config-loader.md first. Use config variables ($PLANNING_DIR, $PHASES_DIR, $PROFILE).
 
-**Adversarial challenger (v1.9.1 R3, v1.9.3 R3.2 upgraded — 8 lenses + Opus):** Source `.claude/commands/vg/_shared/lib/answer-challenger.sh` at top of command. After EVERY user answer in Rounds 1-5 AND in the Deep Probe Loop, invoke `challenge_answer "$user_answer" "round-$ROUND" "phase-scope" "$accumulated_draft"`. The helper writes a subagent prompt to a tmp file (path emitted on fd 3 + stderr). Orchestrator MUST:
-1. Read the prompt file
-2. Dispatch Task tool (subagent_type=general-purpose, model=`${config.scope.adversarial_model:-opus}` — v1.9.3 default Opus, zero parent context) with prompt contents
+**Adversarial challenger (v1.9.1 R3, v1.9.3 R3.2 upgraded — 8 lenses + Opus, v1.9.5 R3.4 fd-3 content fix):** Source `.claude/commands/vg/_shared/lib/answer-challenger.sh` at top of command. After EVERY user answer in Rounds 1-5 AND in the Deep Probe Loop, invoke `challenge_answer "$user_answer" "round-$ROUND" "phase-scope" "$accumulated_draft"`.
+
+**v1.9.5 R3.4 FIX — subagent sandbox isolation:** Helper emits prompt CONTENT (not path) on fd 3. Tmp file kept for audit only. Orchestrator MUST use this exact bash pattern to capture:
+```bash
+PROMPT=$(challenge_answer "$user_answer" "round-$ROUND" "phase-scope" "$accumulated" 3>&1 1>/dev/null 2>/dev/null)
+```
+(Prior docs said "Read the prompt file" — that failed because Task subagents can't access parent's /tmp.)
+
+Orchestrator MUST:
+1. Capture fd 3 via `3>&1 1>/dev/null 2>/dev/null` pattern → `$PROMPT` contains full inline content
+2. Dispatch Task tool (subagent_type=general-purpose, model=`${config.scope.adversarial_model:-opus}` — v1.9.3 default Opus, zero parent context) with `prompt=$PROMPT` parameter
 3. Parse subagent stdout (one JSON line)
 4. Call `challenger_dispatch "$subagent_json" "round-$ROUND" "phase-scope" "$PHASE_NUMBER"`
 5. If `has_issue=true` → AskUserQuestion with 3 options:
@@ -50,9 +58,16 @@ Pipeline: specs -> **scope** -> blueprint -> build -> review -> test -> accept
 
 Skip challenger when `config.scope.adversarial_check: false` (rapid prototyping) or answer is trivial (Y/N, single-word confirm — helper auto-detects via `challenger_is_trivial`).
 
-**Dimension Expander (v1.9.3 R3.2 — NEW, proactive gap finding):** Source `.claude/commands/vg/_shared/lib/dimension-expander.sh` at top of command. At the END of EACH round (Rounds 1-5) and at the END of the Deep Probe Loop, AFTER the adversarial challenger loop concludes and BEFORE advancing to next round, invoke `expand_dimensions "$ROUND" "$ROUND_TOPIC" "$round_qa_accumulated" ".planning/FOUNDATION.md"`. The helper writes a subagent prompt to tmp (path on fd 3 + stderr). Orchestrator MUST:
-1. Read the prompt file
-2. Dispatch Task tool (subagent_type=general-purpose, model=`${config.scope.dimension_expand_model:-opus}`, zero parent context) with prompt contents
+**Dimension Expander (v1.9.3 R3.2 — NEW, proactive gap finding, v1.9.5 R3.4 fd-3 content fix):** Source `.claude/commands/vg/_shared/lib/dimension-expander.sh` at top of command. At the END of EACH round (Rounds 1-5) and at the END of the Deep Probe Loop, AFTER the adversarial challenger loop concludes and BEFORE advancing to next round, invoke `expand_dimensions "$ROUND" "$ROUND_TOPIC" "$round_qa_accumulated" ".planning/FOUNDATION.md"`.
+
+**v1.9.5 R3.4 FIX — same pattern as challenger:** Helper emits prompt CONTENT on fd 3. Orchestrator capture pattern:
+```bash
+PROMPT=$(expand_dimensions "$ROUND" "$ROUND_TOPIC" "$accumulated" ".planning/FOUNDATION.md" 3>&1 1>/dev/null 2>/dev/null)
+```
+
+Orchestrator MUST:
+1. Capture fd 3 via `3>&1 1>/dev/null 2>/dev/null` → `$PROMPT` = full inline prompt content
+2. Dispatch Task tool (subagent_type=general-purpose, model=`${config.scope.dimension_expand_model:-opus}`, zero parent context) with `prompt=$PROMPT`
 3. Parse subagent stdout (one JSON line)
 4. Call `expander_dispatch "$subagent_json" "round-$ROUND" "$PHASE_NUMBER"`
 5. If `critical_missing[] > 0` OR `nice_to_have_missing[] > 0` → AskUserQuestion with 3 options:
