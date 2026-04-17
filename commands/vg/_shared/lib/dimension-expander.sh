@@ -185,6 +185,12 @@ If >4 real ship-blockers exist, it signals scope is too broad and needs splittin
 ══════════════════════════════════════════════════════════════════════════════
 OUTPUT FORMAT — exactly ONE line of strict JSON, no prose before/after
 ══════════════════════════════════════════════════════════════════════════════
+
+**SCHEMA RULE (v1.10.1):** `critical_missing` + `nice_to_have_missing` MUST be
+arrays of OBJECTS with named fields, NOT flat arrays of strings.
+WRONG: "critical_missing": ["test_pyramid", "fixture_strategy"]
+RIGHT: "critical_missing": [{"dimension": "Test pyramid", "question": "...", "rationale": "..."}]
+
 {"dimensions_total": <int>,
  "dimensions_addressed": <int>,
  "dimensions_missing": <int>,
