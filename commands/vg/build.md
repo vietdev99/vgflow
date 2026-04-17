@@ -29,6 +29,7 @@ Why: those tools persist items in Claude Code's status tail across sessions. Wav
 2. **`run_in_background: true` for any Bash > 30s** (typecheck, lint, tests), then poll with `BashOutput` so user sees stdout live.
 3. **For Task subagents > 2 min**: write 1-line status BEFORE spawning ("Wave 2 spawning 5 parallel executors for tasks 04-08...") + 1-line summary AFTER ("Wave 2 done: 5/5 commits, typecheck PASS").
 4. Bash echo narration is audit log only — not user-visible during long runs.
+5. **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `Wave (đợt)`, `commit (lưu thay đổi)`, `typecheck (kiểm tra kiểu)`, `BLOCK (chặn)`. Không áp dụng: file path, code identifier, config tag values, lần lặp lại trong cùng message.
 </NARRATION_POLICY>
 
 <rules>

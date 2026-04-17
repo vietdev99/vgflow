@@ -24,6 +24,7 @@ Why: those tools persist items in Claude Code's status tail across sessions. If 
 2. **`run_in_background: true` for any Bash > 30s** (dev server boot, health wait, parallel scanner spawn). Then poll with `BashOutput` so user sees stdout live instead of waiting blind.
 3. **For Task subagents** that take > 2 min: write a 1-line status in your text output BEFORE spawning ("Spawning Haiku scanner for /users + /settings..."), then a 1-line summary AFTER it returns ("Scanner found 12 elements, 0 errors"). User sees both in the message stream.
 4. **Bash echo narration** (`narrate_phase`, `session_start` banner) lands in tool result block — useful for audit log but NOT visible during long runs. Don't rely on it as primary progress signal.
+5. **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `BLOCK (chặn)`, `Foundation (nền tảng) drift detected (phát hiện lệch hướng)`, `legacy-v1 (định dạng cũ v1)`, `UNREACHABLE (không tiếp cận được)`. Không áp dụng: file path, code identifier (`D-XX`, `git`, `pnpm`), config tag values, lần lặp lại trong cùng message.
 
 This is a HARD rule — TodoWrite is the wrong abstraction for a 30-min orchestrator with parallel subagents.
 </NARRATION_POLICY>

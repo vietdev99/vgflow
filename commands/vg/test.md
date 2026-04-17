@@ -24,6 +24,7 @@ Why: those tools persist items in Claude Code's status tail across sessions. If 
 2. **`run_in_background: true` for any Bash > 30s**, then poll with `BashOutput` so user sees stdout live.
 3. **For Task subagents > 2 min**: write 1-line status BEFORE spawning + 1-line summary AFTER. User sees both in the message stream.
 4. Bash echo narration is audit log only — not user-visible during long runs.
+5. **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `PASSED (đạt)`, `FAILED (thất bại)`, `regression (hồi quy)`, `coverage (độ phủ)`. Không áp dụng: file path, code identifier (`G-XX`, `git`), config tag values, lần lặp lại trong cùng message.
 </NARRATION_POLICY>
 
 <rules>
