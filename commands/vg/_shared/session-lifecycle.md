@@ -13,6 +13,26 @@ This helper fixes that via:
 3. **Stale state sweep** — detect + clean leftover `.{cmd}-state.json` from previous interrupted runs
 4. **Port sweep** — kill orphan dev servers on target port before starting new one
 
+## TodoWrite policy (CRITICAL — read first if executing review/test/build)
+
+The "stuck UI tail" symptom (3 items hanging in "Baking…" / "Hullaballooing…" status box across runs) is caused by **TodoWrite items not being marked completed** when the previous run interrupted. Echo narration (`narrate_phase`, etc.) does NOT cause this — only TodoWrite does.
+
+**If you use TodoWrite to track progress through `/vg:review`, `/vg:test`, or `/vg:build`:**
+
+1. **FIRST TodoWrite call** must contain the FULL step list for this run. TodoWrite **replaces** the entire list (it doesn't merge), so this displaces any stale items left over from a previous interrupted session. Even if you don't track every step, the first call should overwrite at least 1 item to clear the tail.
+
+2. **As each step completes** → TodoWrite update marking it `completed` immediately. Don't batch.
+
+3. **At session end (success path)** → all items should already be `completed` from step 2. If any still `pending`/`in_progress`, mark them completed before returning.
+
+4. **At session end (error path)** → before exiting/raising, mark remaining items completed (or use a final TodoWrite with single `completed` item like "review-aborted-at-step-X"). Do NOT leave `in_progress` items behind.
+
+5. **On Ctrl+C / EXIT trap** → bash trap can't call TodoWrite (model-only tool). The session_exit_banner emits an `━━━ EXITED at step=X ━━━` line which displaces narration tail, but TodoWrite items persist. Solution: keep TodoWrite list minimal and always mark complete in main flow.
+
+**Recommended pattern**: prefer `narrate_phase`/echo for granular per-step progress (no kẹt risk). Reserve TodoWrite for top-level milestones that cross many tool calls and warrant user-visible checkboxes — typically 3-7 items max for the entire run.
+
+**Anti-pattern (causes stuck tail)**: TodoWrite "Start pnpm dev", "Phase 2b-1", "Phase 2b-2" then run agent that takes 30 min → user interrupts → those 3 items hang forever in tail until user manually clears or session restart.
+
 ## API
 
 ```bash

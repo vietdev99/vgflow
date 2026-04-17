@@ -15,6 +15,18 @@ allowed-tools:
   - AskUserQuestion
 ---
 
+<TODOWRITE_POLICY>
+**⛔ TODOWRITE PROTOCOL (read FIRST — prevents stuck UI tail across runs)**
+
+If you (the executing model) use TodoWrite to track progress through this command:
+1. **Your VERY FIRST tool call** must be a TodoWrite that REPLACES any stale todos from previous interrupted runs. Pass a fresh complete list (or even a single placeholder item) — TodoWrite overwrites the entire list, displacing items like "Phase 2b-1: Navigator" that hang from prior sessions.
+2. **Mark each item completed immediately** when done — don't batch.
+3. **Before returning (success OR error path)**: TodoWrite must end with NO `pending`/`in_progress` items. Mark anything remaining `completed` (even if not actually done — add a final item like "review-aborted-at-step-X" if needed).
+4. **Better default**: prefer `narrate_phase` (echo to stdout) over TodoWrite for granular per-step progress. Echo lines don't kẹt UI tail. Reserve TodoWrite for ≤7 top-level milestones the user wants visible across the whole run.
+
+This is a HARD requirement — stuck TodoWrite items from interrupted reviews are visible in user's UI tail until session restart.
+</TODOWRITE_POLICY>
+
 <rules>
 1. **SUMMARY*.md required** — build must have completed. Missing = BLOCK.
 2. **API-CONTRACTS.md required** — contracts must exist. Missing = BLOCK.

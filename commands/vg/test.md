@@ -15,6 +15,16 @@ allowed-tools:
   - AskUserQuestion
 ---
 
+<TODOWRITE_POLICY>
+**⛔ TODOWRITE PROTOCOL (read FIRST — prevents stuck UI tail across runs)**
+
+If you (the executing model) use TodoWrite to track progress:
+1. **Your VERY FIRST tool call** must be a TodoWrite that REPLACES any stale todos from previous interrupted runs (TodoWrite overwrites the entire list).
+2. **Mark each item completed immediately** when done — don't batch.
+3. **Before returning (success OR error path)**: NO `pending`/`in_progress` items left. Mark anything remaining `completed` (use a final "test-aborted-at-step-X" item if interrupted).
+4. **Better default**: prefer echo narration for granular per-step progress. TodoWrite for ≤7 top-level milestones only.
+</TODOWRITE_POLICY>
+
 <rules>
 1. **RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md required** — review must have completed. Missing = BLOCK.
 2. **TEST-GOALS.md required** — goals must exist (from blueprint or review).

@@ -2,6 +2,18 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.3.3] - 2026-04-17
+
+### Fixed (UX — stuck UI tail across runs)
+- **Stuck TodoWrite items hanging in Claude Code's "Baking…" / "Hullaballooing…" status box across `/vg:review`, `/vg:test`, `/vg:build` runs** — items like "Phase 2b-1: Navigator", "Start pnpm dev + wait health" persisted from interrupted previous runs because TodoWrite list wasn't reset/cleared.
+- **Root cause:** v1.3.0 session lifecycle banner only displaces `echo` narration tail, not TodoWrite items (which are model-only, bash trap can't touch them).
+- **Fix:** Added `<TODOWRITE_POLICY>` directive block at top of `commands/vg/review.md`, `test.md`, `build.md`. Tells executing model:
+  1. FIRST tool call MUST be a TodoWrite that REPLACES stale items (overwrites entire list)
+  2. Mark each item `completed` immediately when done — don't batch
+  3. Exit path (success OR error) MUST leave NO `pending`/`in_progress` items
+  4. Better default: prefer `narrate_phase` (echo) over TodoWrite for granular per-step progress
+- Companion update in `_shared/session-lifecycle.md` documents the symptom + recommended pattern (≤7 top-level milestones max for TodoWrite, echo for everything else).
+
 ## [1.3.2] - 2026-04-17
 
 ### Fixed (CRITICAL — extend preservation gate to all migrate steps)
