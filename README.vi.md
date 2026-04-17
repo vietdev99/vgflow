@@ -1,10 +1,91 @@
 # VGFlow
 
+> **Heavy AI Workflow cho các dự án software production-grade.**
+>
 > **Ngôn ngữ:** [Tiếng Việt](README.vi.md) · [English](README.md)
 
-Pipeline phát triển AI config-driven cho Claude Code, Codex CLI và Gemini CLI. Zero hardcode giá trị stack — tất cả đến từ `vg.config.md`.
+VGFlow là một **pipeline AI config-driven** mạnh mẽ — thiết kế chuyên cho các dự án software lớn, đa thành phần, chất lượng production. Pipeline hỗ trợ đầy đủ:
 
-**Phiên bản:** 1.1.0 · **License:** MIT
+- **Web applications** (React / Next / Vue / Svelte frontend + Node / Python / Go / Rust backend)
+- **Web servers / Backend APIs** (REST / GraphQL / gRPC, microservices, RTB engines, ad exchanges)
+- **CLI tools** (dev tools, DevOps automation, data pipelines)
+- **Mobile apps** (React Native, Flutter, native iOS / Android, hybrid)
+
+Zero hardcode stack — mọi giá trị derive từ `vg.config.md`. Portable 100% qua mọi project, mọi ngôn ngữ, mọi deployment (VPS / Docker / Kubernetes / serverless).
+
+**Phiên bản:** 1.9.3 · **License:** MIT
+
+---
+
+## ⚠ Heavy Workflow — Không dành cho dự án nhỏ
+
+VGFlow là pipeline **chuyên sâu**, **nhiều tầng orchestration**, **tốn token**. Không phải "hỏi AI sửa 1 file" — mỗi phase đi qua 7 steps, spawn multiple AI agents, chạy CrossAI consensus, validate qua weighted gates, commit theo atomic group. Chi phí token từng giai đoạn:
+
+- `/vg:scope` ~$0.15-0.30/phase (Opus adversarial + dimension expander)
+- `/vg:build` ~$0.50-2.00/phase (Sonnet execution waves, contract-aware)
+- `/vg:review` ~$0.30-0.80/phase (Opus navigator + Haiku scanners + CrossAI)
+- `/vg:test` ~$0.20-0.50/phase (goal verification + codegen regression)
+
+**VGFlow shine nhất khi:**
+- Phase có **10-50+ tasks**, spans **nhiều apps** trong monorepo
+- **Critical domain** constraints (billing, auth, auction, compliance, payout)
+- Cần **audit trail** cho production deploy hoặc regulatory review
+- Team nhiều developer cần **decision traceability** (D-XX namespace)
+- Performance SLA nghiêm ngặt (RTB ≤50ms, API p95 ≤200ms...)
+
+**VGFlow KHÔNG phù hợp khi:**
+- Chỉ sửa 1-2 files hoặc hotfix cấp tốc → dùng `/vg:amend` hoặc edit trực tiếp
+- Prototype cuối tuần, one-off script → overhead không xứng
+- Solo dev làm side project nhỏ → simpler workflow đủ
+
+---
+
+## 🚀 Tại sao chọn VGFlow
+
+### Multi-tier AI Orchestration
+**Opus / Sonnet / Haiku tier routing theo độ phức tạp task.** Opus cho reasoning-heavy gates (scope adversarial, plan architect, block resolver L2). Sonnet cho execution waves + code review. Haiku cho exhaustive scan, rationalization guard, pattern probing. Right model, right price, right quality.
+
+### CrossAI N-reviewer Consensus
+Blueprint + Scope không phê duyệt bằng 1 AI. Pipeline chạy song song **Claude Code + OpenAI Codex CLI + Gemini CLI** → synthesize consensus → PASS / BLOCK / escalate. Independent eyes catch blind spots.
+
+### Contract-Aware Wave Parallel Execution
+`/vg:build` parse dependency graph → graph-coloring waves → parallel execute. File conflicts auto-force sequential. **Contract injection** copy Zod / Pydantic / TypeScript schemas verbatim — zero typo drift. Silent agent failures catch qua **commit-count verification**.
+
+### Goal-Backward Verification với Weighted Gates
+Không phải "tests green" — mà **goal-coverage-matrix**: critical 100%, important 80%, nice-to-have 50%. Goals map qua **surface taxonomy** (UI / API / Data / Integration / Time-driven), mỗi surface có dedicated runner. Mixed-phase project vẫn cover đầy đủ.
+
+### 8-Lens Adversarial Scope + Dimension Expander (v1.9.3)
+Mỗi answer trong `/vg:scope` qua **8-lens Opus challenger**: contradiction · hidden assumption · edge case · foundation conflict · **security threat** · **performance budget** · **failure mode** · **integration chain**. Cuối round, **dimension-expander** hỏi "what haven't we discussed?" — proactive tìm gap.
+
+### Phase Profile System (6 loại)
+Auto-detect `feature / feature-legacy / infra / hotfix / bugfix / migration / docs` → gate policy + test mode + artifacts tự động phù hợp. Không one-size-fits-all.
+
+### Block Resolver 4 Levels
+L1 Inline auto-fix → L2 Architect Haiku propose → L3 User Choice → L4 Stuck. AI tự nghĩ options trước khi đòi user quyết định.
+
+### Live Browser Discovery (MCP Playwright)
+`/vg:review` organic exploration — click sidebar, mỗi button, quan sát console errors + network 4xx/5xx + i18n resolution. **Mobile-aware (v1.9.4):** single-device project auto-sequential, web parallel 5-slot, cli/library skip UI.
+
+### 3-Way Git Merge Updates
+`/vg:update` pull latest từ GitHub, 3-way merge với user edits, park conflicts cho `/vg:reapply-patches`. Không clobber custom changes.
+
+### SHA256 Artifact Manifest + Atomic Commits
+Mỗi phase có manifest hash-validates artifacts. Corruption detect early qua `/vg:integrity`. Namespace enforcement `P{phase}.D-XX` → cross-phase traceability.
+
+### Structured Telemetry + Override Debt Register
+Append-only JSONL events. Query qua `/vg:telemetry` + `/vg:gate-stats`. Mỗi `--allow-*` / `--skip-*` được log với event-based resolution.
+
+### Rationalization Guard (Chống Cắt Góc)
+Gate skip đề xuất → spawn Haiku zero-context adjudicates: real blocker hay rationalization. Anti-corner-cutting ở critical gates.
+
+### Visual Regression + Security Register
+UI pixel-diff vs baseline. Threats STRIDE+OWASP cumulated qua milestone, cross-phase correlation.
+
+### Foundation Drift Detection
+8-dimension foundation lock tại `/vg:project`. Mỗi phase scope check drift — đảm bảo không silent assumption shift.
+
+### Incremental Graphify (Knowledge Graph)
+Auto-rebuild knowledge graph sau mỗi wave — fresh sibling/caller context cho wave tiếp theo. God nodes + communities inject vào scope/plan prompts.
 
 ---
 

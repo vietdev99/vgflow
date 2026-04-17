@@ -2,6 +2,69 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.9.4] - 2026-04-18
+
+### R3.3 — Scanner spawn mode (mobile sequential gate) + README rewrite
+
+**Problem:** `/vg:review` Phase 2b-2 luôn spawn N Haiku scanner agents parallel (1 per view). Với mobile apps (iOS simulator, Android emulator, physical device), chỉ có ONE instance chạy được tại một thời điểm — parallel spawn gây state corruption / crash / conflicting app state. Với CLI/library projects, spawn UI scan là waste hoàn toàn (không có UI).
+
+**Fix: `review.scanner_spawn_mode` config — 4 modes:**
+
+| Mode         | Behavior                                              | Use case                         |
+|--------------|-------------------------------------------------------|----------------------------------|
+| `auto`       | Derive từ profile (default)                           | Let workflow decide              |
+| `parallel`   | Tất cả Agent() calls trong ONE tool_use block        | web-* (multi-browser contexts)   |
+| `sequential` | Mỗi Agent() call trong SEPARATE message, await each  | mobile-* (single-emulator/device)|
+| `none`       | Skip entire spawn loop, write empty scan-manifest    | cli-tool, library (no UI)        |
+
+**Auto-derivation logic (profile → mode):**
+- `mobile-rn` / `mobile-flutter` / `mobile-native-ios` / `mobile-native-android` / `mobile-hybrid` → **sequential**
+- `cli-tool` / `library` → **none**
+- `web-fullstack` / `web-frontend-only` / `web-backend-only` / default → **parallel**
+
+Override: user set `scanner_spawn_mode: "sequential"` force serialize even on web (e.g., CI with constrained browser resources).
+
+**Narration updated:**
+- `parallel`: "🌐 Parallel mode — up to 5 Haiku agents concurrent"
+- `sequential`: "📱 Sequential mode — 1 Haiku agent at a time (mobile/single-window constraint). Tổng N view sẽ scan tuần tự"
+- `none`: "⏭  Spawn mode=none — skipping Phase 2b-2 entirely (profile has no UI scan). Backend goals resolved via surface probes in Phase 4a instead."
+
+### README rewrite — heavy-workflow positioning
+
+Both `README.md` và `README.vi.md` được rewrite để phản ánh đúng vị thế của VGFlow:
+
+- **Heavy AI Workflow** banner — không phải "hỏi AI sửa file", mà pipeline production-grade
+- **Supported project types** clear: Web apps / Web servers / CLI tools / Mobile apps (RN/Flutter/native)
+- **Token cost transparency**: `/vg:scope` $0.15-0.30, `/vg:build` $0.50-2.00, `/vg:review` $0.30-0.80, `/vg:test` $0.20-0.50
+- **When VGFlow shine / KHÔNG phù hợp** sections — honest positioning
+- **14 power features** detail:
+  1. Multi-tier AI Orchestration (Opus/Sonnet/Haiku)
+  2. CrossAI N-reviewer Consensus (Claude/Codex GPT/Gemini)
+  3. Contract-Aware Wave Parallel Execution
+  4. Goal-Backward Verification với Weighted Gates
+  5. 8-Lens Adversarial Scope + Dimension Expander (v1.9.3)
+  6. Phase Profile System (6 types)
+  7. Block Resolver 4 Levels (L1→L4)
+  8. Live Browser Discovery (MCP Playwright) — mobile-aware
+  9. 3-Way Git Merge Updates
+  10. SHA256 Artifact Manifest + Atomic Commits
+  11. Structured Telemetry + Override Debt Register
+  12. Rationalization Guard (anti-corner-cutting)
+  13. Visual Regression + Security Register (STRIDE+OWASP)
+  14. Foundation Drift Detection + Incremental Graphify
+
+### Files
+
+- **MODIFIED** `commands/vg/review.md` — SPAWN_MODE_RESOLUTION block + branch logic (parallel/sequential/none) + SPAWN_MODE aware Limits section
+- **MODIFIED** `vg.config.template.md` — `review.scanner_spawn_mode: "auto"` key added
+- **REWRITE** `README.md` — heavy workflow positioning, 14-feature highlight, mobile/cli support section
+- **REWRITE** `README.vi.md` — mirror of English rewrite, Vietnamese translation
+- **BUMP** `VERSION` 1.9.3 → 1.9.4
+
+### Migration
+
+Auto via `/vg:update` (3-way merge). Existing `review:` section in user config gets `scanner_spawn_mode` key added to new block; existing `fix_routing` block preserved. Fresh install defaults to `auto` which is safe for all profiles.
+
 ## [1.9.3] - 2026-04-18
 
 ### R3.2 — Scope Adversarial Upgrade + Dimension Expander

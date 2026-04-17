@@ -1481,15 +1481,76 @@ Simply write: "view-assignments.json written — {N} views × {M} roles = {K} sc
 Then immediately proceed to 2b-2 (spawn Haiku).
 </FLUSH_RULE>
 
-#### 2b-2: Spawn Haiku Scanners (parallel per view)
+#### 2b-2: Spawn Haiku Scanners (parallel OR sequential per view — v1.9.4 R3.3)
 
 <MANDATORY_GATE>
-**You MUST spawn Haiku agents in step 2b-2.** This is NOT optional.
+**You MUST spawn Haiku agents in step 2b-2** (unless spawn_mode=none for cli-tool/library profiles). This is NOT optional.
 - Do NOT skip this step because "phase is small" or "I already covered everything in 2b-1"
 - Do NOT replace spawning with "I'll click through views myself"
 - MINIMUM: spawn at least 1 Haiku agent per view discovered in 2b-1
 - The Agent tool with model="haiku" MUST be called. If it's not called, 2b-2 is incomplete.
 </MANDATORY_GATE>
+
+<SPAWN_MODE_RESOLUTION>
+**v1.9.4 R3.3 — Scanner spawn mode (mobile sequential constraint):**
+
+Mobile apps (iOS simulator, Android emulator, physical device) can typically run only ONE instance at a time. Spawning 5 parallel Haiku agents on a single emulator causes conflicts / crashes / app state corruption. CLI/library projects have no UI to scan at all.
+
+```bash
+# Resolve scanner spawn mode BEFORE entering spawn loop
+resolve_scanner_spawn_mode() {
+  local mode="${CONFIG_REVIEW_SCANNER_SPAWN_MODE:-auto}"
+  if [ "$mode" != "auto" ]; then
+    echo "$mode"
+    return
+  fi
+  # Auto-derive from config.profile
+  case "${CONFIG_PROFILE:-web-fullstack}" in
+    mobile-rn|mobile-flutter|mobile-native-ios|mobile-native-android|mobile-hybrid)
+      echo "sequential"  # Single emulator/simulator/device
+      ;;
+    cli-tool|library)
+      echo "none"        # No UI to scan
+      ;;
+    web-fullstack|web-frontend-only|web-backend-only|*)
+      echo "parallel"    # Default — multiple browser contexts supported
+      ;;
+  esac
+}
+
+SPAWN_MODE=$(resolve_scanner_spawn_mode)
+echo ""
+echo "▸ Scanner spawn mode: ${SPAWN_MODE} (profile: ${CONFIG_PROFILE:-web-fullstack})"
+case "$SPAWN_MODE" in
+  sequential)
+    echo "📱 Sequential mode — 1 Haiku agent at a time (mobile/single-window constraint)"
+    echo "   Tổng ${TOTAL} view sẽ scan tuần tự; thời gian ~${TOTAL}×5min (1 agent/view)"
+    ;;
+  parallel)
+    echo "🌐 Parallel mode — up to 5 Haiku agents concurrent (Playwright lock caps)"
+    echo "   Tổng ${TOTAL} view; thời gian ~${TOTAL}/5 × 5min"
+    ;;
+  none)
+    echo "⏭  Spawn mode=none — skipping Phase 2b-2 entirely (profile has no UI scan)"
+    echo "   Backend goals resolved via surface probes in Phase 4a instead."
+    ;;
+  *)
+    echo "⚠ Unknown spawn_mode=${SPAWN_MODE} — falling back to parallel" >&2
+    SPAWN_MODE="parallel"
+    ;;
+esac
+```
+
+**Behavior branch by mode:**
+
+- **`parallel`** (web default): All Agent(model="haiku", ...) calls in ONE tool_use block → Claude Code harness runs them concurrently. Playwright lock manager caps effective concurrency at 5 slots.
+
+- **`sequential`** (mobile default): Each Agent(model="haiku", ...) call in SEPARATE messages, awaiting completion before spawning next. Guarantees single emulator/device state. User sees 1/N → 2/N → ... progression serially.
+
+- **`none`** (cli-tool/library): Skip 2b-2 entirely. Jump to 2b-3 collect phase (will merge 0 scans). Phase 4 goal coverage relies 100% on surface probes (api/data/integration/time-driven) from Phase 4a.
+
+**Override via config:** Set `review.scanner_spawn_mode: "sequential"` in vg.config.md to force sequential even for web projects (e.g., if CI has constrained browser resources).
+</SPAWN_MODE_RESOLUTION>
 
 <REREAD_REQUIRED>
 **Before spawning Haiku agents, you MUST re-read `view-assignments.json` via the Read tool
@@ -1592,7 +1653,34 @@ PY
 }
 ```
 
-Then spawn with **structured description** (thay vì freeform):
+Then spawn with **structured description** (thay vì freeform).
+
+**⚠ SPAWN_MODE enforcement (v1.9.4 R3.3) — orchestrator branching:**
+
+| SPAWN_MODE  | Tool-use pattern                                           | Use case                               |
+|-------------|------------------------------------------------------------|----------------------------------------|
+| `none`      | Skip spawn loop entirely, write empty scan-manifest, jump to 2b-3 | cli-tool, library (no UI to scan)      |
+| `sequential`| Each Agent() call in **SEPARATE** message, await each complete before next | mobile-* (single emulator/device)      |
+| `parallel`  | All Agent() calls in **ONE** tool_use block, harness runs concurrent ≤5 | web-* (default, multi-browser contexts)|
+
+**When SPAWN_MODE=none:** orchestrator writes empty scan-manifest.json then skips to 2b-3:
+```bash
+${PYTHON_BIN} -c "
+import json; from pathlib import Path
+Path('${PHASE_DIR}/scans').mkdir(exist_ok=True)
+Path('${PHASE_DIR}/scan-manifest.json').write_text(json.dumps({
+  'mode': 'skipped_no_ui',
+  'profile': '${CONFIG_PROFILE}',
+  'scans': []
+}, indent=2))"
+# → proceed to 2b-3 collect (which handles empty scans gracefully)
+```
+
+**When SPAWN_MODE=sequential (mobile):** iterate view_assignments ONE AT A TIME. Each Agent() call in a separate message — DO NOT batch them into one tool_use block. Narrate `[idx/total] spawning <view>@<role>...` before each, `[idx/total] done (<N goals, <M regressions>)` after. User sees serial progression.
+
+**When SPAWN_MODE=parallel (web):** batch ALL Agent() calls in ONE tool_use block so Claude harness dispatches them concurrently (Playwright lock manager caps at 5 slots).
+
+**Common spawn pattern (applies to both sequential and parallel):**
 
 ```
 For each view in view_assignments:
@@ -1644,7 +1732,10 @@ User sẽ thấy banner đầy đủ BEFORE spawn + structured description trong
 - Max 200 actions per view (prevents runaway on huge pages)
 - Max 10 min wall time per agent
 - Stagnation: same state 3x = stuck, move on
-- Up to 5 Haiku agents run in parallel (limited by Playwright slots)
+- **Concurrency (v1.9.4 R3.3 SPAWN_MODE aware):**
+  - `parallel` mode: up to 5 Haiku agents concurrent (Playwright slot cap)
+  - `sequential` mode: exactly 1 Haiku agent at a time (mobile safety)
+  - `none` mode: no Haiku agents spawned (cli-tool/library)
 
 #### 2b-3: Collect, Cross-Check, Fill Gaps (Opus, no browser)
 

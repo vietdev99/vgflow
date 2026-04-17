@@ -475,6 +475,14 @@ scope:
 #   MAJOR     → escalate to user (requires human judgment)
 # Severity classified by: fix_scope (files), blast_radius (callers), contract changes.
 review:
+  # ─── Scanner spawn mode (v1.9.4 R3.3 — mobile sequential gate) ──────
+  # Controls how Phase 2b-2 spawns Haiku scanner agents:
+  #   auto       → derive from profile (mobile-*=sequential, cli/library=none, web-*=parallel)
+  #   parallel   → up to 5 concurrent agents (web default)
+  #   sequential → 1 agent at a time (mobile iOS sim / Android emu = single instance)
+  #   none       → skip UI scan entirely (cli-tool, library)
+  scanner_spawn_mode: "auto"
+
   fix_routing:
     enabled: true                       # master switch — false disables routing (fallback all inline)
     inline_threshold_loc: 20            # fixes <= N lines stay inline
