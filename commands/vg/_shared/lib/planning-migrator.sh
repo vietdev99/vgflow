@@ -36,9 +36,11 @@ PM_DEFAULT_TARGET=".vg"
 PM_STATS_NEW=0
 PM_STATS_UPDATED=0
 PM_STATS_UNCHANGED=0
-PM_STATS_SKIPPED_GSD=0
+PM_STATS_ARCHIVED_GSD=0      # v1.12.1: was SKIPPED_GSD — now archive to _legacy/
+PM_STATS_EXTRACTED=0         # v1.12.1: GSD files with VG-extractable content
 PM_STATS_BACKED_UP=0
 PM_STATS_TOTAL=0
+PM_LEGACY_DIR="_legacy"      # subfolder under .vg/ for archived GSD files
 
 # Classify file as vg-owned, gsd-owned, shared (both), or unknown.
 # stdout: "vg" | "gsd" | "shared" | "unknown"
@@ -162,8 +164,19 @@ planning_migrator_migrate_file() {
   class=$(planning_migrator_classify "$src")
 
   if [ "$class" = "gsd" ]; then
-    echo "  SKIP-GSD:    $rel"
-    PM_STATS_SKIPPED_GSD=$((PM_STATS_SKIPPED_GSD + 1))
+    # v1.12.1: don't skip — ARCHIVE to .vg/_legacy/{rel} (preserve full info)
+    local legacy_dst="$PM_TARGET/$PM_LEGACY_DIR/$rel"
+    if [ "${PM_DRY_RUN:-false}" = "true" ]; then
+      echo "  WOULD-ARCHIVE-GSD: $rel → _legacy/$rel"
+    else
+      mkdir -p "$(dirname "$legacy_dst")" 2>/dev/null || true
+      cp -p "$src" "$legacy_dst"
+      echo "  ARCHIVE-GSD: $rel → _legacy/$rel"
+    fi
+    PM_STATS_ARCHIVED_GSD=$((PM_STATS_ARCHIVED_GSD + 1))
+
+    # Extract VG-relevant content if file has it
+    planning_migrator_extract_vg_value "$src" "$rel"
     return 0
   fi
 
@@ -216,6 +229,330 @@ planning_migrator_migrate_file() {
   fi
 }
 
+# v1.12.1 R7.1: Extract VG-relevant content from GSD legacy files.
+# Reads file, identifies sections valuable for VG (decisions, requirements,
+# test scenarios, design notes), writes extraction summary to
+# .vg/_legacy/_extractions/{rel}.extracted.md
+#
+# Heuristic extraction (lightweight, doesn't need AI):
+#   - "## Decision" / "Lock decision" / "D-XX" → potential VG decisions
+#   - "## Requirements" / "REQ-XX" → potential roadmap items
+#   - "## Test" / "TS-XX" / "Scenario" → potential VG test goals
+#   - "## Design" / brand/colors/typography → design system hints
+#   - "## Plan" / task list → plan structure
+#
+# Output: structured markdown report listing extractable sections per file.
+# User can manually review + cherry-pick into VG canonical files.
+planning_migrator_extract_vg_value() {
+  local src="$1"
+  local rel="$2"
+  local out="$PM_TARGET/$PM_LEGACY_DIR/_extractions/${rel%.md}.extracted.md"
+
+  # Only analyze .md / .txt files
+  case "$src" in
+    *.md|*.txt) ;;
+    *) return 0 ;;
+  esac
+
+  # Single-pass Python scan (faster than 5 grep calls per file)
+  local scan_result
+  scan_result=$(${PYTHON_BIN:-python3} -c "
+import re, sys
+try:
+    with open(r'$src', encoding='utf-8', errors='ignore') as f: txt = f.read()
+except: sys.exit(0)
+patterns = {
+    'dec':    r'^## (Decision|Decisions)\b|^### D-[0-9]+|Lock decision',
+    'req':    r'^## Requirements?\b|^- REQ-[0-9]+|requirement:',
+    'test':   r'^## Test|^- TS-[0-9]+|^- Scenario:',
+    'design': r'^## Design|color\s*:|font\s*:|typography|palette',
+    'plan':   r'^## (Plan|Tasks?|Steps?)\b|^- \[ \]|^[0-9]+\.\s',
+}
+counts = {k: len(re.findall(p, txt, re.M | re.I)) for k, p in patterns.items()}
+total = sum(counts.values())
+if total >= 2:
+    print(f\"{counts['dec']}|{counts['req']}|{counts['test']}|{counts['design']}|{counts['plan']}|{total}\")
+" 2>/dev/null)
+
+  [ -z "$scan_result" ] && return 0  # no signals or read failed
+
+  local has_decisions has_reqs has_tests has_design has_plan total_signals
+  IFS='|' read -r has_decisions has_reqs has_tests has_design has_plan total_signals <<< "$scan_result"
+
+  if [ "${PM_DRY_RUN:-false}" = "true" ]; then
+    echo "    EXTRACTABLE: $rel (signals: dec=$has_decisions req=$has_reqs test=$has_tests design=$has_design plan=$has_plan)"
+    PM_STATS_EXTRACTED=$((PM_STATS_EXTRACTED + 1))
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$out")" 2>/dev/null || true
+  cat > "$out" <<EOF
+# Legacy Extraction: $rel
+
+Source: \`$rel\` (GSD legacy, preserved at \`_legacy/$rel\`)
+Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+Extraction signals: decisions=$has_decisions / requirements=$has_reqs / tests=$has_tests / design=$has_design / plan=$has_plan
+
+This file flags **potentially VG-extractable content** in legacy GSD file. AI orchestrator OR user should review + cherry-pick relevant sections into VG canonical files (PROJECT.md, ROADMAP.md, phases/XX/CONTEXT.md, etc.).
+
+## Extracted sections (raw)
+
+EOF
+
+  # Decisions block
+  if [ "$has_decisions" -gt 0 ]; then
+    echo "### Decisions found in source" >> "$out"
+    grep -E "^## (Decision|Decisions)\b|^### D-[0-9]+|Lock decision|^- D-[0-9]+" "$src" 2>/dev/null | head -20 >> "$out"
+    echo "" >> "$out"
+    echo "**Recommendation:** Review + convert to \`P{phase}.D-XX\` namespace, add to relevant \`phases/XX/CONTEXT.md\`." >> "$out"
+    echo "" >> "$out"
+  fi
+
+  # Requirements
+  if [ "$has_reqs" -gt 0 ]; then
+    echo "### Requirements found" >> "$out"
+    grep -E "^## Requirements?\b|^- REQ-[0-9]+|requirement:" "$src" 2>/dev/null | head -20 >> "$out"
+    echo "" >> "$out"
+    echo "**Recommendation:** Add to \`ROADMAP.md\` requirements field of relevant phase." >> "$out"
+    echo "" >> "$out"
+  fi
+
+  # Test scenarios
+  if [ "$has_tests" -gt 0 ]; then
+    echo "### Test scenarios found" >> "$out"
+    grep -E "^## Test|^- TS-[0-9]+|^- Scenario:" "$src" 2>/dev/null | head -20 >> "$out"
+    echo "" >> "$out"
+    echo "**Recommendation:** Convert to \`phases/XX/TEST-GOALS.md\` goal entries with surface taxonomy." >> "$out"
+    echo "" >> "$out"
+  fi
+
+  # Design hints
+  if [ "$has_design" -gt 0 ]; then
+    echo "### Design tokens / brand hints found" >> "$out"
+    grep -iE "color\s*:|font\s*:|palette|typography|brand|#[0-9a-f]{6}|rgb\(" "$src" 2>/dev/null | head -15 >> "$out"
+    echo "" >> "$out"
+    echo "**Recommendation:** Compare against \`design/DESIGN.md\`. If missing, run \`/vg:design-system --create\` to formalize." >> "$out"
+    echo "" >> "$out"
+  fi
+
+  # Plan items
+  if [ "$has_plan" -gt 0 ]; then
+    echo "### Plan / task list found" >> "$out"
+    grep -E "^## (Plan|Tasks?|Steps?)\b|^- \[ \]" "$src" 2>/dev/null | head -20 >> "$out"
+    echo "" >> "$out"
+    echo "**Recommendation:** If unfinished plan, port to VG \`phases/XX/PLAN.md\` task structure." >> "$out"
+    echo "" >> "$out"
+  fi
+
+  echo "    EXTRACTED:  $rel → _legacy/_extractions/${rel%.md}.extracted.md ($total_signals signals)"
+  PM_STATS_EXTRACTED=$((PM_STATS_EXTRACTED + 1))
+}
+
+# v1.12.1 OPTIMIZED: batch entire migration in single Python process
+# (was: bash per-file shelling out 5+ times each — too slow on 1000+ files)
+planning_migrator_run_python() {
+  local source="${1:-$PM_DEFAULT_SOURCE}"
+  local target="${2:-$PM_DEFAULT_TARGET}"
+  local dry_run="${3:-false}"
+
+  ${PYTHON_BIN:-python3} - "$source" "$target" "$dry_run" <<'PYEOF'
+import sys, os, re, hashlib, shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+dry_run = sys.argv[3].lower() == 'true'
+legacy_dir = target / '_legacy'
+extract_dir = legacy_dir / '_extractions'
+
+stats = {'NEW': 0, 'UPDATED': 0, 'UNCHANGED': 0, 'BACKED_UP': 0,
+         'ARCHIVED_GSD': 0, 'EXTRACTED': 0, 'TOTAL': 0}
+
+# Classification rules (same as bash version)
+GSD_PATH_PATTERNS = [
+    re.compile(r'\.gsd($|/|-)'),
+    re.compile(r'^(debug|quick|research|codebase)/'),
+    re.compile(r'^(brief|REQUIREMENTS|TEST-REPORT-VI|TEST-STRATEGY|REMOVED-)'),
+    re.compile(r'(^|/)gsd-'),
+    re.compile(r'gsd-state\.json$'),
+]
+
+VG_PATH_PATTERNS = [
+    re.compile(r'^(PROJECT|FOUNDATION|ROADMAP|STATE|codebase-map|telemetry|overrides|config)\.'),
+    re.compile(r'^(design|intel|vg-eval|vgflow-patches|vgflow-ancestor)/'),
+    re.compile(r'^phases/[^/]+/(SPECS|CONTEXT|PLAN|API-CONTRACTS|TEST-GOALS|SUMMARY|RUNTIME-MAP|GOAL-COVERAGE-MATRIX|PIPELINE-STATE|DISCUSSION-LOG|UAT|SANDBOX-TEST|AMENDMENT-LOG|REVIEW|VERIFICATION|SECURITY|UI-SPEC|UI-REVIEW|FLOW-)'),
+    re.compile(r'^phases/[^/]+/(crossai|checkpoints|\.step-markers)/'),
+    re.compile(r'^phases/[^/]+/.*\.(json|spec\.ts)$'),
+]
+
+GSD_CONTENT_PATTERNS = [
+    re.compile(r'^## GSD\b', re.M),
+    re.compile(r'Generated by gsd-'),
+    re.compile(r'^\[GSD\]', re.M),
+]
+
+VG_CONTENT_PATTERNS = [
+    re.compile(r'P[0-9.]+\.D-[0-9]+'),
+    re.compile(r'/vg:'),
+    re.compile(r'vg-config\.md'),
+    re.compile(r'VG-native'),
+]
+
+def classify(file_path: Path, rel: str) -> str:
+    for p in GSD_PATH_PATTERNS:
+        if p.search(rel): return 'gsd'
+    for p in VG_PATH_PATTERNS:
+        if p.match(rel): return 'vg'
+    # Phase folders fallback
+    if rel.startswith('phases/'):
+        if 'gsd-' in rel or rel.endswith('.gsd') or rel.endswith('/RESULT.md'):
+            return 'gsd'
+    # Content scan (only for small text files)
+    try:
+        if file_path.stat().st_size < 100_000:
+            txt = file_path.read_text(encoding='utf-8', errors='ignore')
+            for p in GSD_CONTENT_PATTERNS:
+                if p.search(txt): return 'gsd'
+            for p in VG_CONTENT_PATTERNS:
+                if p.search(txt): return 'vg'
+    except Exception:
+        pass
+    # Default by extension
+    ext = file_path.suffix
+    if ext in ('.md', '.json', '.jsonl', '.txt', '.tsv', '.xml'): return 'vg'
+    if ext in ('.done', '.err', '.sh', '.gitkeep'): return 'shared'
+    return 'unknown'
+
+def file_hash(p: Path) -> str:
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    except Exception:
+        return ''
+
+def is_user_edited(target_file: Path) -> bool:
+    backup = target_file.with_suffix(target_file.suffix + '.pre-migrate')
+    if not backup.exists(): return False
+    return file_hash(target_file) != file_hash(backup)
+
+# Capture WHOLE LINES matching pattern (so extraction shows actual content)
+EXTRACT_PATTERNS = {
+    'dec':    re.compile(r'^.*(?:## (?:Decision|Decisions)\b|### D-[0-9]+|Lock decision).*$', re.M | re.I),
+    'req':    re.compile(r'^.*(?:## Requirements?\b|- REQ-[0-9]+|requirement:).*$', re.M | re.I),
+    'test':   re.compile(r'^.*(?:## Test|- TS-[0-9]+|- Scenario:).*$', re.M | re.I),
+    'design': re.compile(r'^.*(?:## Design|color\s*:|font\s*:|typography|palette|#[0-9a-f]{6}).*$', re.M | re.I),
+    'plan':   re.compile(r'^.*(?:## (?:Plan|Tasks?|Steps?)\b|- \[[ x]\]|^[0-9]+\.\s+\S).*$', re.M | re.I),
+}
+
+def extract_vg_value(src: Path, rel: str):
+    if src.suffix not in ('.md', '.txt'): return False
+    try:
+        txt = src.read_text(encoding='utf-8', errors='ignore')
+    except Exception:
+        return False
+    counts = {k: len(p.findall(txt)) for k, p in EXTRACT_PATTERNS.items()}
+    total = sum(counts.values())
+    if total < 2: return False
+
+    out = extract_dir / Path(rel).with_suffix('').as_posix()
+    out = Path(str(out) + '.extracted.md')
+    if not dry_run:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open('w', encoding='utf-8') as f:
+            f.write(f"""# Legacy Extraction: {rel}
+
+Source: `{rel}` (GSD legacy, preserved at `_legacy/{rel}`)
+Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+Extraction signals: decisions={counts['dec']} / requirements={counts['req']} / tests={counts['test']} / design={counts['design']} / plan={counts['plan']}
+
+This flags potentially VG-extractable content. AI/user should review + cherry-pick into VG canonical files (PROJECT.md, ROADMAP.md, phases/XX/CONTEXT.md, etc.).
+
+## Extracted sections (top 20 matches per category)
+
+""")
+            for k, name, rec in [
+                ('dec', 'Decisions', 'Convert to `P{phase}.D-XX` namespace, add to phase CONTEXT.md'),
+                ('req', 'Requirements', 'Add to ROADMAP.md requirements field'),
+                ('test', 'Test scenarios', 'Convert to phase TEST-GOALS.md with surface taxonomy'),
+                ('design', 'Design tokens', 'Compare against design/DESIGN.md, formalize via /vg:design-system --create'),
+                ('plan', 'Plan / tasks', 'Port to phase PLAN.md task structure if unfinished'),
+            ]:
+                if counts[k] > 0:
+                    f.write(f"### {name} ({counts[k]} matches, showing top 20)\n")
+                    matches = EXTRACT_PATTERNS[k].findall(txt)[:20]
+                    for m in matches:
+                        line = m if isinstance(m, str) else ' / '.join(m)
+                        line = line.strip()
+                        if line:
+                            f.write(f"- {line}\n")
+                    f.write(f"\n**Recommendation:** {rec}\n\n")
+    return True
+
+# Walk source
+files = []
+for root, _, fnames in os.walk(source):
+    for f in fnames:
+        files.append(Path(root) / f)
+
+for src in files:
+    rel = src.relative_to(source).as_posix()
+    cls = classify(src, rel)
+    stats['TOTAL'] += 1
+
+    if cls == 'gsd':
+        # Archive to _legacy/
+        legacy_dst = legacy_dir / rel
+        if not dry_run:
+            legacy_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, legacy_dst)
+        stats['ARCHIVED_GSD'] += 1
+        if extract_vg_value(src, rel):
+            stats['EXTRACTED'] += 1
+        continue
+
+    # VG file → copy to .vg/{rel}
+    dst = target / rel
+    if not dst.exists():
+        if not dry_run:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        stats['NEW'] += 1
+    else:
+        if file_hash(src) == file_hash(dst):
+            stats['UNCHANGED'] += 1
+        elif is_user_edited(dst):
+            if not dry_run:
+                shutil.copy2(dst, dst.with_suffix(dst.suffix + f'.user-edit.{int(datetime.now().timestamp())}'))
+                shutil.copy2(src, dst)
+            stats['BACKED_UP'] += 1
+        else:
+            if not dry_run:
+                pre = dst.with_suffix(dst.suffix + '.pre-migrate')
+                if not pre.exists():
+                    shutil.copy2(dst, pre)
+                shutil.copy2(src, dst)
+            stats['UPDATED'] += 1
+
+# Print summary
+print("═" * 63)
+print("  Migration Summary (Python optimized)")
+print("═" * 63)
+print(f"  Total scanned:        {stats['TOTAL']}")
+print(f"  ✓ NEW (VG):           {stats['NEW']} (didn't exist in target)")
+print(f"  ↻ UPDATED (VG):       {stats['UPDATED']} (source newer)")
+print(f"  ⚠ BACKED-UP (VG):     {stats['BACKED_UP']} (target had user edits)")
+print(f"  · UNCHANGED:          {stats['UNCHANGED']} (already in sync)")
+print(f"  📦 ARCHIVED (GSD):    {stats['ARCHIVED_GSD']} → .vg/_legacy/{{rel}}")
+print(f"  🔍 EXTRACTED (GSD):   {stats['EXTRACTED']} → .vg/_legacy/_extractions/*.extracted.md")
+print()
+if stats['EXTRACTED'] > 0:
+    print(f"🔍 {stats['EXTRACTED']} GSD legacy files have potentially VG-extractable content.")
+    print("   Review at .vg/_legacy/_extractions/")
+print()
+print("📦 GSD legacy preserved at .vg/_legacy/ — full info available, none lost.")
+PYEOF
+}
+
 # Main migration runner
 # Args: --dry-run (preview only) | --keep-original (don't delete .planning after)
 planning_migrator_run() {
@@ -262,14 +599,8 @@ planning_migrator_run() {
     mkdir -p "$PM_TARGET"
   fi
 
-  # Walk all files in source, migrate each
-  while IFS= read -r src; do
-    [ -f "$src" ] || continue
-    planning_migrator_migrate_file "$src"
-  done < <(find "$PM_SOURCE" -type f 2>/dev/null | sort)
-
-  echo ""
-  planning_migrator_report
+  # v1.12.1 OPTIMIZED: delegate to Python (single-process, ~1000x faster)
+  planning_migrator_run_python "$PM_SOURCE" "$PM_TARGET" "$dry_run"
 
   if [ "$dry_run" != "true" ] && [ "$keep_original" = "false" ] && [ "$PM_STATS_BACKED_UP" -eq 0 ]; then
     echo ""
@@ -285,15 +616,25 @@ planning_migrator_report() {
   echo "═══════════════════════════════════════════════════════════════"
   echo "  Migration Summary"
   echo "═══════════════════════════════════════════════════════════════"
-  echo "  Total scanned:     $PM_STATS_TOTAL"
-  echo "  ✓ NEW:             $PM_STATS_NEW (didn't exist in target)"
-  echo "  ↻ UPDATED:         $PM_STATS_UPDATED (source newer)"
-  echo "  ⚠ BACKED-UP:       $PM_STATS_BACKED_UP (target had user edits, .user-edit.* saved)"
-  echo "  · UNCHANGED:       $PM_STATS_UNCHANGED (already in sync)"
-  echo "  ✗ SKIPPED-GSD:     $PM_STATS_SKIPPED_GSD (GSD-owned, not migrated)"
+  echo "  Total scanned:        $PM_STATS_TOTAL"
+  echo "  ✓ NEW (VG):           $PM_STATS_NEW (didn't exist in target)"
+  echo "  ↻ UPDATED (VG):       $PM_STATS_UPDATED (source newer)"
+  echo "  ⚠ BACKED-UP (VG):     $PM_STATS_BACKED_UP (target had user edits)"
+  echo "  · UNCHANGED:          $PM_STATS_UNCHANGED (already in sync)"
+  echo "  📦 ARCHIVED (GSD):    $PM_STATS_ARCHIVED_GSD → .vg/_legacy/{rel}"
+  echo "  🔍 EXTRACTED (GSD):   $PM_STATS_EXTRACTED → .vg/_legacy/_extractions/*.extracted.md"
   echo ""
   if [ "$PM_STATS_BACKED_UP" -gt 0 ]; then
     echo "⚠ ${PM_STATS_BACKED_UP} files had user edits. Backups at *.user-edit.<ts>"
     echo "  Review + merge manually if needed."
   fi
+  if [ "$PM_STATS_EXTRACTED" -gt 0 ]; then
+    echo ""
+    echo "🔍 ${PM_STATS_EXTRACTED} GSD legacy files have potentially VG-extractable content."
+    echo "   Review extraction reports at .vg/_legacy/_extractions/"
+    echo "   Each report flags decisions/requirements/tests/design/plan sections."
+    echo "   Cherry-pick relevant content into VG canonical files."
+  fi
+  echo ""
+  echo "📦 GSD legacy preserved at .vg/_legacy/ — full info available, none lost."
 }
