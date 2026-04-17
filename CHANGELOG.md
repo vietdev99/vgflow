@@ -2,6 +2,52 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.7.0] - 2026-04-17
+
+### Added — Pre-discussion doc scan (auto-fill foundation từ existing docs)
+
+User feedback: Khi `/vg:project` chạy, phải scan tất cả docs hiện có để auto-fill PROJECT/FOUNDATION artifacts. Chỉ coi là "project mới" khi 100% trống — README/CLAUDE.md/package.json/.planning đều bị bỏ qua trước đây.
+
+v1.7.0 thêm step `0c_scan_existing_docs` chạy sau state detection, **luôn** scan trừ khi đã có FOUNDATION.md authoritative hoặc đang resume draft. Output: `.planning/.project-scan.json` + console summary.
+
+### Scan sources (10 nhóm)
+
+1. **README** — `README.md`, `README.vi.md`, `readme.md` (extract title + first paragraph)
+2. **package.json** — name, description, dependencies → infer React/Vite/Next/Vue/Svelte/Fastify/Express/MongoDB/Postgres/Prisma/Playwright/Vitest/Expo/Electron/etc.
+3. **Other manifests** — Cargo.toml (Rust), go.mod (Go), pubspec.yaml (Flutter), requirements.txt/pyproject.toml (Python), Gemfile (Ruby)
+4. **Monorepo** — pnpm-workspace.yaml + turbo.json, nx.json, lerna.json, rush.json
+5. **Infra/hosting** — infra/ansible/, Dockerfile, vercel.json, netlify.toml, fly.toml, render.yaml, railway.json, serverless.yml, AWS SAM, wrangler.toml (Cloudflare), .github/workflows/, .gitlab-ci.yml
+6. **Auth code** — apps/*/src/**/auth*, src/**/auth* directory detection
+7. **CLAUDE.md** — extract `## Project` / `## Overview` / `## About` section as description (per VG convention)
+8. **Brief/spec docs** — docs/**/*.md, BRIEF.md, SPEC.md, RFC*.md, *-brief.md, *-spec.md
+9. **`.planning/` deep scan** (NEW per user request):
+   - PROJECT.md (legacy v1) → name + description fallback
+   - REQUIREMENTS.md → count REQ-XX items
+   - ROADMAP.md → count phases
+   - STATE.md → pipeline progress snapshot
+   - SCOPE.md / PROJECT-SCOPE.md
+   - **phases/** → count dirs + classify (accepted = has UAT.md, in-progress = has SUMMARY.md but no UAT.md), list latest 3 phase titles
+   - intel/, codebase/, research/, design-normalized/, milestones/ → file counts
+   - All loose `.planning/*.md` files
+10. **vg.config.md** — already-confirmed config (highest trust signal)
+
+### State upgrades
+
+If scan results are "rich" (name + description + ≥2 tech buckets + ≥1 doc):
+- `greenfield` → `greenfield-with-docs` (skip pure first-time, jump to confirm/adjust scan results)
+- `brownfield-fresh` → `brownfield-with-docs`
+
+This means project có README + package.json không còn bị treat như "blank slate".
+
+### Files
+
+- `commands/vg/project.md` — step `0c_scan_existing_docs` (NEW, ~150 lines Python in heredoc)
+- Output artifact: `.planning/.project-scan.json` (machine-readable scan results, consumed by Round 2 to pre-populate foundation table)
+
+### Migration
+
+Existing v1.6.x users: no breaking change. Next `/vg:project` invocation will scan + show richer info, but artifacts unchanged unless user explicitly chooses update/migrate/rewrite.
+
 ## [1.6.1] - 2026-04-17
 
 ### Changed (UX — auto-scan + state-tailored menu)
