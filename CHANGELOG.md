@@ -2,6 +2,41 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.5.0] - 2026-04-17
+
+### Changed (BREAKING UX — show-step mechanism rebuild)
+
+End-to-end re-evaluation of progress narration found 8 bugs across 4 layered mechanisms (TodoWrite, session_start banner, session_mark_step, narrate_phase). v1.3.3's TODOWRITE_POLICY softfix was insufficient because it was conditional ("if you use TodoWrite") — model rationalized opt-out, items still got stuck.
+
+**TodoWrite/TaskCreate/TaskUpdate are now BANNED in `/vg:review`, `/vg:test`, `/vg:build`.**
+
+Why TodoWrite was the wrong abstraction:
+1. Persists across sessions until next TodoWrite call (stuck-tail symptom)
+2. Long Task subagent (30 min) blocks all updates → Ctrl+C = items stuck forever
+3. Bash echo / EXIT trap can't reach TodoWrite (model-only tool)
+4. Subagent's TodoWrite goes to its own conversation, not parent UI
+5. Conditional policy gets skipped by model
+
+### Added — replacement narration
+
+- **Markdown headers in model text output** between tool calls (e.g. `## ━━━ Phase 2b-1: Navigator ━━━`). Visible in message stream, does NOT persist after session.
+- **`run_in_background: true` + `BashOutput` polling** for any Bash > 30s — user sees stdout live instead of blank wait.
+- **1-line text BEFORE + 1-line summary AFTER** for any `Task` subagent > 2 min.
+- **Bash echo / `session_start` banner** demoted to audit-log role only — useful for run history, NOT live UX (lands in tool result block, only visible after Bash returns).
+
+### Modified
+
+- `commands/vg/review.md`, `test.md`, `build.md`:
+  - Removed `<TODOWRITE_POLICY>` block, replaced with `<NARRATION_POLICY>` block at top
+  - Removed `TaskCreate`, `TaskUpdate` from `allowed-tools`; added `BashOutput`
+- `commands/vg/_shared/session-lifecycle.md`:
+  - Replaced TodoWrite policy section with full bug map (8 bugs) + narration replacement table
+  - `session_start` / EXIT trap retained but documented as audit log, not live UX
+
+### Migration
+
+Existing stuck TodoWrite items will clear once a v1.5.0 `/vg:review` (or `/vg:test`, `/vg:build`) runs in the session — orchestrator no longer creates new TodoWrite items, so the status tail naturally empties as Claude Code GC's stale state at next session restart.
+
 ## [1.4.0] - 2026-04-17
 
 ### Added — UNREACHABLE Triage (closes silent-debt loophole)

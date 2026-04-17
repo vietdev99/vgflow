@@ -10,22 +10,23 @@ allowed-tools:
   - Glob
   - Grep
   - Task
-  - TaskCreate
-  - TaskUpdate
   - AskUserQuestion
+  - BashOutput
 ---
 
-<TODOWRITE_POLICY>
-**⛔ TODOWRITE PROTOCOL (read FIRST — prevents stuck UI tail across runs)**
+<NARRATION_POLICY>
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in this command.**
 
-If you (the executing model) use TodoWrite to track progress through this command:
-1. **Your VERY FIRST tool call** must be a TodoWrite that REPLACES any stale todos from previous interrupted runs. Pass a fresh complete list (or even a single placeholder item) — TodoWrite overwrites the entire list, displacing items like "Phase 2b-1: Navigator" that hang from prior sessions.
-2. **Mark each item completed immediately** when done — don't batch.
-3. **Before returning (success OR error path)**: TodoWrite must end with NO `pending`/`in_progress` items. Mark anything remaining `completed` (even if not actually done — add a final item like "review-aborted-at-step-X" if needed).
-4. **Better default**: prefer `narrate_phase` (echo to stdout) over TodoWrite for granular per-step progress. Echo lines don't kẹt UI tail. Reserve TodoWrite for ≤7 top-level milestones the user wants visible across the whole run.
+Why: those tools persist items in Claude Code's status tail across sessions. If a long step (Haiku scanner, Bash, Task subagent) interrupts before items get marked completed, they hang forever in the UI ("Phase 2b-1: Navigator", "Start pnpm dev + wait health" stuck for runs after).
 
-This is a HARD requirement — stuck TodoWrite items from interrupted reviews are visible in user's UI tail until session restart.
-</TODOWRITE_POLICY>
+**Use these instead:**
+1. **Markdown headers in YOUR text output** between tool calls — e.g., `## ━━━ Phase 2b-1: Navigator ━━━` written in plain text. Appears in message stream, does NOT persist after session ends.
+2. **`run_in_background: true` for any Bash > 30s** (dev server boot, health wait, parallel scanner spawn). Then poll with `BashOutput` so user sees stdout live instead of waiting blind.
+3. **For Task subagents** that take > 2 min: write a 1-line status in your text output BEFORE spawning ("Spawning Haiku scanner for /users + /settings..."), then a 1-line summary AFTER it returns ("Scanner found 12 elements, 0 errors"). User sees both in the message stream.
+4. **Bash echo narration** (`narrate_phase`, `session_start` banner) lands in tool result block — useful for audit log but NOT visible during long runs. Don't rely on it as primary progress signal.
+
+This is a HARD rule — TodoWrite is the wrong abstraction for a 30-min orchestrator with parallel subagents.
+</NARRATION_POLICY>
 
 <rules>
 1. **SUMMARY*.md required** — build must have completed. Missing = BLOCK.

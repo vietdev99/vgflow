@@ -13,25 +13,35 @@ This helper fixes that via:
 3. **Stale state sweep** — detect + clean leftover `.{cmd}-state.json` from previous interrupted runs
 4. **Port sweep** — kill orphan dev servers on target port before starting new one
 
-## TodoWrite policy (CRITICAL — read first if executing review/test/build)
+## Narration policy (CRITICAL — read first if executing review/test/build)
 
-The "stuck UI tail" symptom (3 items hanging in "Baking…" / "Hullaballooing…" status box across runs) is caused by **TodoWrite items not being marked completed** when the previous run interrupted. Echo narration (`narrate_phase`, etc.) does NOT cause this — only TodoWrite does.
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in pipeline commands** (`/vg:review`, `/vg:test`, `/vg:build`).
 
-**If you use TodoWrite to track progress through `/vg:review`, `/vg:test`, or `/vg:build`:**
+### Why we banned TodoWrite
 
-1. **FIRST TodoWrite call** must contain the FULL step list for this run. TodoWrite **replaces** the entire list (it doesn't merge), so this displaces any stale items left over from a previous interrupted session. Even if you don't track every step, the first call should overwrite at least 1 item to clear the tail.
+TodoWrite items persist in Claude Code's status tail box across sessions. The symptom: items like "Phase 2b-1: Navigator", "Start pnpm dev + wait health" hang for runs after the original session ended. Root causes (8 separate bugs, all real):
 
-2. **As each step completes** → TodoWrite update marking it `completed` immediately. Don't batch.
+1. **Conditional policy gets skipped** — model rationalizes "I won't use TodoWrite this run" then uses it anyway
+2. **Long Task subagent (30 min) blocks updates** — orchestrator marks 3 items `in_progress`, spawns subagent, can't update until it returns; if user Ctrl+C, items stuck forever
+3. **Bash echo lands in tool result block** — only visible after Bash returns, not during 5-min runs
+4. **`session_start` banner same problem** — echo doesn't displace the status tail box
+5. **EXIT trap is bash-only** — can't call TodoWrite (model-only tool) to clear items
+6. **Subagent's TodoWrite ≠ parent UI** — Task spawns separate conversation, parent UI stays frozen
+7. **No live progress during subagent runs** — 30-min Task = 30 min of nothing visible
+8. **4 narration layers conflict** — TodoWrite, env var, echo, banner — no single source of truth
 
-3. **At session end (success path)** → all items should already be `completed` from step 2. If any still `pending`/`in_progress`, mark them completed before returning.
+### Use these instead
 
-4. **At session end (error path)** → before exiting/raising, mark remaining items completed (or use a final TodoWrite with single `completed` item like "review-aborted-at-step-X"). Do NOT leave `in_progress` items behind.
+| Need | Tool | Why |
+|------|------|-----|
+| Step header user sees during run | **Markdown `## ━━━ Phase X ━━━` in your text output** between tool calls | Appears in message stream, doesn't persist after session |
+| Progress during long Bash (>30s) | **`run_in_background: true` + `BashOutput` polls** | User sees stdout live |
+| Long Task subagent (>2 min) | **1-line text BEFORE spawning + 1-line summary AFTER** | Both visible in message stream |
+| Audit log (artifact, not UX) | `narrate_phase` echo into log file | Persisted to disk, not shown live |
 
-5. **On Ctrl+C / EXIT trap** → bash trap can't call TodoWrite (model-only tool). The session_exit_banner emits an `━━━ EXITED at step=X ━━━` line which displaces narration tail, but TodoWrite items persist. Solution: keep TodoWrite list minimal and always mark complete in main flow.
+### Banner is still useful
 
-**Recommended pattern**: prefer `narrate_phase`/echo for granular per-step progress (no kẹt risk). Reserve TodoWrite for top-level milestones that cross many tool calls and warrant user-visible checkboxes — typically 3-7 items max for the entire run.
-
-**Anti-pattern (causes stuck tail)**: TodoWrite "Start pnpm dev", "Phase 2b-1", "Phase 2b-2" then run agent that takes 30 min → user interrupts → those 3 items hang forever in tail until user manually clears or session restart.
+`session_start` banner + EXIT trap remain — they write to bash stdout which appears in the Bash tool result. Useful for **audit log** (proves the run happened, with timing) but NOT for live UX. Don't rely on them as primary progress signal.
 
 ## API
 

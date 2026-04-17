@@ -10,9 +10,8 @@ allowed-tools:
   - Glob
   - Grep
   - Task
-  - TaskCreate
-  - TaskUpdate
   - AskUserQuestion
+  - BashOutput
 argument-instructions: |
   Parse the argument as a phase number plus optional flags.
   Example: /vg:build 7.1
@@ -20,15 +19,17 @@ argument-instructions: |
   Example: /vg:build 7.1 --wave 2
 ---
 
-<TODOWRITE_POLICY>
-**⛔ TODOWRITE PROTOCOL (read FIRST — prevents stuck UI tail across runs)**
+<NARRATION_POLICY>
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in this command.**
 
-If you (the executing model) use TodoWrite to track progress:
-1. **Your VERY FIRST tool call** must be a TodoWrite that REPLACES any stale todos from previous interrupted runs (TodoWrite overwrites the entire list).
-2. **Mark each item completed immediately** when done — don't batch.
-3. **Before returning (success OR error path)**: NO `pending`/`in_progress` items left. Mark anything remaining `completed` (use a final "build-aborted-at-step-X" item if interrupted).
-4. **Better default**: prefer echo narration for granular per-step progress. TodoWrite for ≤7 top-level milestones only.
-</TODOWRITE_POLICY>
+Why: those tools persist items in Claude Code's status tail across sessions. Wave-based parallel build can spawn 5+ subagents running 10-30 min each — items hang in UI for runs after if interrupted.
+
+**Use these instead:**
+1. **Markdown headers in YOUR text output** between tool calls — e.g., `## ━━━ Wave 2 / Task 7.6-04 ━━━`. Appears in message stream, does NOT persist after session ends.
+2. **`run_in_background: true` for any Bash > 30s** (typecheck, lint, tests), then poll with `BashOutput` so user sees stdout live.
+3. **For Task subagents > 2 min**: write 1-line status BEFORE spawning ("Wave 2 spawning 5 parallel executors for tasks 04-08...") + 1-line summary AFTER ("Wave 2 done: 5/5 commits, typecheck PASS").
+4. Bash echo narration is audit log only — not user-visible during long runs.
+</NARRATION_POLICY>
 
 <rules>
 1. **Blueprint required** — phase must have PLAN*.md AND API-CONTRACTS.md before build. Missing = BLOCK.

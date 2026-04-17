@@ -10,20 +10,21 @@ allowed-tools:
   - Glob
   - Grep
   - Task
-  - TaskCreate
-  - TaskUpdate
   - AskUserQuestion
+  - BashOutput
 ---
 
-<TODOWRITE_POLICY>
-**⛔ TODOWRITE PROTOCOL (read FIRST — prevents stuck UI tail across runs)**
+<NARRATION_POLICY>
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in this command.**
 
-If you (the executing model) use TodoWrite to track progress:
-1. **Your VERY FIRST tool call** must be a TodoWrite that REPLACES any stale todos from previous interrupted runs (TodoWrite overwrites the entire list).
-2. **Mark each item completed immediately** when done — don't batch.
-3. **Before returning (success OR error path)**: NO `pending`/`in_progress` items left. Mark anything remaining `completed` (use a final "test-aborted-at-step-X" item if interrupted).
-4. **Better default**: prefer echo narration for granular per-step progress. TodoWrite for ≤7 top-level milestones only.
-</TODOWRITE_POLICY>
+Why: those tools persist items in Claude Code's status tail across sessions. If a long step interrupts before items get marked completed, they hang in UI for runs after.
+
+**Use these instead:**
+1. **Markdown headers in YOUR text output** between tool calls — e.g., `## ━━━ Phase 5b: Goal verification ━━━`. Appears in message stream, does NOT persist after session ends.
+2. **`run_in_background: true` for any Bash > 30s**, then poll with `BashOutput` so user sees stdout live.
+3. **For Task subagents > 2 min**: write 1-line status BEFORE spawning + 1-line summary AFTER. User sees both in the message stream.
+4. Bash echo narration is audit log only — not user-visible during long runs.
+</NARRATION_POLICY>
 
 <rules>
 1. **RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md required** — review must have completed. Missing = BLOCK.
