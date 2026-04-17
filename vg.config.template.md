@@ -17,6 +17,20 @@ package_manager: "pnpm"          # pnpm | npm | yarn | bun
 # For mobile profiles, also fill the `mobile:` block below.
 profile: "web-fullstack"
 
+# === Multi-Surface Project (v1.10.0 R4 — NEW) =========================
+# For projects with multiple platforms (web + mobile + CLI + backend).
+# Declare surfaces for per-phase targeting. Omit block = single-surface project.
+# Example:
+# surfaces:
+#   api:     { type: "web-backend-only",  stack: "fastify", paths: ["apps/api"] }
+#   web:     { type: "web-frontend-only", stack: "react",   paths: ["apps/web"],
+#              design: "default" }  # → .planning/design/default/DESIGN.md
+#   ios:     { type: "mobile-native-ios", stack: "swift",   paths: ["apps/ios"],
+#              design: "ios-native" }
+#   android: { type: "mobile-native-android", stack: "kotlin", paths: ["apps/android"],
+#              design: "android-native" }
+#   workers: { type: "cli-tool",          stack: "node",    paths: ["apps/workers"] }
+
 # target_platforms (REQUIRED for mobile profiles, ignored for others)
 # Distribution targets — drives gates (iOS signing, Android data safety, etc.) and deploy.
 # Valid values: ios | android | macos | web
@@ -485,6 +499,24 @@ review:
 
   fix_routing:
     enabled: true                       # master switch — false disables routing (fallback all inline)
+
+# === Design System (v1.10.0 R4 — NEW) ==========================
+# Integrates getdesign.md ecosystem DESIGN.md (58 brand variants).
+# Multi-design support: project can have multiple design systems per role/area.
+# Resolution priority: phase > role > project > none.
+# Commands:
+#   /vg:design-system --browse
+#   /vg:design-system --import stripe --role=dsp-admin
+#   /vg:design-system --view --role=dsp-admin
+#   /vg:design-system --validate
+design_system:
+  enabled: true
+  source_repo: "Meliwat/awesome-design-md-pre-paywall"
+  project_level: ".planning/design/DESIGN.md"
+  role_dir: ".planning/design"
+  phase_override_pattern: "{phase_dir}/DESIGN.md"
+  inject_on_build: true       # build task prompts receive DESIGN.md content
+  validate_on_review: true    # /vg:review Phase 2.5 checks hex drift
     inline_threshold_loc: 20            # fixes <= N lines stay inline
     spawn_threshold_loc: 150            # fixes > N but < escalate → spawn Sonnet
     escalate_threshold_loc: 500         # fixes > N lines → block + escalate to user

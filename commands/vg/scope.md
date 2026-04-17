@@ -226,6 +226,41 @@ From response, lock decisions:
 
 ### Round 2 — Technical Approach
 
+**Multi-surface gate (v1.10.0 R4 NEW):** if `config.surfaces` block declared (multi-platform project), Round 2 MUST first ask user which surfaces this phase touches.
+
+```bash
+if grep -qE "^surfaces:" .claude/vg.config.md; then
+  # List surfaces from config
+  AVAILABLE_SURFACES=$(${PYTHON_BIN} -c "
+import re
+cfg = open('.claude/vg.config.md', encoding='utf-8').read()
+m = re.search(r'^surfaces:\n((?:  [^\n]+\n)+)', cfg, re.M)
+if m:
+    for line in m.group(1).split('\n'):
+        sm = re.match(r'^  (\w[\w-]*):', line)
+        if sm: print(sm.group(1))
+")
+  echo "Multi-surface project detected. Surfaces declared: $AVAILABLE_SURFACES"
+  # AskUserQuestion multi-select: which surfaces does this phase touch?
+  # Example: phase 13 (DSP admin) touches [web, api] but not [rtb, workers]
+  # Lock SURFACE_LIST in CONTEXT.md + pick primary SURFACE_ROLE for design lookup
+fi
+```
+
+**AskUserQuestion for surfaces** (only when multi-surface config exists):
+```
+header: "Surfaces touched"
+question: "Phase này touch surfaces nào? (multi-select)"
+multiSelect: true
+options: [<from config.surfaces keys>]
+```
+
+Lock `P{phase}.D-surfaces: [api, web]` decision.
+
+**Primary role lookup** — for design resolution, if phase touches `web` surface, read `config.surfaces.web.design` → set `SURFACE_ROLE` var for Round 4 DESIGN.md resolve.
+
+---
+
 AI pre-analyzes existing code via `config.code_patterns` paths. Identify:
 - Which services/modules need changes?
 - Database collections/schema shape?
@@ -280,6 +315,38 @@ User confirms/edits each endpoint. Lock ENDPOINT NOTES embedded within existing 
 ### Round 4 — UI/UX
 
 **Skip condition:** If `$PROFILE` is "web-backend-only" or "cli-tool" or "library" -> skip this round entirely. Log: "Round 4 skipped (profile: {profile})."
+
+**Design System integration (v1.10.0 R4 NEW):**
+
+Before asking UI questions, source `design-system.sh` and resolve applicable DESIGN.md:
+
+```bash
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/design-system.sh"
+if design_system_enabled; then
+  # Scope Round 2 should have locked `surface_role` metadata from user answer
+  # (multi-surface projects: user declares which role this phase targets)
+  DESIGN_RESOLVED=$(design_system_resolve "$PHASE_DIR" "${SURFACE_ROLE:-}")
+
+  if [ -n "$DESIGN_RESOLVED" ]; then
+    echo "✓ DESIGN.md resolved: $DESIGN_RESOLVED"
+    echo "  Will inject into Round 4 discussion + build task prompts."
+    DESIGN_CONTEXT=$(design_system_inject_context "$PHASE_DIR" "${SURFACE_ROLE:-}")
+    # Use $DESIGN_CONTEXT in Round 4 AskUserQuestion + lock as decision note
+  else
+    echo "⚠ No DESIGN.md resolved for phase (role=${SURFACE_ROLE:-<none>})"
+    echo "  Round 4 will offer 3 options: pick from library / import existing / create from scratch"
+    DESIGN_CONTEXT=""
+  fi
+fi
+```
+
+**If `$DESIGN_CONTEXT` set (DESIGN.md resolved):** Round 4 Q includes "Dùng design này làm base? Hay customize cho phase?" với design reference. Pages/components suggested phải tôn trọng color palette + typography + spacing rules từ DESIGN.md.
+
+**If `$DESIGN_CONTEXT` empty (no DESIGN.md):** Round 4 Q offers 3 options:
+1. **Pick from 58 brands** — `/vg:design-system --browse` để list. User pick → auto-run `/vg:design-system --import <brand> --role=<current-role>`.
+2. **Import existing** — user paste DESIGN.md content hoặc link URL → save to `.planning/design/DESIGN.md` hoặc `.planning/design/{role}/DESIGN.md`.
+3. **Create from scratch** — `/vg:design-system --create --role=<role>` → guided discussion tạo DESIGN.md custom.
+4. **Skip (not recommended)** — UI phase without design standards → flag "design-debt" trong CONTEXT.md.
 
 AI suggests pages/components from decisions + endpoint notes:
 

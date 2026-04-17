@@ -2,6 +2,122 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.10.0] - 2026-04-18
+
+### R4 — Design System integration + Multi-surface project support
+
+**Motivation:** UI của các phase hay bị drift — mỗi phase AI tự ý pick tokens/colors/fonts khác nhau → inconsistent look across project. User request: tích hợp [getdesign.md](https://getdesign.md/) ecosystem (58 brand DESIGN.md variants) để chuẩn hoá UI theo design system chọn.
+
+Phát sinh thêm requirement trong discussion:
+1. **Multi-design** — project có nhiều role (SSP Admin, DSP Admin, Publisher, Advertiser) có thể có design khác nhau
+2. **Multi-surface** — 1 dự án có cả webserver + webclient + iOS + Android, workflow cần phân biệt phase theo surface
+
+### Features
+
+**1. `/vg:design-system` command (NEW)**
+
+Lifecycle management for DESIGN.md files:
+- `--browse` — list 58 brands grouped into 9 categories (AI/LLM, DevTools, Backend, Productivity, Design, Fintech, E-commerce, Media, Automotive)
+- `--import <brand> [--role=<name>]` — download brand DESIGN.md to project/role location
+- `--create [--role=<name>]` — guided discussion to build custom DESIGN.md (8 questions: personality, primary color, typography, radius, shadow, spacing, motion, component style)
+- `--view [--role=<name>]` — print current DESIGN.md (resolved by priority)
+- `--edit [--role=<name>]` — open in $EDITOR
+- `--validate [--scan=<path>]` — check code hex codes vs DESIGN.md palette, report drift
+
+**2. Multi-design resolution (4-tier priority)**
+
+```
+1. Phase-level:    .planning/phases/XX/DESIGN.md   ← highest priority
+2. Role-level:     .planning/design/{role}/DESIGN.md
+3. Project default: .planning/design/DESIGN.md
+4. None:           scope Round 4 prompts user to pick/import/create
+```
+
+Helper `design_system_resolve PHASE_DIR ROLE` returns applicable path, respecting priority.
+
+**3. Multi-surface project config**
+
+New `surfaces:` block in vg.config.md for projects với nhiều platform:
+
+```yaml
+surfaces:
+  api:     { type: "web-backend-only",  stack: "fastify", paths: ["apps/api"] }
+  web:     { type: "web-frontend-only", stack: "react",   paths: ["apps/web"],
+             design: "default" }
+  ios:     { type: "mobile-native-ios", stack: "swift",   paths: ["apps/ios"],
+             design: "ios-native" }
+  android: { type: "mobile-native-android", stack: "kotlin", paths: ["apps/android"],
+             design: "android-native" }
+```
+
+Scope Round 2 new gate: if `surfaces:` declared → user multi-select which surfaces phase touches. Lock as `P{phase}.D-surfaces: [web, api]` decision. Design resolution picks design from surface's `design:` field.
+
+**4. Scope Round 4 integration**
+
+Before asking UI questions:
+```bash
+source design-system.sh
+DESIGN_RESOLVED=$(design_system_resolve "$PHASE_DIR" "$SURFACE_ROLE")
+```
+
+- **Resolved** → inject DESIGN.md content into Round 4 AskUserQuestion. User pages/components follow palette + typography + spacing
+- **Not resolved** → offer 3 options:
+  1. Pick from 58 brands
+  2. Import existing
+  3. Create from scratch
+  4. Skip (flag as "design-debt")
+
+**5. Build integration (enabled via config `inject_on_build: true`)**
+
+`/vg:build` detects UI tasks → injects resolved DESIGN.md into task prompt. Agent must respect palette — commit body cites "Per DESIGN.md Section 2 — Primary Purple #533afd".
+
+**6. Review Phase 2.5 integration (enabled via `validate_on_review: true`)**
+
+`design_system_validate_tokens` scans `apps/web/src` for hex codes, compares against DESIGN.md palette, reports drift (code uses color not in palette). Non-blocking warn.
+
+### Dimension-expander cap fix (v1.9.6 observation)
+
+**Problem:** During live v1.9.5 test, dimension-expander generated 6-10 critical items per round → user fatigue risk for full 5-round scope + deep probe.
+
+**Fix:** Prompt updated with explicit CAP RULE:
+> Cap critical_missing at MAX 4 items. Pick the 4 MOST impactful ship-blockers. Push others to nice_to_have_missing. Rationale: avoid decision fatigue.
+
+Verified during live scope Round 4 test — Opus respected cap (4 critical + 11 nice-to-have vs earlier 10+ critical unbounded).
+
+### Source: Meliwat/awesome-design-md-pre-paywall
+
+Official `VoltAgent/awesome-design-md` (getdesign.md) moved content behind paywall. Workflow defaults to `Meliwat/awesome-design-md-pre-paywall` fork (free, 58 brands snapshot pre-2026-04). User can override `config.design_system.source_repo` to use official or custom fork.
+
+### Files
+
+- **NEW** `commands/vg/design-system.md` (256 LOC) — lifecycle command
+- **NEW** `commands/vg/_shared/lib/design-system.sh` (250 LOC) — 8 functions (resolve/browse/fetch/list_roles/inject_context/validate_tokens/browse_grouped/enabled)
+- **MODIFIED** `commands/vg/scope.md` — Round 2 multi-surface gate + Round 4 DESIGN.md injection
+- **MODIFIED** `commands/vg/_shared/lib/dimension-expander.sh` — prompt CAP RULE
+- **MODIFIED** `vg.config.template.md` — `surfaces:` + `design_system:` + `review.scanner_spawn_mode` blocks
+- **BUMP** `VERSION` 1.9.5 → 1.10.0 (minor bump — new feature)
+
+### Migration
+
+Auto via `/vg:update` (3-way merge). Existing projects without multi-surface will keep `profile:` single-value behavior. Projects adopting design system:
+1. Run `/vg:design-system --browse` to see brands
+2. Pick brand: `/vg:design-system --import linear`
+3. Existing phases automatically detect `.planning/design/DESIGN.md` on next `/vg:scope` run
+
+### Example workflow
+
+```bash
+# Multi-role project (VollxSSP-style with 4 dashboards)
+/vg:design-system --import stripe --role=ssp-admin       # SSP Admin → Stripe
+/vg:design-system --import linear --role=dsp-admin       # DSP Admin → Linear
+/vg:design-system --import notion --role=publisher       # Publisher → Notion
+/vg:design-system --import vercel --role=advertiser      # Advertiser → Vercel
+
+# Multi-platform project (web + mobile)
+# Edit vg.config.md to declare surfaces with design mapping
+# Scope each phase picks correct DESIGN.md based on surface/role
+```
+
 ## [1.9.5] - 2026-04-18
 
 ### R3.4 — Subagent sandbox isolation fix (BUG phát hiện qua live test v1.9.3)

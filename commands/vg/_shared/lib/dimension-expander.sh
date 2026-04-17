@@ -176,6 +176,12 @@ QUALITY RULES
   "What's the rate limit policy for POST /api/v1/conversion-goals when an
   advertiser creates 100 goals/hour — drop / queue / 429?").
 
+**CAP RULE (v1.10.0):** Cap critical_missing at **MAX 4 items**. Pick the 4 MOST
+impactful dimensions that are ship-blockers. Push all other MISSING/PARTIAL
+dimensions (including lower-priority "critical" ones) to nice_to_have_missing.
+Rationale: avoid decision fatigue — user can resolve 4 criticals per round, not 10+.
+If >4 real ship-blockers exist, it signals scope is too broad and needs splitting.
+
 ══════════════════════════════════════════════════════════════════════════════
 OUTPUT FORMAT — exactly ONE line of strict JSON, no prose before/after
 ══════════════════════════════════════════════════════════════════════════════
