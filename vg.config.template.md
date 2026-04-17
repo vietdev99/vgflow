@@ -517,6 +517,35 @@ design_system:
   phase_override_pattern: "{phase_dir}/DESIGN.md"
   inject_on_build: true       # build task prompts receive DESIGN.md content
   validate_on_review: true    # /vg:review Phase 2.5 checks hex drift
+
+# === Bug Reporting (v1.11.0 R5 — NEW) ==========================
+# Auto-detect workflow bugs + push to vietdev99/vgflow GitHub issues.
+# Opt-out default (prompted at install). Privacy-first: redact paths,
+# project name, emails, phase IDs before upload.
+#
+# 3-tier send: gh CLI → URL fallback → silent queue.
+# Detection types: schema_violation, helper_error, user_pushback,
+# gate_loop, ai_inconsistency.
+#
+# Commands:
+#   /vg:bug-report                 # status + consent prompt (first run)
+#   /vg:bug-report --flush         # send queued events
+#   /vg:bug-report --queue         # show pending
+#   /vg:bug-report --disable-all   # opt out
+#   /vg:bug-report --disable=SIG   # suppress specific signature
+#   /vg:bug-report --stats         # local stats
+bug_reporting:
+  enabled: true                       # opt-out default; user prompted at install
+  repo: "vietdev99/vgflow"
+  severity_threshold: "minor"         # minor | medium | high | critical
+  auto_send_minor: true               # silent background send
+  redact_project_paths: true
+  redact_project_names: true
+  auto_assign: "vietdev99"            # GitHub handle for auto-assignment
+  default_labels: ["bug-auto", "needs-triage"]
+  max_per_session: 5                  # rate limit
+  queue_path: ".claude/.bug-reports-queue.jsonl"
+  sent_cache_path: ".claude/.bug-reports-sent.jsonl"
     inline_threshold_loc: 20            # fixes <= N lines stay inline
     spawn_threshold_loc: 150            # fixes > N but < escalate → spawn Sonnet
     escalate_threshold_loc: 500         # fixes > N lines → block + escalate to user

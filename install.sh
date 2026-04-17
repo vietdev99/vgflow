@@ -435,3 +435,68 @@ echo "       for mobile phases. Android SDK platform-tools (adb) works on any OS
 echo "     → See vgflow/README.md '## Mobile profiles (V1)' for the full matrix."
 echo "  3. Open Codex → \$vg-next  or  \$vg-review <phase>"
 echo "  (Gemini CLI used only for CrossAI review — no direct workflow)"
+
+# === v1.11.0 R5 Bug Reporting consent (opt-out default) ===
+if [ -f "$TARGET/.claude/commands/vg/_shared/lib/bug-reporter.sh" ]; then
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  Help improve VG workflow"
+  echo "═══════════════════════════════════════════════════════════════"
+  echo ""
+  echo "VG có thể tự động gửi bug reports + install telemetry tới"
+  echo "vietdev99/vgflow GitHub issues để giúp cải thiện workflow."
+  echo ""
+  echo "Sẽ gửi (đã redact PII):"
+  echo "  ✓ Schema violations, helper errors, user pushback"
+  echo "  ✓ Install/update events (version, OS), command usage counts"
+  echo ""
+  echo "KHÔNG gửi:"
+  echo "  ✗ Project code, decisions, file contents, PII"
+  echo "  ✗ User email, project name (auto-redact)"
+  echo ""
+  echo "Send modes (3-tier):"
+  echo "  1. gh CLI (nếu authenticated)"
+  echo "  2. Pre-filled URL (browser submit anonymous)"
+  echo "  3. Local queue (silent if neither work)"
+  echo ""
+  echo "Opt-out anytime: cd $TARGET && /vg:bug-report --disable-all"
+  echo ""
+  printf "Enable bug reporting? [Y/n] (default: Y): "
+  read -r BR_CONSENT < /dev/tty 2>/dev/null || BR_CONSENT="Y"
+  BR_CONSENT="${BR_CONSENT:-Y}"
+
+  case "$BR_CONSENT" in
+    Y|y|yes|Yes) BR_ENABLED="true" ;;
+    *)           BR_ENABLED="false" ;;
+  esac
+
+  CONFIG_FILE="$TARGET/.claude/vg.config.md"
+  if [ -f "$CONFIG_FILE" ] && ! grep -qE "^bug_reporting:" "$CONFIG_FILE"; then
+    cat >> "$CONFIG_FILE" <<EOF
+
+# ─── Bug Reporting (v1.11.0 R5) ───────────────────────────────────────
+# Auto-detect workflow bugs + telemetry → vietdev99/vgflow GitHub issues
+# Consented at install: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+bug_reporting:
+  enabled: ${BR_ENABLED}
+  repo: "vietdev99/vgflow"
+  severity_threshold: "minor"
+  auto_send_minor: true
+  redact_project_paths: true
+  redact_project_names: true
+  auto_assign: "vietdev99"
+  default_labels: ["bug-auto", "needs-triage"]
+  max_per_session: 5
+  queue_path: ".claude/.bug-reports-queue.jsonl"
+  sent_cache_path: ".claude/.bug-reports-sent.jsonl"
+EOF
+    if [ "$BR_ENABLED" = "true" ]; then
+      echo "✓ Bug reporting enabled"
+      ( cd "$TARGET" && \
+        source .claude/commands/vg/_shared/lib/bug-reporter.sh 2>/dev/null && \
+        report_telemetry "install_success" "{\"version\":\"$(cat .claude/VGFLOW-VERSION 2>/dev/null || echo unknown)\",\"installer\":\"install.sh\"}" ) 2>/dev/null || true
+    else
+      echo "✓ Bug reporting disabled. Re-enable: /vg:bug-report --enable"
+    fi
+  fi
+fi

@@ -2,6 +2,79 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.11.0] - 2026-04-18
+
+### R5 — Auto Bug Reporting + Codex skills full sync (31 missing skills generated)
+
+**Motivation 1:** User feedback: "có cách nào để chúng ta phát triển hệ thống tự phát hiện lỗi của workflow, và đẩy về git issue được không nhỉ" — distributed bug collection. When other users run VG on different projects/envs, AI-detected bugs (like dim-expander schema bug found in v1.10.0 live test) auto-report to vietdev99/vgflow GitHub issues.
+
+**Motivation 2:** "cập nhật vào codex skill cho tôi nhé, hình như chưa cập nhật đâu" — codex-skills folder lagged: only 5 skills (accept/next/progress/review/test). Missing 31 commands including ALL v1.9-v1.10 features.
+
+### Features
+
+**1. `/vg:bug-report` command** — lifecycle (flush/queue/disable/enable/stats/test)
+
+**2. `bug-reporter.sh` lib** (~370 LOC, 15 functions):
+- Consent flow + 3-tier send (gh CLI → URL fallback → silent queue)
+- Generic event reporting + bug + telemetry types
+- Schema validators for dim-expander + answer-challenger output
+- User pushback detector (keywords: nhầm/sai/bug/wrong/không đúng)
+- Redaction (paths/project name/emails/phase IDs)
+- Dedup (local cache + GitHub issue search)
+- Rate limit (max 5 events/session)
+- Auto-assign vietdev99 + label `bug-auto`/`needs-triage`
+
+**3. Install/update tracing** — `install.sh` prompts consent at end, writes config block, sends `install_success` event
+
+**4. Detection types (broader scope)**:
+- `schema_violation` — JSON output mismatch
+- `helper_error` — bash exit ≠ 0 (v1.11.1 trap ERR integration)
+- `user_pushback` — AskUserQuestion answer keywords
+- `gate_loop` — challenger/expander max_rounds (v1.11.2)
+- `ai_inconsistency` — same input → different output (v1.11.2)
+
+**5. Privacy** — opt-out default + auto-redact PII before upload:
+- `D:/.../RTB/...` → `{project_path}/...`
+- "VollxSSP" → `<project-name>`
+- `phase-13-dsp-...` → `phase-{id}`
+- email → `<email>`
+
+### Codex skills full sync
+
+**`scripts/generate-codex-skills.sh`** — auto-generates `codex-skills/vg-X/SKILL.md` from `commands/vg/X.md`:
+- Wraps with `<codex_skill_adapter>` prelude (Claude→Codex tool mapping)
+- Run: `bash scripts/generate-codex-skills.sh [--force]`
+
+**Generated 31 skills** (was 5, now 36 total):
+add-phase, amend, blueprint, bug-report, build, design-extract, design-system, doctor, gate-stats, health, init, integrity, map, migrate, override-resolve, phase, prioritize, project, reapply-patches, recover, regression, remove-phase, roadmap, scope, scope-review, security-audit-milestone, setup-mobile, specs, sync, telemetry, update.
+
+Deployed to `~/.codex/skills/` (global) + project `.codex/skills/` via `vgflow/sync.sh`.
+
+### Files
+
+- **NEW** `commands/vg/bug-report.md`
+- **NEW** `commands/vg/_shared/lib/bug-reporter.sh` (~370 LOC, 15 functions)
+- **NEW** `scripts/generate-codex-skills.sh`
+- **NEW** `codex-skills/vg-{31 dirs}/SKILL.md`
+- **MODIFIED** `install.sh` — consent prompt + config block + install event
+- **BUMP** `VERSION` 1.10.1 → 1.11.0
+
+### Migration
+
+Existing projects:
+- Run `/vg:bug-report` to trigger consent prompt + populate config
+- Or manually add `bug_reporting:` block
+
+Re-installs:
+- `install.sh` prompts consent at install end
+- Default opt-IN, easy disable: `/vg:bug-report --disable-all`
+
+### Known Limitations (defer v1.11.x)
+
+- Helper error trap auto-integration (v1.11.1)
+- AI orchestrator inline pushback detection prompts (v1.11.2)
+- Telemetry weekly batch aggregator (v1.12.0)
+
 ## [1.10.0] - 2026-04-18
 
 ### R4 — Design System integration + Multi-surface project support
