@@ -193,7 +193,7 @@ At top of `/vg:review`, `/vg:test`, `/vg:build` command files:
 ```bash
 <step name="0_session_start">
 # Source shared helpers (already part of config-loader pattern)
-source .claude/commands/vg/_shared/session-lifecycle.md   # conceptual — inline in practice
+source .claude/commands/vg/_shared/lib/session-lifecycle.sh   # .sh when extracted (v1.9.0 T3); functions inline in practice today
 
 PHASE_NUMBER="..."  # resolved from args
 PHASE_DIR=".planning/phases/${PHASE_NUMBER}..."

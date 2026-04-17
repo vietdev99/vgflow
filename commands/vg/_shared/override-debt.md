@@ -5,6 +5,8 @@ description: Override Debt Register (Shared Reference) — track every --allow/-
 
 # Override Debt Register — Shared Helper
 
+> **⚠ Runtime note (v1.9.0 T3):** Runnable bash code is at [`_shared/lib/override-debt.sh`](lib/override-debt.sh). Commands MUST `source` the `.sh` file — this `.md` file is documentation only (YAML frontmatter + markdown headers + fenced code blocks cannot be sourced by bash). The bash snippets below are kept in sync with `.sh` for readability.
+
 Every VG override flag (`--allow-*`, `--skip-*`, `--override-*`) MUST log to `.planning/OVERRIDE-DEBT.md`. Debt register makes invisible technical debt visible, forces review, blocks `accept` when critical debt is unresolved.
 
 ## ⛔ Time-based expiry is BANNED (v1.8.0)
@@ -62,7 +64,7 @@ Each row in `.planning/OVERRIDE-DEBT.md` carries:
 | `flag` | string | the override flag (e.g. `--allow-missing-commits`) |
 | `reason` | string | user justification |
 | `logged_ts` | ISO-8601 UTC | when created |
-| `status` | enum | `OPEN` \| `RESOLVED` \| `WONT_FIX` |
+| `status` | enum | `OPEN` \| `RESOLVED` \| `WONT_FIX` — `WONT_FIX` set by `/vg:override-resolve --wont-fix` for permanent declines; treated as resolved by accept gate |
 | `gate_id` | string | telemetry gate id of the bypassed gate (for re-run matching) |
 | `resolved_by_event_id` | UUID\|null | telemetry `override_resolved` event id (null until resolved) |
 | `legacy` | bool | true for pre-v1.8.0 entries without event link |
@@ -131,22 +133,25 @@ HEADER
 }
 
 # Helper — mark an override entry as resolved via telemetry event correlation
-# Usage: override_resolve GATE_ID PHASE TELEMETRY_EVENT_ID
+# Usage: override_resolve GATE_ID PHASE TELEMETRY_EVENT_ID [STATUS]
 #   Called when a previously-bypassed gate re-runs cleanly. Links the clean
 #   telemetry event to the original debt entry.
+#   STATUS (optional, default RESOLVED): RESOLVED | WONT_FIX
 override_resolve() {
   local gate_id="$1"
   local phase="$2"
   local telemetry_event_id="$3"
+  local status="${4:-RESOLVED}"
   local register="${CONFIG_DEBT_REGISTER_PATH:-.planning/OVERRIDE-DEBT.md}"
   [ -f "$register" ] || return 0
   [ -z "$gate_id" ] && { echo "override_resolve: gate_id required" >&2; return 1; }
+  case "$status" in RESOLVED|WONT_FIX) ;; *) echo "override_resolve: invalid status '$status' (want RESOLVED|WONT_FIX)" >&2; return 1 ;; esac
 
   # Find matching OPEN entry for (gate_id, phase) and update in-place
-  ${PYTHON_BIN:-python3} - "$register" "$gate_id" "$phase" "$telemetry_event_id" <<'PY'
+  ${PYTHON_BIN:-python3} - "$register" "$gate_id" "$phase" "$telemetry_event_id" "$status" <<'PY'
 import re, sys
 from pathlib import Path
-register, gate_id, phase, event_id = sys.argv[1:5]
+register, gate_id, phase, event_id, new_status = sys.argv[1:6]
 p = Path(register)
 if not p.exists(): sys.exit(0)
 text = p.read_text(encoding='utf-8')
@@ -163,11 +168,10 @@ for line in lines:
     out.append(line); continue
   did, sev, ph, step, flag, reason, ts, status, gid, rbe, legacy = [g.strip() for g in m.groups()]
   if status == 'OPEN' and ph == phase and gid == gate_id:
-    # Update this row
-    new_line = f"| {did} | {sev} | {ph} | {step} | {flag} | {reason} | {ts} | RESOLVED | {gid} | {event_id} | {legacy or 'false'} |"
+    new_line = f"| {did} | {sev} | {ph} | {step} | {flag} | {reason} | {ts} | {new_status} | {gid} | {event_id} | {legacy or 'false'} |"
     out.append(new_line)
     matched += 1
-    print(f"override_resolve: matched {did} (gate={gid}, phase={ph}) → RESOLVED via event {event_id}", file=sys.stderr)
+    print(f"override_resolve: matched {did} (gate={gid}, phase={ph}) → {new_status} via event {event_id}", file=sys.stderr)
   else:
     out.append(line)
 p.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
@@ -178,8 +182,69 @@ PY
   # Emit telemetry resolution event (idempotent — event already exists, this just mirrors into schema)
   if type -t emit_telemetry_v2 >/dev/null 2>&1; then
     emit_telemetry_v2 "override_resolved" "$phase" "" "$gate_id" "PASS" \
-      "{\"original_override_event_id\":\"$telemetry_event_id\"}"
+      "{\"original_override_event_id\":\"$telemetry_event_id\",\"status\":\"$status\"}"
   fi
+}
+
+# Helper — resolve a single debt entry by its DEBT-ID (used by /vg:override-resolve --wont-fix)
+# Usage: override_resolve_by_id DEBT_ID STATUS REASON
+#   STATUS: RESOLVED | WONT_FIX
+#   Emits override_resolved telemetry event with {status, reason, debt_id}.
+#   Prints emitted event_id on success, or empty string + nonzero exit on failure.
+override_resolve_by_id() {
+  local debt_id="$1" new_status="$2" reason="$3"
+  local register="${CONFIG_DEBT_REGISTER_PATH:-.planning/OVERRIDE-DEBT.md}"
+  [ -f "$register" ] || { echo "override_resolve_by_id: register not found" >&2; return 1; }
+  [ -z "$debt_id" ] && { echo "override_resolve_by_id: debt_id required" >&2; return 1; }
+  [ -z "$reason" ] && { echo "override_resolve_by_id: reason required" >&2; return 1; }
+  case "$new_status" in RESOLVED|WONT_FIX) ;; *) echo "override_resolve_by_id: invalid status" >&2; return 1 ;; esac
+
+  # Emit telemetry first so we can write event_id back into the row
+  local event_id="manual-${new_status,,}-$(date -u +%Y%m%d%H%M%S)"
+  local payload
+  payload=$(${PYTHON_BIN:-python3} -c "import json,sys; print(json.dumps({'status':sys.argv[1],'reason':sys.argv[2],'debt_id':sys.argv[3],'manual':True}))" \
+    "$new_status" "$reason" "$debt_id" 2>/dev/null || echo "{}")
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    local emitted
+    emitted=$(emit_telemetry_v2 "override_resolved" "" "" "" "PASS" "$payload" 2>/dev/null | tail -n1)
+    [ -n "$emitted" ] && event_id="$emitted"
+  fi
+
+  # Patch the single matching row (by DEBT-ID, must be OPEN)
+  ${PYTHON_BIN:-python3} - "$register" "$debt_id" "$new_status" "$event_id" "$reason" <<'PY' || return 1
+import re, sys
+from pathlib import Path
+register, target_id, new_status, event_id, reason = sys.argv[1:6]
+p = Path(register)
+text = p.read_text(encoding='utf-8')
+lines = text.splitlines()
+row_re = re.compile(
+  r'^\|\s*(DEBT-\d+-\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*(OPEN|RESOLVED|WONT_FIX)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|'
+)
+out, matched, found_any = [], 0, False
+for line in lines:
+  m = row_re.match(line)
+  if not m:
+    out.append(line); continue
+  did, sev, ph, step, flag, reason_old, ts, status, gid, rbe, legacy = [g.strip() for g in m.groups()]
+  if did == target_id:
+    found_any = True
+    if status == 'OPEN':
+      # Append resolution reason to original reason (audit trail preserves both)
+      merged_reason = f"{reason_old} || {new_status.lower()}: {reason}"
+      out.append(f"| {did} | {sev} | {ph} | {step} | {flag} | {merged_reason} | {ts} | {new_status} | {gid} | {event_id} | {legacy or 'false'} |")
+      matched += 1
+      continue
+  out.append(line)
+p.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
+if not found_any:
+  print(f"override_resolve_by_id: DEBT-ID not found: {target_id}", file=sys.stderr); sys.exit(2)
+if matched == 0:
+  print(f"override_resolve_by_id: {target_id} already resolved (not OPEN) — no change", file=sys.stderr); sys.exit(3)
+print(f"override_resolve_by_id: {target_id} → {new_status} (event {event_id})", file=sys.stderr)
+PY
+
+  echo "$event_id"
 }
 
 # Helper — list unresolved overrides (resolved_by_event_id == null, status == OPEN)
@@ -340,7 +405,7 @@ fi
 In `.claude/commands/vg/accept.md` step `3c_override_resolution_gate` (after debt surface, before UAT):
 
 ```bash
-source .claude/commands/vg/_shared/override-debt.md  # or inline helpers
+source .claude/commands/vg/_shared/lib/override-debt.sh  # .sh — .md is docs only
 override_migrate_legacy                               # idempotent — migrates pre-v1.8.0 entries
 if ! check_blocking_debt "$PHASE_NUMBER"; then
   UNRESOLVED=$(override_list_unresolved)
@@ -370,20 +435,22 @@ if [ -f "${CONFIG_DEBT_REGISTER_PATH}" ]; then
 fi
 ```
 
-## Future command: `/vg:override-resolve`
+## Manual resolution: `/vg:override-resolve` (v1.9.0+)
 
-Placeholder for v1.9+. Manual resolution for overrides that will NEVER be clean-resolved (e.g., decisions deliberately reverted).
+For overrides that will NEVER be clean-resolved (e.g. scaffolding phase that deliberately skipped tests — no natural re-run trigger). Use sparingly; prefer clean re-run path.
 
-**Usage:** `/vg:override-resolve {gate_id} --wont-fix --reason='<justification>'`
+**Usage:** `/vg:override-resolve <DEBT-ID> --reason='<justification>' [--wont-fix]`
 
 **Behavior:**
-1. Finds all OPEN entries matching `gate_id`.
-2. Prompts user to select one (or `--all` flag).
-3. Sets `status=WONT_FIX`, writes reason to register.
-4. Emits telemetry event `override_resolved` with `{wont_fix: true, reason: "..."}`.
-5. Clears accept-block for that entry.
+1. Validates DEBT-ID exists in OVERRIDE-DEBT.md.
+2. If `--wont-fix`: prompts user via AskUserQuestion to confirm permanent decision.
+3. Calls `override_resolve_by_id(debt_id, status, reason)` which:
+   - Appends resolution reason to the entry's reason column (audit trail preserves both original + resolution justification).
+   - Sets `status=WONT_FIX` (or `RESOLVED` for clean manual resolution).
+   - Emits telemetry `override_resolved` event with `{status, reason, debt_id, manual:true}`.
+4. Accept gate (`override_list_unresolved`) already skips non-OPEN entries — WONT_FIX rows no longer block.
 
-Until this command ships, use the in-band resolution path (`--allow-unresolved-overrides`) documented above.
+Use `--allow-unresolved-overrides --reason='...'` at `/vg:accept` ONLY when you want a time-boxed defer (still creates NEW debt entry for next accept).
 
 ## Success criteria
 

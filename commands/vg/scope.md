@@ -348,6 +348,24 @@ Source: /vg:scope structured discussion (5 rounds)
 - Test scenario format: `TS-XX: action -> expected result`
 - Omit empty sub-sections (e.g., if a technical decision has no endpoints, omit **Endpoints:** entirely)
 
+**Write-strict gate (v1.9.0 T5 — HARD BLOCK):**
+Before promoting `CONTEXT.md.staged` to `CONTEXT.md`, run the namespace validator:
+
+```bash
+# shellcheck disable=SC1091
+source .claude/commands/vg/_shared/lib/namespace-validator.sh
+
+STAGED="${PHASE_DIR}/CONTEXT.md.staged"
+if ! validate_d_xx_namespace "$STAGED" "phase:${PHASE_NUMBER}"; then
+  echo ""
+  echo "⛔ Scope gate chặn: CONTEXT.md.staged còn chứa bare D-XX. Sửa hết rồi chạy lại /vg:scope ${PHASE_NUMBER} --continue."
+  exit 1
+fi
+mv "$STAGED" "${PHASE_DIR}/CONTEXT.md"
+```
+
+The validator tolerates legacy `D-XX` inside fenced code blocks and blockquotes (cho phép example/migration docs). Live decisions outside code fences MUST use `P${PHASE_NUMBER}.D-XX`.
+
 ### DISCUSSION-LOG.md
 
 **APPEND-ONLY.** If file already exists, append a new session block. Never overwrite existing content.

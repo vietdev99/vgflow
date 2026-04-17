@@ -1102,6 +1102,13 @@ if [ -n "$DYN_FOUND" ]; then
   if [[ ! "$ARGUMENTS" =~ --allow-dynamic-ids ]]; then
     exit 1
   else
+    # v1.9.0 T1: rationalization guard — dynamic IDs = flaky tests. Should rarely pass.
+    RATGUARD_RESULT=$(rationalization_guard_check "dynamic-ids" \
+      "Dynamic ID selectors (e.g. #user-42) break when data changes. Codegen with flaky selectors produces tests that fail intermittently and hide real bugs." \
+      "found_selectors=${DYN_FOUND} user_arg=--allow-dynamic-ids")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "dynamic-ids" "--allow-dynamic-ids" "$PHASE_NUMBER" "test.codegen" "$DYN_FOUND"; then
+      exit 1
+    fi
     echo "⚠ --allow-dynamic-ids set — codegen will proceed with flaky selectors."
   fi
 fi

@@ -359,6 +359,13 @@ if grep -l "<design-ref>" "${PHASE_DIR}"/PLAN*.md 2>/dev/null; then
     if [[ ! "$ARGUMENTS" =~ --skip-design-check ]]; then
       exit 1
     else
+      # v1.9.0 T1: rationalization guard before honoring --skip-design-check
+      RATGUARD_RESULT=$(rationalization_guard_check "design-check" \
+        "Gate requires design assets present when plan tasks reference design-ref. Skipping = build without ground-truth UI." \
+        "missing_design=${MISSING_DESIGN} user_arg=--skip-design-check")
+      if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "design-check" "--skip-design-check" "$PHASE_NUMBER" "build.design-manifest" "$MISSING_DESIGN"; then
+        exit 1
+      fi
       echo "⚠ --skip-design-check set — proceeding WITHOUT design context. Design fidelity compromised."
       echo "skip-design-check: $(date -u +%FT%TZ) MISSING=$MISSING_DESIGN" >> "${PHASE_DIR}/build-state.log"
     fi
@@ -805,6 +812,18 @@ if [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ]; then
   # ⛔ HARD BLOCK (tightened 2026-04-17): silent agent failure = silent bad wave.
   # Previously asked user; now requires explicit --allow-missing-commits to proceed.
   if [[ "$ARGUMENTS" =~ --allow-missing-commits ]]; then
+    # v1.9.0 T1: spawn isolated Haiku subagent to adjudicate skip justification
+    # See _shared/rationalization-guard.md — dispatch Task tool with zero parent context.
+    # Orchestrator MUST: (1) read gate spec "wave-commits: silent agent failures caught via commit count",
+    # (2) read skip_reason from ARGUMENTS/--reason=, (3) dispatch Task(model=haiku) with prompt from
+    # rationalization_guard_check template, (4) parse JSON verdict, (5) call rationalization_guard_dispatch.
+    # If ESCALATE → block and exit 1. If PASS/FLAG → proceed (FLAG exports VG_RATGUARD_FORCE_CRITICAL=1).
+    RATGUARD_RESULT=$(rationalization_guard_check "wave-commits" \
+      "Gate blocks wave if commits < tasks. Silent agent failures cause broken waves if bypassed without concrete reason." \
+      "missing_tasks=[${MISSING_TASKS}] user_arg=--allow-missing-commits")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "wave-commits" "--allow-missing-commits" "$PHASE_NUMBER" "build.wave-${N}" "${MISSING_TASKS}"; then
+      exit 1
+    fi
     echo "⚠ --allow-missing-commits set — recording missing tasks and proceeding."
     echo "wave-${N}: MISSING_COMMITS tasks=[${MISSING_TASKS}] allowed-by=--allow-missing-commits ts=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
   else
@@ -1217,6 +1236,13 @@ if [ -n "$FAILED_GATE" ]; then
     # Validate reason is non-empty link/issue ID (minimum: 4 chars alphanumeric + punctuation)
     if [ ${#OVERRIDE_REASON} -lt 4 ]; then
       echo "⛔ --override-reason too short (min 4 chars). Must cite issue ID or URL."
+      exit 1
+    fi
+    # v1.9.0 T1: rationalization guard adjudicates whether reason is concrete enough
+    RATGUARD_RESULT=$(rationalization_guard_check "build-hard-gate" \
+      "Gate ${FAILED_GATE} (typecheck/build/test/commit-citation) failed after ${MAX_RETRIES} retries. Override bypasses a hard block." \
+      "failed_gate=${FAILED_GATE} reason=${OVERRIDE_REASON}")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "build-hard-gate" "--override-reason" "$PHASE_NUMBER" "build.hard-gate.wave-${N}" "$OVERRIDE_REASON"; then
       exit 1
     fi
     echo "⚠ OVERRIDE accepted for gate ${FAILED_GATE}"

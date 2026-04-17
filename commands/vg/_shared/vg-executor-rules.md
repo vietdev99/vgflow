@@ -46,10 +46,11 @@ Include ONE of:
 - `Covers goal: G-XX` (if implements a goal)
 - `no-goal-impact` (explicit skip — must justify)
 
-**Namespace (không gian tên) rule — v1.8.0 BREAKING:**
+**Namespace (không gian tên) rule — v1.8.0 BREAKING + v1.9.0 WRITE-STRICT:**
 - Phase-level decisions live in `.planning/phases/{phase}/CONTEXT.md` with IDs `P{phase}.D-XX` (e.g., `P7.10.1.D-12`).
 - Project-level decisions live in `.planning/FOUNDATION.md` with IDs `F-XX` (e.g., `F-01` = platform choice).
-- NEVER cite bare `D-XX` in new commits — ambiguous between FOUNDATION and the phase's CONTEXT once phase numbers reach 15+. Use fully qualified form.
+- **v1.9.0+ commits MUST use the new namespace** (`P{phase}.D-XX` or `F-XX`). Legacy bare `D-XX` is accepted by the commit-msg hook only when referencing a pre-v1.8.0 phase that has NOT yet been migrated — hook emits WARN reminding to run migration tool, and starts rejecting at v1.10.1.
+- NEVER cite bare `D-XX` in new commits for phases already migrated or created post-v1.8.0 — ambiguous between FOUNDATION and the phase's CONTEXT once phase numbers reach 15+.
 - Migration for old artifacts: `python3 .claude/scripts/migrate-d-xx-namespace.py --apply`.
 
 Missing citation → commit-msg hook rejects. Do NOT use `--no-verify`.

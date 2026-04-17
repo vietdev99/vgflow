@@ -2,6 +2,110 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.9.0] - 2026-04-17
+
+### Tier A discipline batch — closing v1.8.0 residual gaps
+
+Cross-AI Round 2 evaluation (codex/gemini/claude/opus) verdict CONCERNS — overall **6.75** (+1.0 vs v1.7.1), robustness **+2.25**, consistency **+1.5**, but onboarding flat **3.25/10** and AI-failure surface GREW (more gates × same self-rationalizing executor). v1.9.0 ships 5 discipline-focused fixes (T1–T5) consensus-flagged at Tier A.
+
+### Added
+
+- **T1. Rationalization-guard Haiku subagent** — `_shared/rationalization-guard.md` (REWRITTEN 61 → 235 LOC)
+  - Replaces same-model self-check (CRITICAL Round 2 finding 4/4 consensus)
+  - `rationalization_guard_check(gate_id, gate_spec, skip_reason)` spawns isolated Haiku subagent via Task tool with **zero parent context**
+  - Returns PASS / FLAG / ESCALATE — caller acts: PASS continue, FLAG log critical debt, ESCALATE block + AskUserQuestion
+  - Fail-closed: if subagent unavailable → ESCALATE (safe default)
+  - Integrated at 8 gate-skip sites: `build.md` × 3 (wave-commits, design-check, build-hard-gate), `review.md` × 1 (NOT_SCANNED defer), `test.md` × 1 (dynamic-ids), `accept.md` × 2 (unreachable-triage, override-resolution-gate)
+  - Telemetry event: `rationalization_guard_check` (subagent_model, verdict, confidence)
+  - Deprecated alias `rationalization_guard()` retained with WARN
+
+- **T2. `/vg:override-resolve --wont-fix` command** — `commands/vg/override-resolve.md` NEW (132 LOC)
+  - Unblocks intentional permanent overrides at `/vg:accept` (claude CRITICAL finding)
+  - Args: `<DEBT-ID> --reason='...' [--wont-fix]`
+  - `--wont-fix` requires AskUserQuestion confirmation (audit safety)
+  - Emits `override_resolved` telemetry event with `status=WONT_FIX`, `manual=true`, `reason=...`
+  - `accept.md` step 3c filters WONT_FIX entries from blocking check
+
+- **T2 (extension). Override status WONT_FIX** — `_shared/override-debt.md`
+  - `override_resolve()` accepts optional `status` arg (RESOLVED|WONT_FIX, default RESOLVED)
+  - New helper `override_resolve_by_id(debt_id, status, reason)` — patches single row, merges audit trail
+  - `override_list_unresolved()` excludes WONT_FIX from blocking accept
+
+- **T3. Bash extraction `_shared/*.md` → `_shared/lib/*.sh`** — NEW `_shared/lib/` directory
+  - Fixes CRITICAL bug (claude+opus): `/vg:doctor` was `source .md` files which silently failed (YAML frontmatter `---` = bash syntax error). Functions undefined → false confidence
+  - Created 4 .sh files (all `bash -n` syntax-clean):
+    - `lib/artifact-manifest.sh` (185 LOC) — 3 functions
+    - `lib/telemetry.sh` (206 LOC) — 8 functions
+    - `lib/override-debt.sh` (242 LOC) — 5 functions
+    - `lib/foundation-drift.sh` (436 LOC) — 4 functions
+  - 18 functions extracted total
+  - Markdown stays as docs with "Runtime note" callout pointing to .sh
+  - Patched call sites: `doctor.md`, `accept.md` step 3c, `_shared/foundation-drift.md` examples
+
+- **T5 (extension). `_shared/lib/namespace-validator.sh`** — NEW (105 LOC)
+  - `validate_d_xx_namespace(file_path, scope_kind)` — scope_kind ∈ {"foundation"|"phase:N"}
+  - `validate_d_xx_namespace_stdin(scope_kind)` — pipeline-friendly variant
+  - Tolerates D-XX inside fenced code, blockquotes, inline backticks (false-positive guard)
+
+### Changed
+
+- **T4. `/vg:doctor` split into 4 focused commands** (Round 2 4/4 consensus: god-command anti-pattern)
+  - **NEW** `commands/vg/health.md` (315 LOC) — full project health + per-phase deep inspect (was doctor "full" + "phase" modes)
+  - **NEW** `commands/vg/integrity.md` (194 LOC) — manifest validation across all phases (was doctor `--integrity`)
+  - **NEW** `commands/vg/gate-stats.md` (179 LOC) — telemetry query API (was doctor `--gates`)
+  - **NEW** `commands/vg/recover.md` (272 LOC) — guided recovery for stuck phases (was doctor `--recover`)
+  - **REWRITTEN** `commands/vg/doctor.md` (673 → 115 LOC) — thin dispatcher routing to 4 sub-commands
+  - Total 1075 LOC across 5 files (was 673 mono) — 60% increase justified by clearer modularity + unambiguous argument grammar
+  - Backward compat: legacy `--integrity`, `--gates`, `--recover` flags still work with WARN deprecation
+
+- **T5. Telemetry write-strict / read-tolerant** — `_shared/lib/telemetry.sh` + `_shared/telemetry.md`
+  - **READ tolerant:** legacy 4-arg `emit_telemetry()` call still accepted (back-compat shim)
+  - **WRITE strict:** shim now logs WARN to stderr with caller stack hint, marks event with `legacy_call:true` payload
+  - `telemetry_step_start()` / `telemetry_step_end()` updated to call `emit_telemetry_v2()` directly (was using shim — gate_id was empty in majority events)
+  - Integration pattern examples in telemetry.md updated to use `emit_telemetry_v2`
+  - Added config `telemetry.strict_write: true` (default v1.9.0); v2.0 will hard-fail
+  - Bash bug fix: `${4:-{}}` parsing was appending stray `}`
+
+- **T5. D-XX namespace write-strict** — `scope.md`, `project.md`, `_shared/vg-executor-rules.md`
+  - **READ tolerant:** legacy bare D-XX accepted in old files (commit-msg hook WARN, not BLOCK)
+  - **WRITE strict:** `scope.md` blocks `CONTEXT.md.staged` write if generated text contains bare D-XX outside fenced code → forces `P{phase}.D-XX`
+  - Same gate in `project.md` for `FOUNDATION.md.staged` → forces `F-XX`
+  - Validator tolerates fenced code/blockquotes/inline backticks (no false positives)
+
+### v1.9.0 vs Round 2 score targets
+
+Round 2 baseline: overall 6.75, robustness 7.0, consistency 6.0, onboarding **3.25** (flat).
+
+Expected v1.9.0 movement:
+- **AI failure surface ↓** — rationalization-guard now Haiku-isolated, can't be self-rationalized
+- **Onboarding ↑** — `/vg:doctor` 5-mode god command split into 4 focused commands with clear verbs
+- **Consistency ↑** — telemetry write-strict ensures gate_id populated; D-XX namespace enforced at write-time
+- **Robustness ↑** — `.sh` extraction fixes silent function-loading failure that made T2 (Round 1) theater
+
+### Migration v1.8.0 → v1.9.0
+
+**Required actions:**
+
+1. **Backup** (always): `git commit -am "pre-v1.9.0"`
+2. **No data migration needed** — all changes additive or back-compat
+3. **Sub-command discovery**: `/vg:health`, `/vg:integrity`, `/vg:gate-stats`, `/vg:recover` are new top-level commands. Use them directly. `/vg:doctor` still works as dispatcher.
+4. **Override --wont-fix**: any pre-existing override entries marked OPEN can now be resolved manually via `/vg:override-resolve <DEBT-ID> --wont-fix --reason='...'`
+5. **Telemetry**: any custom code calling `emit_telemetry()` 4-arg signature will see WARN in stderr — migrate to `emit_telemetry_v2(event_type, phase, step, gate_id, outcome, payload, correlation_id, command)`. Old code keeps working through v1.10.0.
+6. **D-XX**: continue to accept legacy bare D-XX on read; new `/vg:scope` and `/vg:project` runs will refuse to WRITE bare D-XX. Use `migrate-d-xx-namespace.py --apply` (v1.8.0+) if not done.
+
+**No breaking changes** — all v1.8.0 code paths continue to work; new gates are additive.
+
+### Cross-AI evaluation context
+
+v1.9.0 addresses Tier A from `.planning/vg-eval/SYNTHESIS-r2.md`:
+- C1 Rationalization-guard deferral (4/4 consensus) → T1
+- M1 /vg:doctor god-command (4/4) → T4
+- M3 Backward-compat windows AI rationalization (4/4) → T5 (write-strict)
+- M4 Override --wont-fix missing (claude critical) → T2
+- M8 /vg:doctor source-chain bug (claude+opus) → T3
+
+Tier B (wave checkpoints, /vg:amend propagation, telemetry sqlite, foundation BLOCK, gate-manifest signing) deferred to v1.9.x. Tier C deferred to v2.0.
+
 ## [1.8.0] - 2026-04-17
 
 ### Tier 2 fixes batch — closing AI corner-cutting surface

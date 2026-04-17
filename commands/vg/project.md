@@ -871,6 +871,17 @@ ${PYTHON_BIN} - <<PY
 ...
 PY
 
+# Write-strict gate (v1.9.0 T5): FOUNDATION.md MUST use F-XX, never bare D-XX
+# (D-XX is reserved for phase CONTEXT.md as P{phase}.D-XX).
+# shellcheck disable=SC1091
+source .claude/commands/vg/_shared/lib/namespace-validator.sh
+if ! validate_d_xx_namespace "${FOUNDATION_FILE}.staged" "foundation"; then
+  echo ""
+  echo "⛔ Foundation gate chặn: FOUNDATION.md.staged chứa bare D-XX — phải dùng F-XX."
+  echo "   Sửa staging file xong chạy lại /vg:project (resume from draft)."
+  exit 1
+fi
+
 # Atomic promote (mv all-or-nothing)
 mv "${PROJECT_FILE}.staged"     "$PROJECT_FILE"
 mv "${FOUNDATION_FILE}.staged" "$FOUNDATION_FILE"

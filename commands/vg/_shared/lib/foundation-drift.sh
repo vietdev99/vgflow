@@ -1,50 +1,14 @@
----
-name: vg:_shared:foundation-drift
-description: Foundation Drift (lệch hướng nền tảng) Check — semantic field diff against structured FOUNDATION.md. Tracks detections in append-only register until user acknowledges.
----
+# shellcheck shell=bash
+# Foundation Drift Check — bash function library
+# Companion runtime for: .claude/commands/vg/_shared/foundation-drift.md
+# Docs (tiers, drift register schema, semantic vs regex rationale) live in the .md.
+#
+# Exposed functions:
+#   - foundation_drift_check SCAN_TEXT SOURCE          (back-compat wrapper)
+#   - foundation_drift_semantic_check SCAN_TEXT SOURCE (main entry)
+#   - foundation_drift_ensure_register REGISTER_PATH
+#   - foundation_drift_check_register                  (stdout: JSON summary)
 
-# Foundation Drift Check — Shared Helper (v1.8.0 semantic)
-
-> **⚠ Runtime note (v1.9.0 T3):** Runnable bash code is at [`_shared/lib/foundation-drift.sh`](lib/foundation-drift.sh). Commands MUST `source` the `.sh` file — this `.md` file is documentation only (YAML frontmatter + markdown headers + fenced code blocks cannot be sourced by bash). The bash snippets below are kept in sync with `.sh` for readability.
-
-Detects when a phase/milestone/scope text asserts claims incompatible with the locked `FOUNDATION.md`. **v1.8.0 tiers:** `INFO` (thông tin — foundation already covers), `WARN` (cảnh báo — real mismatch). `BLOCK` tier is reserved for v1.9.0 (hard requirement miss) — v1.8.0 surfaces it as WARN with note.
-
-## Why semantic, not regex
-
-- **Old (regex on prose):** matched keyword → flag. Missed claims hidden in data model / security posture / deployment topology / SLO fields. High false-negative rate.
-- **New (semantic field diff):** extract structured claims from scan text, compare against FOUNDATION yaml dict. Claim "credit card processing" → checks `foundation.compliance` for `PCI-DSS`. Claim "iOS app" → checks `foundation.platform` allows mobile. Foundation-field-aware.
-
-## Tiers (cấp độ)
-
-| Tier | Meaning | v1.8.0 behavior |
-|------|---------|-----------------|
-| `INFO` (thông tin) | Foundation already covers claim | log informational, no user prompt |
-| `WARN` (cảnh báo) | Real mismatch — foundation says X, scan claims Y | print warning + track in register |
-| `BLOCK` (chặn) | Hard requirement missing (compliance/security) | **v1.8.0 = WARN** with "v1.9.0 sẽ BLOCK" note; deferred |
-
-**Always soft in v1.8.0** — exits 0, never blocks command flow. User has agency via register.
-
-## Drift register (append-only tracking)
-
-Every detection writes to `.planning/.drift-register.md`. User acknowledges entries to silence them. Entries persist across sessions — nothing lost to summarization.
-
-Register schema:
-```markdown
-| Date | Source | Tier | Keyword | Foundation Field | Current | Implied | Status | User Ack |
-|------|--------|------|---------|------------------|---------|---------|--------|----------|
-| 2026-04-17 | roadmap:phase-08 | WARN | "iOS app" | platform | web-saas | mobile | unfixed | NO |
-```
-
-**Status values:**
-- `unfixed` — detection stands, not yet addressed
-- `acknowledged` — user intentionally accepts drift (set via `/vg:doctor --ack <entry-id>`)
-- `foundation-updated` — user ran `/vg:project --update foundation` fixing this dimension
-
-**Dedup rule:** same `{source, keyword, tier}` with `status=unfixed` → update timestamp, do not duplicate row.
-
-## API
-
-```bash
 # Back-compat entry (wraps semantic version, same signature)
 # Inputs: $1 = text to scan, $2 = source identifier (cmd:phase)
 # Output: stdout notify block if drift, exit 0 always (soft)
@@ -470,67 +434,3 @@ print(json.dumps({
 }))
 PY
 }
-```
-
-## Notify pattern (output when WARN detected)
-
-```
-⚠ FOUNDATION DRIFT (lệch hướng nền tảng) detected — tier: WARN (cảnh báo)
-   Source: roadmap:phase-08
-   • Keyword 'iOS app' implies platform = mobile
-     Current foundation.platform: web-saas
-
-   Suggested fix: /vg:project --update foundation
-   Tracked at: .planning/.drift-register.md (1 new entry)
-   Run /vg:doctor --drift to see all unfixed drift entries.
-   Silence this run: re-run with --no-drift-check (logged for audit).
-```
-
-INFO tier is silent by default (only recorded in register + telemetry) — noise control.
-
-## Integration template
-
-In `/vg:roadmap`, `/vg:add-phase`, `/vg:scope`, `/vg:specs`:
-
-```bash
-# Source helpers (v1.9.0 T3: .sh files — .md docs are not sourceable)
-source .claude/commands/vg/_shared/lib/foundation-drift.sh 2>/dev/null || true
-source .claude/commands/vg/_shared/lib/telemetry.sh 2>/dev/null || true
-
-SCAN="${PHASE_TITLE} ${PHASE_DESC} ${PHASE_SCOPE_BODY}"
-SOURCE="${VG_CURRENT_COMMAND:-${COMMAND_NAME:-vg}}:${PHASE_NUMBER:-unknown}"
-foundation_drift_semantic_check "$SCAN" "$SOURCE"
-# Always exits 0 — soft warning. Continue normal flow.
-```
-
-## /vg:doctor integration
-
-T2 agent calls `foundation_drift_check_register` to surface unfixed entries:
-
-```bash
-source .claude/commands/vg/_shared/lib/foundation-drift.sh
-DRIFT_JSON=$(foundation_drift_check_register)
-WARN_COUNT=$(${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read())['warn_unfixed'])" <<<"$DRIFT_JSON")
-if [ "$WARN_COUNT" -gt 0 ]; then
-  echo "⚠ ${WARN_COUNT} unfixed drift (lệch hướng) entries — run /vg:doctor --drift for details"
-fi
-```
-
-## User acknowledgment workflow
-
-User edits `.planning/.drift-register.md` directly, changing `Status: unfixed` → `Status: acknowledged` (and `User Ack: YES`). Or runs `/vg:project --update foundation` which auto-sets `Status: foundation-updated` for entries whose dimension was touched (handled by project.md step 5 cascade).
-
-## Success criteria
-
-- FOUNDATION.md yaml-parseable → structured field diff runs
-- FOUNDATION.md table-only (legacy v1.6.0) → graceful fallback, no crash
-- FOUNDATION.md missing → silent skip
-- Every detection creates/updates a row in `.drift-register.md` (dedup by source+keyword+tier)
-- WARN entries trigger user notification with fix hint + register path
-- INFO entries silent (logged only)
-- BLOCK tier deferred to v1.9.0 (recorded as WARN with note)
-- `foundation_drift_check_register` exposes unfixed count for `/vg:doctor`
-- Every flag emits `drift_detected` telemetry event
-- `--no-drift-check` flag skips, logs to build-state.log
-- Never blocks command flow (always exit 0)
-- Back-compat `foundation_drift_check` retained — wraps semantic version

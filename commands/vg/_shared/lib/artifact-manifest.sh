@@ -1,54 +1,15 @@
----
-name: vg:_shared:artifact-manifest
-description: Artifact Manifest (Shared Reference) — SHA256 manifest per phase artifacts, atomic group commit, validation gate on read. Detects partial-write corruption from crashes, race conditions, disk-full.
----
+# shellcheck shell=bash
+# Artifact Manifest — bash function library
+# Companion runtime for: .claude/commands/vg/_shared/artifact-manifest.md
+# Docs (schemas, integration pattern, edge cases) live in the .md file.
+# This .sh file is the ONLY sourceable entry point — markdown is NOT sourceable
+# because it contains YAML frontmatter + markdown headers + fenced code blocks.
+#
+# Exposed functions:
+#   - artifact_manifest_write PHASE_DIR COMMAND ARTIFACT_PATH [ARTIFACT_PATH...]
+#   - artifact_manifest_validate PHASE_DIR        (returns 0=ok, 1=missing, 2=corrupt)
+#   - artifact_manifest_backfill PHASE_DIR [COMMAND]
 
-# Artifact Manifest — Shared Helper
-
-> **⚠ Runtime note (v1.9.0 T3):** Runnable bash code is at [`_shared/lib/artifact-manifest.sh`](lib/artifact-manifest.sh). Commands MUST `source` the `.sh` file — this `.md` file is documentation only (YAML frontmatter + markdown headers + fenced code blocks cannot be sourced by bash). The bash snippets below are kept in sync with `.sh` for readability.
-
-## Problem solved (per claude reviewer M10)
-
-Multi-file outputs (PLAN.md + API-CONTRACTS.md + TEST-GOALS.md together) không atomic group. Mid-write crash → file 1+2 written, file 3 missing OR partial. Reading commands silently consume inconsistent artifacts. Build wave produces code against incomplete contract. Bugs blamed on implementation, not corruption. Hours of forensic debugging.
-
-## Solution
-
-Each phase has `.artifact-manifest.json` listing every expected artifact với SHA256 + bytes + lines. Manifest written **LAST** after all artifacts complete. Reading commands MUST validate manifest first; mismatch → BLOCK with explicit error message.
-
-## Manifest schema
-
-```json
-{
-  "manifest_version": "1.8.0",
-  "phase": "07.10.1",
-  "generated_at": "2026-04-17T09:12:33Z",
-  "generated_by": "vg:blueprint v1.8.0",
-  "session_id": "abc123",
-  "artifacts": [
-    {
-      "path": "PLAN.md",
-      "sha256": "abc123...",
-      "bytes": 12345,
-      "lines": 234,
-      "category": "plan"
-    },
-    {
-      "path": "API-CONTRACTS.md",
-      "sha256": "def456...",
-      "bytes": 4567,
-      "lines": 89,
-      "category": "contract"
-    }
-  ],
-  "manifest_sha256": "ghi789..."
-}
-```
-
-`manifest_sha256` = SHA256 of manifest excluding `manifest_sha256` field (self-describing integrity).
-
-## API
-
-```bash
 # Write manifest after artifact group complete
 # Usage: artifact_manifest_write PHASE_DIR COMMAND ARTIFACT_PATH1 [ARTIFACT_PATH2 ...]
 # Returns: 0 on success, 1 on failure
@@ -222,80 +183,3 @@ artifact_manifest_backfill() {
   artifact_manifest_write "$phase_dir" "$command" "${artifacts[@]}"
   echo "ℹ Backfilled manifest for legacy phase: ${#artifacts[@]} artifacts"
 }
-```
-
-## Integration pattern
-
-### Writing (blueprint/build/review/test)
-
-After all artifacts in a group are written and committed:
-
-```bash
-# /vg:blueprint after writing PLAN + API-CONTRACTS + TEST-GOALS
-artifact_manifest_write "$PHASE_DIR" "vg:blueprint v1.8.0" \
-  "PLAN.md" "API-CONTRACTS.md" "TEST-GOALS.md"
-# Manifest written; reading commands now have integrity reference
-```
-
-### Reading (any command consuming phase artifacts)
-
-At top of command, before reading artifacts:
-
-```bash
-artifact_manifest_validate "$PHASE_DIR"
-case $? in
-  0) ;;  # valid, proceed
-  1)
-    # Legacy phase — backfill manifest, then proceed
-    artifact_manifest_backfill "$PHASE_DIR" "$VG_CURRENT_COMMAND"
-    ;;
-  2)
-    # Corruption detected — BLOCK
-    echo "⛔ Cannot proceed with corrupted artifacts. Fix above issues first."
-    exit 1
-    ;;
-esac
-# Safe to read artifacts now
-```
-
-## Per-command integration (v1.8.0 rollout)
-
-| Command | Write timing | Artifacts |
-|---------|-------------|-----------|
-| `/vg:project` | After Round 7 atomic write | `PROJECT.md`, `FOUNDATION.md`, `vg.config.md` (project-level manifest at `.planning/.artifact-manifest.json`) |
-| `/vg:roadmap` | After ROADMAP.md write | `ROADMAP.md` (project-level) |
-| `/vg:specs` | After write | `SPECS.md` |
-| `/vg:scope` | After Round 5 write | `CONTEXT.md`, `DISCUSSION-LOG.md` |
-| `/vg:blueprint` | After all 3 written | `PLAN.md`, `API-CONTRACTS.md`, `TEST-GOALS.md` |
-| `/vg:build` | After SUMMARY.md write per wave | `SUMMARY.md`, wave-specific files |
-| `/vg:review` | After RUNTIME-MAP write | `RUNTIME-MAP.json`, `RUNTIME-MAP.md`, `GOAL-COVERAGE-MATRIX.md`, `UNREACHABLE-TRIAGE.md` (if exists) |
-| `/vg:test` | After SANDBOX-TEST write | `SANDBOX-TEST.md` |
-| `/vg:accept` | After UAT.md write | `UAT.md` |
-
-| Command | Read validation | Artifacts validated before consuming |
-|---------|-----------------|--------------------------------------|
-| `/vg:scope` | Read SPECS.md | manifest validates SPECS exists + intact |
-| `/vg:blueprint` | Read SPECS + CONTEXT | both manifests validated |
-| `/vg:build` | Read PLAN + API-CONTRACTS + TEST-GOALS | blueprint manifest validated |
-| `/vg:review` | Read SUMMARY + API-CONTRACTS | build + blueprint manifests |
-| `/vg:test` | Read RUNTIME-MAP + GOAL-COVERAGE | review manifest |
-| `/vg:accept` | Read everything | all upstream manifests validated as final gate |
-
-## Edge cases
-
-**Manual edit after manifest write:** User edits PLAN.md by hand → SHA256 mismatch → next read BLOCKS. Recovery: re-run `/vg:blueprint` (regenerates manifest with new content) OR `git checkout PLAN.md` (revert to manifest version).
-
-**Partial git stash/pop:** Manifest references SHA of pre-stash content. After pop, content matches → no issue. If pop conflicts left half-merged file → BLOCK at next read.
-
-**Multi-session edits:** Manifest includes `session_id`. If session A wrote manifest, session B edits artifact, session B re-runs command without re-writing manifest → BLOCK on next session A continuation.
-
-**File system race conditions:** Atomic write via `.tmp` + `mv` rename. On Windows: `mv` may fail if target locked → emit error + suggest retry.
-
-## Success criteria
-
-- Every phase has `.artifact-manifest.json` after first blueprint/review run
-- Reading commands never consume corrupted/partial artifacts silently
-- Mid-write crash detectable on next read (manifest missing OR mismatch)
-- Manual edits flagged immediately (SHA256 mismatch)
-- Legacy phases (pre-v1.8.0) auto-backfilled with WARN, don't block
-- Telemetry tracks: artifact_written events, artifact_read_validated events with PASS/WARN/FAIL outcome

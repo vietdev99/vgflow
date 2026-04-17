@@ -258,6 +258,13 @@ PY
         echo "⛔ --allow-unreachable requires --reason='<why shipping with known gaps>'"
         exit 1
       fi
+      # v1.9.0 T1: rationalization guard — shipping with known UNREACHABLE goals is critical bypass.
+      RATGUARD_RESULT=$(rationalization_guard_check "unreachable-triage" \
+        "UNREACHABLE with bug-this-phase/cross-phase-pending/scope-amend verdict = known gap. Shipping without fix or amend creates phantom-done phases." \
+        "blocking_list=${BLOCKING_LIST} reason=${REASON}")
+      if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "unreachable-triage" "--allow-unreachable" "$PHASE_NUMBER" "accept.unreachable-gate" "$REASON"; then
+        exit 1
+      fi
       echo "⚠ --allow-unreachable set with reason: ${REASON}"
       echo "   Recording to override-debt register + UAT.md 'Unreachable Debt' section"
       # Log to override-debt (helper from _shared/override-debt.md)
@@ -304,8 +311,10 @@ fi
 Rationale (from M9 claude reviewer): prior `auto_expire_days` model silently forgave real debt. An override entry must stay OPEN until either (a) the bypassed gate re-runs cleanly (auto-resolved via telemetry `override_resolved` event correlation), or (b) the user explicitly marks `--wont-fix` with justification.
 
 ```bash
-# Load helpers
-source .claude/commands/vg/_shared/override-debt.md 2>/dev/null || true
+# Load helpers (v1.9.0 T3: source .sh, NOT .md — .md contains YAML frontmatter
+# that bash cannot source. If .sh missing → real install bug, surface it.)
+source .claude/commands/vg/_shared/lib/override-debt.sh 2>/dev/null || \
+  echo "⚠ override-debt.sh missing — override resolution gate degraded" >&2
 
 # Migrate any pre-v1.8.0 legacy entries (idempotent — adds legacy:true flag)
 override_migrate_legacy 2>/dev/null || true
@@ -349,8 +358,8 @@ PY
     echo "  1. Re-run the bypassed gate cleanly → auto-resolved via telemetry event (preferred)"
     echo "     Example: /vg:build ${PHASE_NUMBER} --gaps-only  OR  /vg:review ${PHASE_NUMBER}  OR  /vg:test ${PHASE_NUMBER}"
     echo ""
-    echo "  2. /vg:override-resolve {gate_id} --wont-fix --reason='<why this override is permanent>'"
-    echo "     (Future command — for overrides that will never be clean-resolved. Marks WONT_FIX, logs telemetry.)"
+    echo "  2. /vg:override-resolve <DEBT-ID> --reason='<why>' [--wont-fix]"
+    echo "     (v1.9.0+ — for overrides without natural re-run trigger. --wont-fix = permanent decline via AskUserQuestion confirmation. Marks WONT_FIX, logs telemetry.)"
     echo ""
     echo "  3. /vg:accept ${PHASE_NUMBER} --allow-unresolved-overrides --reason='<justification>'"
     echo "     (Accept path — logs NEW debt entry, still blocks the NEXT accept. Not a forgive, a defer.)"
@@ -360,6 +369,13 @@ PY
       REASON=$(echo "$ARGUMENTS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
       if [ -z "$REASON" ]; then
         echo "⛔ --allow-unresolved-overrides requires --reason='<why shipping with unresolved overrides>'"
+        exit 1
+      fi
+      # v1.9.0 T1: rationalization guard — meta-override (forgive prior overrides). Highest-risk gate.
+      RATGUARD_RESULT=$(rationalization_guard_check "override-resolution-gate" \
+        "Accept gate blocks while critical OPEN overrides are unresolved. --allow-unresolved-overrides compounds debt — a meta-override forgiving prior overrides." \
+        "unresolved_count=${UNRESOLVED_COUNT} reason=${REASON}")
+      if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "override-resolution-gate" "--allow-unresolved-overrides" "$PHASE_NUMBER" "accept.override-resolution-gate" "$REASON"; then
         exit 1
       fi
       echo "⚠ --allow-unresolved-overrides set with reason: ${REASON}"

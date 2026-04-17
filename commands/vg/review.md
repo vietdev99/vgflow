@@ -2162,6 +2162,13 @@ if [ "$INTERMEDIATE" -gt 0 ]; then
   if [[ ! "$ARGUMENTS" =~ --allow-intermediate ]]; then
     exit 1
   else
+    # v1.9.0 T1: rationalization guard — NOT_SCANNED defer is a classic rationalization surface.
+    RATGUARD_RESULT=$(rationalization_guard_check "not-scanned-defer" \
+      "NOT_SCANNED = review didn't replay the goal sequence. Deferring = test codegen has no input. Auto-UNREACHABLE hides coverage debt." \
+      "intermediate_goals=${INTERMEDIATE_GOALS} not_scanned=${NOT_SCANNED_COUNT} failed=${FAILED_COUNT}")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "not-scanned-defer" "--allow-intermediate" "$PHASE_NUMBER" "review.4c-pre" "${INTERMEDIATE} intermediate goals"; then
+      exit 1
+    fi
     # Auto-convert intermediate → UNREACHABLE với audit trail
     for gid in $INTERMEDIATE_GOALS; do
       update_goal_status $gid "UNREACHABLE" --reason "review-skip-${original_status}"
