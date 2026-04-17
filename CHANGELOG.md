@@ -2,6 +2,47 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.9.2.6] - 2026-04-18
+
+### 2 bugs dò được qua 9 smoke tests — shipped
+
+**Bug #1: unreachable-triage extraction missed in v1.9.0 T3**
+
+v1.9.0 T3 extracted bash from 4 shared libs (artifact-manifest, telemetry, override-debt, foundation-drift) to `lib/*.sh` NHƯNG MISSED `unreachable-triage.md`. `review.md:2948` calls `triage_unreachable_goals()` WITHOUT source statement → function undefined → silent skip → UNREACHABLE goals never classified → `/vg:accept` hard-gate can't enforce `bug-this-phase` / `cross-phase-pending`.
+
+Fix: NEW `_shared/lib/unreachable-triage.sh` (~362 LOC) with both functions (`triage_unreachable_goals` + `unreachable_triage_accept_gate`). Patched `review.md` step `unreachable_triage` to source + invoke.
+
+**Bug #2: v1.9.x config drift undetected**
+
+v1.9.0-v1.9.2 added 6 new config sections (`review.fix_routing`, `phase_profiles`, `test_strategy`, `scope`, `models.review_fix_inline`, `models.review_fix_spawn`) nhưng workflow không check user config có những sections này chưa. Projects update v1.9.x via `/vg:update` nhận .sh/.md mới nhưng `vg.config.md` vẫn ở schema cũ → workflow fallback silent → features như 3-tier fix routing không hoạt động.
+
+Fix: `config-loader.md` thêm schema drift detection — scan vg.config.md cho 6 sections v1.9.x. Missing → WARN với tên section + purpose + impact + fix command (`/vg:init` hoặc manual add từ template).
+
+### Smoke test results (9 areas tested)
+
+| Area | Verdict |
+|------|---------|
+| Phase 0 session + profile | ✅ |
+| Phase 1 code scan | ✅ |
+| Phase 3 fix routing config | ⚠️ drift detected → fix #2 |
+| Phase 4b code_exists fallback | ✅ |
+| unreachable_triage helper | 🐛 extraction missed → fix #1 |
+| Block resolver L2 architect fd3 | ✅ pattern OK |
+| vg-haiku-scanner skill | ✅ present |
+| Playwright lock manager | ✅ claim+release clean |
+| env-commands.md | ⚠️ documented convention (not bug) |
+
+### Files
+
+- **NEW** `_shared/lib/unreachable-triage.sh` (362 LOC, `bash -n` clean)
+- **MODIFIED** `review.md` step `unreachable_triage` — source helper, graceful fallback
+- **MODIFIED** `_shared/config-loader.md` — CONFIG DRIFT scan block emits WARN for each missing v1.9.x section
+
+### Migration v1.9.2.5 → v1.9.2.6
+
+- Review unreachable triage: transparent — was silent-skipping before, now runs real classification
+- Config drift: warns on next command. User runs `/vg:init` to regenerate OR manually adds sections from `vg.config.template.md`. No block — fallback safe.
+
 ## [1.9.2.5] - 2026-04-18
 
 ### probe_api substring match — eliminate false BLOCKED

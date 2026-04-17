@@ -116,6 +116,39 @@ for MK in models_executor models_planner models_debugger; do
     echo "⚠ CONFIG: ${MK_DOTTED} missing — defaulting. Run /vg:init to explicitly set model profile."
   fi
 done
+
+# v1.9.2.6 — config schema drift detection
+# New sections added in v1.9.x that user configs may not have yet.
+# Each missing section → WARN + hint to user (no block — workflow falls back silently).
+declare -A CONFIG_V1_9_SECTIONS=(
+  ["review.fix_routing"]="Phase 3 fix loop 3-tier routing (v1.9.1 R2) — inline/spawn/escalate thresholds"
+  ["phase_profiles"]="Phase profile system (v1.9.2 P5) — feature/infra/hotfix/bugfix/migration/docs"
+  ["test_strategy"]="Surface taxonomy (v1.9.1 R1) — ui/api/data/integration/time-driven runners"
+  ["scope"]="Scope adversarial check (v1.9.1 R3) — adversarial_check, adversarial_model"
+  ["models.review_fix_inline"]="Review fix inline model (v1.9.1 R2) — main tier for small MINOR fixes"
+  ["models.review_fix_spawn"]="Review fix spawn model (v1.9.1 R2) — cheaper tier for MODERATE/large fixes"
+)
+
+DRIFT_COUNT=0
+DRIFT_MSG=""
+for section in "${!CONFIG_V1_9_SECTIONS[@]}"; do
+  # Dotted path → grep pattern. review.fix_routing → look for "review:" then "fix_routing:"
+  main_key="${section%%.*}"
+  if ! grep -qE "^${main_key}:" "$CONFIG_CLEAN"; then
+    DRIFT_COUNT=$((DRIFT_COUNT + 1))
+    DRIFT_MSG="${DRIFT_MSG}  - ${section} — ${CONFIG_V1_9_SECTIONS[$section]}\n"
+  fi
+done
+
+if [ "$DRIFT_COUNT" -gt 0 ]; then
+  echo ""
+  echo "⚠ CONFIG DRIFT — ${DRIFT_COUNT} v1.9.x sections missing from .claude/vg.config.md:"
+  echo -e "$DRIFT_MSG"
+  echo "  Impact: workflow falls back to defaults — features may silent-skip (e.g., review fix routing fallback)"
+  echo "  Fix: run '/vg:init' to regenerate config OR manually add sections from vgflow/vg.config.template.md"
+  echo "  Continue on fallback? Safe for most phases, ship-blocker only if phase hits deferred feature."
+  echo ""
+fi
 ```
 
 Use `$CONFIG_RAW` for downstream parsing instead of re-reading the file.

@@ -2944,8 +2944,13 @@ session_mark_step "4f-unreachable-triage"
 echo ""
 echo "🔍 UNREACHABLE triage — classifying unresolved goals..."
 
-# Source helper (conceptual — inline logic from _shared/unreachable-triage.md in practice)
-triage_unreachable_goals "$PHASE_DIR" "$PHASE_NUMBER"
+# v1.9.2.6 — source real helper (was documented-only before, function undefined → silent skip)
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/unreachable-triage.sh" 2>/dev/null || true
+if type -t triage_unreachable_goals >/dev/null 2>&1; then
+  triage_unreachable_goals "$PHASE_DIR" "$PHASE_NUMBER"
+else
+  echo "⚠ unreachable-triage.sh missing — triage skipped (upgrade vgflow or reinstall)" >&2
+fi
 # Outputs:
 #   ${PHASE_DIR}/UNREACHABLE-TRIAGE.md         (human-readable, evidence per goal)
 #   ${PHASE_DIR}/.unreachable-triage.json      (machine-readable, drives accept gate)
