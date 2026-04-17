@@ -73,15 +73,7 @@ jobs:
               --output gate-manifest.json
           else
             echo "scripts/vg_update.py missing — emitting empty manifest (pre-1.8.0)"
-            python - <<PY
-import json, datetime
-json.dump({
-  "version": "${VERSION}",
-  "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
-  "heuristic": "N/A — vg_update.py not yet present in this release",
-  "gates": [],
-}, open("gate-manifest.json", "w"), indent=2)
-PY
+            python -c "import json, datetime, os; json.dump({'version': os.environ['VERSION'], 'generated_at': datetime.datetime.utcnow().isoformat() + 'Z', 'heuristic': 'N/A — vg_update.py not yet present in this release', 'gates': []}, open('gate-manifest.json', 'w'), indent=2)"
           fi
           echo "---"
           echo "gate-manifest.json summary:"
