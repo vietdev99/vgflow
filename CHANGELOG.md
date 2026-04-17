@@ -2,6 +2,19 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.3.2] - 2026-04-17
+
+### Fixed (CRITICAL — extend preservation gate to all migrate steps)
+- **`/vg:migrate` steps 5, 6, 7 also had overwrite-without-diff risk** (v1.3.1 only fixed step 4 CONTEXT.md):
+  - Step 5 **API-CONTRACTS.md**: `--force` case overwrote existing without preserving endpoint paths
+  - Step 6 **TEST-GOALS.md**: `--force` case overwrote existing without preserving G-XX goals + bodies
+  - Step 7 **PLAN.md attribution**: Agent trusted to "only add attributes" but no verification — task descriptions could be silently rewritten/dropped
+- **Fix:** All 4 mutation steps (4/5/6/7) now write to `{file}.staged` first. Preservation gates before promote:
+  - IDs preserved (D-XX, G-XX, Task N, endpoint paths — depending on artifact type)
+  - Body similarity ≥ 80% (difflib.SequenceMatcher) — attribute-stripped for PLAN.md
+  - On fail: original untouched, staging kept at `{file}.staged`, backup in `.gsd-backup/`
+- **Universal rule added to `<rules>` block**: "MERGE, DO NOT OVERWRITE" — codifies staging+diff+gate pattern for any future migrate step or similar mutation command.
+
 ## [1.3.1] - 2026-04-17
 
 ### Fixed (CRITICAL — data safety)

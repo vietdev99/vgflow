@@ -14,10 +14,15 @@ allowed-tools:
 
 <rules>
 1. **Non-destructive** — never delete GSD originals. Move to `.gsd-backup/` within phase dir.
-2. **Idempotent** — running migrate twice on same phase produces same result. Skip already-converted artifacts.
-3. **Config-driven** — all format decisions from vg.config.md (contract_format, scan_patterns, etc.)
-4. **No hardcoded project values** — endpoint paths, file locations, domain names all from config or code scan.
-5. **Profile enforcement** — `touch "${PHASE_DIR}/.step-markers/migrate.done"` at end.
+2. **MERGE, DO NOT OVERWRITE (tightened 2026-04-17)** — any existing artifact with user-authored content must be merged, not replaced. Agent writes to `{file}.staged` (not target). Before promoting staging → target, run preservation gates:
+   - **ID preservation**: every `D-XX` (decisions) / `G-XX` (goals) / `Task N` / endpoint path in original MUST exist in staging. Missing = agent dropped content → ABORT, original untouched.
+   - **Body preservation**: each element's body text must be ≥ 80% similar to original (`difflib.SequenceMatcher`). Lower ratio = agent rewrote prose → ABORT.
+   - **On fail**: staging kept at `{file}.staged` for user inspection; backup at `.gsd-backup/{file}.{original-ext}`.
+   Applies to: CONTEXT.md (step 4), API-CONTRACTS.md (step 5), TEST-GOALS.md (step 6), PLAN.md (step 7).
+3. **Idempotent** — running migrate twice on same phase produces same result. Skip already-converted artifacts.
+4. **Config-driven** — all format decisions from vg.config.md (contract_format, scan_patterns, etc.)
+5. **No hardcoded project values** — endpoint paths, file locations, domain names all from config or code scan.
+6. **Profile enforcement** — `touch "${PHASE_DIR}/.step-markers/migrate.done"` at end.
 </rules>
 
 <objective>
@@ -396,7 +401,40 @@ Agent(model="sonnet", description="Generate API-CONTRACTS.md from built code"):
     CRITICAL: This is REVERSE-ENGINEERING from code, not forward-design.
     Every field, every status code, every auth guard MUST match what's actually in the code.
     
-    Output: write ${PHASE_DIR}/API-CONTRACTS.md
+    Output: write to ${PHASE_DIR}/API-CONTRACTS.md.staged (STAGING — not final).
+```
+
+**Preservation gate (tightened 2026-04-17):**
+
+If `API-CONTRACTS.md` already exists (`--force` case), backup first then diff:
+
+```bash
+STAGING="${PHASE_DIR}/API-CONTRACTS.md.staged"
+TARGET="${PHASE_DIR}/API-CONTRACTS.md"
+
+[ -f "$STAGING" ] || { echo "⛔ Agent did not write staging ${STAGING}"; exit 1; }
+
+# If overwriting existing file, backup + verify endpoint preservation
+if [ -f "$TARGET" ]; then
+  cp "$TARGET" "${PHASE_DIR}/.gsd-backup/API-CONTRACTS.md.pre-migrate"
+  ${PYTHON_BIN:-python3} - "$TARGET" "$STAGING" <<'PY' || exit 1
+import re, sys
+orig = open(sys.argv[1], encoding='utf-8').read()
+new = open(sys.argv[2], encoding='utf-8').read()
+def paths(t): return set(re.findall(r'(?m)^[#\s]*(GET|POST|PUT|PATCH|DELETE)\s+(/[^\s`]+)', t))
+orig_eps, new_eps = paths(orig), paths(new)
+missing = orig_eps - new_eps
+if missing:
+    print(f"⛔ CONTRACTS LOST: {len(missing)} endpoint(s) in existing file not in new:")
+    for m, p in sorted(missing): print(f"    {m} {p}")
+    print(f"    Existing API-CONTRACTS.md preserved. Staging kept at {sys.argv[2]}")
+    sys.exit(1)
+print(f"✓ All {len(orig_eps)} existing endpoints preserved (+{len(new_eps - orig_eps)} new)")
+PY
+fi
+
+mv "$STAGING" "$TARGET"
+echo "✓ API-CONTRACTS.md written"
 ```
 </step>
 
@@ -434,7 +472,65 @@ Agent(model="sonnet", description="Generate TEST-GOALS.md from enriched CONTEXT"
        Goals with unmet infra_deps auto-classify as INFRA_PENDING in review Phase 4.
     
     Output format: follow TEST-GOALS.md template from blueprint step 2b5.
-    Write to: ${PHASE_DIR}/TEST-GOALS.md
+    Write to: ${PHASE_DIR}/TEST-GOALS.md.staged (STAGING — not final).
+```
+
+**Preservation gate (tightened 2026-04-17):**
+
+```bash
+STAGING="${PHASE_DIR}/TEST-GOALS.md.staged"
+TARGET="${PHASE_DIR}/TEST-GOALS.md"
+
+[ -f "$STAGING" ] || { echo "⛔ Agent did not write staging ${STAGING}"; exit 1; }
+
+# If overwriting existing file (--force), preserve G-XX IDs + bodies
+if [ -f "$TARGET" ]; then
+  cp "$TARGET" "${PHASE_DIR}/.gsd-backup/TEST-GOALS.md.pre-migrate"
+  ${PYTHON_BIN:-python3} - "$TARGET" "$STAGING" <<'PY' || exit 1
+import re, sys, difflib
+orig = open(sys.argv[1], encoding='utf-8').read()
+new = open(sys.argv[2], encoding='utf-8').read()
+
+def extract(text):
+    """Return dict G-XX -> body (between header and next ## or end)."""
+    bodies = {}
+    for m in re.finditer(r'(?mi)^#+\s*Goal\s+(G-\d+)[^\n]*\n(.*?)(?=^#+\s*Goal\s+G-|\Z)', text, re.S):
+        bodies[m.group(1)] = m.group(2).strip()
+    # Fallback: simpler pattern "## G-XX"
+    if not bodies:
+        for m in re.finditer(r'(?mi)^#+\s*(G-\d+)\b[^\n]*\n(.*?)(?=^#+\s*G-|\Z)', text, re.S):
+            bodies[m.group(1)] = m.group(2).strip()
+    return bodies
+
+orig_g = extract(orig)
+new_g = extract(new)
+
+missing = sorted(set(orig_g) - set(new_g), key=lambda x: int(x.split('-')[1]))
+if missing:
+    print(f"⛔ GOALS LOST: {len(missing)} goal(s) in existing file not in new: {missing}")
+    print(f"    Existing TEST-GOALS.md preserved. Staging kept at {sys.argv[2]}")
+    sys.exit(1)
+
+# Body preservation check — each G-XX body >= 80% similar
+rewrites = []
+for gid, orig_body in orig_g.items():
+    new_body = new_g.get(gid, "")
+    if not orig_body and not new_body: continue
+    ratio = difflib.SequenceMatcher(None, orig_body, new_body).ratio()
+    if ratio < 0.80:
+        rewrites.append((gid, ratio))
+if rewrites:
+    print(f"⛔ GOAL BODY REWRITTEN: {len(rewrites)} goal(s) with < 80% similarity:")
+    for gid, r in rewrites: print(f"    {gid}: {r:.0%}")
+    print(f"    Staging kept at {sys.argv[2]}")
+    sys.exit(1)
+
+print(f"✓ All {len(orig_g)} existing goals preserved (+{len(set(new_g)-set(orig_g))} new)")
+PY
+fi
+
+mv "$STAGING" "$TARGET"
+echo "✓ TEST-GOALS.md written"
 ```
 </step>
 
@@ -464,7 +560,84 @@ Agent(model="sonnet", description="Add VG attributes to PLAN.md tasks"):
     - ${PHASE_DIR}/API-CONTRACTS.md (for contract-ref mapping)
     - ${PHASE_DIR}/TEST-GOALS.md (for goals-covered mapping)
     
-    Output: overwrite ${PHASE_DIR}/PLAN*.md with attributed versions
+    Output: write to ${PHASE_DIR}/PLAN.md.staged per source file (STAGING — not final overwrite).
+```
+
+**Preservation gate (tightened 2026-04-17):**
+
+Agent wrote to staging files (one per PLAN*.md source). Verify task preservation before promoting to target.
+
+```bash
+# Process each PLAN*.md that has a staging file
+for PLAN_FILE in "${PHASE_DIR}"/PLAN*.md; do
+  [ -f "$PLAN_FILE" ] || continue
+  BASENAME=$(basename "$PLAN_FILE")
+  STAGING="${PHASE_DIR}/${BASENAME}.staged"
+
+  [ -f "$STAGING" ] || { echo "⚠ No staging for ${BASENAME} — agent skipped?"; continue; }
+
+  BACKUP="${PHASE_DIR}/.gsd-backup/${BASENAME}.gsd"
+  ORIG="${BACKUP:-$PLAN_FILE}"
+  [ -f "$ORIG" ] || ORIG="$PLAN_FILE"
+
+  ${PYTHON_BIN:-python3} - "$ORIG" "$STAGING" <<'PY' || exit 1
+import re, sys, difflib
+orig = open(sys.argv[1], encoding='utf-8').read()
+stage = open(sys.argv[2], encoding='utf-8').read()
+
+def tasks(text):
+    """Return dict 'Task N' -> body (between header and next ## Task or end)."""
+    bodies = {}
+    # Match "## Task N" or "### Task N" — capture title + body
+    for m in re.finditer(r'(?mi)^#+\s*Task\s+(\d+)([^\n]*)\n(.*?)(?=^#+\s*Task\s+\d+|\Z)', text, re.S):
+        num = m.group(1)
+        title = m.group(2).strip()
+        body = m.group(3)
+        # Strip VG attribute blocks (<file-path>, <contract-ref>, <goals-covered>, <design-ref>)
+        body_clean = re.sub(r'<(?:file-path|contract-ref|goals-covered|design-ref|api-endpoint|edits-\w+)>.*?</\1>', '', body, flags=re.S)
+        body_clean = re.sub(r'<(?:file-path|contract-ref|goals-covered|design-ref|api-endpoint|edits-\w+)[^/>]*/>', '', body_clean)
+        bodies[num] = {'title': title, 'body': body_clean.strip()}
+    return bodies
+
+orig_t = tasks(orig)
+stage_t = tasks(stage)
+
+# Gate A: every task in original must exist in staging
+missing = sorted(set(orig_t) - set(stage_t), key=int)
+if missing:
+    print(f"⛔ TASKS LOST: {len(missing)} task(s) in original not in staging: Task {missing}")
+    print(f"    Staging kept at {sys.argv[2]}. PLAN.md NOT modified.")
+    sys.exit(1)
+
+# Gate B: title + body preservation >= 80% similar (attribute-stripped)
+rewrites = []
+for tnum, orig_data in orig_t.items():
+    stage_data = stage_t.get(tnum, {})
+    # Title comparison
+    if orig_data['title'] and stage_data.get('title'):
+        title_ratio = difflib.SequenceMatcher(None, orig_data['title'], stage_data['title']).ratio()
+    else:
+        title_ratio = 1.0
+    # Body comparison (after stripping VG attrs)
+    body_ratio = difflib.SequenceMatcher(None, orig_data['body'], stage_data.get('body', '')).ratio() if (orig_data['body'] or stage_data.get('body')) else 1.0
+    if title_ratio < 0.85 or body_ratio < 0.80:
+        rewrites.append((tnum, title_ratio, body_ratio))
+
+if rewrites:
+    print(f"⛔ TASK CONTENT REWRITTEN: {len(rewrites)} task(s) diverged beyond threshold:")
+    for tnum, tr, br in rewrites:
+        print(f"    Task {tnum}: title_similarity={tr:.0%} body_similarity={br:.0%}")
+    print(f"    Rule violated: 'DO NOT rewrite task descriptions. ONLY ADD attributes.'")
+    print(f"    Staging kept at {sys.argv[2]}. PLAN.md NOT modified.")
+    sys.exit(1)
+
+print(f"✓ {sys.argv[2]}: all {len(orig_t)} tasks preserved (titles + bodies)")
+PY
+
+  # Gates passed — promote staging to final
+  mv "$STAGING" "$PLAN_FILE"
+  echo "✓ Attributed: ${BASENAME}"
+done
 ```
 </step>
 
