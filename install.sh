@@ -108,16 +108,44 @@ fi
 # ============================================================
 # 2. Codex CLI skill
 # ============================================================
-echo "[2/6] Codex CLI skill..."
-if command -v codex &>/dev/null; then
-  for skill in vg-review vg-test vg-next vg-accept vg-progress; do
+echo "[2/6] Codex CLI skills (verification subset — review onwards)..."
+# v1.11.3: Codex chỉ chạy phần verification (post-build). Không phải tất cả 36 skills.
+# Codex tốt cho: review/test/accept (E2E browser), regression sweep, diagnostics.
+# Generation-heavy commands (scope/blueprint/build) belong to Claude/main IDE.
+#
+# Subset deployed to .codex/skills/:
+CODEX_SKILLS=(
+  vg-review       # post-build code scan + browser discovery
+  vg-test         # goal verification + codegen
+  vg-accept       # human UAT
+  vg-regression   # full regression sweep
+  vg-next         # auto-advance pipeline
+  vg-progress     # status dashboard
+  vg-bug-report   # auto-report workflow bugs
+  vg-doctor       # health/integrity dispatcher
+  vg-health       # project health
+  vg-integrity    # artifact manifest verify
+  vg-recover      # stuck phase recovery
+  vg-update       # pull latest
+  vg-reapply-patches  # post-update conflict resolve
+)
+
+SKILL_DEPLOYED=0
+for skill in "${CODEX_SKILLS[@]}"; do
+  src="$SCRIPT_DIR/codex-skills/$skill/SKILL.md"
+  if [ -f "$src" ]; then
     mkdir -p "$TARGET/.codex/skills/$skill"
-    cp "$SCRIPT_DIR/codex-skills/$skill/SKILL.md" "$TARGET/.codex/skills/$skill/"
-    echo "  → .codex/skills/$skill/SKILL.md"
-  done
-  echo "  Commands: \$vg-review  \$vg-test  \$vg-next  \$vg-accept  \$vg-progress"
+    cp "$src" "$TARGET/.codex/skills/$skill/"
+    SKILL_DEPLOYED=$((SKILL_DEPLOYED + 1))
+  fi
+done
+
+echo "  → ${SKILL_DEPLOYED}/${#CODEX_SKILLS[@]} codex skills installed (verification subset)"
+if command -v codex &>/dev/null; then
+  echo "  Codex CLI detected. Available: \$vg-review, \$vg-test, \$vg-accept, \$vg-regression, \$vg-next, \$vg-progress, ..."
+  echo "  Note: scope/blueprint/build use Claude (heavier reasoning)."
 else
-  echo "  → codex not found, skipping (install later: cp vgflow/codex-skills/* to .codex/skills/)"
+  echo "  → codex CLI not found — skills installed inactive until codex installed"
 fi
 
 # ============================================================
