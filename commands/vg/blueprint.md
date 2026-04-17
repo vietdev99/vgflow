@@ -138,10 +138,10 @@ Before planning, verify CONTEXT.md has the enriched format scope.md should have 
 
 ```bash
 CONTEXT_FILE="${PHASE_DIR}/CONTEXT.md"
-# Check enriched format: at least some D-XX decisions should have Endpoints or Test Scenarios
+# Check enriched format: at least some P{phase}.D-XX (or legacy D-XX) decisions should have Endpoints or Test Scenarios
 HAS_ENDPOINTS=$(grep -c "^\*\*Endpoints:\*\*" "$CONTEXT_FILE" 2>/dev/null || echo 0)
 HAS_TESTS=$(grep -c "^\*\*Test Scenarios:\*\*" "$CONTEXT_FILE" 2>/dev/null || echo 0)
-DECISION_COUNT=$(grep -c "^### D-" "$CONTEXT_FILE" 2>/dev/null || echo 0)
+DECISION_COUNT=$(grep -cE "^### (P[0-9.]+\.)?D-" "$CONTEXT_FILE" 2>/dev/null || echo 0)
 
 if [ "$DECISION_COUNT" -eq 0 ]; then
   echo "⛔ CONTEXT.md has 0 decisions. Run /vg:scope ${PHASE_NUMBER} first."
@@ -491,7 +491,7 @@ If no API routes or web pages detected → write minimal contract with CONTEXT-d
 Generate TEST-GOALS.md from CONTEXT.md decisions + API-CONTRACTS.md endpoints.
 
 **Agent context (~300 lines):**
-- CONTEXT.md decisions (D-01 through D-XX) (~100 lines)
+- CONTEXT.md decisions (`P{phase}.D-01` through `P{phase}.D-XX`, or legacy `D-01..D-XX`) (~100 lines)
 - API-CONTRACTS.md endpoints + fields (~100 lines)
 - Output format template (~100 lines)
 
@@ -499,14 +499,14 @@ Generate TEST-GOALS.md from CONTEXT.md decisions + API-CONTRACTS.md endpoints.
 ```
 Convert CONTEXT decisions into testable GOALS.
 
-For each decision (D-XX), produce 1+ goals. Each goal:
+For each decision (`P{phase}.D-XX`, or legacy `D-XX`), produce 1+ goals. Each goal:
 - Has success criteria (what the user can do, what the system shows)
 - Has mutation evidence (for create/update/delete: API response + UI change)
 - Has dependencies (which goals must pass first)
 - Has priority (critical = core feature, important = expected feature, nice-to-have = edge case/polish)
 
 CONTEXT decisions:
-[D-01 through D-XX]
+[P{phase}.D-01 through P{phase}.D-XX — phase-scoped namespace, mandatory prefix]
 
 API endpoints:
 [from API-CONTRACTS.md]
@@ -538,7 +538,7 @@ Output format:
 Generated from: CONTEXT.md decisions + API-CONTRACTS.md
 Total: {N} goals ({critical} critical, {important} important, {nice} nice-to-have)
 
-## Goal G-00: Authentication (D-00)
+## Goal G-00: Authentication (F-06 or P{phase}.D-XX)
 **Priority:** critical
 **Success criteria:**
 - User can log in with valid credentials
@@ -549,7 +549,7 @@ Total: {N} goals ({critical} critical, {important} important, {nice} nice-to-hav
 **Dependencies:** none (root goal)
 **Infra deps:** none
 
-## Goal G-01: {Feature} (D-XX)
+## Goal G-01: {Feature} (P{phase}.D-XX — or F-XX if foundation-sourced)
 **Priority:** critical | important | nice-to-have
 **Success criteria:**
 - [what the user can do]
@@ -1119,7 +1119,7 @@ ${endpoints_missing[@]}
 
 ## Instruction for planner
 APPEND tasks covering the missing items. DO NOT rewrite existing tasks.
-Match each new task to 1 missing D-XX, G-XX, or endpoint.
+Match each new task to 1 missing `P{phase}.D-XX` / `F-XX`, G-XX, or endpoint.
 EOF
 
 # Spawn planner via SlashCommand with gap context

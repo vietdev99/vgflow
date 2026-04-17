@@ -19,7 +19,7 @@ allowed-tools:
 1. **All pipeline artifacts required** — SPECS → CONTEXT → PLAN → API-CONTRACTS → TEST-GOALS → SUMMARY → RUNTIME-MAP → GOAL-COVERAGE-MATRIX → SANDBOX-TEST. Missing = BLOCK.
 2. **Step markers mandatory** — every profile-applicable step from /vg:build, /vg:review, /vg:test MUST have its `.step-markers/{step}.done` file. Missing = BLOCK (AI skipped silently).
 3. **SANDBOX-TEST verdict gate** — must be `PASSED` or `GAPS_FOUND`. `FAILED` → BLOCK with redirect.
-4. **UAT is data-driven** — checklist items are GENERATED from VG artifacts (D-XX from CONTEXT, G-XX from TEST-GOALS, HIGH callers from RIPPLE-ANALYSIS, design-refs from PLAN). No hardcoded checks.
+4. **UAT is data-driven** — checklist items are GENERATED from VG artifacts (`P{phase}.D-XX` from CONTEXT, `F-XX` from FOUNDATION if cited in any phase artifact, G-XX from TEST-GOALS, HIGH callers from RIPPLE-ANALYSIS, design-refs from PLAN). No hardcoded checks. Bare `D-XX` treated as legacy — displayed with "(legacy)" suffix.
 5. **No auto-accept** — every non-N/A item requires explicit user Pass/Fail/Skip.
 6. **Ripple gate** — if RIPPLE-ANALYSIS has HIGH severity callers, user MUST acknowledge each before proceeding.
 7. **Write UAT.md atomic** — at end, all results persisted. Rejected phase still writes UAT.md (audit trail).
@@ -33,6 +33,19 @@ Pipeline: specs → scope → blueprint → build → review → test → **acce
 </objective>
 
 <process>
+
+<step name="0_gate_integrity_precheck">
+**T8 gate (cổng) integrity precheck — blocks accept if /vg:update left unresolved gate conflicts (xung đột).**
+
+If `.planning/vgflow-patches/gate-conflicts.md` exists, a prior `/vg:update` detected that the 3-way merge (gộp) altered one or more HARD gate blocks. BLOCK (chặn) until resolved via `/vg:reapply-patches --verify-gates`.
+
+```bash
+if [ -f ".planning/vgflow-patches/gate-conflicts.md" ]; then
+  echo "⛔ Gate integrity conflicts unresolved — run /vg:reapply-patches --verify-gates first."
+  exit 1
+fi
+```
+</step>
 
 <step name="0_load_config">
 Follow `.claude/commands/vg/_shared/config-loader.md`.
@@ -283,26 +296,170 @@ fi
 ```
 </step>
 
+<step name="3c_override_resolution_gate">
+**Gate 3c: Override resolution gate (T5 — event-based, v1.8.0+)**
+
+⛔ HARD GATE: if the override-debt register contains OPEN entries that are NOT resolved by a telemetry event (and NOT explicitly `--wont-fix`), BLOCK accept. Time-based expiry is BANNED — an override only clears when its bypassed gate re-runs cleanly OR the user explicitly declines to fix.
+
+Rationale (from M9 claude reviewer): prior `auto_expire_days` model silently forgave real debt. An override entry must stay OPEN until either (a) the bypassed gate re-runs cleanly (auto-resolved via telemetry `override_resolved` event correlation), or (b) the user explicitly marks `--wont-fix` with justification.
+
+```bash
+# Load helpers
+source .claude/commands/vg/_shared/override-debt.md 2>/dev/null || true
+
+# Migrate any pre-v1.8.0 legacy entries (idempotent — adds legacy:true flag)
+override_migrate_legacy 2>/dev/null || true
+
+# List unresolved entries
+UNRESOLVED_JSON=$(override_list_unresolved 2>/dev/null || echo "[]")
+UNRESOLVED_COUNT=$(echo "$UNRESOLVED_JSON" | ${PYTHON_BIN} -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
+
+if [ "${UNRESOLVED_COUNT:-0}" -gt 0 ]; then
+  # Filter to blocking-severity entries for THIS phase only
+  BLOCKING_SEV="${CONFIG_DEBT_BLOCKING_SEVERITY:-critical}"
+  BLOCKING_LIST=$(echo "$UNRESOLVED_JSON" | ${PYTHON_BIN} - "$BLOCKING_SEV" "$PHASE_NUMBER" <<'PY'
+import json, sys
+entries = json.load(sys.stdin)
+blocking_sev = set(sys.argv[1].split())
+phase = sys.argv[2]
+out = []
+for e in entries:
+    if e.get("severity") in blocking_sev and e.get("phase") == phase:
+        age_days = "?"
+        try:
+            from datetime import datetime, timezone
+            ts = datetime.fromisoformat(e["logged_ts"].replace("Z","+00:00"))
+            age_days = (datetime.now(timezone.utc) - ts).days
+        except Exception: pass
+        legacy_tag = " [LEGACY (cũ)]" if e.get("legacy") else ""
+        out.append(f"  • {e['id']} [{e['severity']}] {e['flag']} · gate={e.get('gate_id') or 'n/a'} · age={age_days}d{legacy_tag}")
+        out.append(f"     step: {e['step']}")
+        out.append(f"     reason: {e['reason']}")
+print("\n".join(out))
+PY
+)
+
+  if [ -n "$BLOCKING_LIST" ]; then
+    echo ""
+    echo "⛔ Override resolution gate BLOCKED — unresolved overrides (bỏ qua, chưa giải quyết) for phase ${PHASE_NUMBER}:"
+    echo ""
+    echo "$BLOCKING_LIST"
+    echo ""
+    echo "Resolution paths (giải quyết):"
+    echo "  1. Re-run the bypassed gate cleanly → auto-resolved via telemetry event (preferred)"
+    echo "     Example: /vg:build ${PHASE_NUMBER} --gaps-only  OR  /vg:review ${PHASE_NUMBER}  OR  /vg:test ${PHASE_NUMBER}"
+    echo ""
+    echo "  2. /vg:override-resolve {gate_id} --wont-fix --reason='<why this override is permanent>'"
+    echo "     (Future command — for overrides that will never be clean-resolved. Marks WONT_FIX, logs telemetry.)"
+    echo ""
+    echo "  3. /vg:accept ${PHASE_NUMBER} --allow-unresolved-overrides --reason='<justification>'"
+    echo "     (Accept path — logs NEW debt entry, still blocks the NEXT accept. Not a forgive, a defer.)"
+    echo ""
+
+    if [[ "$ARGUMENTS" =~ --allow-unresolved-overrides ]]; then
+      REASON=$(echo "$ARGUMENTS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
+      if [ -z "$REASON" ]; then
+        echo "⛔ --allow-unresolved-overrides requires --reason='<why shipping with unresolved overrides>'"
+        exit 1
+      fi
+      echo "⚠ --allow-unresolved-overrides set with reason: ${REASON}"
+      echo "   Recording NEW debt entry (this acceptance itself becomes tracked debt)."
+      # Log as new override-debt entry (critical severity — shows up on NEXT accept too)
+      if type -t log_override_debt >/dev/null 2>&1; then
+        log_override_debt "--allow-unresolved-overrides" "$PHASE_NUMBER" \
+          "accept.override-resolution-gate" "$REASON" "override-resolution-gate"
+      fi
+      # Emit telemetry
+      if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+        emit_telemetry_v2 "override_used" "$PHASE_NUMBER" "accept.override-resolution-gate" \
+          "override-resolution-gate" "OVERRIDE" \
+          "{\"flag\":\"--allow-unresolved-overrides\",\"reason\":\"${REASON//\"/\\\"}\",\"unresolved_count\":${UNRESOLVED_COUNT}}"
+      fi
+      # Stash for UAT.md surfacing
+      echo "$BLOCKING_LIST" > "${VG_TMP}/uat-unresolved-overrides.txt"
+      echo "$REASON" > "${VG_TMP}/uat-unresolved-override-reason.txt"
+    else
+      exit 1
+    fi
+  fi
+
+  # Surface legacy (pre-v1.8.0) entries informationally — they need triage but don't auto-block
+  # unless they're also at blocking severity (already caught above)
+  LEGACY_LIST=$(echo "$UNRESOLVED_JSON" | ${PYTHON_BIN} <<'PY'
+import json, sys
+entries = json.load(sys.stdin)
+legacy = [e for e in entries if e.get("legacy")]
+for e in legacy:
+    print(f"  • {e['id']} [{e['severity']}] {e['flag']} — logged {e['logged_ts']}")
+PY
+)
+  if [ -n "$LEGACY_LIST" ]; then
+    echo ""
+    echo "⚠ Legacy (cũ) override entries detected — pre-v1.8.0, no telemetry gate_id link:"
+    echo "$LEGACY_LIST"
+    echo "   These need manual triage. Recommended: re-run the original gate OR mark --wont-fix."
+  fi
+fi
+```
+
+**NEW command placeholder:** `/vg:override-resolve {gate_id} --wont-fix --reason='...'` — explicit decline path for overrides that will never be clean-resolved. Ships in v1.9+. Until then, use `--allow-unresolved-overrides` inline path (logs new debt entry, still blocks next accept — forces eventual confrontation).
+</step>
+
 <step name="4_build_uat_checklist">
 **Build data-driven UAT checklist from VG artifacts.**
 
 The checklist has 5 sections. Each section pulls directly from phase data — no hardcoded items.
 
-### Section A: Decisions (from CONTEXT.md)
+### Section A: Decisions (from CONTEXT.md — phase-scoped) + Section A.1: Foundation Decisions (from FOUNDATION.md — if cited)
 
-Parse `CONTEXT.md` for `D-XX` blocks. Each becomes a UAT item: "Was decision D-XX implemented as specified?"
+Parse `CONTEXT.md` for `P{phase}.D-XX` blocks (new) or legacy `D-XX`. Each becomes a UAT item: "Was decision {ID} implemented as specified?"
 
 ```bash
 ${PYTHON_BIN} - <<PY > "${VG_TMP}/uat-decisions.txt"
 import re
 from pathlib import Path
 text = Path("${PHASE_DIR}/CONTEXT.md").read_text(encoding="utf-8")
-# Match D-XX heading + first descriptive line
-for m in re.finditer(r'^##?\s*(D-\d+)[:\s-]+([^\n]+)', text, re.MULTILINE):
+# Match P{phase}.D-XX heading (new v1.8.0 namespace) OR legacy D-XX heading
+# Patterns: "### P7.10.1.D-01: title" OR "### D-01: title" (legacy)
+for m in re.finditer(r'^##?#?\s*(P[0-9.]+\.D-\d+|D-\d+)[:\s-]+([^\n]+)', text, re.MULTILINE):
     did = m.group(1)
     title = m.group(2).strip().rstrip('*').strip()[:100]
-    print(f"{did}\t{title}")
+    # Mark legacy bare D-XX with suffix for UAT display (migration reminder)
+    suffix = "\t(legacy — run migrate-d-xx-namespace.py)" if re.match(r'^D-\d+$', did) else ""
+    print(f"{did}\t{title}{suffix}")
 PY
+
+# Section A.1 — scan all phase artifacts (PLAN, SUMMARY, UAT, etc.) for F-XX references from FOUNDATION.md
+# If cited, include FOUNDATION.md decision in UAT (to verify F-XX assumption still holds)
+FOUNDATION_FILE=".planning/FOUNDATION.md"
+if [ -f "$FOUNDATION_FILE" ]; then
+  ${PYTHON_BIN} - <<PY > "${VG_TMP}/uat-foundation.txt"
+import re
+from pathlib import Path
+
+phase_dir = Path("${PHASE_DIR}")
+cited_ids = set()
+# Scan phase artifacts for F-XX citations
+for md_file in phase_dir.rglob("*.md"):
+    try:
+        text = md_file.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(r'\bF-(\d+)\b', text):
+            cited_ids.add(f"F-{m.group(1)}")
+    except Exception:
+        pass
+
+if not cited_ids:
+    # No FOUNDATION decisions cited → emit nothing (Section A.1 shown empty)
+    pass
+else:
+    # Parse FOUNDATION.md for each cited F-XX → get title
+    foundation_text = Path("${FOUNDATION_FILE}").read_text(encoding="utf-8")
+    for fid in sorted(cited_ids):
+        m = re.search(rf'^##?#?\s*{re.escape(fid)}[:\s-]+([^\n]+)', foundation_text, re.MULTILINE)
+        title = m.group(1).strip().rstrip('*').strip()[:100] if m else "(not found in FOUNDATION.md — stale cite?)"
+        print(f"{fid}\t{title}")
+PY
+fi
 ```
 
 ### Section B: Goals (from TEST-GOALS.md + GOAL-COVERAGE-MATRIX.md)
@@ -468,7 +625,8 @@ esac
 **Now present SECTION COUNTS to user:**
 ```
 UAT Checklist for Phase {PHASE_NUMBER}:
-  Section A — Decisions (CONTEXT D-XX):     {count} items
+  Section A — Decisions (CONTEXT P{phase}.D-XX): {count} items
+  Section A.1 — Foundation cites (F-XX):    {count} items (0 = none cited)
   Section B — Goals (TEST-GOALS G-XX):      {count} items
   Section C — Ripple callers (HIGH):        {count} callers need acknowledgment
   Section D — Design refs:                  {count} refs + {mobile_count} simulator shots
@@ -491,7 +649,7 @@ For each section:
 For each line in `${VG_TMP}/uat-decisions.txt`:
 ```
 AskUserQuestion:
-  "Decision {D-XX}: {title}
+  "Decision {ID} (P{phase}.D-XX from CONTEXT, or legacy D-XX): {title}
    Was this implemented as specified in CONTEXT.md?
 
    [p] Pass — verified in code/runtime
@@ -646,13 +804,22 @@ Write `${PHASE_DIR}/${PHASE_NUMBER}-UAT.md` with ALL collected data.
 **Verdict:** {ACCEPTED | REJECTED | DEFERRED}
 **Test verdict (pre-UAT):** {VERDICT from SANDBOX-TEST.md}
 
-## A. Decisions (CONTEXT.md D-XX)
-| D-XX | Title | Result | Note |
-|------|-------|--------|------|
-| D-01 | {...} | PASS / FAIL / SKIP | {...} |
+## A. Decisions (CONTEXT.md P{phase}.D-XX — or legacy D-XX)
+| ID | Title | Result | Note |
+|----|-------|--------|------|
+| P7.10.1.D-01 | {...} | PASS / FAIL / SKIP | {...} |
+| D-02 (legacy) | {...} | PASS | run migrate-d-xx-namespace.py to normalize |
 | ... | ... | ... | ... |
 
 Totals: {passed}P / {failed}F / {skipped}S
+
+## A.1 Foundation Citations (FOUNDATION.md F-XX — only populated if cited in phase artifacts)
+| F-XX | Title | Result | Note |
+|------|-------|--------|------|
+| F-01 | Platform = web-saas | PASS / FAIL / SKIP | verified F-XX assumption holds for this phase |
+| ... | ... | ... | ... |
+
+Empty if no F-XX references found in phase artifacts.
 
 ## B. Goals (TEST-GOALS.md G-XX)
 | G-XX | Title | Coverage Status | UAT Result | Note |

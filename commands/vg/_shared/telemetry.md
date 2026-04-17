@@ -18,22 +18,29 @@ telemetry:
   event_types_skip: []              # optional blocklist: ["narration", "debug"]
 ```
 
-## Event schema
+## Event schema (v1.8.0+ structured)
 
 ```json
 {
+  "event_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",  // uuid v4 — every event uniquely addressable
   "ts": "2026-04-17T09:12:33Z",
-  "event": "gate_blocked",
-  "phase": "7.12",
+  "event_type": "gate_blocked",                         // renamed from "event" (alias kept for back-compat)
+  "phase": "7.12",                                      // null if project-level
+  "command": "vg:review",                               // which command emitted
   "step": "review.4c-pre",
-  "session_id": "abc123",           // random per invocation
-  "git_sha": "d484589f",            // HEAD at time of event
-  "meta": {                          // event-specific payload
+  "session_id": "abc123",                               // hash of {user, repo, start_ts}
+  "git_sha": "d484589f",
+  "gate_id": "not-scanned-defer",                       // promoted to top-level (was in meta)
+  "outcome": "BLOCK",                                   // PASS | FAIL | SKIP | OVERRIDE | BLOCK | WARN
+  "correlation_id": "f47ac10b-...",                     // parent event_id for causal chain (null if root)
+  "payload": {                                          // event-specific (renamed from "meta")
     "reason": "NOT_SCANNED=5, FAILED=2",
     "count": 7
   }
 }
 ```
+
+**Back-compat:** Old fields `event` + `meta` still accepted by readers (alias for `event_type` + `payload`). Migration auto-rewrites on first /vg:telemetry --migrate.
 
 ## Standard event types
 
@@ -51,6 +58,10 @@ telemetry:
 | `visual_regression_fail` | baseline diff > threshold | `view`, `diff_pct`, `threshold_pct` |
 | `graphify_skip` | /vg:map skipped (fresh) | `commits_since`, `reason` |
 | `graphify_incremental` | incremental rebuild | `files_changed`, `nodes_affected` |
+| `override_resolved` | T5: bypassed gate re-runs cleanly | `gate_id`, `original_override_event_id` |
+| `artifact_written` | T3: artifact + manifest written | `artifact`, `sha256`, `bytes` |
+| `artifact_read_validated` | T3: manifest validated on read | `artifact`, `expected_sha256`, `actual_sha256`, `match` (bool) |
+| `drift_detected` | T6: foundation drift entry | `tier` (info/warn), `keyword`, `dimension`, `current_value` |
 
 ## API
 
@@ -72,10 +83,13 @@ telemetry_init() {
   fi
 }
 
-# Emit one event
-emit_telemetry() {
+# Emit one event (v1.8.0 structured: event_id, event_type, command, gate_id, outcome, correlation_id, payload)
+# New API: emit_telemetry_v2 EVENT_TYPE PHASE STEP GATE_ID OUTCOME PAYLOAD_JSON [CORRELATION_ID] [COMMAND]
+# Returns: prints emitted event_id to stdout (for downstream correlation)
+emit_telemetry_v2() {
   [ "${CONFIG_TELEMETRY_ENABLED:-true}" = "true" ] || return 0
-  local event="$1" phase="$2" step="$3" meta_json="${4:-{}}"
+  local event_type="$1" phase="$2" step="$3" gate_id="${4:-}" outcome="${5:-}" payload_json="${6:-{}}"
+  local correlation_id="${7:-}" command="${8:-${VG_CURRENT_COMMAND:-unknown}}"
   local path="${TELEMETRY_PATH:-.planning/telemetry.jsonl}"
 
   # Sampling
@@ -88,24 +102,118 @@ emit_telemetry() {
 
   # Skip list
   local skip="${CONFIG_TELEMETRY_EVENT_TYPES_SKIP:-}"
-  case " $skip " in *" $event "*) return 0 ;; esac
+  case " $skip " in *" $event_type "*) return 0 ;; esac
 
-  local ts git_sha
+  local ts git_sha event_id
   ts=$(date -u +%FT%TZ)
   git_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  event_id=$(${PYTHON_BIN:-python3} -c "import uuid; print(uuid.uuid4())" 2>/dev/null || \
+             printf '%08x-%04x-4%03x-%04x-%012x' $RANDOM $RANDOM $RANDOM $RANDOM $RANDOM$RANDOM)
 
-  ${PYTHON_BIN:-python3} - "$event" "$phase" "$step" "$TELEMETRY_SESSION_ID" "$git_sha" "$ts" "$meta_json" "$path" <<'PY'
+  ${PYTHON_BIN:-python3} - \
+    "$event_id" "$event_type" "$phase" "$command" "$step" "$TELEMETRY_SESSION_ID" \
+    "$git_sha" "$ts" "$gate_id" "$outcome" "$correlation_id" "$payload_json" "$path" <<'PY'
 import json, sys
-event, phase, step, sid, sha, ts, meta_raw, path = sys.argv[1:9]
+(eid, etype, phase, cmd, step, sid, sha, ts, gate_id, outcome, corr_id, payload_raw, path) = sys.argv[1:14]
 try:
-  meta = json.loads(meta_raw) if meta_raw else {}
+  payload = json.loads(payload_raw) if payload_raw else {}
 except json.JSONDecodeError:
-  meta = {"_raw": meta_raw}
+  payload = {"_raw": payload_raw}
+event = {
+  "event_id": eid,
+  "ts": ts,
+  "event_type": etype,
+  "phase": phase if phase else None,
+  "command": cmd,
+  "step": step,
+  "session_id": sid,
+  "git_sha": sha,
+  "gate_id": gate_id if gate_id else None,
+  "outcome": outcome if outcome else None,
+  "correlation_id": corr_id if corr_id else None,
+  "payload": payload
+}
 with open(path, 'a', encoding='utf-8') as f:
-  f.write(json.dumps({
-    "ts": ts, "event": event, "phase": phase, "step": step,
-    "session_id": sid, "git_sha": sha, "meta": meta
-  }, ensure_ascii=False) + "\n")
+  f.write(json.dumps(event, ensure_ascii=False) + "\n")
+print(eid)
+PY
+}
+
+# Back-compat shim (old 4-arg signature → maps to v2 with gate_id/outcome extracted from payload if present)
+emit_telemetry() {
+  local event_type="$1" phase="$2" step="$3" payload_json="${4:-{}}"
+  # Extract gate_id + outcome from payload if present (best-effort migration)
+  local gate_id outcome
+  gate_id=$(${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.argv[1] or '{}'); print(d.get('gate_id',''))" "$payload_json" 2>/dev/null || echo "")
+  outcome=$(${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.argv[1] or '{}'); print(d.get('outcome',''))" "$payload_json" 2>/dev/null || echo "")
+  emit_telemetry_v2 "$event_type" "$phase" "$step" "$gate_id" "$outcome" "$payload_json"
+}
+
+# Query API — filter events by gate_id / outcome / phase / event_type / since
+# Usage: telemetry_query --gate-id=X --outcome=OVERRIDE --since=2026-04-10
+telemetry_query() {
+  local path="${TELEMETRY_PATH:-.planning/telemetry.jsonl}"
+  [ -f "$path" ] || return 0
+  local gate_id="" outcome="" phase="" event_type="" since=""
+  for arg in "$@"; do
+    case "$arg" in
+      --gate-id=*)    gate_id="${arg#--gate-id=}" ;;
+      --outcome=*)    outcome="${arg#--outcome=}" ;;
+      --phase=*)      phase="${arg#--phase=}" ;;
+      --event-type=*) event_type="${arg#--event-type=}" ;;
+      --since=*)      since="${arg#--since=}" ;;
+    esac
+  done
+  ${PYTHON_BIN:-python3} - "$path" "$gate_id" "$outcome" "$phase" "$event_type" "$since" <<'PY'
+import json, sys
+path, gid, outc, phs, etyp, since = sys.argv[1:7]
+def match(ev):
+  if gid and ev.get("gate_id") != gid: return False
+  if outc and ev.get("outcome") != outc: return False
+  if phs and ev.get("phase") != phs: return False
+  if etyp and ev.get("event_type", ev.get("event")) != etyp: return False
+  if since and ev.get("ts", "") < since: return False
+  return True
+with open(path, encoding='utf-8') as f:
+  for line in f:
+    line = line.strip()
+    if not line: continue
+    try:
+      ev = json.loads(line)
+      if match(ev):
+        print(line)
+    except Exception: pass
+PY
+}
+
+# Auto-WARNING when gate has > N OVERRIDE outcomes in current milestone
+# Called by /vg:doctor and at the end of major commands
+telemetry_warn_overrides() {
+  local threshold="${1:-2}"
+  local milestone_since="${2:-$(date -u -d '30 days ago' +%FT%TZ 2>/dev/null || date -u +%FT%TZ)}"
+  local path="${TELEMETRY_PATH:-.planning/telemetry.jsonl}"
+  [ -f "$path" ] || return 0
+  ${PYTHON_BIN:-python3} - "$path" "$threshold" "$milestone_since" <<'PY'
+import json, sys
+from collections import Counter
+path, thr, since = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+counts = Counter()
+for line in open(path, encoding='utf-8'):
+  line = line.strip()
+  if not line: continue
+  try:
+    ev = json.loads(line)
+    if ev.get("ts", "") < since: continue
+    if ev.get("outcome") == "OVERRIDE":
+      gid = ev.get("gate_id") or "(no-gate-id)"
+      counts[gid] += 1
+  except Exception: pass
+flagged = [(g, c) for g, c in counts.items() if c > thr]
+if flagged:
+  print("⚠ TELEMETRY WARNING (cảnh báo): gates with > {} OVERRIDE (bỏ qua) outcomes since {}:".format(thr, since[:10]))
+  for g, c in sorted(flagged, key=lambda x: -x[1]):
+    print(f"   • {g}: {c} overrides")
+  print("   Recommended: investigate cause, consider if gate threshold is too strict OR if AI agent is rationalizing past valid concerns.")
 PY
 }
 

@@ -51,54 +51,72 @@ Gracefully degrades: no VGFLOW-VERSION → "VG vunknown"; offline → no update 
 </step>
 
 <step name="1_scan_phases">
-**Scan all phase directories for artifacts:**
+**Deterministic scan via script — DO NOT self-scan.**
 
-```
-phases_dir = config.paths.phases   # e.g., .planning/phases
-List all directories in ${phases_dir}/
+LLM self-scanning across many phases is error-prone (hallucinated counts, missed
+verdict formats). Progress uses a Python script as the single source of truth.
 
-For each phase_dir:
-  phase_number = extract from dir name (e.g., "07.6-publisher-polish" → "7.6")
-  phase_name = extract from dir name (e.g., "publisher-polish")
-  
-  Check artifacts:
-    specs     = exists ${phase_dir}/SPECS.md
-    context   = exists ${phase_dir}/CONTEXT.md
-    plan      = count ${phase_dir}/*-PLAN*.md OR ${phase_dir}/PLAN*.md
-    contracts = exists ${phase_dir}/API-CONTRACTS.md
-    test_goals = exists ${phase_dir}/TEST-GOALS.md
-    summary   = count ${phase_dir}/*-SUMMARY*.md OR ${phase_dir}/SUMMARY*.md
-    runtime   = exists ${phase_dir}/RUNTIME-MAP.json
-    runtime_md = exists ${phase_dir}/RUNTIME-MAP.md
-    sandbox   = exists ${phase_dir}/*-SANDBOX-TEST.md
-    uat       = exists ${phase_dir}/*-UAT.md
-    uat_status = grep "status:" from UAT file (if exists)
-    
-    # Extra detail
-    scan_files = count ${phase_dir}/scan-*.json (Haiku scan results)
-    probe_files = count ${phase_dir}/probe-*.json (probe results)
-    goal_matrix = exists ${phase_dir}/GOAL-COVERAGE-MATRIX.md
-    crossai    = count ${phase_dir}/crossai/*.xml
-    
-    # Pipeline state (primary source — more accurate than artifact detection)
-    pipeline_state = read ${phase_dir}/PIPELINE-STATE.json (if exists)
-    
-  Determine current step:
-    # Prefer PIPELINE-STATE.json if it exists (has timing + sub-step info)
-    IF pipeline_state exists:
-      Find first step with status != "done" and status != "skipped"
-      Use sub_step and detail for in-progress visibility
-      Use started_at/finished_at for timing
-    ELSE (fallback to artifact detection):
-    IF no specs     → step 0 (prerequisite)
-    IF no context   → step 1 (scope)
-    IF no plan      → step 2 (blueprint)
-    IF no summary   → step 3 (build)
-    IF no runtime   → step 4 (review)
-    IF no sandbox   → step 5 (test)
-    IF no uat OR uat_status != "complete" → step 6 (accept)
-    ELSE            → step 7 (done)
+```bash
+SCAN_JSON=$(${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/vg-progress.py" \
+  --planning "${PLANNING_DIR}" --output json 2>&1)
+
+if [ $? -ne 0 ]; then
+  echo "⛔ vg-progress.py failed. Falling back to artifact check — results may be stale."
+fi
 ```
+
+The script returns JSON:
+```json
+{
+  "current_phase_from_state": "07.8",
+  "phase_count": 33,
+  "phases": [
+    {
+      "phase": "07.7",
+      "name": "07.7-inventory-floor-pricing-engine",
+      "label": "DONE",
+      "done_count": 7,
+      "total_steps": 7,
+      "current_step": null,
+      "next_command": "—",
+      "steps": {
+        "specs": {"status": "done", "icon": "✅", "source": "artifact"},
+        "scope": {"status": "done", "icon": "✅", "source": "artifact"},
+        "blueprint": {"status": "done", "icon": "✅", "source": "artifact"},
+        "build": {"status": "done", "icon": "✅", "source": "artifact"},
+        "review": {"status": "done", "icon": "✅", "source": "artifact"},
+        "test": {"status": "done", "icon": "✅", "source": "artifact"},
+        "accept": {"status": "done", "icon": "✅", "source": "artifact"}
+      },
+      "content": {
+        "sandbox": "PASSED",
+        "uat": "ACCEPTED",
+        "matrix": {"ready": 36, "blocked": 0, "unreachable": 0, "gate": "PASS"}
+      },
+      "artifacts": {...},
+      "pipeline_state": null
+    }
+  ]
+}
+```
+
+Key fields to render in Step 3:
+- `label` — overall status (DONE | BLOCKED | IN_PROGRESS | NOT_STARTED)
+- `done_count/total_steps` — "6/7" in header
+- `steps[*].icon` — pipeline string
+- `next_command` — exact command to suggest (already includes phase number)
+- `content.sandbox`, `content.uat`, `content.matrix` — for detail view
+
+**Detection rules the script enforces** (so renderer trusts them):
+1. **PIPELINE-STATE.json** is authoritative — script reads it first, falls back to artifacts only if missing.
+2. **UAT verdict** parsing handles all seen formats: `**Verdict:** ACCEPTED`,
+   `## Verdict: PASSED`, `status: complete`, YAML frontmatter prioritized over
+   per-test `status:` lines deeper in file.
+3. **Monotonic invariant** — if step N is done, all steps < N are promoted to
+   done with `source: "inferred"`. Prevents false BLOCKED when review matrix
+   has an unusual format but UAT has already accepted the phase.
+4. **Matrix gate** — `Ready: X | Blocked: Y | Unreachable: Z` parsed deterministically.
+   FAIL only when Blocked+Unreachable > 0 AND UAT hasn't accepted downstream.
 </step>
 
 <step name="2_identify_current">

@@ -2,6 +2,113 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.8.0] - 2026-04-17
+
+### Tier 2 fixes batch — closing AI corner-cutting surface
+
+Sau cross-AI evaluation 4 reviewers (codex, gemini, claude, opus) — verdict CONCERNS với onboarding 3.25/10, consistency/robustness 4.5–4.75/10. v1.8.0 ship 8 cải tiến (T1–T8) đóng các lỗ hổng "soft policy" và "observability theater" được consensus flag.
+
+### Added
+
+- **T1. Structured telemetry schema (v2)** — `_shared/telemetry.md`
+  - `emit_telemetry_v2(event_type, phase, step, gate_id, outcome, payload, correlation_id, command)` với uuid `event_id`
+  - `telemetry_query --gate-id=X --outcome=Y --since=Z` để root-cause analysis thực sự
+  - `telemetry_warn_overrides` auto-WARN khi 1 gate bị OVERRIDE > N lần trong milestone
+  - Event types mới: `override_resolved`, `artifact_written`, `artifact_read_validated`, `drift_detected`
+  - Back-compat shim: `emit_telemetry()` cũ vẫn work, map sang v2
+
+- **T2. `/vg:doctor` command** — `commands/vg/doctor.md` (NEW, 673 LOC)
+  - 5 modes: bare (project health), `{phase}` (deep inspect), `--integrity` (hash validate), `--gates` (gate audit), `--recover {phase}` (6 corruption recovery flows)
+  - Replaces "fix manually + grep telemetry.jsonl" pattern
+
+- **T3. Artifact manifest với SHA256** — `_shared/artifact-manifest.md` (NEW)
+  - `artifact_manifest_write(phase_dir, command, ...paths)` ghi `.artifact-manifest.json` LAST sau khi all artifacts complete
+  - `artifact_manifest_validate(phase_dir)` → 0=valid, 1=missing, 2=corruption
+  - `artifact_manifest_backfill(phase_dir, command)` migrate phase legacy
+  - Chống multi-file atomicity gap (crash mid-write)
+
+- **T8. `/vg:update` gate-integrity verify** — `scripts/vg_update.py`, `commands/vg/update.md`, `reapply-patches.md`
+  - GitHub Action publish `gate-manifest.json` per release
+  - `update.md` step `6b_verify_gate_integrity` so sánh hash gate blocks vs manifest
+  - `/vg:reapply-patches --verify-gates` mode bắt buộc trước /vg:build sau update
+  - Build/review/test/accept: early hard gate block nếu unverified gates
+
+### Changed (BREAKING — migration required)
+
+- **T4. D-XX namespace migration (MANDATORY)** — split namespace:
+  - **F-XX** = FOUNDATION decisions (project-wide)
+  - **P{phase}.D-XX** = per-phase decisions (e.g., `P7.6.D-12`)
+  - Migration script: `scripts/migrate-d-xx-namespace.py` (450 LOC, idempotent, atomic backup)
+    - `--dry-run` (default) → preview changes
+    - `--apply` → commit + backup to `.planning/.archive/{ts}/pre-migration/`
+    - Negative-lookbehind regex `(?<![\w.])D-(\d+)(?!\d)` (no false-positive)
+  - **Backward compat window:** legacy `D-XX` accepted with WARN through v1.10.0; HARD-REJECT v1.10.1+
+  - Files updated: `project.md`, `scope.md`, `blueprint.md`, `accept.md` (Section A.1 for F-XX), `vg-executor-rules.md`, `vg-planner-rules.md`, `templates/vg/commit-msg`
+
+- **T5. Override expiry contract (BREAKING)** — `_shared/override-debt.md`, `accept.md`
+  - **Time-based expiry BANNED** — overrides chỉ resolve khi gate bypassed RE-RUN clean
+  - New field: `resolved_by_event_id` (telemetry event ID, kiểm chứng được)
+  - New API: `override_resolve()`, `override_list_unresolved()`, `override_migrate_legacy()`
+  - `/vg:accept` step `3c_override_resolution_gate` — block accept nếu override unresolved
+
+### Improved
+
+- **T6. Foundation semantic drift + notify-and-track** — `_shared/foundation-drift.md`, `.planning/.drift-register.md`
+  - 8 structured claim families (mobile/desktop/serverless/PCI/GDPR/HIPAA/SOC2/high-QPS) thay regex on prose
+  - 3 tiers: INFO (log), WARN (notify user + track register), BLOCK-deferred
+  - **`.drift-register.md`** — dedup tracking, không quên drift đã flag
+  - `drift_detected` telemetry event tự động emit
+
+- **T7. `/vg:scope-review` incremental mode** — `commands/vg/scope-review.md` (385 → 665 LOC)
+  - `.scope-review-baseline.json` — chỉ re-compare phases changed since baseline
+  - `--full` flag để full O(n²) scan (default = incremental)
+  - Delta summary + telemetry emit cho audit
+  - Khử O(n²) scaling failure ở milestone 50+ phases
+
+### Migration guide v1.7.1 → v1.8.0
+
+**Required actions:**
+
+1. **Backup**: `git commit -am "pre-v1.8.0"` hoặc `cp -r .planning .planning.bak`
+2. **Run D-XX migration (dry-run first)**:
+   ```bash
+   python3 .claude/scripts/migrate-d-xx-namespace.py --dry-run
+   # Review preview, sau đó:
+   python3 .claude/scripts/migrate-d-xx-namespace.py --apply
+   ```
+3. **Backfill artifact manifests** (legacy phases):
+   ```bash
+   /vg:doctor --integrity   # detect missing manifests
+   # For each phase: artifact_manifest_backfill called via /vg:doctor --recover
+   ```
+4. **Migrate legacy overrides** (loại bỏ time-based expiry):
+   ```bash
+   # /vg:accept tự gọi override_migrate_legacy() lần đầu
+   ```
+5. **Drift register init**: `.planning/.drift-register.md` tự tạo lần đầu chạy `/vg:scope-review` hoặc khi drift detected.
+
+**Backward compatibility:**
+- Legacy `D-XX` (không namespace) — WARN nhưng vẫn pass qua v1.10.0
+- Legacy telemetry events thiếu `event_id` — `emit_telemetry()` shim auto-fill
+- Phase artifacts chưa có manifest — `/vg:doctor --recover` backfill được
+
+**Breaking only at v1.10.1+:**
+- D-XX không namespace → HARD-REJECT
+- Override không có `resolved_by_event_id` → HARD-REJECT
+
+### Cross-AI evaluation context
+
+v1.8.0 đáp ứng Tier 2 priorities từ `.planning/vg-eval/SYNTHESIS.md`:
+- M4 (Observability theater) → T1 + T2
+- M5 (`scope-review` O(n²)) → T7
+- M6 (Foundation drift wording-only) → T6
+- M7 (`/vg:update` gate-integrity) → T8
+- M8 (D-XX namespace collision) → T4
+- M9 (Override expiry undefined) → T5
+- M10 (Multi-file atomicity gap) → T3
+
+Tier 1 (wave checkpoints, command consolidation, rationalization-guard subagent, /vg:amend propagation, CrossAI domain disclaimer) — deferred sang v2.0 (breaking).
+
 ## [1.7.1] - 2026-04-17
 
 ### Added — Term glossary RULE (Vietnamese explanation for English terms)

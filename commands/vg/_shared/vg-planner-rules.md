@@ -14,7 +14,7 @@ references, goal linkages, and design references. No vague "create something" ta
 
 ```
 <specs>       SPECS.md — problem, scope, constraints
-<context>     CONTEXT.md — decisions D-XX with rationale
+<context>     CONTEXT.md — decisions `P{phase}.D-XX` with rationale (or legacy `D-XX` for pre-v1.8.0 phases)
 <contracts>   API-CONTRACTS.md — endpoint definitions with code blocks (if exists)
 <goals>       TEST-GOALS.md — G-XX goals with success criteria (if exists)
 <design_refs> List of design assets available (screenshots + structural)

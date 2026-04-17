@@ -78,6 +78,19 @@ If ALL 5 servers locked → BLOCK. The lock manager auto-sweeps stale locks (TTL
 on every claim — if still no slot free, it's genuinely contended. Do NOT manually cleanup other sessions' locks.
 </CRITICAL_MCP_RULE>
 
+<step name="00_gate_integrity_precheck">
+**T8 gate (cổng) integrity precheck — blocks review if /vg:update left unresolved gate conflicts (xung đột).**
+
+If `.planning/vgflow-patches/gate-conflicts.md` exists, a prior `/vg:update` detected that the 3-way merge (gộp) altered one or more HARD gate blocks. BLOCK (chặn) until resolved via `/vg:reapply-patches --verify-gates`.
+
+```bash
+if [ -f ".planning/vgflow-patches/gate-conflicts.md" ]; then
+  echo "⛔ Gate integrity conflicts unresolved — run /vg:reapply-patches --verify-gates first."
+  exit 1
+fi
+```
+</step>
+
 <step name="00_session_lifecycle">
 **Session lifecycle (tightened 2026-04-17) — clean tail UI across runs.**
 

@@ -768,46 +768,53 @@ For EACH `?` dimension, model presents OPTIONS with TRADE-OFFS, asks user:
  [v] Vite (recommended) [n] Next.js [r] Remix [s] Skip — quyết sau"
 ```
 
-User answers → record D-XX trong decisions array.
+User answers → record F-XX trong decisions array.
+
+**Namespace (không gian tên) note — BREAKING CHANGE v1.8.0:**
+- FOUNDATION.md decisions use `F-XX` (project-level, stable across milestones). Ví dụ: `F-01` = Platform decision.
+- Per-phase CONTEXT.md decisions use `P{phase}.D-XX` (scoped to phase). Ví dụ: `P7.10.1.D-12` = decision 12 of phase 7.10.1.
+- Bare `D-XX` is LEGACY (còn chấp nhận bởi commit-msg hook tới v1.10.0, sau đó reject).
+- Rationale: ngăn collision (xung đột) khi phase 15+ có `D-12` trùng với FOUNDATION `D-12` → AI agents cite sai source.
+- Migration (chuyển đổi) tool: `.claude/scripts/migrate-d-xx-namespace.py` — tự động rename trong mọi artifact.
 
 ### Round 4: High-cost confirmation gate (MANDATORY — never skip)
 
-Model presents ALL `🔒` decisions as a single confirm gate:
+Model presents ALL `🔒` decisions as a single confirm gate (using new F-XX namespace):
 
 ```
 "⚠ HIGH-COST DECISIONS (irreversible — confirm explicit trước khi lock):
 
-  🔒 Platform: web-saas
+  🔒 F-01 Platform: web-saas
      Đổi sau = rewrite ~80% UI (sang mobile/desktop). 
 
-  🔒 Frontend framework: Vite
+  🔒 F-03 Frontend framework: Vite
      Đổi sang Next.js sau = re-architect routing + data fetching.
 
-  🔒 Backend topology: monolith Fastify
+  🔒 F-04 Backend topology: monolith Fastify
      Đổi sang serverless = re-architect deploy + state management.
 
-  🔒 Database: Postgres
+  🔒 F-05 Database: Postgres
      Đổi sang NoSQL = data layer rewrite + migration script.
 
-  🔒 Hosting: VPS
+  🔒 F-07 Hosting: VPS
      Đổi sang Vercel/cloud = redeploy infra + CI/CD redo.
 
  Confirm tất cả? [y] Yes / [r] Revisit dimension cụ thể / [a] Abort"
 ```
 
-NEVER auto-skip Round 4. Even with `--auto` mode, must confirm.
+NEVER auto-skip Round 4. Even with `--auto` mode, must confirm. All IDs here are `F-XX` (FOUNDATION namespace).
 
 ### Round 5: Constraints fill-in (skip if all answered)
 
-For each `⚠` dimension still missing or default-applied, ask:
+For each `⚠` dimension still missing or default-applied, ask (record as F-XX):
 
 ```
-"Constraint: Compliance
+"Constraint: Compliance (F-10)
  Bạn không nhắc — default 'none'. Có cần GDPR/HIPAA/SOC2 không?
  [n] None [g] GDPR [h] HIPAA [s] SOC2 [m] Multiple (specify)"
 ```
 
-Cover: scale (precise users), latency budget, compliance, team size, budget tier.
+Cover: scale (precise users), latency budget, compliance, team size, budget tier. All foundation-scope constraints → F-XX.
 
 ### Round 6: Auto-derive vg.config.md from foundation
 
@@ -876,7 +883,7 @@ rm -f "$DRAFT_FILE"
 git add "$PROJECT_FILE" "$FOUNDATION_FILE" "$CONFIG_FILE"
 git commit -m "project: foundation locked
 
-Per discussion rounds 1-7. See FOUNDATION.md for D-XX decisions.
+Per discussion rounds 1-7. See FOUNDATION.md for F-XX decisions (F = Foundation namespace, stable across milestones; per-phase decisions use P{phase}.D-XX).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
@@ -905,9 +912,9 @@ User answers + nói rõ thay đổi.
 
 Model:
 1. Identify affected dimensions (parse user input)
-2. Load existing decisions D-XX cho dimensions đó
+2. Load existing decisions F-XX cho dimensions đó (FOUNDATION namespace — không gian tên project-level)
 3. Run mini-dialog (1-3 rounds) chỉ trên dimensions affected
-4. Generate new D-(N+1) marked "supersedes D-XX"
+4. Generate new F-(N+1) marked "supersedes F-XX"
 5. **Preservation gate** (MERGE NOT OVERWRITE):
    - Write `FOUNDATION.md.staged` với chỉ dimensions changed updated
    - Other dimensions: copy verbatim từ existing
@@ -918,7 +925,7 @@ Model:
 Cascade impact:
 - If frontend/backend/build dimension changed → SUGGEST: "Tech stack changed → re-derive vg.config.md? [y/n]"
 - If yes → run Round 6 (config derivation) chỉ cho fields affected
-- Commit message: `project(update): <dimension(s)> changed — D-XX supersedes D-YY`
+- Commit message: `project(update): <dimension(s)> changed — F-XX supersedes F-YY`
 </step>
 
 <step name="6_mode_milestone">
@@ -1082,25 +1089,27 @@ Print next-step pointer based on mode:
 
 ## 1. Platform & Topology (8 dimensions)
 
+**Namespace:** All FOUNDATION decisions use `F-XX` (project-level, stable across milestones). Per-phase decisions live in `.planning/phases/*/CONTEXT.md` as `P{phase}.D-XX`.
+
 | # | Dimension | Value | Decision | Confidence |
 |---|-----------|-------|----------|------------|
-| 1 | Platform type | web-saas / mobile-native / mobile-cross / desktop / cli / hybrid | D-01 | derived/confirmed |
-| 2 | Frontend runtime | browser / iOS / Android / Electron / none | D-02 | ... |
-| 3 | Frontend framework | React+Vite / Next.js / Vue+Vite / Svelte / Flutter / RN / native-iOS / native-Android | D-03 | ... |
-| 4 | Backend topology | none / monolith / microservices / serverless / edge / BaaS | D-04 | ... |
-| 5 | Data layer | none / Postgres / MySQL / SQLite / MongoDB / Redis / blob / hybrid | D-05 | ... |
-| 6 | Auth model | none / own / OAuth / SSO / passwordless / 3rd-party (Auth0/Clerk) | D-06 | ... |
-| 7 | Hosting | VPS / AWS / GCP / Vercel / Netlify / on-prem / app-store / hybrid | D-07 | ... |
-| 8 | Distribution | URL / app-store / npm / docker-hub / physical-device | D-08 | ... |
+| 1 | Platform type | web-saas / mobile-native / mobile-cross / desktop / cli / hybrid | F-01 | derived/confirmed |
+| 2 | Frontend runtime | browser / iOS / Android / Electron / none | F-02 | ... |
+| 3 | Frontend framework | React+Vite / Next.js / Vue+Vite / Svelte / Flutter / RN / native-iOS / native-Android | F-03 | ... |
+| 4 | Backend topology | none / monolith / microservices / serverless / edge / BaaS | F-04 | ... |
+| 5 | Data layer | none / Postgres / MySQL / SQLite / MongoDB / Redis / blob / hybrid | F-05 | ... |
+| 6 | Auth model | none / own / OAuth / SSO / passwordless / 3rd-party (Auth0/Clerk) | F-06 | ... |
+| 7 | Hosting | VPS / AWS / GCP / Vercel / Netlify / on-prem / app-store / hybrid | F-07 | ... |
+| 8 | Distribution | URL / app-store / npm / docker-hub / physical-device | F-08 | ... |
 
 ## 2. Tech Stack (concrete choices, derived from above)
 
-- Frontend: {framework + key libs} (D-XX)
-- Backend: {framework + key libs} (D-XX)
-- Database: {engine + version} (D-XX)
-- Build/monorepo: {pnpm+turborepo / npm / cargo / go-mod / ...} (D-XX)
-- Test: {vitest / jest / pytest / playwright / maestro / ...} (D-XX)
-- Deploy: {SSH+PM2 / git-push / docker / Ansible / ...} (D-XX)
+- Frontend: {framework + key libs} (F-XX)
+- Backend: {framework + key libs} (F-XX)
+- Database: {engine + version} (F-XX)
+- Build/monorepo: {pnpm+turborepo / npm / cargo / go-mod / ...} (F-XX)
+- Test: {vitest / jest / pytest / playwright / maestro / ...} (F-XX)
+- Deploy: {SSH+PM2 / git-push / docker / Ansible / ...} (F-XX)
 
 ## 3. Constraints
 
@@ -1112,13 +1121,15 @@ Print next-step pointer based on mode:
 
 ## 4. Decisions
 
-### D-01: Platform = {value}
+### F-01: Platform = {value}
 **Reasoning:** {derivation/discussion summary}
 **Reverse cost:** HIGH/MEDIUM/LOW — {what breaks if reversed}
 **Confirmed:** {date} by user
 **Source:** {description / Round 4 confirm / scan / migration}
 
-(D-02 ... D-N — same structure)
+(F-02 ... F-N — same structure)
+
+**Namespace rule:** These IDs are `F-XX` (Foundation-scope). Do NOT reuse `D-XX` — that's reserved for per-phase CONTEXT.md as `P{phase}.D-XX`.
 
 ## 5. Open Questions
 
@@ -1175,7 +1186,7 @@ User only asked về fields marked `<ASK>` (typically: ssh_alias, deploy.path, d
     ]
   },
   "decisions": [
-    {"id": "D-01", "dim": "platform", "value": "web-saas", "confirmed": true, "round": 4}
+    {"id": "F-01", "dim": "platform", "value": "web-saas", "confirmed": true, "round": 4}
   ],
   "status": "in_progress"
 }
@@ -1197,7 +1208,8 @@ Each `/vg:project` invocation logs to telemetry:
 - `--update`, `--milestone`, `--rewrite`, `--migrate`, `--init-only`, `--view` all routable
 - Draft checkpointed every round, resumable on interrupt
 - High-cost confirm gate (Round 4) NEVER skipped
-- Existing decisions D-XX preserved across `--update` (MERGE NOT OVERWRITE)
+- Existing decisions F-XX preserved across `--update` (MERGE NOT OVERWRITE)
+- **Namespace enforcement:** FOUNDATION.md uses `F-XX`; phase CONTEXT.md uses `P{phase}.D-XX`. Legacy bare `D-XX` accepted until v1.10.0, then rejected. Migration tool: `.claude/scripts/migrate-d-xx-namespace.py`
 - `--rewrite` always backs up to `.archive/{ts}/`
 - vg.config.md auto-derived 80-90%, only `<ASK>` fields prompt user
 - Foundation drift detection in roadmap/add-phase/scope (separate commands)

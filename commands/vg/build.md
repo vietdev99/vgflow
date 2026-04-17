@@ -64,6 +64,22 @@ Key difference from V4 execute: executors read API-CONTRACTS.md to ensure BE rou
 
 **Config:** Read .claude/commands/vg/_shared/config-loader.md first.
 
+<step name="0_gate_integrity_precheck">
+**T8 gate (cổng) integrity precheck — blocks build if /vg:update left unresolved gate conflicts (xung đột).**
+
+If `.planning/vgflow-patches/gate-conflicts.md` exists, a prior `/vg:update` detected that the 3-way merge (gộp) altered one or more HARD gate blocks. Until a human resolves them via `/vg:reapply-patches --verify-gates`, the pipeline cannot trust its own enforcement logic — so we BLOCK (chặn).
+
+```bash
+if [ -f ".planning/vgflow-patches/gate-conflicts.md" ]; then
+  echo "⛔ Gate integrity conflicts unresolved."
+  echo "   File: .planning/vgflow-patches/gate-conflicts.md"
+  echo "   Cause: /vg:update 3-way merge altered hard-gate (cổng cứng) blocks."
+  echo "   Fix:   /vg:reapply-patches --verify-gates"
+  exit 1
+fi
+```
+</step>
+
 <step name="0_session_lifecycle">
 **Session lifecycle (tightened 2026-04-17) — clean tail UI across runs.**
 

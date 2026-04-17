@@ -294,6 +294,36 @@ echo "Merge pass done: updated=${UPDATED} new=${NEW_FILES} conflicts=${CONFLICTS
 ```
 </step>
 
+<step name="6b_verify_gate_integrity">
+**T8: post-merge hard-gate (cổng cứng) integrity check.**
+
+After 3-way merge (gộp), download `gate-manifest.json` for the upstream release, re-hash every hard-gate block in the merged command files, and diff against the manifest SHA256. Mismatches get parked in `.planning/vgflow-patches/gate-conflicts.md` for resolution by `/vg:reapply-patches --verify-gates`.
+
+Backward-compat (tương thích ngược): a 404 from the manifest URL (pre-v1.8.0 release) is a soft-skip with a warning — NOT a failure.
+
+```bash
+set +e  # Never let this step fail the whole /vg:update run
+echo ""
+echo "=== T8: verifying hard-gate integrity ==="
+
+python3 "${REPO_ROOT}/.claude/scripts/vg_update.py" verify-gates \
+  --manifest-version "${LATEST}" \
+  --from-version "${INSTALLED}" \
+  --merged-root "${REPO_ROOT}/.claude" \
+  --output-dir "${REPO_ROOT}/.planning/vgflow-patches" \
+  --phase ""
+VG_INTEGRITY_RC=$?
+
+case "$VG_INTEGRITY_RC" in
+  0) echo "Gate integrity: OK (tất cả cổng nguyên vẹn)" ;;
+  1) echo "Gate integrity: CONFLICTS (xung đột) — see .planning/vgflow-patches/gate-conflicts.md" ;;
+  2) echo "Gate integrity: SKIP — pre-v1.8.0 upstream has no gate-manifest (bỏ qua, tương thích ngược)" ;;
+  *) echo "Gate integrity: ERROR rc=${VG_INTEGRITY_RC} — treating as non-fatal" ;;
+esac
+set -e
+```
+</step>
+
 <step name="7_rotate_ancestor_and_version">
 ```bash
 # Remove old ancestor (ignore missing)

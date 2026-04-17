@@ -17,7 +17,9 @@ allowed-tools:
 2. **Config-driven** — read .claude/vg.config.md for project paths, profile, models.
 3. **SPECS.md required** — must exist before scoping. No SPECS = BLOCK.
 4. **Scope = DISCUSSION only** — do NOT create API-CONTRACTS.md, TEST-GOALS.md, or PLAN.md. Those are blueprint's job.
-5. **Enriched CONTEXT.md** — each decision D-XX has structured sub-sections (endpoints:, ui_components:, test_scenarios:). Blueprint reads these to generate artifacts accurately.
+5. **Enriched CONTEXT.md** — each decision `P{phase}.D-XX` has structured sub-sections (endpoints:, ui_components:, test_scenarios:). Blueprint reads these to generate artifacts accurately.
+
+**Namespace (không gian tên) BREAKING v1.8.0:** CONTEXT.md decisions use `P{phase}.D-XX` format, where `{phase}` is the phase number (e.g., `P7.10.1.D-01` for phase 7.10.1, decision 01). Bare `D-XX` is LEGACY — written by pre-v1.8.0 scope runs, migrated via `.claude/scripts/migrate-d-xx-namespace.py`. Rationale: prevent collision (xung đột) with FOUNDATION.md `F-XX` and with other phases' `D-XX` at phase 15+.
 6. **DISCUSSION-LOG.md is APPEND-ONLY** — never overwrite, never delete existing content. Only append new sessions.
 7. **Pipeline names** — use V5 names: `/vg:blueprint` (not plan), `/vg:build` (not execute).
 8. **5 rounds, then loop** — every round locks decisions. No round is skippable (except Round 4 UI/UX for backend-only profile).
@@ -120,8 +122,9 @@ AskUserQuestion:
 **If --auto mode:** AI picks recommended answers based on SPECS.md + codebase context. Log "[AUTO]" in discussion log.
 
 From response, lock decisions:
-- D-01 through D-XX (category: business)
+- `P${PHASE_NUMBER}.D-01` through `P${PHASE_NUMBER}.D-XX` (category: business)
 - Each decision captures: title, decision text, rationale
+- **Namespace enforcement:** Always prefix with `P${PHASE_NUMBER}.` (where ${PHASE_NUMBER} is extracted from $ARGUMENTS). If phase is "7.10.1", the decision ID is `P7.10.1.D-01`. Never write bare `D-01` (legacy — blocked by commit-msg hook from v1.10.1).
 
 ### Round 2 — Technical Approach
 
@@ -302,7 +305,9 @@ Source: /vg:scope structured discussion (5 rounds)
 
 ## Decisions
 
-### D-01: {decision title}
+**Namespace:** IDs are `P{phase}.D-XX` where `{phase}` = `${PHASE_NUMBER}` (this phase's identifier from ROADMAP). Example below uses phase 7.10.1 → IDs like `P7.10.1.D-01`. Substitute actual phase number when generating.
+
+### P${PHASE_NUMBER}.D-01: {decision title}
 **Category:** business | technical
 **Decision:** {what was decided}
 **Rationale:** {why}
@@ -317,7 +322,7 @@ Source: /vg:scope structured discussion (5 rounds)
 - TS-02: {edge case} -> {expected error}
 **Constraints:** {if any, else omit this line}
 
-### D-02: {decision title}
+### P${PHASE_NUMBER}.D-02: {decision title}
 **Category:** ...
 ...
 
@@ -336,7 +341,7 @@ Source: /vg:scope structured discussion (5 rounds)
 ```
 
 **Rules for CONTEXT.md:**
-- Decisions MUST be numbered sequentially: D-01, D-02, ...
+- Decisions MUST be numbered sequentially: `P{phase}.D-01`, `P{phase}.D-02`, ... (phase prefix MANDATORY — see namespace rule in command header)
 - Every decision with endpoints MUST have at least 1 test scenario
 - Endpoint format: `METHOD /path (auth: role, purpose: description)`
 - UI component format: `ComponentName: description`
@@ -500,8 +505,8 @@ Read and follow `.claude/commands/vg/_shared/crossai-invoke.md`.
 **Update PIPELINE-STATE.json:** Set `steps.scope.status = "done"`, `steps.scope.finished_at = {now}`, `last_action = "scope: {N} decisions, {M} endpoints, {K} test scenarios"`.
 
 ```bash
-# Count from CONTEXT.md
-DECISION_COUNT=$(grep -c '^### D-' "${PHASE_DIR}/CONTEXT.md")
+# Count from CONTEXT.md — supports both new P{phase}.D-XX and legacy D-XX headers
+DECISION_COUNT=$(grep -cE '^### (P[0-9.]+\.)?D-' "${PHASE_DIR}/CONTEXT.md")
 ENDPOINT_COUNT=$(grep -c '^\- .* /api/' "${PHASE_DIR}/CONTEXT.md" || echo 0)
 TEST_SCENARIO_COUNT=$(grep -c '^\- TS-' "${PHASE_DIR}/CONTEXT.md" || echo 0)
 

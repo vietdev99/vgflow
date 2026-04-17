@@ -1,78 +1,100 @@
-name: Release Tarball
+# VG Workflow release pipeline (T8 v1.8.0+)
+#
+# Triggered when a version tag (v*.*.*) is pushed. Builds:
+#   1. vgflow-<tag>.tar.gz       — standard release tarball
+#   2. vgflow-<tag>.tar.gz.sha256 — checksum for /vg:update verify step
+#   3. gate-manifest.json         — T8 hard-gate integrity manifest
+#
+# All three are uploaded as release assets. `/vg:update` downloads
+# gate-manifest.json post-merge to detect logically-broken gates.
+
+name: release
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (without leading v)"
+        required: true
+        default: "1.8.0"
 
 permissions:
-  contents: write
+  contents: write  # create release + upload assets
 
 jobs:
-  build:
+  build-and-publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Verify VERSION matches tag
+      - name: Resolve version
+        id: ver
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          FILE=$(cat VERSION | tr -d '[:space:]')
-          if [ "$TAG" != "$FILE" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match VERSION file ($FILE)"
-            exit 1
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "tag=v${{ github.event.inputs.version }}"    >> "$GITHUB_OUTPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}"       >> "$GITHUB_OUTPUT"
           fi
-          echo "VERSION matches tag: ${TAG}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Build tarball
         run: |
-          # Collect paths that exist (gemini-skills optional — git doesn't track empty dirs)
-          PATHS=()
-          for p in commands skills codex-skills gemini-skills scripts templates \
-                   install.sh sync.sh vg.config.template.md VERSION CHANGELOG.md README.md LICENSE; do
-            [ -e "$p" ] && PATHS+=("$p")
-          done
-          echo "Packing: ${PATHS[@]}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          TAR="vgflow-${TAG}.tar.gz"
+          # Exclude .github from shipped tarball (workflow files stay in repo only)
+          tar --exclude='.github' --exclude='.git' --exclude='*.bak' \
+              -czf "${TAR}" .
+          sha256sum "${TAR}" | awk '{print $1}' > "${TAR}.sha256"
+          echo "TAR=${TAR}" >> "$GITHUB_ENV"
 
-          tar czf "vgflow-${GITHUB_REF_NAME}.tar.gz" \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='.gitignore' \
-            --exclude='*.pyc' \
-            --exclude='__pycache__' \
-            --transform "s,^,vgflow/," \
-            "${PATHS[@]}"
-          ls -la "vgflow-${GITHUB_REF_NAME}.tar.gz"
-
-      - name: Compute SHA256
+      - name: Build gate-manifest.json (T8)
+        # Scans commands/vg/*.md for blocks containing `exit 1` OR `⛔ BLOCK`.
+        # Each qualifying <step> block is hashed (SHA256) and recorded with a
+        # fingerprint (first 80 chars of inner content) for post-merge lookup.
+        # vg_update.py is the single source of truth for this heuristic — if
+        # it's absent (pre-1.8.0 tag), fall back to a no-op manifest.
         run: |
-          sha256sum "vgflow-${GITHUB_REF_NAME}.tar.gz" > "vgflow-${GITHUB_REF_NAME}.tar.gz.sha256"
-          cat "vgflow-${GITHUB_REF_NAME}.tar.gz.sha256"
+          VERSION="${{ steps.ver.outputs.version }}"
+          if [ -f "scripts/vg_update.py" ]; then
+            python scripts/vg_update.py build-gate-manifest \
+              --commands-dir commands/vg \
+              --version "${VERSION}" \
+              --output gate-manifest.json
+          else
+            echo "scripts/vg_update.py missing — emitting empty manifest (pre-1.8.0)"
+            python - <<PY
+import json, datetime
+json.dump({
+  "version": "${VERSION}",
+  "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+  "heuristic": "N/A — vg_update.py not yet present in this release",
+  "gates": [],
+}, open("gate-manifest.json", "w"), indent=2)
+PY
+          fi
+          echo "---"
+          echo "gate-manifest.json summary:"
+          python -c "import json; d=json.load(open('gate-manifest.json')); print('version:', d['version']); print('gates:', len(d.get('gates', [])))"
 
-      - name: Extract changelog section for release notes
+      - name: Create GitHub Release + upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 <<'PY' > RELEASE_NOTES.md
-          import re, os
-          ver = os.environ.get("GITHUB_REF_NAME", "").lstrip("v")
-          try:
-              text = open("CHANGELOG.md", encoding="utf-8").read()
-          except Exception:
-              text = ""
-          m = re.search(rf'## \[{re.escape(ver)}\].*?(?=## \[|\Z)', text, re.S)
-          if m:
-              print(m.group(0).strip())
-          else:
-              print(f"# Release {ver}\n\nSee CHANGELOG.md for details.")
-          PY
-          echo "--- RELEASE NOTES PREVIEW ---"
-          cat RELEASE_NOTES.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            vgflow-${{ github.ref_name }}.tar.gz
-            vgflow-${{ github.ref_name }}.tar.gz.sha256
-          body_path: RELEASE_NOTES.md
-          draft: false
-          prerelease: false
+          TAG="${{ steps.ver.outputs.tag }}"
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes "Automated release. See CHANGELOG for details. Gate-manifest published for /vg:update T8 integrity verification." \
+            "${TAR}" \
+            "${TAR}.sha256" \
+            gate-manifest.json

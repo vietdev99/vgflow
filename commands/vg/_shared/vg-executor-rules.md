@@ -40,9 +40,17 @@ Types: `feat`, `fix`, `refactor`, `test`, `chore`, `docs`, `style`, `perf`
 
 Include ONE of:
 - `Per API-CONTRACTS.md line {start}-{end}` (if task touches API)
-- `Per CONTEXT.md D-XX` (if traces to decision)
+- `Per CONTEXT.md P{phase}.D-XX` (phase-scoped decision — NEW v1.8.0 namespace)
+- `Per FOUNDATION.md F-XX` (foundation-level decision — stable across milestones)
+- Legacy: `Per CONTEXT.md D-XX` (still accepted through v1.10.0, rejected v1.10.1+)
 - `Covers goal: G-XX` (if implements a goal)
 - `no-goal-impact` (explicit skip — must justify)
+
+**Namespace (không gian tên) rule — v1.8.0 BREAKING:**
+- Phase-level decisions live in `.planning/phases/{phase}/CONTEXT.md` with IDs `P{phase}.D-XX` (e.g., `P7.10.1.D-12`).
+- Project-level decisions live in `.planning/FOUNDATION.md` with IDs `F-XX` (e.g., `F-01` = platform choice).
+- NEVER cite bare `D-XX` in new commits — ambiguous between FOUNDATION and the phase's CONTEXT once phase numbers reach 15+. Use fully qualified form.
+- Migration for old artifacts: `python3 .claude/scripts/migrate-d-xx-namespace.py --apply`.
 
 Missing citation → commit-msg hook rejects. Do NOT use `--no-verify`.
 

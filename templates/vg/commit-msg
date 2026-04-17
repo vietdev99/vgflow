@@ -100,7 +100,11 @@ if [ "$REQUIRE_CITE" = "true" ]; then
       :
     else
       # --- Gate 2a: at least one citation token must appear ---
-      if ! echo "$MSG" | grep -qE '(Per|per) (API-CONTRACTS|CONTEXT|SPECS|TEST-GOALS|goal:? G-|D-[0-9]+)|Covers goal: G-[0-9]+'; then
+      # Namespace v1.8.0 (BREAKING):
+      #   - P{phase}.D-XX — phase-scoped CONTEXT.md decisions (new)
+      #   - F-XX          — FOUNDATION.md project-level decisions (new)
+      #   - D-XX          — legacy bare decision ID (accepted through v1.10.0, rejected v1.10.1+)
+      if ! echo "$MSG" | grep -qE '(Per|per) (API-CONTRACTS|CONTEXT|SPECS|TEST-GOALS|FOUNDATION|goal:? G-|P[0-9.]+\.D-[0-9]+|F-[0-9]+|D-[0-9]+)|Covers goal: G-[0-9]+'; then
         echo ""
         echo "[vg commit-msg] REJECTED - commit touches src/ but missing citation."
         echo ""
@@ -152,15 +156,48 @@ if [ "$REQUIRE_CITE" = "true" ]; then
         fi
       fi
 
-      # 2b-2: "D-XX" referenced -> must exist in CONTEXT.md (match headings,
-      #        bold markers, bullet items, or "D-XX:" inline — loose on purpose
-      #        to tolerate varied CONTEXT.md styles).
-      for DID in $(echo "$MSG" | grep -oE 'D-[0-9]+' | sort -u); do
+      # 2b-2: Decision IDs referenced -> must resolve.
+      #   - P{phase}.D-XX  → resolve in this phase's CONTEXT.md (new v1.8.0 namespace)
+      #   - F-XX           → resolve in .planning/FOUNDATION.md (project-level)
+      #   - D-XX (bare)    → LEGACY: resolve in this phase's CONTEXT.md. WARNS about migration.
+      # Using ERE alternation to catch all 3 forms in priority order.
+
+      # 2b-2a: P{phase}.D-XX — phase-scoped
+      for PDID in $(echo "$MSG" | grep -oE 'P[0-9.]+\.D-[0-9]+' | sort -u); do
+        # Extract core ID (strip P-prefix after last dot for local grep)
+        DID=$(echo "$PDID" | sed -E 's/^P[0-9.]+\.//')
         CTX_FILE="${PHASE_DIR}/CONTEXT.md"
         if [ ! -f "$CTX_FILE" ]; then
-          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites ${DID} but CONTEXT.md missing at ${CTX_FILE}"
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites ${PDID} but CONTEXT.md missing at ${CTX_FILE}"
+        elif ! grep -qE "(^|[^A-Za-z0-9])(${PDID}|${DID})([:*[:space:]]|$)" "$CTX_FILE"; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Decision ${PDID} not found in ${CTX_FILE}"
+        fi
+      done
+
+      # 2b-2b: F-XX — foundation-level
+      for FID in $(echo "$MSG" | grep -oE 'F-[0-9]+' | sort -u); do
+        FOUNDATION_FILE=".planning/FOUNDATION.md"
+        if [ ! -f "$FOUNDATION_FILE" ]; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites ${FID} but FOUNDATION.md missing at ${FOUNDATION_FILE}. Run /vg:project to create."
+        elif ! grep -qE "(^|[^A-Za-z0-9])${FID}([:*[:space:]]|$)" "$FOUNDATION_FILE"; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Foundation decision ${FID} not found in ${FOUNDATION_FILE}"
+        fi
+      done
+
+      # 2b-2c: Legacy bare D-XX (NOT preceded by "P{phase}.") — accepted thru v1.10.0, warned, rejected v1.10.1+
+      # Use perl-style negative lookbehind equivalent via sed-extracted ungrouped matches.
+      # Bash ERE can't do lookbehind; use a filter loop.
+      for DID in $(echo "$MSG" | grep -oE '(^|[^.])D-[0-9]+' | grep -oE 'D-[0-9]+' | sort -u); do
+        # Skip if this D-XX was already matched by P{phase}.D-XX above (which would include it)
+        if echo "$MSG" | grep -qE "P[0-9.]+\.${DID}\b"; then continue; fi
+        CTX_FILE="${PHASE_DIR}/CONTEXT.md"
+        if [ ! -f "$CTX_FILE" ]; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites legacy ${DID} but CONTEXT.md missing at ${CTX_FILE}"
         elif ! grep -qE "(^|[^A-Za-z0-9])${DID}([:*[:space:]]|$)" "$CTX_FILE"; then
           TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Decision ${DID} not found in ${CTX_FILE}"
+        else
+          # WARN (non-blocking through v1.10.0): remind to migrate
+          echo "[vg commit-msg] WARN: legacy bare citation '${DID}'. Run .claude/scripts/migrate-d-xx-namespace.py --apply to convert to P{phase}.D-XX. Rejected starting v1.10.1." >&2
         fi
       done
 

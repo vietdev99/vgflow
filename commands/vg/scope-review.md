@@ -1,7 +1,7 @@
 ---
 name: vg:scope-review
 description: Cross-phase scope validation — detect conflicts, overlaps, and gaps across all scoped phases
-argument-hint: "[--skip-crossai] [--phases=7.6,7.8,7.10]"
+argument-hint: "[--skip-crossai] [--phases=7.6,7.8,7.10] [--full]"
 allowed-tools:
   - Read
   - Write
@@ -20,6 +20,7 @@ allowed-tools:
 5. **DISCUSSION-LOG.md is APPEND-ONLY** — never overwrite, never delete existing content.
 6. **Resolution is interactive** — conflicts and gaps require user decision, not AI auto-fix.
 7. **Minimum 2 phases** — warn (not block) if only 1 phase scoped.
+8. **Incremental by default (tăng cường theo delta)** — scope is narrowed to changed + new + dependent phases via `.planning/.scope-review-baseline.json`. Use `--full` for complete rescan (mốc gốc — full baseline rebuild).
 </rules>
 
 <objective>
@@ -42,11 +43,13 @@ Pipeline position: specs -> scope -> **scope-review** -> blueprint -> build -> r
 # Parse arguments
 SKIP_CROSSAI=false
 PHASE_FILTER=""
+FULL_RESCAN=false
 
 for arg in $ARGUMENTS; do
   case "$arg" in
     --skip-crossai) SKIP_CROSSAI=true ;;
     --phases=*) PHASE_FILTER="${arg#--phases=}" ;;
+    --full) FULL_RESCAN=true ;;
   esac
 done
 ```
@@ -75,7 +78,7 @@ done
 - If 1 phase found -> WARN: "Only 1 phase scoped ({phase}). Cross-phase review works best with 2+ phases. Proceeding with single-phase structural check."
 
 **Extract from each CONTEXT.md:**
-For every scoped phase, parse and collect:
+For every scoped phase (filtered later by Step 0.5 if incremental), parse and collect:
 - **Decisions:** D-XX title, category, full text
 - **Endpoints:** method + path + auth role + purpose (from decision Endpoints: sub-sections)
 - **Module names:** inferred from endpoint paths (e.g., `/api/v1/sites` -> sites module) and UI component names
@@ -87,6 +90,209 @@ Store all extracted data in a structured format for cross-referencing in Step 1.
 
 **Also check for DONE phases:**
 Scan for phases with completed PIPELINE-STATE.json (`steps.accept.status = "done"`) or existing UAT.md. These are "shipped" phases — used for scope creep detection (Check E).
+</step>
+
+<step name="incremental_check">
+## Step 0.5: INCREMENTAL SCAN (baseline delta)
+
+Purpose: narrow scan scope to phases whose CONTEXT.md / SPECS.md changed since last successful scope-review (baseline — mốc gốc). At 50+ phases full O(n²) rescan is too slow and users skip the gate; incremental (tăng cường theo delta) keeps it cheap so it runs every time.
+
+**Baseline path:** `${PLANNING_DIR}/.scope-review-baseline.json`
+
+**Schema:**
+```json
+{
+  "ts": "2026-04-17T09:12:33Z",
+  "phases": {
+    "7.6": {"context_sha256": "abc...", "spec_sha256": "def..."},
+    "7.8": {"context_sha256": "ghi...", "spec_sha256": "jkl..."}
+  }
+}
+```
+
+**Logic:**
+
+```bash
+BASELINE_PATH="${PLANNING_DIR}/.scope-review-baseline.json"
+INCREMENTAL=true
+SCAN_SET=()       # phase IDs to actually scan this run
+SKIPPED_SET=()    # phase IDs unchanged since baseline
+CHANGED_COUNT=0
+NEW_COUNT=0
+REMOVED_COUNT=0
+BASELINE_TS="(none)"
+
+if [ "$FULL_RESCAN" = "true" ]; then
+  INCREMENTAL=false
+  echo "ℹ Full rescan (--full) — bypassing baseline (mốc gốc bị bỏ qua)."
+elif [ ! -f "$BASELINE_PATH" ]; then
+  INCREMENTAL=false
+  echo "ℹ No baseline (chưa có mốc gốc) — running full scan to seed baseline."
+else
+  # Compute current hashes + compare to baseline
+  DELTA_JSON=$(${PYTHON_BIN:-python3} - "$BASELINE_PATH" "$PHASES_DIR" <<'PY'
+import json, hashlib, sys, os
+from pathlib import Path
+
+baseline_path = Path(sys.argv[1])
+phases_dir = Path(sys.argv[2])
+
+baseline = json.loads(baseline_path.read_text(encoding='utf-8'))
+baseline_phases = baseline.get("phases", {})
+
+def sha256_file(p):
+    if not p.exists(): return None
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+def phase_id(name):
+    # e.g. "07.12-conversion-tracking-pixel" -> "7.12" ; "7.6-sites" -> "7.6"
+    import re
+    m = re.match(r'^0*([0-9]+(?:\.[0-9]+)*)', name)
+    return m.group(1) if m else name
+
+current = {}
+for d in sorted(phases_dir.iterdir()):
+    if not d.is_dir(): continue
+    ctx = d / "CONTEXT.md"
+    spec = d / "SPECS.md"
+    if not ctx.exists(): continue  # only care about scoped phases
+    pid = phase_id(d.name)
+    current[pid] = {
+        "context_sha256": sha256_file(ctx),
+        "spec_sha256": sha256_file(spec),
+        "dir_name": d.name,
+    }
+
+changed, new, removed, unchanged = [], [], [], []
+for pid, info in current.items():
+    base = baseline_phases.get(pid)
+    if not base:
+        new.append(pid)
+    elif base.get("context_sha256") != info["context_sha256"] or \
+         base.get("spec_sha256") != info["spec_sha256"]:
+        changed.append(pid)
+    else:
+        unchanged.append(pid)
+for pid in baseline_phases:
+    if pid not in current:
+        removed.append(pid)
+
+print(json.dumps({
+    "baseline_ts": baseline.get("ts", "(unknown)"),
+    "changed": sorted(changed),
+    "new": sorted(new),
+    "removed": sorted(removed),
+    "unchanged": sorted(unchanged),
+    "current_map": {k: v["dir_name"] for k, v in current.items()},
+}, ensure_ascii=False))
+PY
+)
+  BASELINE_TS=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(json.loads(sys.stdin.read())['baseline_ts'])")
+  CHANGED_LIST=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(','.join(json.loads(sys.stdin.read())['changed']))")
+  NEW_LIST=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(','.join(json.loads(sys.stdin.read())['new']))")
+  REMOVED_LIST=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(','.join(json.loads(sys.stdin.read())['removed']))")
+  UNCHANGED_LIST=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(','.join(json.loads(sys.stdin.read())['unchanged']))")
+
+  CHANGED_COUNT=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(len(json.loads(sys.stdin.read())['changed']))")
+  NEW_COUNT=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(len(json.loads(sys.stdin.read())['new']))")
+  REMOVED_COUNT=$(echo "$DELTA_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(len(json.loads(sys.stdin.read())['removed']))")
+
+  if [ "$CHANGED_COUNT" = "0" ] && [ "$NEW_COUNT" = "0" ] && [ "$REMOVED_COUNT" = "0" ]; then
+    echo "✓ No phases changed since ${BASELINE_TS}. Scope-review is already current."
+    echo "  Use --full to force rescan."
+    # Early-exit optimization: still emit telemetry + skip to baseline rewrite
+    type emit_telemetry_v2 >/dev/null 2>&1 && \
+      emit_telemetry_v2 "gate_hit" "" "scope-review.incremental" \
+        "scope-review-incremental" "PASS" \
+        "{\"changed_count\":0,\"new_count\":0,\"removed_count\":0,\"early_exit\":true,\"conflicts_found\":0}"
+    # Still refresh baseline timestamp, then exit.
+    # (baseline hashes unchanged; just bump ts)
+    exit 0
+  fi
+
+  # Build SCAN_SET = changed + new + their dependents (ROADMAP.md "Depends on" cascade)
+  SCAN_JSON=$(${PYTHON_BIN:-python3} - "$PLANNING_DIR" "$CHANGED_LIST" "$NEW_LIST" <<'PY'
+import sys, re, json
+from pathlib import Path
+
+planning_dir = Path(sys.argv[1])
+changed = [p for p in sys.argv[2].split(',') if p]
+new = [p for p in sys.argv[3].split(',') if p]
+seed = set(changed + new)
+
+# Parse ROADMAP.md for "Depends on: X.Y, A.B" per phase row
+roadmap = planning_dir / "ROADMAP.md"
+deps_reverse = {}   # phase -> set of phases that depend ON it
+if roadmap.exists():
+    content = roadmap.read_text(encoding='utf-8', errors='ignore')
+    # Strategy: find "Phase X.Y" heading followed by "Depends on: ..." within block
+    # Supports: "Depends on: 7.6, 7.8" OR "- Depends on Phase 7.6"
+    phase_blocks = re.split(r'^\s*#{1,4}\s*Phase\s+', content, flags=re.MULTILINE)
+    for block in phase_blocks[1:]:
+        head = re.match(r'([0-9]+(?:\.[0-9]+)*)', block)
+        if not head: continue
+        pid = head.group(1)
+        # Find dependency mentions
+        dep_matches = re.findall(
+            r'[Dd]epends\s+on[:\s]+((?:Phase\s+)?[0-9.,\s]+)', block)
+        for m in dep_matches:
+            for dep in re.findall(r'([0-9]+(?:\.[0-9]+)*)', m):
+                deps_reverse.setdefault(dep, set()).add(pid)
+
+# Cascade: for every seed, add all phases that depend on it (transitive)
+scan = set(seed)
+frontier = set(seed)
+while frontier:
+    next_frontier = set()
+    for pid in frontier:
+        for dependent in deps_reverse.get(pid, []):
+            if dependent not in scan:
+                scan.add(dependent)
+                next_frontier.add(dependent)
+    frontier = next_frontier
+
+print(json.dumps({"scan": sorted(scan)}, ensure_ascii=False))
+PY
+)
+  SCAN_LIST=$(echo "$SCAN_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys;print(','.join(json.loads(sys.stdin.read())['scan']))")
+
+  # Narrow SCOPED_PHASES down to SCAN_LIST members
+  NARROWED_PHASES=()
+  IFS=',' read -ra SCAN_ARR <<< "$SCAN_LIST"
+  for dir in "${SCOPED_PHASES[@]}"; do
+    pname=$(basename "$dir")
+    pnum=$(echo "$pname" | grep -oE '^0*[0-9]+(\.[0-9]+)*' | sed 's/^0*//')
+    for target in "${SCAN_ARR[@]}"; do
+      [ "$pnum" = "$target" ] && NARROWED_PHASES+=("$dir") && break
+    done
+  done
+  # Track which phases were skipped
+  IFS=',' read -ra UNCH_ARR <<< "$UNCHANGED_LIST"
+  for u in "${UNCH_ARR[@]}"; do
+    # Unchanged phases NOT pulled in as dependents of changed phases
+    skipped=true
+    for target in "${SCAN_ARR[@]}"; do
+      [ "$u" = "$target" ] && skipped=false && break
+    done
+    $skipped && SKIPPED_SET+=("$u")
+  done
+
+  SCOPED_PHASES=("${NARROWED_PHASES[@]}")
+  SCAN_SET=("${SCAN_ARR[@]}")
+
+  echo ""
+  echo "📊 Incremental scan (quét tăng cường theo delta): ${CHANGED_COUNT} phases changed since ${BASELINE_TS}, ${NEW_COUNT} new"
+  echo "   Scope this run: [${SCAN_LIST}]"
+  echo "   Skipped (unchanged — bỏ qua vì không đổi): ${#SKIPPED_SET[@]} phases"
+  [ "$REMOVED_COUNT" != "0" ] && echo "   Removed from disk (xoá khỏi đĩa): ${REMOVED_LIST}"
+  echo ""
+fi
+```
+
+**Notes:**
+- If `$PHASE_FILTER` is also set (from `--phases=...`), its filter intersects SCAN_SET (user explicit > baseline).
+- Dependents cascade uses ROADMAP.md "Depends on" — if roadmap missing or phase not listed, no cascade (just changed+new).
+- Early-exit when nothing changed saves the full Step 1 scan.
 </step>
 
 <step name="1_cross_reference">
@@ -223,6 +429,13 @@ Write to `${PLANNING_DIR}/SCOPE-REVIEW.md`:
 ```markdown
 # Scope Review — {ISO date}
 
+**Mode:** {INCREMENTAL (tăng cường theo delta) | FULL (quét toàn bộ)}
+{If incremental:}
+📊 Incremental scan: {CHANGED_COUNT} phases changed since {BASELINE_TS}, {NEW_COUNT} new
+   Scope this run: [{SCAN_LIST}]
+   Skipped (unchanged — bỏ qua vì không đổi): {len(SKIPPED_SET)} phases
+   {If REMOVED_COUNT>0:}Removed from disk (xoá khỏi đĩa): {REMOVED_LIST}
+
 Phases reviewed: {phase list with names}
 Total decisions across phases: {N}
 Total endpoints across phases: {N}
@@ -332,11 +545,75 @@ Re-evaluate gate. If all blocking issues resolved (updated scope or acknowledged
   ```
 </step>
 
+<step name="4.5_baseline_write_and_telemetry">
+## Step 4.5: WRITE BASELINE + TELEMETRY (baseline = mốc gốc)
+
+After gate verdict settles (PASS, conditional PASS, or even BLOCK — baseline always reflects current disk state so next incremental run has accurate delta), write the updated baseline:
+
+```bash
+# Count conflicts detected (sum across checks A..E)
+CONFLICTS_FOUND=$(( ${CHECK_A_COUNT:-0} + ${CHECK_C_COUNT:-0} + ${CHECK_D_COUNT:-0} ))
+
+# Write baseline atomically (via .tmp + mv)
+BASELINE_PATH="${PLANNING_DIR}/.scope-review-baseline.json"
+BASELINE_TMP="${BASELINE_PATH}.tmp"
+
+${PYTHON_BIN:-python3} - "$PHASES_DIR" "$BASELINE_TMP" <<'PY'
+import json, hashlib, sys, re, datetime
+from pathlib import Path
+
+phases_dir = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+
+def sha(p):
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
+
+def phase_id(name):
+    m = re.match(r'^0*([0-9]+(?:\.[0-9]+)*)', name)
+    return m.group(1) if m else name
+
+phases = {}
+for d in sorted(phases_dir.iterdir()):
+    if not d.is_dir(): continue
+    ctx = d / "CONTEXT.md"
+    if not ctx.exists(): continue
+    pid = phase_id(d.name)
+    phases[pid] = {
+        "context_sha256": sha(ctx),
+        "spec_sha256": sha(d / "SPECS.md"),
+    }
+
+baseline = {
+    "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "phases": phases,
+}
+out_path.write_text(json.dumps(baseline, indent=2, ensure_ascii=False), encoding='utf-8')
+print(f"✓ Baseline staged: {len(phases)} phases")
+PY
+
+mv "$BASELINE_TMP" "$BASELINE_PATH"
+echo "✓ Baseline (mốc gốc) written: ${BASELINE_PATH}"
+
+# Emit telemetry for incremental gate hit
+# Reference: .claude/commands/vg/_shared/telemetry.md (emit_telemetry_v2)
+if type emit_telemetry_v2 >/dev/null 2>&1; then
+  emit_telemetry_v2 "gate_hit" "" "scope-review.incremental" \
+    "scope-review-incremental" "PASS" \
+    "{\"changed_count\":${CHANGED_COUNT:-0},\"new_count\":${NEW_COUNT:-0},\"removed_count\":${REMOVED_COUNT:-0},\"incremental\":${INCREMENTAL},\"conflicts_found\":${CONFLICTS_FOUND}}"
+fi
+```
+
+**Rules:**
+- Baseline write is NON-FATAL — if it fails, warn but do not block the gate decision.
+- Baseline is always refreshed (even on BLOCK) so user's next re-run with fixes gets accurate delta.
+- `.scope-review-baseline.json` should be committed alongside `SCOPE-REVIEW.md` in Step 5.
+</step>
+
 <step name="5_commit_and_next">
 ## Step 5: Commit + suggest next
 
 ```bash
-git add "${PLANNING_DIR}/SCOPE-REVIEW.md"
+git add "${PLANNING_DIR}/SCOPE-REVIEW.md" "${PLANNING_DIR}/.scope-review-baseline.json"
 git commit -m "scope-review: ${#SCOPED_PHASES[@]} phases — ${GATE_VERDICT}"
 ```
 
@@ -373,12 +650,16 @@ Scope Review Complete.
 </process>
 
 <success_criteria>
-- All phases with CONTEXT.md collected and parsed
-- 5 automated cross-reference checks executed (A through E)
+- All phases with CONTEXT.md collected and parsed (or scoped down via incremental delta)
+- Incremental mode active by default: baseline read, delta computed, SCAN_SET narrowed to changed + new + dependents
+- `--full` flag forces rescan of every scoped phase, bypassing baseline
+- 5 automated cross-reference checks executed (A through E) against SCAN_SET
 - CrossAI review ran (or skipped if flagged/no CLIs/single phase)
-- SCOPE-REVIEW.md written with structured report + gate verdict
+- SCOPE-REVIEW.md written with structured report + delta summary header + gate verdict
+- Baseline (`.scope-review-baseline.json`) written atomically after every run (even on BLOCK)
+- Telemetry event `scope-review-incremental` emitted with changed/new/conflicts counts
 - All blocking issues presented to user with resolution options
 - Gate resolves to PASS (clean, conditional, or all-acknowledged) before suggesting blueprint
-- Report committed to git
+- Report + baseline committed to git
 - Next step guidance shows /vg:blueprint for first unblueprinted phase
 </success_criteria>
