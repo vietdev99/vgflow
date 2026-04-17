@@ -2,6 +2,47 @@
 
 All notable changes to VG workflow documented here. Format follows [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.9.2.1] - 2026-04-17
+
+### Hotfix — `feature-legacy` profile for phases without SPECS.md
+
+**Bug discovered while testing `/vg:review 7.12` post-v1.9.2 ship:**
+
+Phase 7.12 (conversion-tracking-pixel) was built before VG required SPECS.md as part of the feature pipeline. It has:
+- ✅ PLAN.md, CONTEXT.md, API-CONTRACTS.md, TEST-GOALS.md (39 goals), SUMMARY.md
+- ✅ RUNTIME-MAP.json, GOAL-COVERAGE-MATRIX.md (from prior review)
+- ❌ SPECS.md (convention not enforced at phase creation time)
+
+**v1.9.2 behavior:** `detect_phase_profile` rule 1 returned `"unknown"` when SPECS.md missing → `required_artifacts` = only `SPECS.md` → review BLOCKED at prerequisite gate. Block_resolver L2 architect would propose "run `/vg:specs` first" — which is wrong for a phase already built past specs stage.
+
+### Fix — Rule 1b: legacy feature fallback
+
+`detect_phase_profile` now returns `"feature-legacy"` when:
+- SPECS.md is missing **AND**
+- PLAN.md + TEST-GOALS.md + API-CONTRACTS.md all present
+
+Profile table additions:
+- `feature-legacy`:
+  - `required_artifacts` = `CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md` (no SPECS)
+  - `skip_artifacts` = `SPECS.md`
+  - `review_mode` = `full` (same as feature)
+  - `test_mode` = `full`
+  - `goal_coverage` = `TEST-GOALS`
+- Narration (Vietnamese): "Pha feature legacy... bỏ qua SPECS. Khuyến nghị: tạo SPECS.md retrospective cho audit trail."
+
+### Files
+
+- `_shared/lib/phase-profile.sh` — +8 LOC Rule 1b detection + 2 new case branches in `phase_profile_required_artifacts`, `phase_profile_skip_artifacts`, `phase_profile_review_mode`, `phase_profile_test_mode`, `phase_profile_goal_coverage_source`, plus narration block.
+
+### Verification
+
+- Phase 7.12 (no SPECS, full artifacts): v1.9.2 → `unknown` BLOCK ❌ → v1.9.2.1 → `feature-legacy` PASS ✅
+- Phase 07.12.1 (infra hotfix with SPECS + success_criteria bash): `infra` (unchanged) ✅
+
+### Migration v1.9.2 → v1.9.2.1
+
+No user action needed. Pure detection fix — runs on every review, transparent upgrade.
+
 ## [1.9.2] - 2026-04-17
 
 ### Phase profile system + full block-resolver coverage + sync.sh fix

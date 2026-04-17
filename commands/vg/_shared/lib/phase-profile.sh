@@ -50,6 +50,14 @@ detect_phase_profile() {
 
   local specs="${phase_dir}/SPECS.md"
   if [ ! -f "$specs" ]; then
+    # ─── Rule 1b: legacy feature fallback (v1.9.2.1) ─────────────────
+    # Phase without SPECS.md but WITH feature artifacts (PLAN + TEST-GOALS + API-CONTRACTS)
+    # was built before VG required SPECS. Treat as feature (legacy) — review works off
+    # existing artifacts. Downstream steps (required_artifacts) MUST exclude SPECS.
+    if [ -f "${phase_dir}/PLAN.md" ] && [ -f "${phase_dir}/TEST-GOALS.md" ] && [ -f "${phase_dir}/API-CONTRACTS.md" ]; then
+      echo "feature-legacy"
+      return 0
+    fi
     echo "unknown"
     return 1
   fi
@@ -147,62 +155,64 @@ detect_phase_profile() {
 
 phase_profile_required_artifacts() {
   case "${1:-feature}" in
-    feature)   echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;
-    infra)     echo "SPECS.md PLAN.md SUMMARY.md" ;;
-    hotfix)    echo "SPECS.md PLAN.md SUMMARY.md" ;;
-    bugfix)    echo "SPECS.md PLAN.md SUMMARY.md" ;;
-    migration) echo "SPECS.md PLAN.md SUMMARY.md ROLLBACK.md" ;;
-    docs)      echo "SPECS.md" ;;
-    unknown)   echo "SPECS.md" ;;
-    *)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
+    feature)        echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;
+    feature-legacy) echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;  # v1.9.2.1 — pre-SPECS phases
+    infra)          echo "SPECS.md PLAN.md SUMMARY.md" ;;
+    hotfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
+    bugfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
+    migration)      echo "SPECS.md PLAN.md SUMMARY.md ROLLBACK.md" ;;
+    docs)           echo "SPECS.md" ;;
+    unknown)        echo "SPECS.md" ;;
+    *)              echo "SPECS.md PLAN.md SUMMARY.md" ;;
   esac
 }
 
 phase_profile_skip_artifacts() {
   case "${1:-feature}" in
-    feature)   echo "" ;;
-    infra)     echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md RUNTIME-MAP.json" ;;
-    hotfix)    echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md" ;;
-    bugfix)    echo "API-CONTRACTS.md CONTEXT.md" ;;
-    migration) echo "API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json" ;;
-    docs)      echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json SUMMARY.md" ;;
-    *)         echo "" ;;
+    feature)        echo "" ;;
+    feature-legacy) echo "SPECS.md" ;;  # v1.9.2.1 — treat SPECS as optional for legacy phases
+    infra)          echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md RUNTIME-MAP.json" ;;
+    hotfix)         echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md" ;;
+    bugfix)         echo "API-CONTRACTS.md CONTEXT.md" ;;
+    migration)      echo "API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json" ;;
+    docs)           echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json SUMMARY.md" ;;
+    *)              echo "" ;;
   esac
 }
 
 phase_profile_review_mode() {
   case "${1:-feature}" in
-    feature)   echo "full" ;;
-    infra)     echo "infra-smoke" ;;
-    hotfix)    echo "delta" ;;
-    bugfix)    echo "regression" ;;
-    migration) echo "schema-verify" ;;
-    docs)      echo "link-check" ;;
-    *)         echo "full" ;;
+    feature|feature-legacy) echo "full" ;;
+    infra)                  echo "infra-smoke" ;;
+    hotfix)                 echo "delta" ;;
+    bugfix)                 echo "regression" ;;
+    migration)              echo "schema-verify" ;;
+    docs)                   echo "link-check" ;;
+    *)                      echo "full" ;;
   esac
 }
 
 phase_profile_test_mode() {
   case "${1:-feature}" in
-    feature)   echo "full" ;;
-    infra)     echo "infra-smoke" ;;
-    hotfix)    echo "parent-goals-regression" ;;
-    bugfix)    echo "issue-specific" ;;
-    migration) echo "schema-roundtrip" ;;
-    docs)      echo "markdown-lint" ;;
-    *)         echo "full" ;;
+    feature|feature-legacy) echo "full" ;;
+    infra)                  echo "infra-smoke" ;;
+    hotfix)                 echo "parent-goals-regression" ;;
+    bugfix)                 echo "issue-specific" ;;
+    migration)              echo "schema-roundtrip" ;;
+    docs)                   echo "markdown-lint" ;;
+    *)                      echo "full" ;;
   esac
 }
 
 phase_profile_goal_coverage_source() {
   case "${1:-feature}" in
-    feature)   echo "TEST-GOALS" ;;
-    infra)     echo "SPECS.success_criteria" ;;
-    hotfix)    echo "parent_phase.TEST-GOALS" ;;
-    bugfix)    echo "SPECS.fixes_bug" ;;
-    migration) echo "SPECS.migration_plan" ;;
-    docs)      echo "SPECS.doc_targets" ;;
-    *)         echo "TEST-GOALS" ;;
+    feature|feature-legacy) echo "TEST-GOALS" ;;
+    infra)                  echo "SPECS.success_criteria" ;;
+    hotfix)                 echo "parent_phase.TEST-GOALS" ;;
+    bugfix)                 echo "SPECS.fixes_bug" ;;
+    migration)              echo "SPECS.migration_plan" ;;
+    docs)                   echo "SPECS.doc_targets" ;;
+    *)                      echo "TEST-GOALS" ;;
   esac
 }
 
@@ -319,6 +329,10 @@ phase_profile_summarize() {
         ;;
       docs)
         echo "ℹ Pha docs-only — chỉ kiểm link, không cần browser/test-goals."
+        ;;
+      feature-legacy)
+        echo "ℹ Pha feature legacy (tạo trước khi VG yêu cầu SPECS) — review dùng các artifact hiện có (PLAN + TEST-GOALS + API-CONTRACTS), bỏ qua SPECS."
+        echo "  Khuyến nghị: nếu phase này vẫn active, cân nhắc tạo SPECS.md retrospective (hồi tố) cho audit trail."
         ;;
       feature|*)
         # default — no extra narration
