@@ -52,9 +52,12 @@ jobs:
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
           TAR="vgflow-${TAG}.tar.gz"
-          # Exclude .github from shipped tarball (workflow files stay in repo only)
+          # Build tarball in parent dir to avoid "file changed as we read it"
+          # caused by tar seeing its own output being written under '.'
           tar --exclude='.github' --exclude='.git' --exclude='*.bak' \
-              -czf "${TAR}" .
+              --exclude="${TAR}" --exclude="${TAR}.sha256" \
+              -czf "../${TAR}" .
+          mv "../${TAR}" .
           sha256sum "${TAR}" | awk '{print $1}' > "${TAR}.sha256"
           echo "TAR=${TAR}" >> "$GITHUB_ENV"
 
