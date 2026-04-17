@@ -4,77 +4,91 @@
 # Every vg/ command reads this file first.
 
 # === Project Identity ===
-project_name: ""
-project_description: ""
+project_name: "VollxSSP"
+project_description: "Ad Exchange Platform — RTB with publisher self-service"
 package_manager: "pnpm"          # pnpm | npm | yarn | bun
 
 # === Profile ===
 # Determines which pipeline steps run. Orchestrator filters <step profile="..."> tags.
-# Valid values:
-#   Web:    web-fullstack | web-frontend-only | web-backend-only
-#   Mobile: mobile-rn | mobile-flutter | mobile-native-ios | mobile-native-android | mobile-hybrid
-#   Other:  cli-tool | library
-# For mobile profiles, also fill the `mobile:` block below.
+# Valid values: web-fullstack | web-frontend-only | web-backend-only | cli-tool | library
+# VollxSSP is fullstack (FE + API + workers + RTB engine).
 profile: "web-fullstack"
 
 # === Multi-Surface Project (v1.10.0 R4 — NEW) =========================
-# For projects with multiple platforms (web + mobile + CLI + backend).
-# Declare surfaces for per-phase targeting. Omit block = single-surface project.
-# Example:
+# For projects with multiple platforms (web + mobile + CLI + backend),
+# declare each surface explicitly so workflow knows which phase touches which.
+# If single-surface project, omit this block — workflow uses `profile` alone.
+#
+# Each surface has:
+#   type          — profile type (web-fullstack/web-frontend/mobile-rn/cli-tool/...)
+#   stack         — tech stack identifier (fastify/react/swift/kotlin/rust)
+#   paths         — monorepo dirs that belong to this surface
+#   scanner_mode  — override review scanner mode for this surface (auto/parallel/sequential/none)
+#   design        — role name mapping to .planning/design/{role}/DESIGN.md
+#
+# Phase SPECS declares touched surfaces via "surfaces:" field → workflow
+# applies per-surface gates (review/test/build tool setup).
+#
+# Example for VollxSSP (currently web-fullstack only — declare if adding mobile):
 # surfaces:
-#   api:     { type: "web-backend-only",  stack: "fastify", paths: ["apps/api"] }
-#   web:     { type: "web-frontend-only", stack: "react",   paths: ["apps/web"],
-#              design: "default" }  # → .planning/design/default/DESIGN.md
-#   ios:     { type: "mobile-native-ios", stack: "swift",   paths: ["apps/ios"],
-#              design: "ios-native" }
-#   android: { type: "mobile-native-android", stack: "kotlin", paths: ["apps/android"],
-#              design: "android-native" }
-#   workers: { type: "cli-tool",          stack: "node",    paths: ["apps/workers"] }
-
-# target_platforms (REQUIRED for mobile profiles, ignored for others)
-# Distribution targets — drives gates (iOS signing, Android data safety, etc.) and deploy.
-# Valid values: ios | android | macos | web
-# target_platforms: ["ios", "android"]
+#   api:
+#     type: "web-backend-only"
+#     stack: "fastify"
+#     paths: ["apps/api"]
+#   web:
+#     type: "web-frontend-only"
+#     stack: "react"
+#     paths: ["apps/web"]
+#     design: "ssp-admin"
+#   rtb:
+#     type: "library"
+#     stack: "rust"
+#     paths: ["apps/rtb-engine"]
+#   workers:
+#     type: "cli-tool"
+#     stack: "node"
+#     paths: ["apps/workers"]
+# (Phase 13+ may add: dsp-admin surface with design: "dsp-admin")
 
 # === Environments ===
 # Workflow selects env via: --local, --sandbox, or step_env default
 environments:
   local:
-    os: ""                        # win32 | linux | darwin
-    shell: "bash"                 # bash | powershell | zsh
-    run_prefix: ""                # empty = run directly
-    project_path: ""              # auto-detected from cwd if empty
+    os: "win32"
+    shell: "bash"
+    run_prefix: ""                # empty = run directly on Windows
+    project_path: ""              # auto-detected from cwd
     deploy:
-      build: "{package_manager} install && {package_manager} run build"
-      restart: ""
-      health: ""
+      build: "pnpm install && pnpm run build"
+      restart: "echo local-dev-restart-skipped"
+      health: "curl -sf http://localhost:3001/health"
+      rollback: "echo local-dev-rollback-skipped"
     test_runner: "npx vitest run"
-    seed_command: ""                # e.g. "pnpm seed", "node src/seed/index.js" — empty = skip
-    dev_command: ""                 # e.g. "pnpm dev" — hotreload dev server
-    dev_health_timeout: 30          # seconds to wait for health after dev_command
-    infra_start: ""                 # e.g. "docker compose up -d" or WSL command — start local infra
-    infra_stop: ""                  # stop local infra
-    infra_status: ""                # check local infra status
+    dev_command: "pnpm dev"           # hotreload dev server (turbo dev → API + Web)
+    dev_health_timeout: 30            # seconds to wait for health after dev_command
+    infra_start: "wsl -d Ubuntu -e bash /mnt/d/Workspace/Messi/Code/RTB/scripts/dev-infra.sh start"
+    infra_stop: "wsl -d Ubuntu -e bash /mnt/d/Workspace/Messi/Code/RTB/scripts/dev-infra.sh stop"
+    infra_status: "wsl -d Ubuntu -e bash /mnt/d/Workspace/Messi/Code/RTB/scripts/dev-infra.sh status"
 
   sandbox:
     os: "linux"
     shell: "bash"
-    run_prefix: ""                # e.g. "ssh myserver" — empty = same as local
-    project_path: ""              # remote path, required if run_prefix is set
+    run_prefix: "ssh vollx"
+    project_path: "/home/vollx/vollxssp"
     deploy:
-      pre: ""                     # runs locally before remote (e.g. "git push origin main")
-      build: ""
-      restart: ""
-      health: ""
-      rollback: ""
-    test_runner: ""
-    seed_command: ""                # same format — runs via run_prefix (SSH if sandbox)
+      pre: "git push origin main"
+      build: "git pull origin main && pnpm install && pnpm run build"
+      restart: "pm2 reload vollxssp-api --update-env"
+      health: "curl -sf http://localhost:3001/health"
+      rollback: "pm2 stop all && git checkout {prev_sha} && pnpm install && pnpm run build && pm2 reload vollxssp-api --update-env"
+    test_runner: "pnpm test"
 
 # Default environment per pipeline step
+# Override per-command with --local or --sandbox
 step_env:
   execute: "local"
-  sandbox_test: "sandbox"
-  verify: "sandbox"
+  sandbox_test: "local"            # changed: test local first (hotreload), --sandbox for VPS
+  verify: "local"                  # changed: accept local, --sandbox for final verify
 
 # === AI Models (per pipeline role) ===
 # Controls which Claude model each pipeline step uses for Agent spawns.
@@ -96,10 +110,14 @@ models:
 # Each worktree uses base_port + offset to avoid collisions
 # main = offset 0, worktree1 = offset 10, worktree2 = offset 20
 worktree_ports:
-  base: {}
-    # api: 3001
-    # web: 5173
+  base:
+    api: 3001
+    web: 5173
+    rtb: 3000
+    pixel: 3003                   # Phase 7.12 conversion tracking pixel service
   offset_per_worktree: 10
+  # Example: worktree1 → API:3011, Web:5183, RTB:3010, Pixel:3013
+  # Example: worktree2 → API:3021, Web:5193, RTB:3020, Pixel:3022
 
 # === Deploy Profile ===
 deploy_profile: "custom"          # pm2 | docker | systemd | custom
@@ -120,27 +138,78 @@ deploy_profiles:
 # === Services (per environment, fully dynamic) ===
 # Add whatever services your project uses. Workflow just loops and checks.
 services:
-  local: []
-  sandbox: []
-  # Example:
-  # sandbox:
-  #   - name: "API"
-  #     check: "curl -sf http://localhost:3001/health"
-  #     required: true
-  #   - name: "PostgreSQL"
-  #     check: "pg_isready -h localhost"
-  #     required: true
+  local:
+    - name: "API"
+      check: "curl -sf http://localhost:3001/health"
+      required: true
+    - name: "MongoDB"
+      check: "wsl -d Ubuntu -e mongosh --eval 'db.runCommand({ping:1})' --quiet"
+      required: true
+    - name: "Redis"
+      check: "wsl -d Ubuntu -e redis-cli ping"
+      required: true
+    - name: "PM2"
+      check: "pm2 list --no-color 2>/dev/null | grep -q online"
+      required: false
+  sandbox:
+    - name: "API"
+      check: "curl -sf http://localhost:3001/health"
+      required: true
+    - name: "MongoDB"
+      check: "mongosh --eval 'db.runCommand({ping:1})' --quiet"
+      required: true
+    - name: "Redis"
+      check: "redis-cli ping"
+      required: true
+    - name: "PM2"
+      check: "pm2 list --no-color 2>/dev/null | grep -q online"
+      required: true
+    - name: "Kafka"
+      check: "kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null | head -1"
+      required: false
+    - name: "ClickHouse"
+      check: "clickhouse-client --query 'SELECT 1' 2>/dev/null"
+      required: false
+    - name: "RTB Engine"
+      check: "curl -sf http://localhost:3000/health"
+      required: false
 
 # === Test Credentials (per environment) ===
 credentials:
-  local: []
-  sandbox: []
-  # Example:
-  # sandbox:
-  #   - role: "admin"
-  #     domain: "admin.example.com"
-  #     email: "admin@example.com"
-  #     password: "Admin123!"
+  local:
+    - role: "admin"
+      domain: "localhost:5173"
+      email: "admin@vollxssp.com"
+      password: "Admin123!"
+    - role: "publisher"
+      domain: "localhost:5174"
+      email: "publisher@demo.com"
+      password: "Publisher123!"
+    - role: "advertiser"
+      domain: "localhost:5175"
+      email: "advertiser@demo.com"
+      password: "Advertiser123!"
+    - role: "demand_admin"
+      domain: "localhost:5176"
+      email: "demand_admin@vollxssp.com"
+      password: "DemandAdmin123!"
+  sandbox:
+    - role: "admin"
+      domain: "admin.vollx.com"
+      email: "admin@vollxssp.com"
+      password: "Admin123!"
+    - role: "publisher"
+      domain: "ssp.vollx.com"
+      email: "publisher@demo.com"
+      password: "Publisher123!"
+    - role: "advertiser"
+      domain: "dsp.vollx.com"
+      email: "advertiser@demo.com"
+      password: "Advertiser123!"
+    - role: "demand_admin"
+      domain: "admin.vollx.com"
+      email: "demand_admin@vollxssp.com"
+      password: "DemandAdmin123!"
 
 # === CrossAI CLIs (adaptive — 0 to N) ===
 # 0 = skip CrossAI | 1 = single review | 2 = fast-fail | 3+ = full consensus
@@ -157,8 +226,8 @@ crossai_clis:
 
 # === Paths (relative to project root) ===
 paths:
-  planning: ".planning"
-  phases: ".planning/phases"
+  planning: ".vg"
+  phases: ".vg/phases"
   screenshots: "apps/web/e2e/screenshots"
   e2e_tests: "apps/web/e2e"
   flow_tests: "apps/web/e2e/flows"
@@ -173,8 +242,8 @@ code_patterns:
   interactive_signals: ["onClick", "onChange"]
 
 # === Scan Patterns (for audit element counting) ===
-# Grep patterns to count UI elements per file. Language-agnostic.
-# Each pattern: name + grep regex. Audit step 4b uses these.
+# Grep patterns to count UI elements per file. Stack-specific.
+# Review step 1b uses patterns matching config.scan_patterns.stack
 scan_patterns:
   stack: "typescript"   # typescript | rust | go | python
 
@@ -195,75 +264,21 @@ scan_patterns:
 
   go:
     # TODO: fill when using Go stack
+    # handlers: ['func \(.*\) (Get|Post|Put|Delete)\w+\(']
+    # structs: ['^type \w+ struct \{']
+    # tests: ['func Test\w+\(t \*testing\.T\)']
 
   python:
     # TODO: fill when using Python stack
+    # handlers: ['@(app|router)\.(get|post|put|delete)']
+    # schemas: ['class \w+\(BaseModel\)']
+    # tests: ['def test_\w+\(']
 
-# === Monorepo Apps (for selective build/test) ===
-# Define each app in the monorepo. Workflow uses these for targeted build/test.
-# Remove this section for single-app projects.
-apps: {}
-  # web:
-  #   path: "apps/web"
-  #   build: "turbo run build --filter=web"
-  #   test: "turbo run test --filter=web"
-  #   type: "node"
-  # api:
-  #   path: "apps/api"
-  #   build: "turbo run build --filter=api"
-  #   test: "turbo run test --filter=api"
-  #   type: "node"
-
-# === Visual Integrity Checks (Phase 2.5 in /vg:review) ===
-visual_checks:
-  enabled: false                    # true = run visual checks in review
-  font_check: true
-  overflow_check: true
-  responsive_viewports: [1920, 375]
-  z_index_check: true
-  sidebar_width: 256
-  header_height: 64
-
-# === Pipeline Routing ===
-# Which pipeline step to use based on what changed
-routing:
-  # Files matching these patterns -> full pipeline (browser discovery needed)
-  ui_patterns: []                   # e.g. ["apps/web/**", "apps/api/src/modules/*/routes*"]
-  # Files matching these patterns -> skip browser discovery (API/backend only)
-  backend_only_patterns: []         # e.g. ["apps/api/src/modules/*/services*"]
-  # Domain gates -- these goal categories must be 100% (not 80%)
-  critical_goal_domains: []         # e.g. ["auth", "billing", "payout"]
-
-# === Critical Domains (for test.md step 5b-2 idempotency check) ===
-# Mutation endpoints matching these domain keywords get automatic idempotency testing.
-# Double-submit same request → must NOT create duplicates or charge twice.
-# Empty = skip idempotency check entirely.
-critical_domains: "billing,auth,payout,payment,transaction"
-
-# === Performance Budgets (for test.md step 5g) ===
-# All optional — omit any metric to skip that check.
-perf_budgets:
-  api_response_p95_ms: 200       # single-request baseline (pre-prod)
-  page_load_s: 3                 # page load time budget
-  max_bundle_kb: 500             # frontend build output size limit
-
-# === Regression Guard (for build.md post-wave + /vg:regression) ===
-regression_guard_enabled: true     # run full test suite after build final gate
-regression_guard_fail_action: block  # block | warn
-
-# === i18n / Localization (for review.md i18n key check) ===
-# If your project uses i18n, configure here. Empty = skip i18n checks.
-i18n:
-  enabled: false                    # true = run i18n key resolution check in review
-  framework: ""                     # react-i18next | next-intl | vue-i18n | custom
-  locale_dir: ""                    # e.g. "apps/web/public/locales" or "src/i18n"
-  default_locale: "en"              # fallback locale for key resolution
-  key_function: "t"                 # function name that resolves keys: t('key.path')
-  # key_patterns: grep patterns to find i18n usage in code
-  key_patterns:
-    - "t\\(['\"]"                   # t('key') or t("key")
-    - "useTranslation"              # hook usage
-    - "Trans "                      # <Trans> component
+# === Playwright MCP Server ===
+# Auto-claimed via lock manager at ~/.claude/playwright-locks/playwright-lock.sh
+# Available servers: playwright1, playwright2, playwright3, playwright4, playwright5 (all with unique user-data-dir)
+# Each session auto-claims first free server — no manual config needed.
+# To check status: bash ~/.claude/playwright-locks/playwright-lock.sh status
 
 # === Session Model (for cross-role E2E testing) ===
 # Each role gets its own browser context (parallel, not logout/login).
@@ -272,89 +287,195 @@ session_model:
   # multi-context: each role = new browser context (recommended)
   # single-context: logout/login between roles (legacy)
 
+# === Monorepo Apps (for selective build/test) ===
+apps:
+  web:
+    path: "apps/web"
+    build: "turbo run build --filter=web"
+    test: "turbo run test --filter=web"
+    type: "node"
+  api:
+    path: "apps/api"
+    build: "turbo run build --filter=api"
+    test: "turbo run test --filter=api"
+    type: "node"
+  rtb-engine:
+    path: "apps/rtb-engine"
+    build: "cargo build --release"
+    test: "cargo test"
+    deploy_restart: "sudo systemctl restart rtb-engine"
+    health: "curl -sf http://localhost:3000/health"
+    type: "rust"
+  workers:
+    path: "apps/workers"
+    build: "turbo run build --filter=workers"
+    test: "turbo run test --filter=workers"
+    type: "node"
+
+# === Critical Domains (idempotency check — test.md step 5b-2) ===
+critical_domains: "billing,auth,payout,payment,transaction,auction"
+
+# === Visual Integrity Checks (Phase 2.5 in /vg:review) ===
+visual_checks:
+  enabled: true
+  font_check: true              # check @font-face loaded via document.fonts API
+  text_encoding_check: true     # ALWAYS ON — detect garbled UTF-8 (???, â€™, Ã©). No toggle — too critical
+  overflow_check: true          # detect hidden content overflow (scrollHeight > clientHeight)
+  responsive_viewports: [1920, 375]
+  z_index_check: true
+  sidebar_width: 256
+  header_height: 64
+
+# === Performance Budgets (RTB-specific) ===
+perf_budgets:
+  rtb_bid_response_ms: 50
+  api_response_p95_ms: 200
+  page_load_s: 3
+
+# === Pipeline Routing ===
+# Which pipeline step to use based on what changed
+routing:
+  # Files matching these patterns → full pipeline (browser discovery needed)
+  ui_patterns: ["apps/web/**", "apps/api/src/modules/*/routes*"]
+  # Files matching these patterns → skip browser discovery (API/backend only)
+  backend_only_patterns: ["apps/rtb-engine/**", "apps/workers/**", "apps/api/src/modules/*/services*"]
+  # Domain gates — these goal categories must be 100% (not 80%)
+  critical_goal_domains: ["auth", "billing", "auction", "payout", "compliance"]
+
+# === Review Phase 3 Fix Routing (v1.9.1 R2) ===
+# 3-tier severity-based fix routing in /vg:review Phase 3:
+#   MINOR     → inline main agent fix (fast, no context switch)
+#   MODERATE  → spawn Sonnet subagent (isolated, cheaper, bounded)
+#   MAJOR     → escalate to user (requires human judgment)
+# Severity classified by: fix_scope (files), blast_radius (callers), contract changes.
+review:
+  # ─── Scanner spawn mode (v1.9.4 R3.3 — mobile sequential gate) ──────
+  # Controls how Phase 2b-2 spawns Haiku scanner agents:
+  #   auto       → derive from profile (mobile-*=sequential, cli/library=none, web-*=parallel)
+  #   parallel   → up to 5 concurrent agents (web default, multi-browser contexts)
+  #   sequential → 1 agent at a time (mobile iOS sim / Android emu = single instance)
+  #   none       → skip UI scan entirely (cli-tool, library)
+  # Override: force sequential even for web projects if CI has limited browser slots.
+  scanner_spawn_mode: "auto"
+
+  fix_routing:
+    enabled: true                       # master switch — false disables Phase 3 routing (fallback: all inline)
+    inline_threshold_loc: 20            # fixes <= N lines stay inline (main agent)
+    spawn_threshold_loc: 150            # fixes > N lines but < escalate threshold → spawn Sonnet
+    escalate_threshold_loc: 500         # fixes > N lines → block + escalate to user
+    escalate_on_contract_change: true   # API-CONTRACTS.md touched → always escalate (no inline)
+    escalate_on_critical_domain: true   # touches critical_goal_domains → always escalate
+    max_iterations: 3                   # max fix iterations before giving up (3-strike rule)
+
+# === Design System (v1.10.0 R4 — NEW) ==========================
+# Integrates getdesign.md ecosystem DESIGN.md (58 brand variants: Stripe,
+# Linear, Vercel, Apple, Ferrari, BMW, Claude, Cursor, ...).
+#
+# Multi-design support: project can have multiple design systems per role.
+# Resolution priority (highest first):
+#   1. Phase-level:   .planning/phases/XX/DESIGN.md
+#   2. Role-level:    .planning/design/{role}/DESIGN.md
+#   3. Project-level: .planning/design/DESIGN.md
+#
+# Commands:
+#   /vg:design-system --browse              # list 58 brands grouped
+#   /vg:design-system --import stripe       # project-level DESIGN.md
+#   /vg:design-system --import linear --role=dsp-admin  # role-specific
+#   /vg:design-system --view --role=dsp-admin
+#   /vg:design-system --validate            # check code hex vs DESIGN.md palette
+design_system:
+  enabled: true
+  source_repo: "Meliwat/awesome-design-md-pre-paywall"
+  project_level: ".planning/design/DESIGN.md"
+  role_dir: ".planning/design"
+  phase_override_pattern: "{phase_dir}/DESIGN.md"
+  inject_on_build: true       # build task prompts receive DESIGN.md content
+  validate_on_review: true    # /vg:review Phase 2.5 checks hex drift
+
 # === Design Assets (for /vg:design-extract) ===
 # Normalizer converts any format → PNG + optional structural ref
 # AI vision consumes screenshots directly — no markdown prose middleman
 design_assets:
   # Glob patterns for design assets (relative to repo root unless absolute)
-  paths: []
-    # - "prototypes/**/*.html"                          # HTML wireframes
-    # - "designs/*.png"                                 # raw mockup images
-    # - "designs/*.fig"                                 # Figma exports
-    # - "/abs/path/to/PenBoard/file.pb"                 # PenBoard cross-project ref
-  # Per-format handler (auto-detected by extension; override if needed)
+  paths:
+    - "Supply-Side Platform/SSP Admin dashboard/*.html"
+    - "Supply-Side Platform/SSP Publisher dashboard/*.html"
+    - "Internal Demand/Advertiser Dashboard/*.html"
+    - "Internal Demand/Admin/*.html"
+    # - "designs/*.png"                                  # raw mockup images
+    # - "designs/*.fig"                                  # Figma exports
+    # - "D:/Workspace/Messi/Code/PenBoard/demo-app.pb"  # PenBoard cross-project ref
+  # Per-format handler (auto-detected by extension, override here if needed)
   handlers:
-    html: playwright_render          # Playwright headless → PNG + cleaned HTML
+    html: playwright_render     # Playwright headless → PNG + cleaned HTML
     htm:  playwright_render
-    png:  passthrough                # direct copy
+    png:  passthrough           # direct copy
     jpg:  passthrough
     jpeg: passthrough
     webp: passthrough
-    fig:  figma_fallback             # MCP if available, else user export manually
-    pb:   penboard_render            # PenBoard headless render via Electron/CanvasKit
-    xml:  pencil_xml                 # Pencil CLI export (fallback skip)
-  render_states: true                # click triggers → modal/hover screenshots
+    fig:  figma_fallback        # MCP if available, else user export manually
+    pb:   penboard_render       # PenBoard headless render via Electron/CanvasKit
+    xml:  pencil_xml            # Pencil CLI export (fallback skip)
+  # Capture interactive states (click triggers → modal/hover screenshots)
+  render_states: true
+  # Output directory (per-project)
   output_dir: ".planning/design-normalized"
+  # Haiku scanner tuning (see /vg:design-extract)
   max_parallel_haiku: 5
   normalizer_timeout_sec: 60
 
 # === Test Strategy (v1.9.1 R1 — surface-driven test taxonomy) ===
-# Every TEST-GOALS goal gets a `surface:` field classifying which runner executes it.
-# /vg:review Phase 4 routes non-ui surfaces away from browser discovery.
-# /vg:test step 5c dispatches surface → runner from this table.
-# Projects MAY extend `surfaces` with custom entries (e.g. rtb-engine, ml-model);
-# VG core only knows about the 5 defaults below.
+# Routes each TEST-GOALS goal to a runner based on `surface:`.
+# 5 defaults ship with VG; project may extend with custom surfaces (e.g. rtb-engine).
 test_strategy:
   default_surface: "ui"
   surfaces:
     ui:
       runner: "ui-playwright"
-      detect_keywords: ["click", "form", "modal", "page", "tab", "button", "sidebar", "dropdown", "submit"]
+      detect_keywords: ["click", "form", "modal", "page", "tab", "button", "sidebar", "dropdown", "submit", "badge", "snippet"]
     ui-mobile:
       runner: "ui-mobile-maestro"
       detect_keywords: ["tap", "swipe", "screen", "navigation", "gesture"]
     api:
       runner: "api-curl"
-      detect_keywords: ["endpoint", "POST", "GET", "PUT", "DELETE", "PATCH", "returns", "status code", "/api/", "/health", "/postback", "response contains", "401", "403", "404", "409", "422"]
+      detect_keywords: ["endpoint", "POST", "GET", "PUT", "DELETE", "PATCH", "returns", "status code", "/api/", "/postback", "/health", "/audience", "/event", "response contains", "401", "403", "404", "409", "422", "429", "502", "HMAC", "sig"]
     data:
       runner: "data-dbquery"
-      runner_config: { client: "auto" }   # auto | psql | sqlite3 | clickhouse-client | mongosh
-      detect_keywords: ["row", "count", "aggregate", "table", "collection", "document", "TTL", "partition", "materialized view", "SET", "SISMEMBER", "SELECT"]
+      runner_config: { client: "auto" }
+      detect_keywords: ["row", "count", "aggregate", "table", "collection", "document", "ClickHouse", "MongoDB", "Redis", "SET", "SISMEMBER", "TTL", "partition", "materialized view", "conversion_events", "dedup"]
     time-driven:
       runner: "time-faketime"
-      detect_keywords: ["after", "expires", "cron", "schedule", "window", "interval", "hourly", "daily", "grace period", "attribution window", "days", "pending"]
+      detect_keywords: ["after", "expires", "cron", "schedule", "window", "interval", "hourly", "daily", "attribution window", "grace period", "days ago", "last 24h"]
     integration:
       runner: "integration-mock"
-      detect_keywords: ["downstream", "postback", "webhook", "callback", "external service", "produced to", "Kafka", "topic", "message"]
-  # Confidence thresholds for lazy classification (see _shared/lib/goal-classifier.sh)
-  auto_threshold: 0.80            # >= → auto-assign
-  haiku_threshold: 0.50           # 0.5..0.8 → Haiku subagent tie-break
-  # < 0.5 → AskUserQuestion inline
+      detect_keywords: ["downstream", "postback", "webhook", "callback", "external service", "produced to", "Kafka", "vollx.conversion", "topic", "tracker", "redirect 301"]
+  auto_threshold: 0.80
+  haiku_threshold: 0.50
 
 # === Contract Format (for API-CONTRACTS.md generation + compile check) ===
-# Controls what code block format blueprint step 2b outputs
+# Controls what code block format blueprint 2b outputs
 contract_format:
-  type: "zod_code_block"             # zod_code_block | openapi_yaml | typescript_interface | pydantic_model
-  compile_cmd: ""
-  error_response_shape: "{ error: { code: string, message: string } }"  # project-wide error body format                    # e.g. "pnpm --filter api exec tsc --noEmit" — validates contract syntax
-  generated_types_path: ""           # e.g. "packages/types/contracts" — where executor imports from
+  type: "zod_code_block"        # zod_code_block | openapi_yaml | typescript_interface | pydantic_model
+  compile_cmd: "pnpm --filter @vollx/api exec tsc --noEmit"   # run after extract to validate contract syntax
+  generated_types_path: "packages/types/contracts"             # where executor should import from (if codegen applies)
+  error_response_shape: "{ error: { code: string, message: string } }"  # project-wide error body
 
-# === Build Gates (for post-wave strict verify, build.md step 8d + 9) ===
+# === Build Gates (for post-wave strict verify) ===
 # Commands run after each wave completes. Fail = BLOCK next wave.
 build_gates:
-  typecheck_cmd: ""                  # e.g. "pnpm turbo typecheck"
-  build_cmd: ""                      # e.g. "pnpm turbo build"
-  test_unit_cmd: ""                  # e.g. "pnpm turbo test:unit" — required if test_unit_required=true
-  test_unit_required: true           # if true AND cmd empty + src/ changed → BLOCK with guidance
-  contract_verify_grep: true         # reuse contract_verify_grep from env-commands.md
+  typecheck_cmd: "pnpm turbo typecheck"
+  build_cmd: "pnpm turbo build"
+  test_unit_cmd: "pnpm turbo test:unit"      # can be empty "" if test_unit_required=false
+  test_unit_required: true                    # if true AND cmd empty + src/ changed → BLOCK with guidance
+  contract_verify_grep: true                  # reuse existing contract_verify_grep from env-commands.md
   # Gate 5 — goal-test binding. Every task with <goals-covered>G-XX</goals-covered>
   # must commit a test file referencing goal id or success-criteria keyword.
   #   strict → BLOCK wave on any mismatch (TDD-style enforcement)
-  #   warn   → log mismatches, continue (soft gate — rely on phase-end check)
+  #   warn   → log mismatches, continue (soft gate — rely on phase-end check in /vg:test)
   #   off    → skip entirely
   goal_test_binding: "warn"
-  # Phase-end goal-test binding (runs in /vg:test after codegen). Default strict —
-  # by phase end every goal must be covered by some test (unit or generated E2E).
+  # Phase-end goal-test binding (runs in /vg:test after codegen). Always strict
+  # because at phase end EVERY goal must be covered by some test (unit or generated E2E).
   goal_test_binding_phase_end: "strict"
 
 # === Semantic Regression (cross-module caller analysis) ===
@@ -367,15 +488,68 @@ semantic_regression:
   track_endpoints: true      # API route paths (FE → BE)
   track_collections: true    # DB collection names
   track_topics: true         # Kafka topic names
-  track_css_classes: false   # shared classNames (opt-in — noisy)
-  track_i18n_keys: false     # t('key.path') (opt-in — noisy)
-  scope_apps: ["apps", "packages"]  # where to grep
+  track_css_classes: false   # apps/web shared classNames (opt-in — noisy)
+  track_i18n_keys: false     # apps/web t('key.path') (opt-in — noisy)
+  scope_apps: ["apps/api", "apps/web", "apps/workers", "packages"]  # where to grep
 
 # === Graphify Knowledge Graph (token-saving sibling/caller context) ===
 # When enabled, /vg:build queries graph.json via MCP for sibling + caller context
 # instead of grep-dumping file contents. Saves ~50% executor tokens for these blocks.
 # When disabled OR graph missing, falls back to grep-based path (build-caller-graph.py).
 # Setup: pip install graphifyy[mcp] && graphify install && graphify .
+# ─── v1.12.6 patch: 11 fields workflow reads but /vg:project missed ─────
+# (See .vg/CONFIG-AUDIT.md for full audit. v1.13.0 will move to template-based generation.)
+
+# DB name (used by build, review, test for collection/table naming)
+db_name: "vollxssp"
+
+# Dev server failure detection (used by /vg:build dev-stack startup)
+dev_failure_log_tail: 80
+dev_failure_patterns:
+  - "error TS[0-9]+"
+  - "ESLint:"
+  - "ENOENT"
+  - "EADDRINUSE"
+  - "Cannot find module"
+  - "FATAL"
+  - "panic:"
+dev_os_limits:
+  max_processes: 200
+  max_open_files: 4096
+dev_process_markers:
+  - "pnpm dev"
+  - "vite"
+  - "next dev"
+  - "fastify"
+  - "turbo run dev"
+
+# Flat alias (some skills read this directly, not via contract_format.error_response_shape)
+error_response_shape: "{ error: { code: string, message: string } }"
+
+# i18n configuration (used by scope/build/review for translation key extraction)
+i18n:
+  enabled: true
+  default_locale: "vi"
+  key_function: "t"               # i18next style: t('key.path')
+  locale_dir: "apps/web/src/i18n/locales"
+
+# Flat ports (alias — worktree_ports.base also exists for offset support)
+ports:
+  database: 27017                 # MongoDB default; change to 5432 for Postgres
+
+# Rationalization guard model (gate-skip adjudicator subagent)
+rationalization_guard:
+  model: "haiku"                  # haiku (cheap) for routine, opus for security/architecture gates
+
+# Multi-surface declaration (single-surface default — if mobile added, see Multi-Surface block above)
+surfaces:
+  web:
+    type: "web-fullstack"
+    paths: ["apps/web", "apps/api"]
+    stack: "react+fastify"
+
+# ─── End v1.12.6 patch ──────────────────────────────────────────────────
+
 graphify:
   enabled: true                                # true = use graphify | false = grep fallback
   graph_path: "graphify-out/graph.json"        # snapshot location relative to repo root
@@ -383,6 +557,7 @@ graphify:
   fallback_to_grep: true                       # if graph missing/stale, fallback grep instead of BLOCK
   rebuild_on_phase_start: false                # auto-rebuild graph at /vg:build start (token cost — manual recommended)
   staleness_warn_commits: 50                   # warn if N commits since last build (suggest manual rebuild)
+  block_on_stale: false                        # v1.12.5: when true, config-loader exits 1 if stale (fail-closed). Default false = warn-only (backward compat).
   ignore_patterns:                             # written to .graphifyignore
     - ".planning/"
     - ".claude/"
@@ -400,45 +575,187 @@ graphify:
 # === Plan Validation Gate (blueprint step 2d) ===
 # Runtime prompt asks user; this is fallback for --auto mode
 plan_validation:
-  default_mode: "strict"             # strict | default | loose | custom
+  default_mode: "strict"                      # strict | default | loose | custom
   # Thresholds: % of items allowed to miss before BLOCK
   thresholds:
     strict:  { decisions_miss_pct: 10, goals_miss_pct: 15, endpoints_miss_pct: 5 }
     default: { decisions_miss_pct: 20, goals_miss_pct: 30, endpoints_miss_pct: 10 }
     loose:   { decisions_miss_pct: 40, goals_miss_pct: 50, endpoints_miss_pct: 20 }
   custom_thresholds: { decisions_miss_pct: 10, goals_miss_pct: 15, endpoints_miss_pct: 5 }
-  max_auto_fix_iterations: 3         # AI retries to patch plan before giving up
+  max_auto_fix_iterations: 3                  # AI retries to patch plan before giving up
 
-# === Commit Message Hook (deployed to .git/hooks/commit-msg by /vg:init) ===
-# Template at .claude/templates/vg/commit-msg
+# === Commit Message Hook ===
 commit_msg_hook:
   enabled: true
-  require_contract_cite: true        # commit touching src/ must cite API-CONTRACTS or CONTEXT
+  require_contract_cite: true                 # commit touching src/ must cite API-CONTRACTS or CONTEXT
   pattern: '^(feat|fix|refactor|test|chore|docs)\([0-9]+(\.[0-9]+)*-[0-9]+\): '
 
-# === Phase Profiles (v1.9.2 P5 — orthogonal to R1 surface taxonomy) ===
-# Phase profile decides WHICH artifacts a phase needs and WHICH review/test mode runs.
-# Orthogonal to R1: surface routes GOALS → runners; profile routes PHASES → pipelines.
-# Detection in _shared/lib/phase-profile.sh (pure bash). Override per-phase by adding
-# `phase_profile: <name>` at top of SPECS.md (future — config-driven override).
+# === Console Noise Filter (review Phase 2 — suppress known infra errors) ===
+# Console errors matching these patterns are classified as INFRA_NOISE, not code bugs.
+# Review Phase 2 discovery: only alert on errors NOT matching these patterns.
+# Pattern format: regex applied to console error text (case-insensitive).
+console_noise:
+  enabled: true
+  patterns:
+    - "sse.*401|401.*sse"                          # SSE auth reconnect noise
+    - "balance-stream.*401"                        # balance SSE specifically
+    - "clickhouse|ClickHouse|conversion_events"    # ClickHouse tables not created locally
+    - "kafka.*ECONNREFUSED|ECONNREFUSED.*kafka"    # Kafka not running locally
+    - "ECONNREFUSED.*:9092"                        # Kafka port
+    - "ECONNREFUSED.*:8123"                        # ClickHouse port
+    - "net::ERR_CONNECTION_REFUSED"                 # generic unreachable service
+    - "Failed to fetch.*health"                     # health endpoint during startup
+  # Custom per-project patterns (add yours here):
+  # - "your-noisy-pattern"
+
+# === Infrastructure Dependencies (per phase goal classification) ===
+# Maps service names to their availability check.
+# TEST-GOALS.md goals with `infra_deps: [service]` auto-classify as INFRA_PENDING
+# when the listed service's check fails on current environment.
+# Review Phase 4 skips INFRA_PENDING goals instead of marking them BLOCKED.
+infra_deps:
+  services:
+    mongodb:
+      check_local: "wsl -d Ubuntu -e mongosh --eval 'db.runCommand({ping:1})' --quiet 2>/dev/null"
+      check_sandbox: "mongosh --eval 'db.runCommand({ping:1})' --quiet 2>/dev/null"
+      label: "MongoDB"
+    redis:
+      check_local: "wsl -d Ubuntu -e redis-cli ping 2>/dev/null"
+      check_sandbox: "redis-cli ping 2>/dev/null"
+      label: "Redis"
+    clickhouse:
+      check_local: "wsl -d Ubuntu -e clickhouse-client --query 'SELECT 1' 2>/dev/null"
+      check_sandbox: "clickhouse-client --query 'SELECT 1' 2>/dev/null"
+      label: "ClickHouse"
+    kafka:
+      check_local: "wsl -d Ubuntu -e kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null | head -1"
+      check_sandbox: "kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null | head -1"
+      label: "Kafka"
+    pixel_server:
+      check_local: "curl -sf http://localhost:3003/health 2>/dev/null"
+      check_sandbox: "curl -sf https://pixel.vollx.com/health 2>/dev/null"
+      label: "Pixel Server"
+    no_ui_e2e:
+      check_local: "false"
+      check_sandbox: "false"
+      label: "No-UI E2E (backend integration test required, not /vg:test)"
+    test_fixture_required:
+      check_local: "false"
+      check_sandbox: "false"
+      label: "Test fixture (time-travel/bulk insert/curated UA vectors)"
+  # How review Phase 4 handles goals with unmet infra_deps:
+  # - "skip" = don't count toward pass/fail gate (recommended)
+  # - "warn" = count as WARN, not BLOCK
+  # - "block" = strict — require all infra (use for production readiness)
+  unmet_behavior: "skip"
+
+# ─── F3 Override Debt Register (2026-04-17) ─────────────────────────
+debt:
+  register_path: ".planning/OVERRIDE-DEBT.md"
+  auto_expire_days: 14
+  blocking_severity: ["critical"]
+  severities:
+    critical:
+      - "--allow-missing-commits"
+      - "--override-reason"
+      - "--override-regressions"
+      - "--force-accept-with-debt"
+    high:
+      - "--allow-no-tests"
+      - "--skip-design-check"
+      - "--allow-intermediate"
+      - "--skip-context-rebuild"
+    medium:
+      - "--skip-crossai"
+      - "--skip-research"
+      - "--allow-deferred"
+
+# ─── F6 i18n Narration (2026-04-17) ─────────────────────────────────
+narration:
+  locale: "vi"
+  fallback_locale: "en"
+  string_table_path: ".claude/commands/vg/_shared/narration-strings.yaml"
+
+# ─── F8 Scope Adversarial Answer Challenger (v1.9.1 R3, 2026-04-17) ─
+# Spawns isolated OPUS subagent after every user answer in /vg:scope
+# rounds and /vg:project foundation rounds. Challenges via 8 lenses (v1.9.3):
+# contradiction / hidden_assumption / edge_case / foundation_conflict /
+# security / performance / failure_mode / integration_chain.
+# Model upgraded Haiku→Opus in v1.9.3 R3.2 — scope needs reasoning depth
+# to find real gaps, not superficial checks.
+# Disable for rapid prototyping projects where challenge friction > value.
+scope:
+  adversarial_check: true               # master switch — set false to skip all challenges
+  adversarial_model: "opus"             # subagent model (zero parent context) — v1.9.3: upgraded from haiku
+  adversarial_max_rounds: 3             # loop guard: max challenges per phase (incl. /vg:project run)
+  adversarial_skip_trivial: true        # skip Y/N single-word confirmations (helper auto-detects)
+
+  # ─── v1.9.3 R3.2 Dimension Expander ────────────────────────────────
+  # Proactive gap-finding at END of each round (1 call/round, not per-answer).
+  # Separate from answer-challenger: expander asks "what dimensions have we NOT
+  # covered?" whereas challenger asks "is this specific answer wrong?".
+  dimension_expand_check: true          # master switch — set false to skip all round-end expansions
+  dimension_expand_model: "opus"        # Opus for reasoning depth (dimensions require senior-engineer breadth)
+  dimension_expand_max: 6               # loop guard: max expansions per phase (5 rounds + 1 deep probe)
+
+# ─── F7 Telemetry (2026-04-17) ──────────────────────────────────────
+telemetry:
+  enabled: true
+  path: ".planning/telemetry.jsonl"
+  retention_days: 90
+  sample_rate: 1.0
+  event_types_skip: []
+
+# ─── F9 Security Register (2026-04-17) ──────────────────────────────
+security:
+  register_path: ".planning/SECURITY-REGISTER.md"
+  taxonomy: ["stride", "owasp_top_10", "custom"]
+  severity_scale: ["info", "low", "medium", "high", "critical"]
+  decay_policy:
+    mitigated_archive_days: 90
+    unresolved_escalate_days: 30
+  composite_rules:
+    - name: "auth-weakness + privilege-escalation"
+      patterns: ["broken-auth", "broken-access"]
+      resulting_severity: "critical"
+      phases_min: 2
+    - name: "info-disclosure-chain"
+      patterns: ["info-disclosure", "sensitive-data"]
+      resulting_severity: "high"
+      phases_min: 2
+  accept_gate:
+    block_on_open: ["critical"]
+  milestone_audit:
+    required_before_milestone_complete: true
+
+# ─── Session Lifecycle (2026-04-17) ─────────────────────────────────
+session:
+  stale_hours: 1                    # state files older than N hours → auto-sweep at session_start
+  port_sweep_on_start: true         # kill orphan dev servers on declared ports before pre-flight
+
+# ─── P5 Phase Profiles (v1.9.2, 2026-04-17) ─────────────────────────
+# Orthogonal to R1 surface taxonomy — surface routes GOALS to runners,
+# phase profile routes PHASES to pipelines.
+# Detection rules live in _shared/lib/phase-profile.sh (pure bash function).
+# Override per-phase by adding `phase_profile: <name>` at top of SPECS.md.
 phase_profiles:
   feature:
     required_artifacts: [SPECS.md, CONTEXT.md, PLAN.md, API-CONTRACTS.md, TEST-GOALS.md, SUMMARY.md]
     skip_artifacts: []
-    review_mode: "full"
-    test_mode: "full"
+    review_mode: "full"                       # browser discover + surface routing
+    test_mode: "full"                         # per-surface runners
     goal_coverage: "TEST-GOALS"
   infra:
     required_artifacts: [SPECS.md, PLAN.md, SUMMARY.md]
     skip_artifacts: [TEST-GOALS.md, API-CONTRACTS.md, CONTEXT.md, RUNTIME-MAP.json]
-    review_mode: "infra-smoke"
-    test_mode: "infra-smoke"
-    goal_coverage: "SPECS.success_criteria"
+    review_mode: "infra-smoke"                # parse success_criteria bash → run each → READY/FAILED
+    test_mode: "infra-smoke"                  # same as review
+    goal_coverage: "SPECS.success_criteria"   # implicit goals S-01..S-NN from checklist
   hotfix:
     required_artifacts: [SPECS.md, PLAN.md, SUMMARY.md]
     skip_artifacts: [TEST-GOALS.md, API-CONTRACTS.md, CONTEXT.md]
-    inherits_from: "parent_phase"
-    review_mode: "delta"
+    inherits_from: "parent_phase"             # read parent_phase TEST-GOALS if exists
+    review_mode: "delta"                      # focus on delta changes + parent goals re-verify
     test_mode: "parent-goals-regression"
     goal_coverage: "parent_phase.TEST-GOALS"
   bugfix:
@@ -460,223 +777,31 @@ phase_profiles:
     test_mode: "markdown-lint"
     goal_coverage: "SPECS.doc_targets"
 
-# === Scope Adversarial Check (v1.9.1 R3 + v1.9.3 R3.2) ===
-# Spawns isolated Opus subagent after every user answer in /vg:scope rounds
-# and /vg:project foundation rounds. Challenges via 8 lenses (v1.9.3):
-# contradiction / hidden_assumption / edge_case / foundation_conflict /
-# security / performance / failure_mode / integration_chain.
-# Model upgraded Haiku→Opus in v1.9.3 R3.2 — scope needs reasoning depth
-# to find real gaps, not superficial checks.
-# Disable for rapid prototyping projects where challenge friction > value.
-scope:
-  adversarial_check: true               # master switch — false to skip all challenges
-  adversarial_model: "opus"             # subagent model (zero parent context) — v1.9.3: upgraded from haiku
-  adversarial_max_rounds: 3             # loop guard: max challenges per phase
-  adversarial_skip_trivial: true        # skip Y/N single-word confirmations (helper auto-detects)
+# ─── F11 Visual Regression (2026-04-17) ─────────────────────────────
+visual_regression:
+  enabled: false                   # opt-in per project (requires pip install pixelmatch pillow)
+  tool: "auto"
+  threshold_pct: 2.0
+  baseline_dir: "apps/web/e2e/screenshots/baseline"
+  current_dir: "apps/web/e2e/screenshots"
+  diff_output_dir: ".planning/phases/{phase}/visual-diffs"
+  report_path: ".planning/phases/{phase}/visual-diff.json"
+  ignore_regions: []
+  auto_promote_on_first_run: true
+---
 
-  # ─── v1.9.3 R3.2 Dimension Expander ────────────────────────────────
-  # Proactive gap-finding at END of each round (1 call/round, not per-answer).
-  # Separate from answer-challenger: expander asks "what dimensions have we NOT
-  # covered?" whereas challenger asks "is this specific answer wrong?".
-  dimension_expand_check: true          # master switch — false to skip all expansions
-  dimension_expand_model: "opus"        # Opus for reasoning depth (dimensions require breadth)
-  dimension_expand_max: 6               # loop guard: max expansions per phase (5 rounds + 1 deep probe)
-
-# === Review Phase 3 Fix Routing (v1.9.1 R2) ===
-# 3-tier severity-based fix routing in /vg:review Phase 3:
-#   MINOR     → inline main agent fix (fast, no context switch)
-#   MODERATE  → spawn Sonnet subagent (isolated, cheaper, bounded)
-#   MAJOR     → escalate to user (requires human judgment)
-# Severity classified by: fix_scope (files), blast_radius (callers), contract changes.
-review:
-  # ─── Scanner spawn mode (v1.9.4 R3.3 — mobile sequential gate) ──────
-  # Controls how Phase 2b-2 spawns Haiku scanner agents:
-  #   auto       → derive from profile (mobile-*=sequential, cli/library=none, web-*=parallel)
-  #   parallel   → up to 5 concurrent agents (web default)
-  #   sequential → 1 agent at a time (mobile iOS sim / Android emu = single instance)
-  #   none       → skip UI scan entirely (cli-tool, library)
-  scanner_spawn_mode: "auto"
-
-  fix_routing:
-    enabled: true                       # master switch — false disables routing (fallback all inline)
-
-# === Design System (v1.10.0 R4 — NEW) ==========================
-# Integrates getdesign.md ecosystem DESIGN.md (58 brand variants).
-# Multi-design support: project can have multiple design systems per role/area.
-# Resolution priority: phase > role > project > none.
-# Commands:
-#   /vg:design-system --browse
-#   /vg:design-system --import stripe --role=dsp-admin
-#   /vg:design-system --view --role=dsp-admin
-#   /vg:design-system --validate
-design_system:
-  enabled: true
-  source_repo: "Meliwat/awesome-design-md-pre-paywall"
-  project_level: ".planning/design/DESIGN.md"
-  role_dir: ".planning/design"
-  phase_override_pattern: "{phase_dir}/DESIGN.md"
-  inject_on_build: true       # build task prompts receive DESIGN.md content
-  validate_on_review: true    # /vg:review Phase 2.5 checks hex drift
-
-# === Bug Reporting (v1.11.0 R5 — NEW) ==========================
-# Auto-detect workflow bugs + push to vietdev99/vgflow GitHub issues.
-# Opt-out default (prompted at install). Privacy-first: redact paths,
-# project name, emails, phase IDs before upload.
-#
-# 3-tier send: gh CLI → URL fallback → silent queue.
-# Detection types: schema_violation, helper_error, user_pushback,
-# gate_loop, ai_inconsistency.
-#
-# Commands:
-#   /vg:bug-report                 # status + consent prompt (first run)
-#   /vg:bug-report --flush         # send queued events
-#   /vg:bug-report --queue         # show pending
-#   /vg:bug-report --disable-all   # opt out
-#   /vg:bug-report --disable=SIG   # suppress specific signature
-#   /vg:bug-report --stats         # local stats
+# ─── Bug Reporting (v1.11.0+) ──────────────────────────────────────
+# Auto-detect workflow bugs + send to vietdev99/vgflow GitHub issues.
+# User consented inline (session 2026-04-18 — bug-reporter manual setup).
 bug_reporting:
-  enabled: true                       # opt-out default; user prompted at install
+  enabled: true
   repo: "vietdev99/vgflow"
-  severity_threshold: "minor"         # minor | medium | high | critical
-  auto_send_minor: true               # silent background send
+  severity_threshold: "minor"
+  auto_send_minor: true
   redact_project_paths: true
   redact_project_names: true
-  auto_assign: "vietdev99"            # GitHub handle for auto-assignment
+  auto_assign: "vietdev99"
   default_labels: ["bug-auto", "needs-triage"]
-  max_per_session: 5                  # rate limit
+  max_per_session: 5
   queue_path: ".claude/.bug-reports-queue.jsonl"
   sent_cache_path: ".claude/.bug-reports-sent.jsonl"
-    inline_threshold_loc: 20            # fixes <= N lines stay inline
-    spawn_threshold_loc: 150            # fixes > N but < escalate → spawn Sonnet
-    escalate_threshold_loc: 500         # fixes > N lines → block + escalate to user
-    escalate_on_contract_change: true   # API-CONTRACTS.md touched → always escalate
-    escalate_on_critical_domain: true   # touches critical_goal_domains → always escalate
-    max_iterations: 3                   # max fix iterations before giving up
-
-# =====================================================================
-# === Mobile Configuration =============================================
-# =====================================================================
-# Active ONLY when `profile` is in:
-#   {mobile-rn, mobile-flutter, mobile-native-ios, mobile-native-android, mobile-hybrid}
-# For web/cli/library profiles, leave this block commented out — workflow skips it.
-#
-# ALL values below are EXAMPLES — `/vg:init` overwrites them with answers you give.
-# DO NOT hardcode project-specific device names, team IDs, or paths here.
-#
-# Uncomment and fill via /vg:init.
-# mobile:
-#   # --- Stack toolchain (detected per profile by /vg:init) -----------
-#   stack:
-#     typecheck_cmd: ""              # RN: "tsc --noEmit" | Flutter: "dart analyze"
-#                                    # iOS: "swift-format lint -r ." | Android: "./gradlew lint"
-#     build_cmd: ""                  # e.g. "eas build --profile development --platform all --non-interactive"
-#     test_unit_cmd: ""              # RN: "jest" | Flutter: "flutter test"
-#                                    # iOS: "xcodebuild test -scheme Foo" | Android: "./gradlew testDebugUnitTest"
-#     lint_cmd: ""                   # optional format/lint gate
-#
-#   # --- Distribution targets (subset user picks) ---------------------
-#   target_platforms: ["ios", "android"]
-#
-#   # --- Device abstraction (NAMES only — user types in /vg:init) -----
-#   # Workflow does NOT pick devices. These are identifiers you created locally
-#   # or get from CI runner env. Absence of a field = skip that platform gracefully.
-#   devices:
-#     ios:
-#       simulator_name: ""           # e.g. "iPhone 15 Pro" (from `xcrun simctl list`)
-#       os_version: ""               # e.g. "17.0"
-#       preferred_host_os: "darwin"  # iOS simulator requires macOS host
-#     android:
-#       emulator_name: ""            # AVD name (from `emulator -list-avds`)
-#       os_version: ""               # e.g. "34"
-#       preferred_host_os: "any"     # Android emulator runs on Win/Mac/Linux
-#
-#   # --- E2E automation -----------------------------------------------
-#   # Maestro is the default first-class backend (cross-platform YAML flows).
-#   # Alternatives: appium | detox (RN only) | xcuitest_espresso (native pair).
-#   e2e:
-#     framework: "maestro"           # maestro | appium | detox | xcuitest_espresso
-#     flows_dir: ""                  # e.g. "e2e/flows"
-#     mcp_wrapper_path: ""           # default: "${REPO_ROOT}/.claude/scripts/maestro-mcp.py"
-#     slow_mo_ms: 500
-#     screenshots_dir: ""            # e.g. "e2e/screenshots"
-#
-#   # --- Design asset handler registry --------------------------------
-#   # Extends top-level design_assets.handlers (web handlers still apply).
-#   # Key = file extension; value = handler name in design-normalize.py.
-#   design_handlers:
-#     fig: "figma_mcp"               # Figma file or share link → PNG + node JSON
-#     stitch: "stitch_export"        # Google Stitch AI → PNG export
-#     pencil: "pencil_dev_api"       # pencil.dev prototype → PNG + interactions
-#     swift: "swiftui_preview"       # SwiftUI #Preview → simulator snapshot
-#     kt: "compose_preview"          # @Preview (paparazzi/showkase) → PNG
-#     dart: "flutter_widgetbook"     # Widgetbook → PNG
-#     # existing extensions (html, png, jpg, webp, pb, xml) unchanged.
-#
-#   # --- Deploy chain -------------------------------------------------
-#   # Each stage is a distribution target with a health check.
-#   # Cloud providers (eas/codemagic/bitrise) used as fallback when host ≠ macOS
-#   # and target_platforms includes ios.
-#   deploy:
-#     provider: "fastlane"           # fastlane | eas | firebase | codemagic | bitrise | manual
-#     eas_auto_detect: true          # if eas.json exists in repo → provider=eas override
-#     cloud_fallback_for_ios: true   # non-darwin host + ios target → switch to cloud_fallback_provider
-#     cloud_fallback_provider: "eas" # eas | codemagic | bitrise
-#     stages:
-#       - name: "internal_qa"
-#         target: "firebase_app_distribution"  # firebase_app_distribution | testflight | play_internal | manual_link
-#         required: true
-#         health_check: "fad_link_reachable"
-#       - name: "beta"
-#         target: "testflight_and_play_internal"
-#         required: false
-#         health_check: "store_processing_ok"
-#     signing:
-#       ios_team_id_env: ""          # env-var NAME (not the ID itself) e.g. "APPLE_TEAM_ID"
-#       ios_cert_source: "fastlane_match"  # fastlane_match | manual | eas_managed
-#       android_keystore_env: ""     # env-var NAME pointing to keystore path
-#       cert_expiry_warn_days: 30
-#       cert_expiry_block_days: 0
-#
-#   # --- V1 Mobile-specific gates ------------------------------------
-#   gates:
-#     permission_audit:
-#       enabled: true
-#       require_justification_in_context: true
-#       # Paths relative to REPO_ROOT. Empty = skip that platform.
-#       ios_plist_path: ""           # e.g. "ios/App/Info.plist"
-#       android_manifest_path: ""    # e.g. "android/app/src/main/AndroidManifest.xml"
-#       expo_config_path: ""         # e.g. "app.json"  (RN-only)
-#
-#     cert_expiry:
-#       enabled: true
-#       warn_days: 30
-#       block_days: 0
-#
-#     privacy_manifest:
-#       enabled: true
-#       ios_privacy_info_path: ""    # e.g. "ios/App/PrivacyInfo.xcprivacy"
-#       android_data_safety_yaml: "" # e.g. ".planning/android-data-safety.yaml"
-#       check_consistency_with_permissions: true
-#
-#     native_module_linking:
-#       enabled: true
-#       ios_pods_check: "pod install --dry-run"
-#       android_gradle_check: "./gradlew app:dependencies --quiet"
-#       rn_autolinking_check: "npx react-native config"   # mobile-rn only
-#       flutter_pub_check: "flutter pub deps --style=compact"  # mobile-flutter only
-#       skip_on_missing_tool: true   # gracefully skip sub-check if tool not installed
-#
-#     bundle_size:
-#       enabled: true
-#       ios_ipa_mb: 100
-#       android_apk_mb: 50
-#       android_aab_mb: 80
-#       fail_action: "block"         # block | warn
-#
-#   # --- Store policy (V1 config slot; enforcement comes in V2) ------
-#   store_policy:
-#     ios_min_version: ""            # e.g. "15.0"
-#     android_min_sdk: 0             # e.g. 23
-#     android_target_sdk: 0          # e.g. 34
-#     ios_privacy_manifest_required: true
----

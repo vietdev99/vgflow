@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.12.6] - 2026-04-18
+
+### Fixed (config audit stop-gap)
+- **Patched 10 missing config fields** workflow reads but `/vg:project` doesn't generate. Without these, dotted notation `${config.X.Y}` returns empty string in awk parser → silent fallback to defaults that may not match user environment. Added with sensible defaults:
+  - `db_name`, `dev_failure_log_tail`, `dev_failure_patterns`, `dev_os_limits`, `dev_process_markers` (dev-server startup detection)
+  - `error_response_shape` (flat alias for skills not using `contract_format.` prefix)
+  - `i18n.{enabled,default_locale,key_function,locale_dir}` (translation key extraction)
+  - `ports.database` (flat alias for worktree_ports)
+  - `rationalization_guard.model` (gate-skip subagent model)
+  - `surfaces.web` (multi-surface routing default — single-surface fallback)
+
+### Audit doc
+`.vg/CONFIG-AUDIT.md` — full analysis: 44 keys workflow READS vs 43 keys current config WRITES. Diff shows 11 read-but-missing (10 real + 1 false positive `template.md` = file path).
+
+### Planned for v1.13.0
+- **Template-based config generation** — `/vg:project` reads `vgflow/vg.config.template.md` (754 lines, full schema) as source-of-truth, substitutes only foundation-derived fields. Replaces current placeholder heredoc + 12-row derivation table that covers ~25% of schema. Result: 100% schema coverage on fresh project init.
+
+### User-reported issue
+"file config của vg nhiều thông số thế, khi chạy project xong, nó có tạo đủ field không, hay lại lỗi" — confirmed: project skill at line 887-892 uses placeholder `# Write ...` heredoc with no concrete schema, relies on AI to derive from 12 rules covering ~25% of fields. Stop-gap patches current project + plan v1.13.0 fix.
+
 ## [1.12.5] - 2026-04-18
 
 ### Fixed (graphify integrity audit)
