@@ -123,6 +123,29 @@ Sync chain flag:
 # VG-native: auto-chain not used in VG pipeline
 # (GSD auto-chain is N/A — VG uses explicit /vg:next routing)
 
+# Flag allowlist (v1.14.4+ — typo guard). Unknown flag = hard BLOCK, not silent skip.
+VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-context-rebuild|resume|allow-missing-commits|override-reason|force|help)$'
+UNKNOWN_FLAGS=""
+for tok in ${ARGUMENTS:-}; do
+  case "$tok" in
+    --*)
+      # Strip =value from --flag=value for allowlist match
+      flag_name="${tok%%=*}"
+      if ! echo "$flag_name" | grep -qE "$VALID_FLAGS_PATTERN"; then
+        UNKNOWN_FLAGS="${UNKNOWN_FLAGS} ${flag_name}"
+      fi
+      ;;
+  esac
+done
+if [ -n "$UNKNOWN_FLAGS" ]; then
+  echo "⛔ Unknown flag(s):${UNKNOWN_FLAGS}"
+  echo "   Valid flags: --wave, --only, --status, --gaps-only, --interactive, --auto,"
+  echo "                --reset-queue, --skip-design-check, --skip-context-rebuild, --resume,"
+  echo "                --allow-missing-commits, --override-reason=<text>, --force, --help"
+  echo "   Có thể bạn gõ sai chính tả (typo). Check lại arguments trước khi chạy."
+  exit 1
+fi
+
 # Detect flags
 RESET_QUEUE=false
 STATUS_ONLY=false
@@ -300,9 +323,10 @@ Errors: `PHASE_DIR` empty → stop. `PLAN_COUNT=0` → stop.
 </step>
 
 <step name="3_validate_blueprint">
-**MANDATORY GATE.**
+**MANDATORY GATE — blueprint artifacts + CONTEXT.md format.**
 
-Check BOTH artifacts exist:
+### 3a: Check core artifacts exist
+
 ```bash
 PLANS=$(ls "${PHASE_DIR}"/PLAN*.md 2>/dev/null | head -1)
 CONTRACTS=$(ls "${PHASE_DIR}"/API-CONTRACTS.md 2>/dev/null)
@@ -310,6 +334,55 @@ CONTRACTS=$(ls "${PHASE_DIR}"/API-CONTRACTS.md 2>/dev/null)
 
 Missing PLAN → BLOCK: "Run `/vg:blueprint {phase}` first."
 Missing CONTRACTS → WARNING: "No API contracts. Executors will build without contract guidance. Continue? (y/n)"
+
+### 3b: CONTEXT.md format validation (v1.14.4+ — R2 enforcement)
+
+Executor rules require commits cite `D-XX` / `P{phase}.D-XX` decisions. If CONTEXT.md missing or legacy format (no Endpoints / Test Scenarios sub-sections), executor cites stale decisions and commit-msg hook either fails or lets weak citations through.
+
+```bash
+# Only enforce for feature profile — other profiles (infra/hotfix/docs) skip CONTEXT per phase-profile rules
+PHASE_PROFILE_FOR_CTX="${PHASE_PROFILE:-feature}"
+if [ "$PHASE_PROFILE_FOR_CTX" = "feature" ]; then
+  CONTEXT_FILE="${PHASE_DIR}/CONTEXT.md"
+
+  if [ ! -f "$CONTEXT_FILE" ]; then
+    echo "⛔ CONTEXT.md missing cho phase ${PHASE_NUMBER} (feature profile cần CONTEXT.md)."
+    echo "   Run: /vg:scope ${PHASE_NUMBER} trước khi build."
+    exit 1
+  fi
+
+  # Parse CONTEXT structure
+  DECISION_COUNT=$(grep -cE '^### (P[0-9.]+\.)?D-[0-9]+' "$CONTEXT_FILE" 2>/dev/null || echo 0)
+  ENDPOINT_SECTIONS=$(grep -c '^\*\*Endpoints:\*\*' "$CONTEXT_FILE" 2>/dev/null || echo 0)
+  TEST_SECTIONS=$(grep -c '^\*\*Test Scenarios:\*\*' "$CONTEXT_FILE" 2>/dev/null || echo 0)
+
+  if [ "$DECISION_COUNT" -eq 0 ]; then
+    echo "⛔ CONTEXT.md có 0 decisions — phase chưa scoped đúng."
+    echo "   Expected: '### D-01', '### D-02', ... hoặc '### P${PHASE_NUMBER}.D-01' format."
+    echo "   Run: /vg:scope ${PHASE_NUMBER}"
+    exit 1
+  fi
+
+  if [ "$ENDPOINT_SECTIONS" -eq 0 ] && [ "$TEST_SECTIONS" -eq 0 ]; then
+    # Legacy format — warn but allow (blueprint step 2a also warns)
+    echo "⚠ CONTEXT.md legacy format (không có 'Endpoints:' hoặc 'Test Scenarios:' sub-sections)."
+    echo "   Executor sẽ cite decision IDs nhưng thiếu context cụ thể."
+    echo "   Khuyến nghị: /vg:scope ${PHASE_NUMBER} để re-enrich."
+    # Log to override-debt (technical debt tracking)
+    if type -t log_override_debt >/dev/null 2>&1; then
+      log_override_debt "build-context-legacy" "${PHASE_NUMBER}" "CONTEXT.md legacy format — no Endpoints/Test sections" "$PHASE_DIR"
+    fi
+  fi
+
+  echo "✓ CONTEXT.md: ${DECISION_COUNT} decisions, ${ENDPOINT_SECTIONS} endpoint blocks, ${TEST_SECTIONS} test blocks"
+fi
+```
+
+Result routing:
+- Feature profile + CONTEXT.md missing → HARD BLOCK
+- Feature profile + 0 decisions → HARD BLOCK
+- Feature profile + legacy format → WARN + log override-debt
+- Non-feature profile → skip check (CONTEXT.md not required)
 </step>
 
 <step name="4_load_contracts_and_context">
@@ -837,6 +910,59 @@ BUILD_CONFIG=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(j
 
 # Script auto-builds siblings + callers if missing (runs find-siblings.py + build-caller-graph.py)
 # Graphify used: ${graphify.enabled} from config → sibling/caller enrichment
+
+# R4 enforcement (v1.14.4+) — context budget check per block + total prompt size
+# Rule 4 khai "Context budget per agent ~2000 lines, 7 blocks". Gate đây để tránh drift/OOM.
+PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - <<PY
+import json, sys
+
+ctx = json.loads('''$CONTEXT_JSON''')
+
+# Per-block soft limits (from rule R4)
+BUDGETS = {
+    'task_context': 300,
+    'contract_context': 500,
+    'goals_context': 200,
+    'sibling_context': 400,
+    'downstream_callers': 400,
+    'design_context': 200,
+}
+HARD_TOTAL_MAX = ${CONFIG_BUILD_PROMPT_MAX_LINES:-2500}
+
+per_block_lines = {}
+total = 0
+overflows = []
+
+for key, budget in BUDGETS.items():
+    val = ctx.get(key, '') or ''
+    n = val.count('\n') + (1 if val and not val.endswith('\n') else 0)
+    per_block_lines[key] = n
+    total += n
+    if n > budget:
+        overflows.append(f"  - {key}: {n} lines > budget {budget}")
+
+# Soft warn per-block overflow (R4 said ~2000 lines comfortable)
+if overflows:
+    print(f"⚠ R4 per-block overflow ({len(overflows)} block):")
+    for o in overflows:
+        print(o)
+    print(f"  Total prompt: {total} lines")
+
+# Hard total cap — protects against runaway
+if total > HARD_TOTAL_MAX:
+    print(f"⛔ R4 HARD gate: prompt total {total} lines > max {HARD_TOTAL_MAX}.")
+    print(f"   Per-block: {per_block_lines}")
+    print(f"   Reduce contract sections (chỉ endpoint task touches) hoặc tăng config.build.prompt_max_lines")
+    sys.exit(1)
+else:
+    print(f"✓ R4 budget: {total} lines (hard max {HARD_TOTAL_MAX}), per-block ok")
+PY
+R4_RC=$?
+if [ "$R4_RC" != "0" ]; then
+  echo "R4-overflow task=${TASK_NUM} phase=${PHASE_NUMBER} at=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
+  echo "⛔ Executor spawn blocked — fix context budget or raise config.build.prompt_max_lines, then re-run."
+  exit 1
+fi
 ```
 
 **Spawn executor agent (one per plan task):**
