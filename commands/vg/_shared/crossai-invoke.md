@@ -10,6 +10,39 @@ The calling command must prepare:
 2. `$OUTPUT_DIR` — path to save CLI results (e.g., `${PHASE_DIR}/crossai/`)
 3. `$LABEL` — descriptive label (e.g., `discuss-review`, `plan-review`, `total-check`)
 
+## Infrastructure brief auto-enrich (v1.14.4+)
+
+**Problem:** CrossAI CLIs spawn fresh — không có context về project infrastructure (MCP servers, Playwright lock manager, parallel capability, deploy topology). Thiếu = concern sai (vd: "Playwright không verify được 2 DSP instance trong 1 run" khi thực tế có 5 Playwright servers + lock manager).
+
+**Fix:** Trước dispatch, auto-prepend `.vg/INFRASTRUCTURE.md` (nếu tồn tại) vào `$CONTEXT_FILE`. One-time write, reused across all CrossAI calls (blueprint/review/test/accept).
+
+```bash
+INFRA_BRIEF="${PLANNING_DIR:-.vg}/INFRASTRUCTURE.md"
+if [ -f "$INFRA_BRIEF" ] && [ -f "$CONTEXT_FILE" ]; then
+  # Check if not already prepended (idempotent)
+  if ! head -5 "$CONTEXT_FILE" | grep -q "^# Infrastructure — "; then
+    ENRICHED_CTX=$(mktemp "${VG_TMP:-/tmp}/crossai-ctx-enriched-XXXXXX.md")
+    {
+      echo "# Infrastructure brief (auto-injected)"
+      echo ""
+      echo "> CrossAI reviewers: đọc block này TRƯỚC KHI raise concerns về test-harness/parallel/infra. Project có sẵn resources documented dưới đây."
+      echo ""
+      cat "$INFRA_BRIEF"
+      echo ""
+      echo "---"
+      echo ""
+      echo "# Main context (original)"
+      echo ""
+      cat "$CONTEXT_FILE"
+    } > "$ENRICHED_CTX"
+    CONTEXT_FILE="$ENRICHED_CTX"
+    echo "✓ CrossAI context enriched với INFRASTRUCTURE.md ($(wc -l < "$INFRA_BRIEF") lines infra brief)"
+  fi
+fi
+```
+
+**Placement:** Run BEFORE "Load Config" section. Works cho ALL label values (blueprint-review/review-check/test-check/accept-review).
+
 ## Load Config
 
 Read `.claude/commands/vg/_shared/config-loader.md` if not already loaded.
