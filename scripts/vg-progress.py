@@ -419,13 +419,32 @@ def main() -> int:
     if args.phase:
         phase_dirs = [d for d in phase_dirs if d.name.startswith(args.phase + "-") or d.name == args.phase]
 
-    phases = [scan_phase(d) for d in phase_dirs]
+    # Filter phases that ROADMAP.md has marked REMOVED/DEFERRED. Keep them
+    # exposed in `excluded` so the renderer can show a small "Excluded" note.
+    # When user passes --phase explicitly, honor it (don't hide removed phase).
+    removed_map = read_removed_phases(planning) if not args.phase else {}
+    excluded: list[dict[str, str]] = []
+    kept_dirs: list[Path] = []
+    for d in phase_dirs:
+        pn = phase_num_from_dirname(d.name)
+        key = _normalize_phase_num(pn) if pn else None
+        if key and key in removed_map:
+            excluded.append({
+                "phase": key,
+                "name": d.name,
+                "reason": removed_map[key],
+            })
+            continue
+        kept_dirs.append(d)
+
+    phases = [scan_phase(d) for d in kept_dirs]
 
     out = {
         "planning_dir": str(planning).replace("\\", "/"),
         "current_phase_from_state": current_phase,
         "phase_count": len(phases),
         "phases": phases,
+        "excluded": excluded,
     }
 
     if args.output == "json":
@@ -440,6 +459,11 @@ def main() -> int:
             print(f"  Pipeline: {pipeline}")
             print(f"  Next: {p['next_command']}")
             print()
+        if excluded:
+            print(f"Excluded ({len(excluded)} REMOVED/DEFERRED per ROADMAP.md):")
+            for e in excluded:
+                print(f"  - Phase {e['phase']}  ({e['name']})  — {e['reason']}")
+            print()
 
     return 0
 
@@ -448,6 +472,71 @@ def natural_key(s: str):
     """Sort '07.2' before '07.10'."""
     parts = re.split(r"(\d+)", s)
     return [int(p) if p.isdigit() else p for p in parts]
+
+
+# Strikethrough marker: `- ~~**Phase 7.11: ...**~~ — REMOVED ...` or
+# heading form:          `### Phase 7.11: ... — REMOVED` (case-insensitive).
+_STRIKE_PATTERN = re.compile(r"~~\s*\*\*Phase\s+([\d\.]+)", re.IGNORECASE)
+_HEADING_REMOVED_PATTERN = re.compile(
+    r"^#+\s*Phase\s+([\d\.]+)[^\n]*\b(?:REMOVED|DEFERRED)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def read_removed_phases(planning_dir: Path) -> dict[str, str]:
+    """Parse ROADMAP.md for phases marked removed/deferred.
+
+    Returns dict of {phase_number: reason_line}. Matches two conventions:
+      1. ``- ~~**Phase X.Y: Name**~~ — REMOVED ...``  (strikethrough list item)
+      2. ``### Phase X.Y: Name — REMOVED``             (heading with REMOVED/DEFERRED)
+    """
+    roadmap = planning_dir / "ROADMAP.md"
+    if not roadmap.exists():
+        return {}
+    text = read_text(roadmap)
+    removed: dict[str, str] = {}
+
+    for m in _STRIKE_PATTERN.finditer(text):
+        phase = _normalize_phase_num(m.group(1))
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        line_end = text.find("\n", m.end())
+        if line_end == -1:
+            line_end = len(text)
+        reason = text[line_start:line_end].strip()
+        reason = re.sub(r"^[-\*]\s*", "", reason)
+        removed[phase] = reason
+
+    for m in _HEADING_REMOVED_PATTERN.finditer(text):
+        phase = _normalize_phase_num(m.group(1))
+        if phase in removed:
+            continue
+        line_start = m.start()
+        line_end = text.find("\n", m.end())
+        if line_end == -1:
+            line_end = len(text)
+        removed[phase] = text[line_start:line_end].strip()
+
+    return removed
+
+
+def phase_num_from_dirname(name: str) -> str | None:
+    m = re.match(r"^(\d+(?:\.\d+)*)", name)
+    return m.group(1) if m else None
+
+
+def _normalize_phase_num(num: str) -> str:
+    """Strip leading zeros from each dotted segment so `07.11` ↔ `7.11`.
+
+    Keeps a single ``0`` if the segment is entirely zero-padded. Non-numeric
+    segments (shouldn't happen with valid inputs) are returned as-is.
+    """
+    out: list[str] = []
+    for seg in num.split("."):
+        if seg.isdigit():
+            out.append(str(int(seg)))
+        else:
+            out.append(seg)
+    return ".".join(out)
 
 
 if __name__ == "__main__":
