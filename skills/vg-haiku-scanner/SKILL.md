@@ -225,7 +225,32 @@ Per element type:
 | checkbox / radio / switch / toggle | Toggle → record state → toggle back. |
 | table / list with rows | Scroll container to count rows. Click actions on FIRST row only (representative sample). If row opens detail/modal → recurse. |
 | disabled / hidden | Record state. Try enable by selecting checkbox/row nearby → re-snapshot. If enables → interact. Else → mark stuck with `enable_condition: unknown`. |
-| form (inputs + submit button) | Fill ALL fields (rules above) → click submit → record `{fields_filled, submit_result, api_response, console_errors, toast}`. If confirm dialog → Cancel FIRST, then re-trigger + OK. |
+| form (inputs + submit button) | Fill ALL fields (rules above) → click submit → record `{fields_filled, submit_result, api_response, console_errors, toast}`. If confirm dialog → Cancel FIRST, then re-trigger + OK. **After submit, MANDATORY Persistence Probe (Layer 4) — see sub-table below.** |
+
+**Persistence Probe sub-workflow (MANDATORY after every form submit):**
+
+Layer 1 (toast) + Layer 2 (API 2xx) + Layer 3 (no console error) ARE NOT ENOUGH. Bug pattern "ghost save / phantom persist" passes all three:
+- Toast fires before API confirm (client optimistic dispatch)
+- API returns 200 with empty/default body (silent backend skip)
+- Console clean because no exception thrown
+
+Only `refresh + re-read + diff` detects ghost save.
+
+| Sub-step | Action | Record |
+|---|---|---|
+| A. Pre-snapshot | BEFORE clicking submit: read current field values + DOM text of related cells/rows. Store as `persistence_probe.pre[]`. Example: if editing a user, read `role` dropdown value + row[N].role cell text. If creating a new entity, record current row count. | `pre: [{field: "role", value: "editor"}, {row_count: 15}]` |
+| B. Submit + wait | Click submit → `browser_wait_for` network idle (≤5s). Record `submit_result` as before. | (existing fields) |
+| C. Refresh | `browser_evaluate("() => location.reload()")` OR navigate away (sidebar link) + back. Wait network idle + first meaningful paint (≤3s). | `refresh_method: "reload"\|"navigate_cycle"` |
+| D. Re-open + re-read | If edit flow: click same row → open edit modal → read same field values. If create flow: re-read row count + search for new entity name. | `post: [{field: "role", value: "admin"}, {row_count: 16}]` |
+| E. Diff | Compare pre vs post: mutated field MUST differ on edit (old → new value), row count MUST increase on create, MUST decrease on delete. | `persisted: true\|false, mutated_fields: ["role"], diff_reason?: "..."` |
+| F. Verdict | If diff expected but not present → record as **ghost_save** bug (severity: CRITICAL). Add to `errors[]` with `{type: "persistence", severity: "critical", form_trigger: "e1 → modal Edit User", expected_change: "role: editor → admin", actual: "role unchanged after refresh"}`. | (bug in errors[], persisted=false) |
+
+**Exception — when Persistence Probe CAN skip:**
+- Read-only forms (no mutation) — detect via absence of submit button or `method="get"`
+- Multi-step wizards — probe only on FINAL step (intermediate steps save draft, may not persist across refresh)
+- File upload forms — record `persistence_probe.skipped: "file_upload_progressive"` — manual verify
+
+**Refresh-safe session:** Scanner auth cookie/token MUST survive `page.reload()`. If reload kicks back to login → bug in auth persistence → record as `errors[{type: "auth", severity: "high", message: "refresh logged out"}]` + skip further persistence probes for this view.
 
 ### STEP 5: Write Output
 
@@ -277,7 +302,15 @@ optional fields — no breaking change for web.
         {"ref": "e11", "name": "domain", "type": "text", "required": true, "filled": "scan-test.example.com"}
       ],
       "submit_result": {"status": 201, "response": "created", "toast": "Site created"},
-      "validation_tested": true
+      "validation_tested": true,
+      "persistence_probe": {
+        "refresh_method": "reload",
+        "pre": [{"row_count": 15}],
+        "post": [{"row_count": 16, "new_row_domain": "scan-test.example.com"}],
+        "persisted": true,
+        "mutated_fields": ["row_count"],
+        "diff": "row_count 15→16, new row domain match submitted"
+      }
     }
   ],
   "modals": [ { "trigger": "button Add Site", "elements_inside": 8, "elements_tested": 8, "has_form": true } ],
@@ -301,6 +334,7 @@ optional fields — no breaking change for web.
 - Recurse into EVERY tab panel (each tab = fresh element list).
 - Click EVERY item in EVERY dropdown/action menu.
 - Fill and submit EVERY form you find.
+- **After EVERY form submit → run Persistence Probe (Layer 4). Record `persistence_probe: {persisted, pre, post, diff}`. No exceptions except read-only forms + final-step-of-wizard + file-upload (document skip reason).**
 - Test BOTH branches of EVERY confirm dialog (Cancel first, then OK).
 - Record console errors after EVERY action.
 - Record network requests after EVERY action.

@@ -881,6 +881,17 @@ RULES:
 1. Every decision MUST have at least 1 goal
 2. Goals describe WHAT to verify, not HOW (no selectors, no exact clicks)
 3. Mutation evidence must be specific: "POST returns 201 AND row count +1" not "data changes"
+3b. **Persistence check field (MANDATORY for mutation goals)**: Every goal with non-empty Mutation evidence MUST also have `**Persistence check:**` block describing Layer 4 verify (refresh + re-read + diff):
+    ```
+    **Persistence check:**
+    - Pre-submit: read <field/row/state> value (e.g., role="editor")
+    - Action: <what user does> (fill dropdown role="admin", click Save)
+    - Post-submit wait: API 2xx + toast
+    - Refresh: page.reload() OR navigate away + back
+    - Re-read: <where to re-read> (re-open edit modal)
+    - Assert: <field> = <new value> AND != <pre value> (role="admin", not "editor")
+    ```
+    Why mandatory: "ghost save" bug pattern — toast + API 200 + console clean NHƯNG refresh hiện data cũ. Only refresh-then-read detects backend silent skip / client optimistic rollback. Read-only goals (GET only) KHÔNG cần field này.
 4. Dependencies must reference goal IDs (G-XX)
 5. Priority assignment (deterministic rules, evaluate in order):
    a. Endpoints matching config `routing.critical_goal_domains` (auth, billing, auction, payout, compliance) → priority: critical
@@ -924,6 +935,13 @@ Total: {N} goals ({critical} critical, {important} important, {nice} nice-to-hav
 **Mutation evidence:**
 - [Create: POST /api/X returns 201, table row +1]
 - [Update: PUT /api/X/:id returns 200, row reflects change]
+**Persistence check:**
+- Pre-submit: read <field/row/state> (e.g., status="draft" in detail panel)
+- Action: <what user does> (change status dropdown, click Save)
+- Post-submit wait: API 2xx + toast "Updated"
+- Refresh: page.reload()
+- Re-read: re-open same record / navigate back to list
+- Assert: <field> = <new value> AND != <pre value> (status="published", not "draft")
 **Dependencies:** G-00
 
 ## Decision Coverage

@@ -71,20 +71,29 @@ phase_dir, test_goals_path, runtime_map_path, probe_path, out_path, phase_num = 
 # ─── Load TEST-GOALS ──────────────────────────────────────────────
 tg_text = Path(test_goals_path).read_text(encoding='utf-8', errors='ignore')
 goals = []
-for m in re.finditer(
+# Split by goal blocks first — lets us capture multi-field metadata per goal
+# (Mutation evidence + Persistence check are paragraph-level fields that the
+# single-line regex above cannot match reliably).
+for blk_m in re.finditer(
     r'^## Goal (G-[\w]+): *(.+?)$'
-    r'(?:[^#]*?^\*\*Priority:\*\* (\w[\w-]*))?'
-    r'(?:[^#]*?^\*\*Surface:\*\* (\w[\w-]*))?'
-    r'(?:[^#]*?^\*\*Infra deps:\*\* \[([^\]]+)\])?',
-    tg_text, re.M
+    r'(?P<body>(?:(?!^## Goal ).)*)',
+    tg_text, re.M | re.S
 ):
-    gid, title, prio, surface, infra = m.group(1), m.group(2).strip(), m.group(3), m.group(4), m.group(5)
+    gid, title, body = blk_m.group(1), blk_m.group(2).strip(), blk_m.group('body') or ''
+    def _field(name, blk=body):
+        mm = re.search(rf'^\*\*{re.escape(name)}:\*\*\s*(.+?)(?:\n\*\*|\n##|\Z)', blk, re.M | re.S)
+        return (mm.group(1).strip() if mm else '')
+    prio = re.search(r'^\*\*Priority:\*\*\s*(\w[\w-]*)', body, re.M)
+    surface = re.search(r'^\*\*Surface:\*\*\s*(\w[\w-]*)', body, re.M)
+    infra = re.search(r'^\*\*Infra deps:\*\*\s*\[([^\]]+)\]', body, re.M)
     goals.append({
         'id': gid,
         'title': title[:80],
-        'priority': (prio or 'important').lower(),
-        'surface': (surface or 'ui').lower(),
-        'infra_deps': [x.strip() for x in (infra or '').split(',') if x.strip()],
+        'priority': (prio.group(1) if prio else 'important').lower(),
+        'surface': (surface.group(1) if surface else 'ui').lower(),
+        'infra_deps': [x.strip() for x in (infra.group(1) if infra else '').split(',') if x.strip()],
+        'mutation_evidence': _field('Mutation evidence'),
+        'persistence_check': _field('Persistence check'),
         'status': 'NOT_SCANNED',
         'evidence': '',
     })
@@ -129,6 +138,38 @@ for g in goals:
             # No browser seq — remains NOT_SCANNED (browser phase pending or skipped)
             g['status'] = 'NOT_SCANNED'
             g['evidence'] = 'browser phase did not record goal_sequence'
+
+        # ─── Layer 4 gate — mutation goals require persistence probe ───
+        # If goal has **Mutation evidence:** non-empty AND status was READY
+        # via browser seq, verify that seq.forms[] contains at least one
+        # submit_result with persistence_probe.persisted=true. Missing
+        # persistence probe = ghost save risk = downgrade READY → BLOCKED.
+        if g['status'] == 'READY' and g.get('mutation_evidence'):
+            forms = (seq or {}).get('forms', []) or []
+            # Also check if steps[] has any POST/PUT/PATCH/DELETE observation
+            has_mutation_step = any(
+                (s.get('observe', {}).get('network') or [])
+                and any(n.get('method','').upper() in ('POST','PUT','PATCH','DELETE')
+                        and 200 <= n.get('status', 0) < 300
+                        for n in s['observe']['network'])
+                for s in seq.get('steps', []) if isinstance(s, dict)
+            )
+            # Persistence-verified = at least 1 form with persistence_probe.persisted=true
+            persisted_forms = [
+                f for f in forms
+                if isinstance(f, dict) and (f.get('persistence_probe') or {}).get('persisted') is True
+            ]
+            # Allowed skips: form.persistence_probe.skipped has a documented reason
+            documented_skips = [
+                f for f in forms
+                if isinstance(f, dict) and (f.get('persistence_probe') or {}).get('skipped')
+            ]
+            if has_mutation_step and not persisted_forms and not documented_skips:
+                g['status'] = 'BLOCKED'
+                g['evidence'] = (
+                    f"ghost-save risk: {len(forms)} form(s) submitted but no persistence_probe.persisted=true; "
+                    "Layer 4 verify (refresh + re-read + diff) missing"
+                )
         continue
 
     # Backend goals: consult probe results
