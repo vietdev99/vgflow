@@ -1,7 +1,7 @@
 ---
 name: vg:test
 description: Clean goal verification + independent smoke + codegen regression + security audit
-argument-hint: "<phase> [--skip-deploy] [--regression-only] [--smoke-only] [--fix-only] [--skip-flow]"
+argument-hint: "<phase> [--skip-deploy] [--regression-only] [--smoke-only] [--fix-only] [--skip-flow] [--allow-missing-console-check]"
 allowed-tools:
   - Read
   - Write
@@ -34,7 +34,7 @@ Why: those tools persist items in Claude Code's status tail across sessions. If 
 4. **MINOR-only fix (auto-gated v1.14.4+)** — AI MUST emit `fix-plans.json` before attempting fix. Pre-flight script `severity-classify.py` auto-classifies dựa trên: file count ≥3 → MODERATE, touches `apps/api/**/routes|schemas|contracts` → MODERATE, touches `packages/**|apps/web/**/lib|apps/web/**/hooks` → MODERATE, `change_type=new_feature|contract` → MAJOR. Auto-escalate MODERATE/MAJOR → REVIEW-FEEDBACK.md, kick back to review. AI không được tự classify MINOR bypass gate.
 5. **Independent smoke first** — spot-check RUNTIME-MAP accuracy before trusting it.
 6. **Navigate via UI clicks** — browser_navigate BANNED except for initial login/domain switch.
-7. **Console monitoring** — check browser_console_messages after EVERY action.
+7. **Console monitoring (hard gate v1.14.4+)** — runtime: `browser_console_messages` check after EVERY action (5c goal verification). Codegen: every mutation spec MUST contain setup (`window.__consoleErrors` OR `page.on('console'/'pageerror')`) + assertion (`expect(errs.length).toBe(0)` pattern). Post-codegen gate 5d-r7 greps generated `.spec.ts`, BLOCKS if mutation spec thiếu console assertion. Override: `--allow-missing-console-check` log debt.
 8. **Goal-based codegen** — assertions from TEST-GOALS success criteria, paths from RUNTIME-MAP observation.
 9. **Zero hardcode** — no endpoint, role, page name, or project-specific value in this workflow. All values from config or runtime observation.
 10. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as FINAL action:
@@ -1581,6 +1581,116 @@ if [ "$GTB_MODE" != "off" ]; then
       FAIL_REASON="goal_test_binding_phase_end"
     fi
     # Fall through to 5e so regression still runs (diagnostic value)
+  fi
+fi
+```
+
+### 5d-r7: Console monitoring enforcement gate (R7, v1.14.4+)
+
+Rule 7 khai "Console monitoring after EVERY action". Codegen prose mô tả Layer 3 check (line 1458-1461) nhưng generated spec có thể skip nếu template drift. Gate này verify deterministic.
+
+```bash
+if [ -d "$GENERATED_TESTS_DIR" ]; then
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - "$GENERATED_TESTS_DIR" <<'PY'
+import re, sys, os
+from pathlib import Path
+
+tests_dir = Path(sys.argv[1])
+spec_files = list(tests_dir.rglob("*.spec.ts"))
+
+if not spec_files:
+    print("⚠ R7 gate: no .spec.ts files trong GENERATED_TESTS_DIR — skip (codegen chưa tạo)")
+    sys.exit(0)
+
+# Patterns acceptable for console error capture setup (any = OK)
+SETUP_PATTERNS = [
+    r'window\.__consoleErrors',
+    r'page\.on\s*\(\s*[\'"]console[\'"]',
+    r'page\.on\s*\(\s*[\'"]pageerror[\'"]',
+    r'captureConsoleErrors',
+    r'consoleErrors\s*:\s*\[\]',
+]
+
+# Patterns for post-mutation console assertion
+ASSERT_PATTERNS = [
+    r'expect\s*\(\s*(?:errs|consoleErrors|window\.__consoleErrors)[\[\.\w]*\s*\)\.toBe\s*\(\s*0\s*\)',
+    r'expect\s*\(\s*(?:errs|consoleErrors|window\.__consoleErrors)[\[\.\w]*\.length\s*\)\.toBe\s*\(\s*0\s*\)',
+    r'expect\s*\(\s*(?:errs|consoleErrors)\)\.toHaveLength\s*\(\s*0\s*\)',
+    r'expect\s*\(\s*.*console.*\)\.toBe(?:Less|Equal)',
+]
+
+# Mutation heuristic: spec touches POST/PUT/PATCH/DELETE endpoint?
+MUTATION_PATTERNS = [
+    r'(?:POST|PUT|PATCH|DELETE)\s+',
+    r'waitForResponse.*(?:post|put|patch|delete)',
+    r'\.click\s*\([^)]*(?:Save|Submit|Create|Delete|Update)',
+]
+
+violations = []
+no_setup = []
+total = 0
+mutation_specs = 0
+setup_ok = 0
+assert_ok = 0
+
+for spec in spec_files:
+    total += 1
+    content = spec.read_text(encoding='utf-8', errors='ignore')
+
+    has_setup = any(re.search(p, content) for p in SETUP_PATTERNS)
+    has_assert = any(re.search(p, content) for p in ASSERT_PATTERNS)
+    has_mutation = any(re.search(p, content, re.IGNORECASE) for p in MUTATION_PATTERNS)
+
+    if has_setup:
+        setup_ok += 1
+    else:
+        no_setup.append(spec.name)
+
+    if has_mutation:
+        mutation_specs += 1
+        if not has_assert:
+            violations.append(f"{spec.name}: mutation spec thiếu console assertion")
+
+# Report
+print(f"R7 console gate: {total} spec files, {setup_ok} với setup, {mutation_specs} mutation specs, {len(violations)} violations")
+
+# Setup missing = WARNING (not block) — non-mutation specs may not need explicit assertion
+if no_setup and len(no_setup) > total // 2:
+    print(f"⚠ {len(no_setup)}/{total} specs thiếu console capture setup:")
+    for name in no_setup[:5]:
+        print(f"   - {name}")
+    if len(no_setup) > 5:
+        print(f"   ... +{len(no_setup)-5} more")
+
+# Mutation spec without assertion = BLOCK
+if violations:
+    print(f"\n⛔ R7 violation: {len(violations)} mutation spec(s) không assert console errors:")
+    for v in violations[:10]:
+        print(f"   - {v}")
+    if len(violations) > 10:
+        print(f"   ... +{len(violations)-10} more")
+    print("")
+    print("Mọi mutation spec (touches POST/PUT/PATCH/DELETE) PHẢI có assertion:")
+    print("  expect(errs.length).toBe(0);  // or equivalent pattern")
+    print("")
+    print("Fix: re-run codegen (/vg:test --skip-deploy) hoặc update template tại 5d codegen rules line 1458-1461")
+    sys.exit(1)
+else:
+    print("✓ R7: all mutation specs có console assertion")
+PY
+
+  R7_RC=$?
+  if [ "$R7_RC" != "0" ]; then
+    echo "test-r7-console-gap phase=${PHASE_NUMBER} at=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/test-state.log"
+    if [[ "$ARGUMENTS" =~ --allow-missing-console-check ]]; then
+      if type -t log_override_debt >/dev/null 2>&1; then
+        log_override_debt "test-r7-console-missing" "${PHASE_NUMBER}" "generated specs missing console assertion" "$PHASE_DIR"
+      fi
+      echo "⚠ --allow-missing-console-check set — proceeding, logged to debt"
+    else
+      echo "   Override (NOT recommended): /vg:test ${PHASE_NUMBER} --allow-missing-console-check"
+      exit 1
+    fi
   fi
 fi
 ```
