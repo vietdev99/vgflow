@@ -1135,9 +1135,10 @@ Deploy to target environment:
 1. Record SHAs (local + target)
 2. Build + restart on target
 3. Health check → if fail → PRE-FLIGHT BLOCK (see below)
-4. DB seed (if configured): run_on_target "${config.environments[ENV].seed_command}"
+4. (v1.14.0+) Infra auto-start — nếu review.try_infra_start=true AND config có infra_start declared → chạy
+5. DB seed (if configured): run_on_target "${config.environments[ENV].seed_command}"
    (skip if seed_command not in config — portable)
-5. Auth bootstrap (if configured):
+6. Auth bootstrap (if configured):
    For each role in config.credentials[ENV]:
      Run config.environments[ENV].auth_command with role credentials
      Save response token for API checks below
@@ -1145,6 +1146,85 @@ Deploy to target environment:
 ```
 
 Read `.claude/commands/vg/_shared/env-commands.md` — deploy(env) + preflight(env).
+
+### 2a-infra: Tự động khởi động hạ tầng (v1.14.0+)
+
+**Triết lý:** Review hiện skip `INFRA_PENDING` goals (ClickHouse/Kafka/Pixel không chạy). Cổng 100% không cho phép skip — review phải tự khởi động hạ tầng để goals verify được.
+
+```bash
+# Gate 1: config knob enabled?
+TRY_INFRA_START=$(yq '.review.try_infra_start // true' .claude/vg.config.md 2>/dev/null)
+if [ "$TRY_INFRA_START" != "true" ]; then
+  echo "ℹ review.try_infra_start=false — bỏ qua bước khởi động hạ tầng"
+else
+  # Gate 2: env có declare infra_start không?
+  INFRA_START=$(yq ".environments.${ENV}.infra_start // \"\"" .claude/vg.config.md 2>/dev/null)
+  INFRA_STOP=$(yq  ".environments.${ENV}.infra_stop  // \"\"" .claude/vg.config.md 2>/dev/null)
+  INFRA_STATUS=$(yq ".environments.${ENV}.infra_status // \"\"" .claude/vg.config.md 2>/dev/null)
+
+  if [ -z "$INFRA_START" ]; then
+    echo "ℹ Env '${ENV}' không declare infra_start — bỏ qua (infra không do review quản lý)"
+  else
+    # Gate 3: hạ tầng đã chạy sẵn chưa? (idempotent check)
+    ALREADY_RUNNING=false
+    if [ -n "$INFRA_STATUS" ]; then
+      if eval "$INFRA_STATUS" 2>/dev/null | grep -qiE "running|up|ok|online"; then
+        ALREADY_RUNNING=true
+        echo "✓ Hạ tầng đã chạy sẵn (infra_status detect)"
+      fi
+    fi
+
+    if [ "$ALREADY_RUNNING" = "false" ]; then
+      # Gate 4: khởi động hạ tầng + trap EXIT để dọn
+      narrate_phase "Phase 2a-infra — Khởi động hạ tầng" "Chạy infra_start + trap cleanup"
+      echo "  Command: $INFRA_START"
+
+      # Chạy, capture exit code
+      eval "$INFRA_START"
+      INFRA_START_RC=$?
+
+      if [ $INFRA_START_RC -ne 0 ]; then
+        # Hard block — không skip theo cổng 100%
+        echo "⛔ infra_start THẤT BẠI (exit $INFRA_START_RC) — review không tiếp tục."
+        echo "   Nguyên nhân khả dĩ: port conflict, resource thiếu, config sai."
+        echo "   Debug: chạy '${INFRA_START}' thủ công xem stderr."
+        echo "   Override: /vg:review ${PHASE_NUMBER} --legacy-mode (DEPRECATED, expire 2 milestones)"
+        exit 1
+      fi
+
+      echo "  ✓ infra_start OK — trap infra_stop đã cài"
+
+      # Trap: auto dọn khi review thoát (normal/error/interrupt)
+      if [ -n "$INFRA_STOP" ]; then
+        trap "echo '  ♻ Dọn hạ tầng (infra_stop)...'; eval \"$INFRA_STOP\" 2>/dev/null || true" EXIT INT TERM
+      fi
+
+      # Chờ hạ tầng ready (retry health 30s)
+      for i in {1..30}; do
+        if eval "$INFRA_STATUS" 2>/dev/null | grep -qiE "running|up|ok|online"; then
+          echo "  ✓ Hạ tầng ready sau ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+      # Emit telemetry
+      if type -t telemetry_emit >/dev/null 2>&1; then
+        telemetry_emit "review_infra_start_success" "{\"env\":\"${ENV}\",\"duration_s\":${i}}"
+      fi
+    fi
+  fi
+fi
+```
+
+**Tại sao không có AskUserQuestion:**  
+Đây là autonomous action — config đã khai `try_infra_start: true` nghĩa là user OK. Nếu user không muốn auto-start → set `false` trong config. Giữa đêm chạy review mà lại hỏi user = anti-pattern.
+
+**Cleanup guarantee:**  
+Trap `EXIT INT TERM` bắt mọi đường thoát (normal / error / Ctrl+C). Hạ tầng sẽ stop khi review kết thúc dù success hay fail. Ngoại lệ: SIGKILL (process killed) → trap không chạy → user phải thủ công `infra_stop`.
+
+**Cổng cứng:**  
+infra_start fail → BLOCK. Không có "try again later" hay "skip INFRA_PENDING". Đây là điểm khác biệt cốt lõi với v1.13 — không cho phép defer hạ tầng.
 
 ### 2a-preflight: INFRASTRUCTURE READINESS GATE
 
@@ -2949,35 +3029,7 @@ if [ "$INTERMEDIATE" -gt 0 ]; then
 fi
 ```
 
-### 4c: Weighted Gate Evaluation
-
-**Chỉ chạy sau khi 4c-pre pass (tất cả goals đã ở 1 trong 4 kết luận).**
-
-```
-Gate weights by priority (from design):
-  critical:     100% must be READY
-  important:     80% must be READY
-  nice-to-have:  50% must be READY
-
-For each priority level:
-  ready_count = goals with STATUS=READY at this priority
-  total_count = total goals at this priority
-  threshold   = weight for this priority
-  
-  IF ready_count / total_count < threshold → BLOCK at this level
-
-Overall gate:
-  ANY critical goal NOT READY → BLOCK
-  Important ready% < 80% → BLOCK
-  Nice-to-have ready% < 50% → BLOCK (warning, not hard block if critical+important pass)
-  All thresholds met → PASS
-
-Note: UNREACHABLE/INFRA_PENDING goals count trong total_count nhưng KHÔNG trong ready_count
-      → kéo ready% xuống → gate sẽ block nếu nhiều goals unresolved.
-      Đây là cơ chế tự nhiên pressure user fix thay vì accumulate tech debt.
-```
-
-### 4d: Write GOAL-COVERAGE-MATRIX.md (v1.9.2.4 runnable merger)
+### 4c: Write GOAL-COVERAGE-MATRIX.md (v1.9.2.4 runnable merger)
 
 ```bash
 # Call matrix-merger.sh helper — reads RUNTIME-MAP + probe-results + TEST-GOALS,
@@ -3039,50 +3091,407 @@ fi
 {PASS|BLOCK|INTERMEDIATE message with next-action hints}
 ```
 
-### 4e: Gate Decision
+### 4d: Inline triage + apply scope-tag actions (v1.14.0+ A.2)
 
-```
-IF BLOCK:
-  Show which priority level failed threshold
-  Show specific goals causing the block
-  Suggest action:
-    - Blocked goals → "Fix blockers → re-run /vg:review --fix-only"
-    - Unreachable goals → "Go back to /vg:build {phase} --gaps-only"
-
-IF PASS:
-  Proceed to write artifacts
-```
-</step>
-
-<step name="unreachable_triage">
-## UNREACHABLE Triage (auto-classify before crossai/accept)
-
-If GOAL-COVERAGE-MATRIX has any goal at status `UNREACHABLE`, run triage to classify each one. UNREACHABLE alone is NOT a final verdict — it must resolve to `cross-phase`, `cross-phase-pending`, `bug-this-phase`, or `scope-amend`. See `_shared/unreachable-triage.md` for the helper logic.
+Triage chạy **inline** ngay sau matrix ghi, TRƯỚC 100% gate. Mục đích: đọc scope tag (`depends_on_phase`, `verification_strategy`) từ CONTEXT.md, phân loại mỗi UNREACHABLE thành verdict + action_required, rồi áp dụng action nào autonomous được (mark_deferred/mark_manual). Các action cần người quyết định (spawn_fix_agent, draft_amendment_ask, prompt_scope_tag) sẽ ghi vào hàng đợi nhưng vẫn BLOCK gate — **không có đường thoát ngụỵ trang**.
 
 ```bash
-session_mark_step "4f-unreachable-triage"
+session_mark_step "4d-inline-triage"
 echo ""
-echo "🔍 UNREACHABLE triage — classifying unresolved goals..."
+echo "🔍 Triage + áp dụng action cho UNREACHABLE goals (v1.14.0+)..."
 
-# v1.9.2.6 — source real helper (was documented-only before, function undefined → silent skip)
+# v1.14.3 H3 — pre-scan test source for @deferred markers so triage sees them
+# alongside scope tags. Fixes gap where executor-written it.skip('@deferred X')
+# was ignored (tests were skipped but matrix still BLOCKED).
+DEFER_SCANNER=".claude/scripts/scan-deferred-tests.py"
+if [ -f "$DEFER_SCANNER" ]; then
+  echo "▸ Pre-scan: @deferred markers in test source..."
+  ${PYTHON_BIN:-python3} "$DEFER_SCANNER" \
+    --phase-dir "${PHASE_DIR}" --repo-root "${REPO_ROOT:-.}" 2>&1 | tail -12 || true
+  # Writes .deferred-tests.json — consumed by unreachable-triage below
+fi
+
+# Chạy triage (sinh .unreachable-triage.json + UNREACHABLE-TRIAGE.md)
 source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/unreachable-triage.sh" 2>/dev/null || true
 if type -t triage_unreachable_goals >/dev/null 2>&1; then
   triage_unreachable_goals "$PHASE_DIR" "$PHASE_NUMBER"
 else
-  echo "⚠ unreachable-triage.sh missing — triage skipped (upgrade vgflow or reinstall)" >&2
+  echo "⚠ unreachable-triage.sh missing — triage bị bỏ qua, 100% gate sẽ hard-block mọi UNREACHABLE." >&2
 fi
-# Outputs:
-#   ${PHASE_DIR}/UNREACHABLE-TRIAGE.md         (human-readable, evidence per goal)
-#   ${PHASE_DIR}/.unreachable-triage.json      (machine-readable, drives accept gate)
+
+TRIAGE_JSON="${PHASE_DIR}/.unreachable-triage.json"
+MATRIX="${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
+
+if [ -f "$TRIAGE_JSON" ] && [ -f "$MATRIX" ]; then
+  # Áp dụng action_required autonomous: mark_deferred, mark_manual
+  # Những action còn lại (spawn_fix_agent, draft_amendment_ask, prompt_scope_tag) ghi log + để BLOCK.
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - "$TRIAGE_JSON" "$MATRIX" "$PHASE_DIR" "$PHASE_NUMBER" <<'PY'
+import json, sys, re
+from pathlib import Path
+from datetime import datetime, timezone
+
+triage_path = Path(sys.argv[1])
+matrix_path = Path(sys.argv[2])
+phase_dir   = Path(sys.argv[3])
+phase_num   = sys.argv[4]
+
+try:
+    triage = json.loads(triage_path.read_text(encoding="utf-8"))
+except Exception as e:
+    print(f"⚠ Không đọc được triage JSON: {e}")
+    sys.exit(0)
+
+verdicts = triage.get("verdicts", {})
+
+# v1.14.3 H3 — merge .deferred-tests.json as additional deferral source
+# (test files with it.skip('@deferred X') markers that aren't in CONTEXT.md scope tags).
+deferred_tests_path = phase_dir / ".deferred-tests.json"
+test_deferrals = {}  # ts_id → {reason, kind}
+if deferred_tests_path.exists():
+    try:
+        dt = json.loads(deferred_tests_path.read_text(encoding="utf-8"))
+        for entry in dt.get("deferred_tests", []):
+            ts = entry.get("ts_id")
+            if ts:
+                test_deferrals[ts] = entry
+    except Exception as e:
+        print(f"⚠ Không đọc được .deferred-tests.json: {e}")
+
+if not verdicts and not test_deferrals:
+    print("ℹ Không có UNREACHABLE cần triage — skip.")
+    sys.exit(0)
+
+matrix_text = matrix_path.read_text(encoding="utf-8")
+pending_queue = []   # cho các action chờ user / destructive
+applied       = {"mark_deferred": [], "mark_manual": [], "pending": []}
+
+def update_status_in_matrix(text, gid, new_status, note=""):
+    # Tìm dòng trong ## Goal Details có `| G-XX | ... | UNREACHABLE | ... |`
+    # Thay UNREACHABLE → new_status; append note vào evidence nếu có.
+    pat = re.compile(r'^(\| *' + re.escape(gid) + r' *\|[^|]*\|[^|]*\|) *UNREACHABLE *(\|[^\n]*)', re.M)
+    def _repl(m):
+        prefix = m.group(1)
+        suffix = m.group(2)
+        if note:
+            suffix = suffix.rstrip("|").rstrip() + f" ({note})|"
+        return f"{prefix} {new_status} {suffix}"
+    return pat.sub(_repl, text, count=1)
+
+for gid, v in verdicts.items():
+    action   = v.get("action_required")
+    params   = v.get("action_params", {})
+    verdict  = v.get("verdict", "")
+
+    if action == "mark_deferred":
+        target = params.get("target_phase", "?")
+        matrix_text = update_status_in_matrix(matrix_text, gid, "DEFERRED", f"depends_on_phase: {target}")
+        applied["mark_deferred"].append((gid, target))
+    elif action == "mark_manual":
+        strat = params.get("strategy", "manual")
+        matrix_text = update_status_in_matrix(matrix_text, gid, "MANUAL", f"verification: {strat}")
+        applied["mark_manual"].append((gid, strat))
+    elif action in ("spawn_fix_agent", "draft_amendment_ask", "prompt_scope_tag"):
+        # Giữ UNREACHABLE — gate sẽ block; ghi vào pending queue
+        pending_queue.append({
+            "phase":   phase_num,
+            "goal_id": gid,
+            "verdict": verdict,
+            "action":  action,
+            "params":  params,
+            "title":   v.get("title", "(no title)"),
+            "queued_at": datetime.now(timezone.utc).isoformat(),
+        })
+        applied["pending"].append((gid, action))
+
+# v1.14.3 H3 — apply test-level deferrals (fills gap where scope tags missing
+# but test source has it.skip('@deferred X')). Status depends on defer_kind:
+#   depends_on_phase + test-codegen → DEFERRED
+#   manual + faketime               → MANUAL
+#   unknown                         → log as pending, leave as UNREACHABLE
+for ts_id, entry in test_deferrals.items():
+    # ts_id is "TS-XX"; matrix may have goal_ids like "TS-16" or "G-XX" — try TS- first
+    gid = ts_id
+    kind = entry.get("defer_kind", "unknown")
+    reason = entry.get("defer_reason", "")
+    if kind in ("depends_on_phase", "test-codegen"):
+        matrix_text = update_status_in_matrix(
+            matrix_text, gid, "DEFERRED",
+            f"test.skip @deferred: {reason[:50]}",
+        )
+        applied["mark_deferred"].append((gid, f"test-marker:{kind}"))
+    elif kind in ("manual", "faketime"):
+        matrix_text = update_status_in_matrix(
+            matrix_text, gid, "MANUAL",
+            f"test.skip @deferred: {reason[:50]}",
+        )
+        applied["mark_manual"].append((gid, kind))
+    else:
+        pending_queue.append({
+            "phase":   phase_num,
+            "goal_id": gid,
+            "verdict": "test-level @deferred with unknown kind",
+            "action":  "review_test_defer_reason",
+            "params":  {"reason": reason, "source": entry.get("source_file", "")},
+            "title":   entry.get("test_title", ""),
+            "queued_at": datetime.now(timezone.utc).isoformat(),
+        })
+        applied["pending"].append((gid, "test-defer-unknown"))
+
+# Re-sync header counts trong "## Summary" block nếu có thay đổi
+def recount_summary(text):
+    details = re.search(r'^## Goal Details\s*\n(.*?)(?=^\s*## |\Z)', text, re.M|re.S)
+    if not details:
+        return text
+    body = details.group(1)
+    counts = {"READY":0, "BLOCKED":0, "UNREACHABLE":0, "INFRA_PENDING":0,
+              "DEFERRED":0, "MANUAL":0, "NOT_SCANNED":0, "FAILED":0}
+    for line in body.splitlines():
+        for k in counts:
+            # Status cell đứng giữa 2 dấu | — tránh match keyword trong evidence
+            if re.search(r'\|\s*' + k + r'\s*\|', line):
+                counts[k] += 1
+                break
+    def _rewrite_summary(m):
+        total = sum(counts.values())
+        new = [
+            "## Summary",
+            f"- Total goals: {total}",
+            f"- READY: {counts['READY']}",
+            f"- DEFERRED: {counts['DEFERRED']} (tagged depends_on_phase)",
+            f"- MANUAL: {counts['MANUAL']} (tagged verification_strategy)",
+            f"- BLOCKED: {counts['BLOCKED']}",
+            f"- UNREACHABLE: {counts['UNREACHABLE']}",
+            f"- INFRA_PENDING: {counts['INFRA_PENDING']}",
+            f"- NOT_SCANNED: {counts['NOT_SCANNED']} (intermediate)",
+            f"- FAILED: {counts['FAILED']} (intermediate)",
+            ""
+        ]
+        return "\n".join(new)
+    new_text = re.sub(r'^## Summary\n(?:[-*].*\n)+', _rewrite_summary, text, count=1, flags=re.M)
+    return new_text
+
+matrix_text = recount_summary(matrix_text)
+matrix_path.write_text(matrix_text, encoding="utf-8")
+
+# Ghi pending queue vào .vg/PENDING-USER-REVIEW.md (append-only)
+if pending_queue:
+    pending_file = Path(".vg/PENDING-USER-REVIEW.md")
+    pending_file.parent.mkdir(parents=True, exist_ok=True)
+    header_needed = not pending_file.exists()
+    with pending_file.open("a", encoding="utf-8") as f:
+        if header_needed:
+            f.write("# Pending user review — hàng đợi quyết định đang chờ\n\n")
+            f.write("Mỗi mục là một goal cần quyết định (scope tag / fix / amendment). ")
+            f.write("User review xong → duyệt queue thay vì bị hỏi từng cái.\n\n")
+            f.write("| Phase | Goal | Verdict | Action cần | Tiêu đề | Queued at |\n")
+            f.write("|---|---|---|---|---|---|\n")
+        for p in pending_queue:
+            f.write(f"| {p['phase']} | {p['goal_id']} | {p['verdict']} | {p['action']} | "
+                    f"{p['title'][:60]} | {p['queued_at']} |\n")
+
+# Narration
+print(f"▸ Triage applied: "
+      f"{len(applied['mark_deferred'])} → DEFERRED, "
+      f"{len(applied['mark_manual'])} → MANUAL, "
+      f"{len(applied['pending'])} → chờ người duyệt")
+for gid, tgt in applied["mark_deferred"]:
+    print(f"  🔁 {gid} → DEFERRED (depends_on_phase: {tgt})")
+for gid, strat in applied["mark_manual"]:
+    print(f"  ✋ {gid} → MANUAL ({strat})")
+for gid, act in applied["pending"]:
+    print(f"  ⏳ {gid} → {act} (giữ UNREACHABLE, gate sẽ BLOCK đến khi giải quyết)")
+PY
+else
+  [ -f "$TRIAGE_JSON" ] || echo "ℹ Không có triage JSON (không UNREACHABLE goal nào) — skip apply."
+fi
 ```
 
-**Triage does NOT block review exit.** UNREACHABLE classification only blocks `/vg:accept` — review's job is to produce the triage report; user reviews + acts before accept. This separation lets user inspect verdicts and decide:
-- `bug-this-phase` → run `/vg:build {phase} --gaps-only` to fix
-- `cross-phase-pending:{X.Y}` → ship the owning phase first, OR `/vg:amend` to move goal
-- `scope-amend` → `/vg:amend {phase}` to remove goal, OR `/vg:add-phase` to create owning phase
-- `cross-phase:{X.Y}` → no action (resolved with citation)
+### 4e: Cổng 100% (hard, v1.14.0+ A.3)
 
-If 0 UNREACHABLE goals → triage skipped, no file written.
+Thay gate trọng số (critical/important/nice-to-have) cũ bằng quy tắc đơn giản:
+
+- **ĐẠT (PASS)** khi `BLOCKED == 0` VÀ `UNREACHABLE == 0` (goals ở trạng thái kết thúc: READY + DEFERRED + MANUAL + INFRA_PENDING).
+- **BỊ CHẶN (BLOCK)** khi còn bất kỳ goal `BLOCKED` hoặc `UNREACHABLE`.
+
+Không còn grey zone — DEFERRED và MANUAL là hai đường thoát hợp lệ nhưng phải declare ở `/vg:scope`, không phải review tự gắn.
+
+```bash
+session_mark_step "4e-100pct-gate"
+MATRIX="${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
+
+# Đọc config gate threshold (default 100, legacy-mode fallback 80)
+GATE_THRESHOLD=$(${PYTHON_BIN} -c "
+import re, sys
+try:
+    with open('.claude/vg.config.md', encoding='utf-8') as f:
+        c = f.read()
+    m = re.search(r'gate_threshold\s*:\s*(\d+)', c)
+    print(m.group(1) if m else '100')
+except Exception:
+    print('100')
+")
+
+# Legacy-mode override: --legacy-mode flag hoặc config review.gate_threshold_legacy
+if [[ "$ARGUMENTS" =~ --legacy-mode ]]; then
+  GATE_THRESHOLD_LEGACY=$(${PYTHON_BIN} -c "
+import re
+try:
+    with open('.claude/vg.config.md', encoding='utf-8') as f:
+        c = f.read()
+    m = re.search(r'gate_threshold_legacy\s*:\s*(\d+)', c)
+    print(m.group(1) if m else '80')
+except Exception:
+    print('80')
+")
+  echo "⚠ --legacy-mode: dùng ngưỡng ${GATE_THRESHOLD_LEGACY}% (pre-v1.14). Flag này sẽ hết hạn sau 2 milestones."
+  GATE_THRESHOLD="$GATE_THRESHOLD_LEGACY"
+fi
+
+# Count statuses từ matrix
+if [ -f "$MATRIX" ]; then
+  GATE_COUNTS=$(PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - "$MATRIX" <<'PY'
+import re, sys, json
+text = open(sys.argv[1], encoding='utf-8').read()
+m = re.search(r'^## Goal Details\s*\n(.*?)(?=^\s*## |\Z)', text, re.M|re.S)
+body = m.group(1) if m else ""
+buckets = ["READY","DEFERRED","MANUAL","BLOCKED","UNREACHABLE","INFRA_PENDING","NOT_SCANNED","FAILED"]
+counts = {b:0 for b in buckets}
+for line in body.splitlines():
+    for b in buckets:
+        if re.search(r'\|\s*' + b + r'\s*\|', line):
+            counts[b] += 1
+            break
+print(json.dumps(counts))
+PY
+)
+  READY=$(echo "$GATE_COUNTS"        | ${PYTHON_BIN} -c "import json,sys;print(json.loads(sys.stdin.read())['READY'])")
+  DEFERRED=$(echo "$GATE_COUNTS"     | ${PYTHON_BIN} -c "import json,sys;print(json.loads(sys.stdin.read())['DEFERRED'])")
+  MANUAL=$(echo "$GATE_COUNTS"       | ${PYTHON_BIN} -c "import json,sys;print(json.loads(sys.stdin.read())['MANUAL'])")
+  BLOCKED=$(echo "$GATE_COUNTS"      | ${PYTHON_BIN} -c "import json,sys;print(json.loads(sys.stdin.read())['BLOCKED'])")
+  UNREACHABLE=$(echo "$GATE_COUNTS"  | ${PYTHON_BIN} -c "import json,sys;print(json.loads(sys.stdin.read())['UNREACHABLE'])")
+  INFRA_PENDING=$(echo "$GATE_COUNTS"| ${PYTHON_BIN} -c "import json,sys;print(json.loads(sys.stdin.read())['INFRA_PENDING'])")
+
+  TOTAL=$((READY + DEFERRED + MANUAL + BLOCKED + UNREACHABLE + INFRA_PENDING))
+  # Goals được tính là "kết thúc": READY + DEFERRED + MANUAL + INFRA_PENDING
+  PASS_COUNT=$((READY + DEFERRED + MANUAL + INFRA_PENDING))
+  FAIL_COUNT=$((BLOCKED + UNREACHABLE))
+
+  if [ "$TOTAL" -gt 0 ]; then
+    PASS_PCT=$(( PASS_COUNT * 100 / TOTAL ))
+  else
+    PASS_PCT=0
+  fi
+
+  echo ""
+  echo "━━━ Cổng kiểm tra (${GATE_THRESHOLD}%) ━━━"
+  echo "  Tổng goals:    $TOTAL"
+  echo "  ✅ READY:      $READY"
+  echo "  🔁 DEFERRED:   $DEFERRED (tagged depends_on_phase)"
+  echo "  ✋ MANUAL:     $MANUAL (tagged verification_strategy)"
+  echo "  ♻ INFRA:      $INFRA_PENDING (ngoài ENV hiện tại)"
+  echo "  ⛔ BLOCKED:    $BLOCKED"
+  echo "  ❓ UNREACHABLE:$UNREACHABLE"
+  echo "  Tỉ lệ đạt:    ${PASS_PCT}% (yêu cầu ≥${GATE_THRESHOLD}%)"
+  echo ""
+
+  export GATE_THRESHOLD PASS_COUNT FAIL_COUNT PASS_PCT TOTAL
+  export READY DEFERRED MANUAL BLOCKED UNREACHABLE INFRA_PENDING
+else
+  echo "⚠ GOAL-COVERAGE-MATRIX.md không tồn tại — không tính được gate."
+  export FAIL_COUNT=999 PASS_PCT=0 GATE_THRESHOLD=100
+fi
+```
+
+### 4f: Quyết định cổng (100% hard)
+
+```bash
+session_mark_step "4f-gate-decision"
+
+# Quy tắc:
+#   GATE_THRESHOLD == 100 (default)  → PASS iff FAIL_COUNT == 0
+#   GATE_THRESHOLD <  100 (legacy)   → PASS iff PASS_PCT >= threshold
+if [ "$GATE_THRESHOLD" = "100" ]; then
+  GATE_PASS=$([ "$FAIL_COUNT" -eq 0 ] && echo "true" || echo "false")
+else
+  GATE_PASS=$([ "$PASS_PCT" -ge "$GATE_THRESHOLD" ] && echo "true" || echo "false")
+fi
+
+if [ "$GATE_PASS" = "true" ]; then
+  echo "✅ Cổng ĐẠT — phase sẵn sàng cho /vg:test ${PHASE_NUMBER}"
+  echo ""
+
+  # v1.14.0+ A.4 — write trigger cho CROSS-PHASE-DEPS aggregator
+  # Nếu có goal DEFERRED → append vào .vg/CROSS-PHASE-DEPS.md (idempotent)
+  if [ "$DEFERRED" -gt 0 ]; then
+    CPD_SCRIPT="${REPO_ROOT}/.claude/scripts/vg_cross_phase_deps.py"
+    if [ -f "$CPD_SCRIPT" ]; then
+      PYTHONIOENCODING=utf-8 ${PYTHON_BIN} "$CPD_SCRIPT" append "$PHASE_NUMBER" 2>&1 | sed 's/^/  /'
+    else
+      echo "⚠ vg_cross_phase_deps.py missing — DEFERRED entries không được aggregate." >&2
+    fi
+    echo "ℹ Có $DEFERRED goal DEFERRED (chờ phase phụ thuộc). Xem .vg/CROSS-PHASE-DEPS.md"
+  fi
+  if [ "$MANUAL" -gt 0 ]; then
+    echo "ℹ Có $MANUAL goal MANUAL. /vg:accept sẽ prompt checklist người dùng."
+  fi
+  if [ "$INFRA_PENDING" -gt 0 ]; then
+    echo "ℹ Có $INFRA_PENDING goal chờ infra (ngoài ENV). Re-run với --sandbox nếu cần."
+  fi
+else
+  echo "⛔ Cổng BỊ CHẶN — còn $FAIL_COUNT goal chưa kết thúc."
+  echo ""
+
+  # Gợi ý hành động theo loại fail
+  if [ "$BLOCKED" -gt 0 ]; then
+    echo "  🛠 $BLOCKED goal BLOCKED (scan chạy nhưng criteria fail):"
+    echo "     → Sửa code → re-run /vg:review ${PHASE_NUMBER} --fix-only"
+  fi
+  if [ "$UNREACHABLE" -gt 0 ]; then
+    echo "  ❓ $UNREACHABLE goal UNREACHABLE (không reach được UI hoặc chưa build):"
+    echo "     → Đọc ${PHASE_DIR}/UNREACHABLE-TRIAGE.md — mỗi goal có verdict + action gợi ý"
+    echo "     → cross-phase-pending    → /vg:amend ${PHASE_NUMBER} thêm depends_on_phase tag"
+    echo "     → bug-this-phase         → /vg:build ${PHASE_NUMBER} --gaps-only"
+    echo "     → scope-amend destructive→ user confirm amendment rồi re-run review"
+
+    # Nếu có pending queue, nhắc
+    if [ -f ".vg/PENDING-USER-REVIEW.md" ]; then
+      PENDING_CNT=$(grep -c "^| ${PHASE_NUMBER} " ".vg/PENDING-USER-REVIEW.md" 2>/dev/null || echo 0)
+      [ "$PENDING_CNT" -gt 0 ] && echo "     → $PENDING_CNT mục đang chờ người duyệt (.vg/PENDING-USER-REVIEW.md)"
+    fi
+  fi
+
+  echo ""
+  echo "Không còn đường thoát tự động — scope tag phải declare ở /vg:scope (không phải review tự gán)."
+
+  # Exit với mã lỗi để caller biết gate fail
+  exit 1
+fi
+```
+</step>
+
+<step name="unreachable_triage">
+## UNREACHABLE Triage — legacy guard (v1.14.0+)
+
+**Từ v1.14.0, triage chạy INLINE trong Phase 4d (ngay trước cổng 100%).** Step này chỉ còn là **guard** cho trường hợp legacy flow đi vòng (ví dụ `--skip-discovery` + `--fix-only` nhảy qua 4d). Nếu `.unreachable-triage.json` đã tồn tại từ 4d → skip; nếu chưa → chạy fallback.
+
+```bash
+TRIAGE_JSON="${PHASE_DIR}/.unreachable-triage.json"
+if [ -f "$TRIAGE_JSON" ]; then
+  echo "ℹ Triage đã chạy inline ở Phase 4d — skip legacy guard."
+else
+  session_mark_step "4f-unreachable-triage-legacy"
+  echo ""
+  echo "🔍 Legacy path: UNREACHABLE triage fallback (4d bị bỏ qua)..."
+  source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/unreachable-triage.sh" 2>/dev/null || true
+  if type -t triage_unreachable_goals >/dev/null 2>&1; then
+    triage_unreachable_goals "$PHASE_DIR" "$PHASE_NUMBER"
+  else
+    echo "⚠ unreachable-triage.sh missing — triage skipped" >&2
+  fi
+fi
+```
+
+**Lưu ý v1.14.0+:** Triage không còn là "report-only cho accept gate". Triage SINH action_required, review 4d ÁP DỤNG autonomous action (mark_deferred/mark_manual) và BLOCK gate cho action cần người duyệt (spawn_fix_agent, draft_amendment_ask, prompt_scope_tag). Xem spec section A.2.
 </step>
 
 <step name="crossai_review">

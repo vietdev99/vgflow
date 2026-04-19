@@ -56,7 +56,24 @@ Include ONE of:
 Missing citation → commit-msg hook rejects. Do NOT use `--no-verify`.
 
 ### Pre-commit
-- Run typecheck: the command from `<build_config>.typecheck_cmd`
+
+Typecheck gate — light mode by default:
+
+```bash
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/typecheck-light.sh"
+
+# Per-task: incremental check (fast if cache warm, ~10-30s)
+# vg_typecheck_incremental auto-bootstraps on first run if cache missing.
+vg_typecheck_incremental <pkg>   # e.g., @vollxssp/web OR web
+```
+
+Modes available (from typecheck-light.sh):
+- `vg_typecheck_bootstrap <pkg>` — cold 3-5 min, populates `.tsbuildinfo`. Orchestrator should do this ONCE at wave start.
+- `vg_typecheck_incremental <pkg>` — default agent mode. Reads cache, 10-30s.
+- `vg_typecheck_isolated <file...>` — per-file check (2-5s each), weaker coverage (no cross-file type). Use only when explicitly told.
+
+NODE_OPTIONS heap handled internally — no need to export manually.
+
 - Must exit 0 before committing
 - If fails: fix inline → re-typecheck → max 2 retries
 
@@ -64,6 +81,89 @@ Missing citation → commit-msg hook rejects. Do NOT use `--no-verify`.
 - Stage files individually: `git add path/to/file.ts`
 - NEVER `git add .` or `git add -A`
 - Check for untracked files after task: commit intentional ones, .gitignore generated ones
+
+### Parallel-wave commit safety (MANDATORY)
+
+When `<wave_context>` lists other parallel tasks running concurrently, git's index
+is shared state across executor processes. `git add` interleaves freely — if
+agent A stages fileA and agent B stages fileB before either commits, whoever
+runs `git commit` first absorbs BOTH files into their commit, corrupting
+attribution. This is NOT caught by file-conflict detection (different files,
+different agents, still one `.git/index`).
+
+**Protocol — wrap the stage+commit sequence in the shared mutex:**
+
+```bash
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/build-commit-queue.sh"
+# build-progress.sh auto-hooks via VG_BUILD_PHASE_DIR + VG_BUILD_TASK_NUM env vars
+# — orchestrator sets VG_BUILD_PHASE_DIR; you set TASK_NUM below so mutex acquire
+# auto-logs to .build-progress.json (compact-safe state).
+export VG_BUILD_TASK_NUM="${TASK_NUM}"   # e.g., 15 for Task 15
+
+# Self-register progress fallback (MANDATORY when VG_BUILD_PHASE_DIR set):
+# Orchestrator SHOULD have called vg_build_progress_start_task before spawning us.
+# But if orchestrator bypassed normal flow (e.g., manual Agent spawn, compact
+# reload), our task may be absent from .build-progress.json. Self-register so
+# --status + integrity reconciler see us.
+if [ -n "${VG_BUILD_PHASE_DIR:-}" ]; then
+  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/build-progress.sh" 2>/dev/null || true
+  if type -t vg_build_progress_start_task >/dev/null 2>&1; then
+    # Check progress file — if our task isn't in_flight or committed, self-register
+    NEEDS_REGISTER=$(${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    d = json.load(open('${VG_BUILD_PHASE_DIR}/.build-progress.json', encoding='utf-8'))
+    t = int('${TASK_NUM}')
+    in_flight = any(x['task'] == t for x in d.get('tasks_in_flight', []))
+    committed = any(x['task'] == t for x in d.get('tasks_committed', []))
+    print('no' if (in_flight or committed) else 'yes')
+except Exception:
+    print('yes')
+" 2>/dev/null)
+    if [ "$NEEDS_REGISTER" = "yes" ]; then
+      vg_build_progress_start_task "$VG_BUILD_PHASE_DIR" "$TASK_NUM" "self-register-$$" 2>/dev/null || true
+    fi
+  fi
+fi
+
+# Acquire — blocks until lock held (default 180s timeout)
+vg_commit_queue_acquire "task-${PHASE_NUMBER}-${TASK_NUM}" 180 || {
+  echo "⛔ Could not acquire commit lock — STOP, report via Rule 4"
+  exit 1
+}
+
+# Inside the critical section — only THIS agent is staging + committing right now
+git add path/to/my-file.ts path/to/my-file.test.ts
+
+# Typecheck gate (still inside lock — prevents partial commits if typecheck fails)
+pnpm turbo typecheck --filter @pkg/... || {
+  git reset HEAD -- path/to/my-file.ts path/to/my-file.test.ts  # unstage, keep working tree
+  vg_commit_queue_release
+  # fix inline → retry from top (re-acquire)
+}
+
+git commit -m "feat(PHASE-TASK): subject
+
+Per API-CONTRACTS.md line X-Y
+Covers goal: G-XX
+"
+
+# Release — next waiter proceeds
+vg_commit_queue_release
+```
+
+**Rules:**
+- Only ONE `git add` + `git commit` critical section per task. No staging files
+  outside the lock.
+- If typecheck fails: unstage inside the lock OR release + retry. Never commit
+  failing typecheck just to release the lock.
+- If the mutex times out (180s default): report as Rule 4 Architectural — a
+  peer agent is stuck. Do not force-break.
+- The helper auto-breaks locks older than 600s (crashed agent recovery).
+- The helper auto-releases on EXIT trap — safe if your shell dies mid-critical.
+
+**Why mkdir instead of flock:** flock isn't shipped with Git Bash on Windows
+(VG must run cross-platform). `mkdir` is atomic on POSIX + NTFS.
 
 ## Contract adherence — 3 code blocks per endpoint
 
@@ -95,6 +195,45 @@ Error response says `message: "Advertiser role required"` → Block 3 copied to 
 BE error handler and FE toast → user sees correct message, not "403".
 
 **Zero AI judgment on auth, schema, or error handling. Copy, don't think.**
+
+## Utility reuse — prevent duplicate helpers
+
+**Rule:** Before adding ANY helper function (format/parse/transform/classname), check `@vollxssp/utils` (or the canonical utils package defined in `PROJECT.md` → Shared Utility Contract). If the helper exists → import. Never redeclare.
+
+**Lookup protocol (MANDATORY before declaring any helper):**
+
+1. **Grep the contract** — `grep -E "\b${NAME}\b" packages/utils/src/index.ts` (or the configured canonical path).
+2. **If found** → import:
+   ```typescript
+   import { formatCurrency, formatDate } from '@vollxssp/utils';
+   ```
+   Do NOT redeclare locally even "just this once" or "with a tiny variant" — that's how 16 files end up with 16 subtly-different `formatCurrency` each.
+3. **If not found, and you need it in >1 file of this phase** → STOP. Add it to utils FIRST:
+   - Create a separate commit: `feat(X-0): extend @vollxssp/utils with <helper>`
+   - Then in later tasks, import it.
+   - If you're alone in a single wave, ask orchestrator whether to split into a Task 0 or batch in this task. Default: split.
+4. **If not found, and it's truly 1-file only** (e.g., `formatDealStateForThisSpecificBadge`) → declare locally is OK, but:
+   - Name it specifically (`formatDealStateBadgeLabel` not `formatState`)
+   - Comment why it's not in utils: `// local — phase-specific, not reused`
+
+**Anti-patterns (cause tsc OOM + graphify noise):**
+
+```typescript
+// ❌ NEVER — redeclaring what already exists in @vollxssp/utils
+const formatCurrency = (n: number) => `$${n.toFixed(2)}`;  // found 16x across repo
+const formatDate = (d: Date) => d.toLocaleDateString();     // found 10x across repo
+
+// ❌ NEVER — "just a tiny variant" of a contract helper
+const formatCurrencyNoDecimals = (n: number) => `$${Math.round(n)}`;
+// If you need this variant → add params to canonical: formatCurrency(n, { decimals: 0 })
+
+// ✅ CORRECT
+import { formatCurrency, formatDate } from '@vollxssp/utils';
+```
+
+**Blueprint already blocks this** at plan time via `verify-utility-reuse.py`. But executor is the last line of defense — if a blueprint slipped through, don't let it reach commit.
+
+**Exception for `packages/utils/` itself:** if your `<file-path>` IS in `packages/utils/src/`, you ARE the canonical declaration — declare freely, export from `index.ts`.
 
 ## Error handling — 5 rules (every endpoint, every page)
 

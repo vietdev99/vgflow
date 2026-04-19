@@ -14,14 +14,14 @@ USAGE
   python visual-diff.py compare --current apps/web/e2e/screenshots/{phase}/ \
                                 --baseline apps/web/e2e/screenshots/baseline/{phase}/ \
                                 --threshold 2.0 \
-                                --output .planning/phases/{phase}/visual-diff.json
+                                --output .vg/phases/{phase}/visual-diff.json
 
   # Promote current → baseline (called from /vg:accept)
   python visual-diff.py promote --from apps/web/e2e/screenshots/{phase}/ \
                                 --to apps/web/e2e/screenshots/baseline/{phase}/
 
   # Summarize a report
-  python visual-diff.py summarize --report .planning/phases/{phase}/visual-diff.json
+  python visual-diff.py summarize --report .vg/phases/{phase}/visual-diff.json
 
 CONFIG (read from vg.config.md via env vars)
   VG_VISUAL_THRESHOLD       — max allowed diff %, default 2.0

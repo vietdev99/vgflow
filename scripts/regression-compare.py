@@ -9,10 +9,10 @@ Outputs REGRESSION-REPORT.md (human) + regression-results.json (machine).
 
 USAGE
   python3 regression-compare.py \\
-    --baselines .planning/regression-baselines.json \\
+    --baselines .vg/regression-baselines.json \\
     --vitest-results .vg-tmp/vitest-results.json \\
     --e2e-results .vg-tmp/e2e-results.json \\
-    [--output-dir .planning/] \\
+    [--output-dir .vg/] \\
     [--json-only]
 
 EXIT CODES

@@ -14,7 +14,7 @@ Called from .claude/commands/vg/map.md to gate graphify rebuild cost.
 USAGE
   python graphify-incremental.py decide \
       --graph graphify-out/graph.json \
-      --marker .planning/.graphify-last-rebuild \
+      --marker .vg/.graphify-last-rebuild \
       --config .claude/vg.config.md
 
   # Exit code:
@@ -23,7 +23,7 @@ USAGE
   #   2 = incremental feasible (print "incremental: N files changed")
 
   python graphify-incremental.py mark \
-      --marker .planning/.graphify-last-rebuild
+      --marker .vg/.graphify-last-rebuild
 """
 import argparse
 import subprocess
@@ -51,7 +51,8 @@ NON_CODE_EXTENSIONS = {
 
 # Planning dirs — never code, always skip
 PLANNING_DIR_PREFIXES = [
-    ".planning/",
+    ".vg/",         # VG canonical planning path (v1.14.1+)
+    ".planning/",   # legacy path (tolerate if GSD still present)
     "docs/",
     "CHANGELOG",
     "README",

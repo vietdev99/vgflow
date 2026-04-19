@@ -56,13 +56,27 @@ Gracefully degrades: no VGFLOW-VERSION → "VG vunknown"; offline → no update 
 LLM self-scanning across many phases is error-prone (hallucinated counts, missed
 verdict formats). Progress uses a Python script as the single source of truth.
 
-```bash
-SCAN_JSON=$(${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/vg-progress.py" \
-  --planning "${PLANNING_DIR}" --output json 2>&1)
+**UTF-8 safety (Windows fix, v1.13.0):** Python emits ✅ 🔄 ⬜ ❌ icons in JSON.
+On Windows, default codepage is cp1252/cp1258 which crashes on emoji bytes.
+Always export `PYTHONIOENCODING=utf-8` when invoking AND when reading back,
+and write to a file instead of `$(…)` capture (bash var encoding inconsistent).
 
-if [ $? -ne 0 ]; then
-  echo "⛔ vg-progress.py failed. Falling back to artifact check — results may be stale."
+```bash
+PROGRESS_JSON="${PLANNING_DIR}/.vg-progress.json"
+mkdir -p "$(dirname "$PROGRESS_JSON")"
+
+PYTHONIOENCODING=utf-8 ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/vg-progress.py" \
+  --planning "${PLANNING_DIR}" --output json > "$PROGRESS_JSON" 2>/dev/null
+
+if [ ! -s "$PROGRESS_JSON" ]; then
+  echo "⛔ vg-progress.py failed or produced empty output. Falling back to artifact check — results may be stale."
 fi
+
+# Read back with explicit UTF-8 (never rely on OS default encoding).
+# When iterating from the orchestrator, always use this pattern:
+#   PYTHONIOENCODING=utf-8 python -c "import json, io; \
+#     data = json.load(io.open('$PROGRESS_JSON', encoding='utf-8')); \
+#     ..."
 ```
 
 The script returns JSON:

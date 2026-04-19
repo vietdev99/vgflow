@@ -488,7 +488,7 @@ def _emit_gate_conflict_telemetry(conflict: dict, rel_file: str, phase: str = ""
     """Best-effort telemetry emit. Silent if telemetry disabled or jsonl unwriteable."""
     try:
         import uuid
-        path = Path(".planning/telemetry.jsonl")
+        path = Path(".vg/telemetry.jsonl")
         path.parent.mkdir(parents=True, exist_ok=True)
         event = {
             "event_id": str(uuid.uuid4()),
@@ -520,7 +520,7 @@ def cmd_verify_gates(args):
       --manifest-version  upstream version (e.g. "1.8.0")
       --from-version      local pre-update version (for report header)
       --merged-root       root dir of merged .claude install (default .claude)
-      --output-dir        where to write gate-conflicts.md (default .planning/vgflow-patches)
+      --output-dir        where to write gate-conflicts.md (default .vg/vgflow-patches)
       --manifest-file     optional local path to gate-manifest.json (skip download)
       --phase             optional phase tag for telemetry
 
@@ -690,7 +690,7 @@ def main():
                     help="Local pre-update version (for report header)")
     vg.add_argument("--merged-root", default=".claude",
                     help="Root dir of merged install (default .claude)")
-    vg.add_argument("--output-dir", default=".planning/vgflow-patches",
+    vg.add_argument("--output-dir", default=".vg/vgflow-patches",
                     help="Where to write gate-conflicts.md")
     vg.add_argument("--manifest-file", default="",
                     help="Optional local path to gate-manifest.json (skip download)")

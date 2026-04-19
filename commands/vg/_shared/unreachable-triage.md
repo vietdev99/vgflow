@@ -5,7 +5,32 @@ description: UNREACHABLE Triage (Shared Reference) — auto-classify each UNREAC
 
 # UNREACHABLE Triage — Shared Helper
 
-When `/vg:review` finishes Phase 4 with goals at status `UNREACHABLE`, the workflow MUST classify each one — UNREACHABLE alone is not a conclusion, it's a request for triage.
+## v1.14.0+ Actionable triage (nâng cấp từ descriptive-only)
+
+Trước v1.14: triage CHỈ phân loại + ghi file, user phải tự đọc + quyết.  
+Từ v1.14 (2026-04-18): triage sinh `action_required` + `action_params` cho mỗi verdict, review Phase 3 autonomous thực thi không hỏi user trừ trường hợp destructive.
+
+| Verdict | Nghĩa | Hành động tự động (review Phase 3) |
+|---|---|---|
+| `cross-phase:{X.Y}` — có tag `depends_on_phase: X.Y` ở scope | Goal thuộc phase khác, scope đã khai tag | `mark_deferred` — update GOAL-COVERAGE-MATRIX status=DEFERRED; ghi `.vg/CROSS-PHASE-DEPS.md` |
+| `cross-phase-pending:{X.Y}` — cross-phase detect nhưng KHÔNG có tag scope | Phase khác owns goal nhưng scope chưa khai | `prompt_scope_tag` — mark goal BLOCKED; prompt user `/vg:amend {phase}` thêm `depends_on_phase: X.Y`; user offline → PENDING_USER_REVIEW queue |
+| `bug-this-phase` | Phase này declare goal trong SPECS/CONTEXT nhưng UI không reach | `spawn_fix_agent` — spawn Sonnet fix agent inline với goal context; max 3 iterations per goal; fail → escalate |
+| `scope-amend:additive` — goal thêm note/constraint/narrower scope | Amendment không xoá gì, chỉ bổ sung | `auto_apply_amendment` — sinh CONTEXT.md diff additive, auto-apply + log vào AUTO-AMENDMENT-LOG.md |
+| `scope-amend:destructive` — cần drop goal / swap endpoint | Amendment thay đổi semantics | `draft_amendment_ask` — sinh diff + AskUserQuestion; user offline → mark goal `PENDING_AMENDMENT`, skip + continue review |
+
+**Cổng accept (v1.14.0+):**
+- `cross-phase:{X.Y}` (có tag) → ACCEPT OK (goal DEFERRED, tracked ở CROSS-PHASE-DEPS.md)
+- `cross-phase-pending` → BLOCK accept until tag added or phase completes
+- `bug-this-phase` → BLOCK accept until fix applied + re-verify
+- `scope-amend:additive` → AUTO-RESOLVED (no block after auto-apply)
+- `scope-amend:destructive` → BLOCK accept until user confirms amendment
+
+**Lý do tách additive vs destructive:**  
+Autonomous principle (spec section 2.5) — additive change không revert được người dùng sau (chỉ thêm data), safe auto-apply. Destructive change (drop goal) không revert được mà có thể hỏng downstream — phải user confirm.
+
+---
+
+## v1.13 legacy verdict table (giữ cho reference)
 
 A goal is `UNREACHABLE` because the runtime probe could not reach the UI surface that would prove it. That happens for one of three reasons:
 
@@ -74,9 +99,22 @@ tg_text = tg_path.read_text(encoding="utf-8", errors="ignore") if tg_path.exists
 # Goal blocks are typically: ### G-XX: Title  ...followed by description until next ###
 goal_blocks = {}
 for m in re.finditer(r'^#+\s*(G-\d+)[:\s\-]+([^\n]+)\n([\s\S]*?)(?=^#+\s*G-\d+|\Z)', tg_text, re.M):
+    body = m.group(3).strip()
+    # v1.14.0+ — extract scope-declared tags from goal body
+    # Tag format (lines inside goal block): `depends_on_phase: 7.12` or `verification_strategy: manual`
+    depends_on = None
+    verify_strategy = None
+    dm = re.search(r'^\s*depends_on_phase\s*:\s*([0-9]+(?:\.[0-9]+)*)\s*$', body, re.M | re.I)
+    if dm:
+        depends_on = dm.group(1)
+    vm = re.search(r'^\s*verification_strategy\s*:\s*(manual|fixture|faketime|automated)\s*$', body, re.M | re.I)
+    if vm:
+        verify_strategy = vm.group(1).lower()
     goal_blocks[m.group(1)] = {
-        "title": m.group(2).strip(),
-        "body":  m.group(3).strip()
+        "title":   m.group(2).strip(),
+        "body":    body,
+        "depends_on_phase":       depends_on,
+        "verification_strategy":  verify_strategy,
     }
 
 # 3) Load SPECS.md + CONTEXT.md for current phase to detect "should be in this phase"
@@ -197,6 +235,39 @@ for u in unreachables:
     kws = keywords_for(gid)
     block = goal_blocks.get(gid, {})
 
+    # v1.14.0+ — Scope tag short-circuit (autonomous-first)
+    block = goal_blocks.get(gid, {})
+    scope_depends_on = block.get("depends_on_phase")
+    scope_verify_strategy = block.get("verification_strategy")
+
+    if scope_verify_strategy in ("manual", "fixture", "faketime"):
+        # User đã khai ở scope — goal verify bằng cách khác (không phải browser replay)
+        verdicts[gid] = {
+            "verdict": f"scope-declared-{scope_verify_strategy}",
+            "blocks_accept": False,
+            "title": block.get("title", "(no title)"),
+            "keywords": [],
+            "cross_hits": [],
+            "matrix_line": u["matrix_line"],
+            "action_required": "mark_manual",
+            "action_params": {"strategy": scope_verify_strategy},
+        }
+        continue
+
+    if scope_depends_on:
+        # User đã khai ở scope — goal thuộc phase khác (DEFERRED)
+        verdicts[gid] = {
+            "verdict": f"cross-phase:{scope_depends_on}",
+            "blocks_accept": False,
+            "title": block.get("title", "(no title)"),
+            "keywords": [],
+            "cross_hits": [],
+            "matrix_line": u["matrix_line"],
+            "action_required": "mark_deferred",
+            "action_params": {"target_phase": scope_depends_on},
+        }
+        continue
+
     # 5a) Search every other phase
     cross_hits = []
     for op in other_phases:
@@ -238,13 +309,37 @@ for u in unreachables:
             blocks_accept = True  # decision required before accept
         evidence = []
 
+    # v1.14.0+ action_required mapping (review Phase 3 auto-thực thi)
+    if verdict.startswith("cross-phase-pending:"):
+        action_required = "prompt_scope_tag"
+        action_params = {"target_phase": verdict.split(":", 1)[1], "reason": "cross-phase detected but scope không khai depends_on_phase"}
+    elif verdict.startswith("cross-phase:"):
+        # Legacy verdict (no scope tag) — trong v1.14.0 đã short-circuit ở trên,
+        # nhưng giữ fallback cho phases migrate chưa gắn tag
+        action_required = "mark_deferred"
+        action_params = {"target_phase": verdict.split(":", 1)[1]}
+    elif verdict == "bug-this-phase":
+        action_required = "spawn_fix_agent"
+        action_params = {"keywords": list(kws), "evidence_from_self_spec": True}
+    elif verdict == "scope-amend":
+        # Classify additive vs destructive — heuristic đơn giản
+        # additive: phrase chỉ đang nói về "thêm constraint/note" không xoá goal khỏi scope
+        # destructive: không khớp phase khác + không có trong SPECS → drop goal
+        action_required = "draft_amendment_ask"  # destructive default — user phải confirm drop
+        action_params = {"amendment_type": "destructive", "reason": "goal không còn thuộc phase scope"}
+    else:
+        action_required = None
+        action_params = {}
+
     verdicts[gid] = {
         "verdict": verdict,
         "blocks_accept": blocks_accept,
         "title": block.get("title", "(no title)"),
         "keywords": kws,
         "cross_hits": evidence,
-        "matrix_line": u["matrix_line"]
+        "matrix_line": u["matrix_line"],
+        "action_required": action_required,
+        "action_params": action_params,
     }
 
 # 6) Write JSON for downstream gate

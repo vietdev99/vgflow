@@ -442,7 +442,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument('input', nargs='?', help='Single asset path (or --batch glob)')
     parser.add_argument('--batch', help='Glob pattern for multiple assets')
     parser.add_argument('--output', '-o', required=False,
-                        help='Output directory (default: .planning/design-normalized/)')
+                        help='Output directory (default: .vg/design-normalized/)')
     parser.add_argument('--slug', help='Override auto-generated slug (single input only)')
     parser.add_argument('--states', action='store_true',
                         help='Capture interactive states (click triggers) for HTML assets')
@@ -460,7 +460,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.input and not args.batch:
         parser.error('Must provide <input> or --batch <glob>')
 
-    output_dir = Path(args.output) if args.output else Path('.planning/design-normalized')
+    output_dir = Path(args.output) if args.output else Path('.vg/design-normalized')
     base_dir = Path(args.base_dir) if args.base_dir else None
 
     # Collect inputs

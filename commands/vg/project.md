@@ -881,15 +881,58 @@ Hỏi user chỉ những field có `<NEED_USER_INPUT>` placeholder. Không hỏi
 
 ### Round 7: Atomic write + commit
 
-Write all 3 files trong 1 transaction:
+Write all 3 files trong 1 transaction.
+
+**v1.13.0 (2026-04-18) — template-based config generation.**
+The old inline placeholder heredoc is gone. Config rendering is delegated to
+`.claude/scripts/vg_generate_config.py`, which reads the full-schema template
+at `.claude/templates/vg/vg.config.template.md` (~700 lines, 100% coverage of
+every field workflow commands read) and substitutes only foundation-derived
+fields. Previously the heredoc covered ~25% of schema so 75% of config was
+best-guess by AI — caused missing fields like `db_name`, `i18n`,
+`ports.database`, `rationalization_guard.model`, `surfaces.web` etc. Audit
+history lives in `.vg/CONFIG-AUDIT.md`.
 
 ```bash
-# Write to staging files first
-${PYTHON_BIN} - <<PY
-# Write PROJECT.md.staged, FOUNDATION.md.staged, vg.config.md.staged
-# from draft + derived foundation + config
-...
+# 1. Write PROJECT.md.staged + FOUNDATION.md.staged from discussion (small, direct)
+${PYTHON_BIN} - <<'PY'
+import json, os
+from pathlib import Path
+
+draft = json.loads(Path(os.environ["DRAFT_FILE"]).read_text(encoding="utf-8"))
+
+# PROJECT.md ← identity + milestones
+project_md = Path(os.environ["PROJECT_FILE"] + ".staged")
+project_md.write_text(draft["project_md_content"], encoding="utf-8")
+
+# FOUNDATION.md ← 8 dimensions + F-XX decisions
+foundation_md = Path(os.environ["FOUNDATION_FILE"] + ".staged")
+foundation_md.write_text(draft["foundation_md_content"], encoding="utf-8")
+
+# Export foundation subset as JSON for config generator (next step)
+foundation_json = Path(os.environ["PLANNING_DIR"]) / ".foundation-for-config.json"
+foundation_json.write_text(json.dumps(draft["foundation_for_config"], indent=2), encoding="utf-8")
+print(f"✓ PROJECT.md.staged + FOUNDATION.md.staged + foundation-for-config.json written")
 PY
+
+# 2. Render vg.config.md.staged via generator (the v1.13.0 swap-in)
+${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/vg_generate_config.py" \
+  --foundation "${PLANNING_DIR}/.foundation-for-config.json" \
+  --template   "${REPO_ROOT}/.claude/templates/vg/vg.config.template.md" \
+  --output     "${CONFIG_FILE}.staged"
+
+if [ $? -ne 0 ] || [ ! -s "${CONFIG_FILE}.staged" ]; then
+  echo "⛔ vg_generate_config.py failed — cannot promote staged artifacts."
+  echo "   Run manually to debug:"
+  echo "     ${PYTHON_BIN} .claude/scripts/vg_generate_config.py \\"
+  echo "       --foundation ${PLANNING_DIR}/.foundation-for-config.json \\"
+  echo "       --template   .claude/templates/vg/vg.config.template.md \\"
+  echo "       --output     /tmp/config.test.md --strict"
+  exit 1
+fi
+
+# 3. Cleanup temp JSON (keeps repo tidy — foundation lives in FOUNDATION.md now)
+rm -f "${PLANNING_DIR}/.foundation-for-config.json"
 
 # Write-strict gate (v1.9.0 T5): FOUNDATION.md MUST use F-XX, never bare D-XX
 # (D-XX is reserved for phase CONTEXT.md as P{phase}.D-XX).
@@ -1175,20 +1218,29 @@ Print next-step pointer based on mode:
 
 ## vg.config.md derivation rules (Round 6 logic)
 
-When foundation values are known, derive config defaults:
+**v1.13.0+ (2026-04-18):** Logic lives in `.claude/scripts/vg_generate_config.py`.
+This markdown table is reference-only — the authoritative derivation tables
+(`FRAMEWORK_PORT`, `BACKEND_PORT`, `BACKEND_HEALTH`, `DATA_PORT`,
+`HOSTING_DEPLOY_PROFILE`, `TEST_RUNNER_BY_STACK`) are constants at the top
+of `vg_generate_config.py`. Update there, not here.
+
+The generator also emits dynamic blocks: `crossai_clis` / `models` scale with
+`team_size`; `services` + `credentials` + `apps` + `infra_deps.services`
+derive from `data` / `auth.roles` / `monorepo.apps` / etc. Template:
+`.claude/templates/vg/vg.config.template.md` (~700 lines, full schema).
+
+Reference table (indicative — check script for current values):
 
 | Foundation field | → vg.config.md fields |
 |------------------|----------------------|
-| `frontend.framework: vite` | `dev_command: pnpm dev`, `port: 5173`, `e2e: playwright` |
-| `frontend.framework: next` | `dev_command: pnpm dev`, `port: 3000`, `e2e: playwright`, ssr_markers |
-| `frontend.framework: flutter` | `dev_command: flutter run`, mobile profile, no port |
-| `frontend.framework: react-native + expo` | `dev_command: npx expo start`, mobile profile |
-| `backend.framework: fastify` | `port: 3001`, `health: /health` |
-| `backend.framework: express` | `port: 3000`, `health: /healthz` |
-| `backend.topology: serverless` | `deploy.git_push: true`, no SSH alias |
-| `hosting: vps` | `deploy.ssh_alias: <ASK>`, `deploy.path: <ASK>` |
-| `hosting: vercel` | `deploy.git_push: true`, `domain: <ASK>` |
-| `data: postgres` | `db.engine: postgres`, `db.driver: postgres-js` |
+| `frontend.framework: vite` | `worktree_ports.base.web: 5173`, `dev_command: {pm} dev` |
+| `frontend.framework: next` | `worktree_ports.base.web: 3000` |
+| `backend.framework: fastify` | `worktree_ports.base.api: 3001`, `health: /health` |
+| `backend.framework: express` | `worktree_ports.base.api: 3000` |
+| `hosting: vps` | `deploy_profile: pm2`, `run_prefix: ssh {{ssh_alias}}` |
+| `hosting: vercel` | `deploy_profile: git_push` |
+| `data.primary: postgres` | `ports.database: 5432`, `services.local.postgres check` |
+| `data.primary: mongodb` | `ports.database: 27017`, `services.local.mongodb check` |
 | `monorepo: turborepo` | `build_gates.typecheck_cmd: pnpm turbo typecheck` |
 | `team_size: solo` | `models.executor: sonnet`, `models.planner: opus` (cost-aware) |
 | `team_size: 6-20+` | `models.executor: opus`, `crossai_clis: [codex, gemini]` (quality-priority) |

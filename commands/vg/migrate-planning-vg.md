@@ -20,12 +20,19 @@ Modes:
 - `--no-keep` — delete `.planning/` after successful migration (default: keep)
 - `--source=<path>` — override source (default `.planning`)
 - `--target=<path>` — override target (default `.vg`)
+- `--auto-promote` (v1.14.2+) — promote `.vg/_legacy/_extractions/*.extracted.md` → `.vg/` proper slot using deterministic name-based rules. Never overwrites existing `.vg/` content. Adds banner for review.
+- `--full-auto` (v1.14.2+) — run migrate + auto-promote + verify-convergence in one pass. Short-circuit end-to-end.
+- `--archive-planning` (v1.14.2+) — after successful migrate+promote+verify, tar.gz `.planning/` → `.vg/_archives/planning-{ts}.tar.gz` then remove `.planning/`. Safer than `--no-keep` (preserves evidence). Compose with `--full-auto`.
 
 Idempotent — running multiple times is SAFE and EXPECTED:
 - New files in source → copied to target
 - Changed files in source → updated in target (with backup if user edited)
 - Already-synced files → no-op
 - GSD files → skipped consistently
+
+Convergence guarantee (`--full-auto` only):
+- After migrate + promote, dry-run re-check MUST produce 0 NEW + 0 UPDATED
+- If not converged, command exits non-zero (signals drift somewhere)
 </objective>
 
 <process>
@@ -39,17 +46,46 @@ source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/planning-migrator.sh"
 Parse flags from `$ARGUMENTS`:
 ```bash
 ARGS=""
+FULL_AUTO=false
+AUTO_PROMOTE=false
 for arg in $ARGUMENTS; do
   case "$arg" in
     --dry-run|--no-keep|--source=*|--target=*) ARGS="$ARGS $arg" ;;
+    --full-auto) FULL_AUTO=true ;;
+    --auto-promote) AUTO_PROMOTE=true ;;
   esac
 done
 ```
 </step>
 
 <step name="1_run">
+Three modes:
+
+**(A) Full-auto (v1.14.2+ NEW):** migrate → promote → verify in one pass.
 ```bash
-planning_migrator_run $ARGS
+if [ "$FULL_AUTO" = "true" ]; then
+  planning_migrator_full_auto $ARGS
+  # Exit here — full_auto handles everything including commit suggestion
+  exit $?
+fi
+```
+
+**(B) Migrate + promote (without full verify):**
+```bash
+if [ "$AUTO_PROMOTE" = "true" ]; then
+  planning_migrator_run $ARGS
+  # Run promote AFTER migrate completes
+  DRY_RUN_FLAG=false
+  [[ "$ARGS" =~ --dry-run ]] && DRY_RUN_FLAG=true
+  planning_migrator_promote_extractions $DRY_RUN_FLAG
+fi
+```
+
+**(C) Classic (migrate only):**
+```bash
+if [ "$FULL_AUTO" != "true" ] && [ "$AUTO_PROMOTE" != "true" ]; then
+  planning_migrator_run $ARGS
+fi
 ```
 
 Output shows per-file classification + final summary table.

@@ -335,16 +335,23 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
     def marker_has(*patterns):
         return any(any(pat in m for pat in patterns) for m in markers)
 
-    # Scope: SPECS.md + CONTEXT.md
+    # Specs: SPECS.md
     specs = _find_first_canonical(entries, "SPECS.md")
+    specs_legacy = [e["name"] for e in entries
+                    if not e["is_dir"]
+                    and e["name"] in {"SPEC.md", "REQUIREMENTS.md", "BRIEF.md"}]
+    specs_status = ("done" if specs else
+                    "legacy_only" if specs_legacy else
+                    "missing")
+
+    # Scope: CONTEXT.md (SPECS tracked separately above)
     context = _find_first_canonical(entries, "CONTEXT.md")
     scope_legacy = [e["name"] for e in entries
                     if not e["is_dir"]
-                    and e["name"] in {"RESEARCH.md", "SPEC.md",
+                    and e["name"] in {"RESEARCH.md",
                                       "DISCUSSION-LOG.md", "DISCUSSION-LOG-2.md",
                                       "DEPTH-INPUT.md"}]
-    scope_status = ("done" if specs and context else
-                    "partial" if specs or context else
+    scope_status = ("done" if context else
                     "legacy_only" if scope_legacy else
                     "missing")
 
@@ -448,8 +455,11 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
         a_status = "missing"
 
     return {
+        "specs":     {"status": specs_status,
+                      "v6_artifacts": [specs["name"]] if specs else [],
+                      "legacy_sources": specs_legacy},
         "scope":     {"status": scope_status,
-                      "v6_artifacts": [e["name"] for e in (specs, context) if e],
+                      "v6_artifacts": [context["name"]] if context else [],
                       "legacy_sources": scope_legacy},
         "blueprint": {"status": bp_status,
                       "v6_artifacts": [e["name"] for e in (plan, api, goals) if e],

@@ -12,7 +12,7 @@ Exit 0 always. Errors embedded in output JSON.
 Usage:
   python vg-progress.py                      # all phases
   python vg-progress.py --phase 07.10.2      # single phase
-  python vg-progress.py --planning .planning # custom planning dir
+  python vg-progress.py --planning .vg       # custom planning dir
 """
 
 from __future__ import annotations
@@ -23,6 +23,15 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+
+# Force UTF-8 stdout/stderr on Windows (default cp1252/cp1258 crashes on emoji ✅🔄⬜❌).
+# Python 3.7+ supports reconfigure(); no-op elsewhere.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 # --- Verdict detection ---
 # Markdown decorations vary: `**Verdict:** ACCEPTED`, `## Verdict: PASSED`,
@@ -386,7 +395,7 @@ def compute_steps(
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Deterministic phase scanner for /vg:progress")
-    ap.add_argument("--planning", default=".planning", help="planning dir (default .planning)")
+    ap.add_argument("--planning", default=".vg", help="planning dir (default .vg)")
     ap.add_argument("--phase", help="scan single phase (matches dir prefix)")
     ap.add_argument("--output", choices=["json", "text"], default="json")
     args = ap.parse_args()

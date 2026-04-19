@@ -7,7 +7,7 @@ before spawning executor. Output = JSON with all context blocks ready to inject.
 
 Usage:
   python pre-executor-check.py \
-    --phase-dir .planning/phases/07.10-user-org-management-deep \
+    --phase-dir .vg/phases/07.10-user-org-management-deep \
     --task-num 4 \
     --config .claude/vg.config.md \
     --plan-file PLAN.md
@@ -426,7 +426,7 @@ def main():
     design_ref = re.search(r"<design-ref>([^<]+)</design-ref>", task_context)
     design_context = ""
     if design_ref:
-        design_dir = config.get("design_assets.output_dir", ".planning/design-normalized")
+        design_dir = config.get("design_assets.output_dir", ".vg/design-normalized")
         slug = design_ref.group(1).strip()
         design_context = (
             f"Visual reference: {design_dir}/screenshots/{slug}.default.png\n"

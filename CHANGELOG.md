@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.13.0] - 2026-04-19
+
+Major workflow upgrade: adaptive typecheck + generic cache bootstrap + tsgo integration + Utility Contract Layer 2+3 + agent resilience. Hardened via real-run test on RTB apps/web (1157-file TS project) that exposed 807 pre-existing errors previously invisible due to tsc OOM.
+
+### Added (features)
+
+- **Adaptive typecheck strategy** (`_shared/lib/typecheck-light.sh`) — cache-first decision tree: OOM history → narrow; warm → incremental; cold small → incremental direct; cold medium/large → bootstrap first → incremental warm. Auto-selects based on file count + cache presence + OOM history (7-day window). Portable knobs in config: `typecheck_adaptive.{smallThreshold,largeThreshold,heapMB}`.
+- **Generic cache bootstrap** (`vg_typecheck_cache_bootstrap`) — 3 strategies auto-selected by detection chain:
+  1. **tsgo** — if `@typescript/native-preview` on PATH (Rust re-impl, 10-20x faster, 1/5 RAM). Strategy fires first in both adaptive incremental AND bootstrap paths.
+  2. **watch** — spawn `tsc -w` background, poll for `.tsbuildinfo` write every 5s, Windows `_vg_kill_tree` cleanup.
+  3. **chunked** — split tsconfig.include into N-file chunks with auto-fit (÷4 when total ≤ original chunk_size).
+  Portable via `templates/vg/vg.config.template.md` new `typecheck_adaptive:` section.
+- **`/vg:extract-utils` command** — one-shot duplicate helper extraction. Modes: `--scan` (default read-only), `--extract <name>`, `--interactive` (multi-select), `--all`. Reads canonical package from PROJECT.md Shared Utility Contract table, extracts atomically with per-commit rollback on typecheck fail.
+- **Utility Contract System Layer 2+3** — prevents new duplicates:
+  - Layer 2a: `/vg:scope` Round 2 utility classifier (REUSE/EXTEND/NEW)
+  - Layer 2b: `scripts/verify-utility-reuse.py` blueprint gate (BLOCKs if task redeclares contract name)
+  - Layer 3a: executor grep-before-declare rule in `vg-executor-rules.md`
+  - Layer 3b: `scripts/verify-utility-duplication.py` post-wave scan (AST, weighted .ts/.tsx*3, skips handle*/on*/render* prefixes)
+- **Agent resilience M2+M3** — `build-progress.sh` self-register (agents check `.build-progress.json` + self-call start if missing) + stuck-agent detection (>600s in-flight OR >120s critical section).
+- **H3 @deferred test markers** — `scripts/scan-deferred-tests.py` parses `it.skip('TS-XX ...', () => { // @deferred reason })` in 4 variants → appends "Deferred tests" section to GOAL-COVERAGE-MATRIX.md so tests marked deferred don't silently drop goals.
+
+### Fixed (gaps)
+
+- **H1 integrity auto-run post-wave** — `verify-wave-integrity.py` now invoked automatically at build step 0c (previously had to be run manually).
+- **H2 wave override → OVERRIDE-DEBT register** — 6 new call sites log overrides (attribution, integrity, hard-gate, final-unit-suite, regression, missing-summaries). Audit trail for every skip decision.
+- **L1 plan package-scope check** — `scripts/verify-plan-paths.py` greps PLAN for `@scope/name`, cross-refs repo package.json, flags mismatches with nearest-match suggestions.
+- **L2 registration list expansion** — `scripts/verify-commit-attribution.py` REGISTRATION_FILENAMES extended: routes.ts, plugins.ts, schema.ts, types.ts, api.rs, routes.rs, handlers.rs, main.go, main.py.
+- **Cache bootstrap hardening** — caught in real run:
+  - Windows orphan `tsc -w` process (15GB RAM) — `kill $!` hit npx wrapper not grandchild. Fix: `_vg_kill_tree` using `taskkill //F //PID` scanning node.exe >2GB.
+  - Chunked degenerate case: 381 files with chunk=400 = 1 chunk = OOM. Fix: auto-fit `(total + 3) / 4` when total ≤ original chunk_size.
+  - OOM detection gap: rc 134/137 in chunked loop not recognized → never logged. Fix: explicit rc check per chunk, append to `.tsbuildinfo-oom-log`.
+
+### Real-run validation
+
+Battle-tested on RTB apps/web:
+- Before: tsc cold OOM forever at 32GB heap, narrow-mode only saw 10 errors.
+- After: tsgo cold ~2min (48GB peak, writes .tsbuildinfo), **warm 1 second full type check**, exposed 807 real errors (previously invisible tech debt).
+- Zero config change beyond 2 tsconfig lines (remove baseUrl, prefix paths with `./`).
+- Backward compat with tsc 5.9 verified.
+
+### Install hint for VG projects
+
+`npm install -g @typescript/native-preview` — workflow auto-detects via `_vg_cache_detect_tsgo`. Template config lists tsgo as preferred strategy out of the box.
+
 ## [1.12.6] - 2026-04-18
 
 ### Fixed (config audit stop-gap)

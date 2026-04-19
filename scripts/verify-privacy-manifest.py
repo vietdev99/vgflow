@@ -19,7 +19,7 @@ USAGE
       [--ios-plist Info.plist] \
       [--ios-privacy-info PrivacyInfo.xcprivacy] \
       [--android-manifest AndroidManifest.xml] \
-      [--android-data-safety .planning/android-data-safety.yaml] \
+      [--android-data-safety .vg/android-data-safety.yaml] \
       [--lenient] [--json]
 
 EXIT CODES

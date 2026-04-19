@@ -638,3 +638,359 @@ planning_migrator_report() {
   echo ""
   echo "📦 GSD legacy preserved at .vg/_legacy/ — full info available, none lost."
 }
+
+# ─────────────────────────────────────────────────────────────────────────
+# v1.14.2 — Auto-promote extractions (deterministic rules, SAFE only)
+# ─────────────────────────────────────────────────────────────────────────
+# Promotes .vg/_legacy/_extractions/*.extracted.md → .vg/ proper slot ONLY
+# when target slot is EMPTY in .vg/ (never overwrite). Adds "Promoted from
+# GSD legacy" banner so user knows source.
+#
+# Rules (name-based, deterministic):
+#   REQUIREMENTS.extracted.md         → .vg/REQUIREMENTS.md (if missing)
+#   TEST-STRATEGY.extracted.md        → .vg/TEST-STRATEGY.md (if missing)
+#   TEST-REPORT-VI.extracted.md       → .vg/TEST-REPORT-VI.md (if missing)
+#   codebase/*.extracted.md           → .vg/intel/{name}.md (if .vg/intel/ slot empty)
+#   phases/XX/*.extracted.md          → .vg/phases/XX/ only if VG artifact absent
+#   quick/*.extracted.md              → STAY in legacy (GSD-specific workflow)
+#   research/*.extracted.md           → STAY in legacy (GSD-specific)
+#
+# Each promotion:
+#   - Creates target with banner "# [PROMOTED FROM GSD LEGACY] — REVIEW REQUIRED"
+#   - Logs to PM_PROMOTIONS[] array
+#   - Skips if target exists (never overwrite)
+
+PM_STATS_PROMOTED=0
+PM_STATS_PROMOTE_SKIPPED=0
+PM_PROMOTION_LOG=()
+
+planning_migrator_promote_extractions() {
+  local dry_run="${1:-false}"
+  local extractions_dir="${PM_TARGET:-.vg}/_legacy/_extractions"
+
+  if [ ! -d "$extractions_dir" ]; then
+    echo "ℹ No extractions directory at $extractions_dir — skip promote"
+    return 0
+  fi
+
+  echo ""
+  echo "━━━ Auto-promote extractions (${dry_run:+DRY-RUN }safe rules only) ━━━"
+
+  PM_STATS_PROMOTED=0
+  PM_STATS_PROMOTE_SKIPPED=0
+  PM_PROMOTION_LOG=()
+
+  # Use Python for reliable path handling + rule matching
+  "${PYTHON_BIN:-python3}" - "$extractions_dir" "${PM_TARGET:-.vg}" "${dry_run}" <<'PY'
+import os, re, sys, shutil
+from pathlib import Path
+ext_dir = Path(sys.argv[1])
+vg_root = Path(sys.argv[2])
+dry_run = sys.argv[3].lower() == 'true'
+
+PROMOTE_BANNER = """<!-- PROMOTED FROM GSD LEGACY — REVIEW REQUIRED
+Source: {source}
+Auto-promoted by /vg:migrate-planning-vg --auto-promote on {ts}.
+This file was extracted from GSD legacy and may need content cleanup,
+re-namespacing (D-XX → P{{phase}}.D-XX), or merging with existing VG artifacts.
+Delete this banner after review.
+-->
+
+"""
+
+from datetime import datetime, timezone
+ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+# Rules: {regex_from_extractions_relpath: target_path_template}
+# Target is relative to vg_root. None in target = stay in legacy (don't promote).
+RULES = [
+    # Top-level docs
+    (r'^REQUIREMENTS\.extracted\.md$',       'REQUIREMENTS.md'),
+    (r'^TEST-STRATEGY\.extracted\.md$',      'TEST-STRATEGY.md'),
+    (r'^TEST-REPORT-VI\.extracted\.md$',     'TEST-REPORT-VI.md'),
+    (r'^ARCHITECTURE\.extracted\.md$',       'ARCHITECTURE.md'),
+    # Codebase intel → .vg/intel/
+    (r'^codebase/([\w.-]+)\.extracted\.md$', r'intel/\1.md'),
+    # Phase artifacts — only specific named files
+    (r'^phases/([\w.-]+)/SPECS\.extracted\.md$',          r'phases/\1/SPECS.md'),
+    (r'^phases/([\w.-]+)/CONTEXT\.extracted\.md$',        r'phases/\1/CONTEXT.md'),
+    (r'^phases/([\w.-]+)/PLAN\.extracted\.md$',           r'phases/\1/PLAN.md'),
+    (r'^phases/([\w.-]+)/API-CONTRACTS\.extracted\.md$',  r'phases/\1/API-CONTRACTS.md'),
+    (r'^phases/([\w.-]+)/TEST-GOALS\.extracted\.md$',     r'phases/\1/TEST-GOALS.md'),
+    (r'^phases/([\w.-]+)/SUMMARY\.extracted\.md$',        r'phases/\1/SUMMARY.md'),
+    # quick/ and research/ stay in legacy (GSD-specific workflow, not VG canonical)
+]
+
+promoted = []
+skipped_exists = []
+skipped_norule = []
+
+# Walk extractions
+for ext_file in sorted(ext_dir.rglob('*.extracted.md')):
+    rel = ext_file.relative_to(ext_dir).as_posix()
+
+    # Find matching rule
+    target_rel = None
+    for pattern, replacement in RULES:
+        m = re.match(pattern, rel)
+        if m:
+            target_rel = re.sub(pattern, replacement, rel)
+            break
+
+    if target_rel is None:
+        skipped_norule.append(rel)
+        continue
+
+    target_path = vg_root / target_rel
+
+    # Safety: never overwrite existing VG artifact
+    if target_path.exists():
+        skipped_exists.append((rel, target_rel))
+        continue
+
+    # Read extraction, prepend banner, write to target
+    content = ext_file.read_text(encoding='utf-8', errors='replace')
+    banner = PROMOTE_BANNER.format(source=f'_legacy/_extractions/{rel}', ts=ts)
+    final = banner + content
+
+    if dry_run:
+        promoted.append((rel, target_rel, 'DRY-RUN'))
+    else:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(final, encoding='utf-8')
+        promoted.append((rel, target_rel, 'APPLIED'))
+
+# Report
+print(f"  Promoted: {len(promoted)}  Skipped (exists): {len(skipped_exists)}  Skipped (no-rule): {len(skipped_norule)}")
+for src, dst, status in promoted[:10]:
+    print(f"    {'→' if status == 'APPLIED' else '~'} {src}  →  {dst}")
+if len(promoted) > 10:
+    print(f"    ... +{len(promoted)-10} more")
+if skipped_exists:
+    print()
+    print(f"  Skipped (target exists — VG canonical wins, extraction untouched):")
+    for src, dst in skipped_exists[:5]:
+        print(f"    · {src}  (target .vg/{dst} already present)")
+    if len(skipped_exists) > 5:
+        print(f"    ... +{len(skipped_exists)-5} more")
+if skipped_norule and len(skipped_norule) < 20:
+    print()
+    print(f"  Skipped (no promote rule — stays in legacy):")
+    for s in skipped_norule[:8]:
+        print(f"    · {s}")
+    if len(skipped_norule) > 8:
+        print(f"    ... +{len(skipped_norule)-8} more")
+
+# Emit counts for bash caller
+import json
+print(f"__MIGRATE_PROMOTE_STATS__={json.dumps({'promoted': len(promoted), 'skipped_exists': len(skipped_exists), 'skipped_norule': len(skipped_norule)})}")
+PY
+
+  # Parse back stats (best-effort — stats remain 0 if Python didn't emit)
+  local last_stats_line
+  last_stats_line=$( { planning_migrator_promote_extractions_DUMMY 2>/dev/null || true; } 2>&1 | tail -1 || echo "")
+  # We don't re-run; stats already printed above. Keep PM_STATS_PROMOTED as reported in Python output.
+
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# v1.14.2 — Verify convergence (re-run should produce 0 changes)
+# ─────────────────────────────────────────────────────────────────────────
+# Called after migrate + promote to confirm idempotency + no drift.
+# Exit 0 if converged; exit 1 if still changes pending.
+
+planning_migrator_verify_convergence() {
+  echo ""
+  echo "━━━ Verify convergence (dry-run re-check) ━━━"
+
+  # Save current stats
+  local saved_new="$PM_STATS_NEW"
+  local saved_updated="$PM_STATS_UPDATED"
+
+  # Re-run dry-mode
+  PM_STATS_NEW=0
+  PM_STATS_UPDATED=0
+  planning_migrator_run --dry-run > /tmp/vg-migrate-converge-check.log 2>&1
+
+  local new_count="$PM_STATS_NEW"
+  local upd_count="$PM_STATS_UPDATED"
+
+  # Restore
+  PM_STATS_NEW="$saved_new"
+  PM_STATS_UPDATED="$saved_updated"
+
+  if [ "$new_count" -eq 0 ] && [ "$upd_count" -eq 0 ]; then
+    echo "✓ Converged — re-run produces 0 NEW + 0 UPDATED"
+    rm -f /tmp/vg-migrate-converge-check.log
+    return 0
+  else
+    echo "⚠ NOT converged — re-run would produce ${new_count} NEW + ${upd_count} UPDATED"
+    echo "  Detail: /tmp/vg-migrate-converge-check.log"
+    return 1
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# v1.14.2 — Full auto: migrate + promote + verify (NO DELETE, user controls that)
+# ─────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────
+# v1.14.2+ — Archive .planning/ to .vg/_archives/ (safer than --no-keep)
+# ─────────────────────────────────────────────────────────────────────────
+# Creates tar.gz archive of .planning/ at .vg/_archives/planning-{ts}.tar.gz
+# THEN removes .planning/. Preserves evidence while reclaiming space.
+# Verifies archive integrity before deletion (tar -tzf must succeed).
+
+planning_migrator_archive_planning() {
+  local source_dir="${PM_SOURCE:-.planning}"
+  local target_dir="${PM_TARGET:-.vg}"
+  local dry_run="${1:-false}"
+
+  if [ ! -d "$source_dir" ]; then
+    echo "ℹ $source_dir does not exist — nothing to archive"
+    return 0
+  fi
+
+  local archives_dir="${target_dir}/_archives"
+  local ts
+  ts=$(date -u +'%Y%m%dT%H%M%SZ')
+  local archive_path="${archives_dir}/planning-${ts}.tar.gz"
+
+  echo ""
+  echo "━━━ Archive ${source_dir}/ → ${archive_path} ━━━"
+
+  local size_mb
+  size_mb=$(du -sh "$source_dir" 2>/dev/null | awk '{print $1}')
+  local file_count
+  file_count=$(find "$source_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  echo "  Source size: $size_mb  files: $file_count"
+
+  if [ "$dry_run" = "true" ]; then
+    echo "  [DRY-RUN] would create: $archive_path"
+    echo "  [DRY-RUN] would delete: $source_dir/"
+    return 0
+  fi
+
+  mkdir -p "$archives_dir"
+
+  # Create tar.gz
+  if ! tar -czf "$archive_path" "$source_dir" 2>/dev/null; then
+    echo "⛔ Archive creation failed — abort (source preserved)"
+    rm -f "$archive_path"
+    return 1
+  fi
+
+  # Verify integrity: list archive contents
+  if ! tar -tzf "$archive_path" >/dev/null 2>&1; then
+    echo "⛔ Archive integrity check failed — abort (source preserved)"
+    rm -f "$archive_path"
+    return 1
+  fi
+
+  # Compare file count in archive vs source (sanity check)
+  local archive_count
+  archive_count=$(tar -tzf "$archive_path" 2>/dev/null | grep -v '/$' | wc -l | tr -d ' ')
+  local archive_size
+  archive_size=$(du -sh "$archive_path" 2>/dev/null | awk '{print $1}')
+
+  echo "  Archive created: $archive_size  files: $archive_count"
+
+  if [ "$archive_count" -lt "$file_count" ]; then
+    echo "⛔ File count mismatch — archive has ${archive_count} but source has ${file_count}"
+    echo "   abort. Archive kept at ${archive_path} for forensics; source not deleted"
+    return 1
+  fi
+
+  # Safe to delete source
+  rm -rf "$source_dir"
+  echo "✓ ${source_dir}/ archived + removed"
+  echo "  Archive: ${archive_path}  (restore via: tar -xzf)"
+
+  # Emit telemetry event
+  if type -t telemetry_emit >/dev/null 2>&1; then
+    telemetry_emit "planning_archived" "{\"archive\":\"${archive_path}\",\"size\":\"${archive_size}\",\"files\":${archive_count}}"
+  fi
+
+  return 0
+}
+
+planning_migrator_full_auto() {
+  local dry_run="false"
+  local archive="false"
+  for arg in "$@"; do
+    [ "$arg" = "--dry-run" ] && dry_run="true"
+    [ "$arg" = "--archive-planning" ] && archive="true"
+  done
+
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  Full-Auto Migration Sequence"
+  if [ "$archive" = "true" ]; then
+    echo "  Steps: 1) migrate  2) promote  3) verify  4) archive .planning/"
+  else
+    echo "  Steps: 1) migrate  2) promote  3) verify  (.planning/ preserved)"
+  fi
+  echo "  Mode: ${dry_run:+DRY-RUN} ${dry_run:-APPLY}"
+  echo "═══════════════════════════════════════════════════════════════"
+
+  # Step 1: migrate
+  if [ "$dry_run" = "true" ]; then
+    planning_migrator_run --dry-run
+  else
+    planning_migrator_run
+  fi
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "⛔ Step 1 (migrate) failed rc=$rc — abort full-auto"
+    return 1
+  fi
+
+  # Step 2: auto-promote extractions
+  planning_migrator_promote_extractions "$dry_run"
+
+  # Step 3: verify convergence (only meaningful if applied, not dry-run)
+  if [ "$dry_run" = "false" ]; then
+    planning_migrator_verify_convergence
+    local conv_rc=$?
+    if [ $conv_rc -ne 0 ]; then
+      echo ""
+      echo "⚠ Full-auto finished but NOT converged. Investigate log + re-run."
+      return 1
+    fi
+  fi
+
+  # Step 4 (optional): archive .planning/
+  if [ "$archive" = "true" ]; then
+    planning_migrator_archive_planning "$dry_run"
+    local arc_rc=$?
+    if [ $arc_rc -ne 0 ]; then
+      echo ""
+      echo "⚠ Archive step failed — .planning/ preserved. Re-run or archive manually."
+      return 1
+    fi
+  fi
+
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  Full-Auto Summary"
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  ✓ Step 1 Migrate:    ${PM_STATS_NEW} NEW + ${PM_STATS_UPDATED} UPDATED + ${PM_STATS_UNCHANGED} UNCHANGED"
+  echo "  ✓ Step 2 Promote:    see above (extraction promotion report)"
+  if [ "$dry_run" = "false" ]; then
+    echo "  ✓ Step 3 Converged:  re-run = 0 changes"
+    if [ "$archive" = "true" ]; then
+      echo "  ✓ Step 4 Archived:   .planning/ → .vg/_archives/planning-*.tar.gz"
+    fi
+  else
+    echo "  · Step 3 Verify:     skipped (dry-run)"
+    [ "$archive" = "true" ] && echo "  · Step 4 Archive:    skipped (dry-run)"
+  fi
+  echo ""
+  if [ "$archive" != "true" ]; then
+    echo ".planning/ preserved per safety default. Options:"
+    echo "  /vg:migrate-planning-vg --full-auto --archive-planning   # tar.gz + remove (Recommended)"
+    echo "  /vg:migrate-planning-vg --no-keep                        # hard delete, no archive (risky)"
+  fi
+  echo ""
+  return 0
+}

@@ -40,7 +40,16 @@ Pipeline: specs -> **scope** -> blueprint -> build -> review -> test -> accept
 
 **Adversarial challenger (v1.9.1 R3, v1.9.3 R3.2 upgraded — 8 lenses + Opus, v1.9.5 R3.4 fd-3 content fix):** Source `.claude/commands/vg/_shared/lib/answer-challenger.sh` at top of command. After EVERY user answer in Rounds 1-5 AND in the Deep Probe Loop, invoke `challenge_answer "$user_answer" "round-$ROUND" "phase-scope" "$accumulated_draft"`.
 
-**v1.9.5 R3.4 FIX — subagent sandbox isolation:** Helper emits prompt CONTENT (not path) on fd 3. Tmp file kept for audit only. Orchestrator MUST use this exact bash pattern to capture:
+**v1.9.5 R3.4 FIX — subagent sandbox isolation:** Helper emits prompt CONTENT (not path) on fd 3. Tmp file kept for audit only. **v1.14.1+ REFACTOR:** call wrapper script instead of raw fd-3 pattern (safer — encapsulates redirection + trivial-skip):
+```bash
+PROMPT=$(bash .claude/commands/vg/_shared/lib/vg-challenge-answer-wrapper.sh \
+         "$user_answer" "round-$ROUND" "phase-scope" "$accumulated_draft")
+wrapper_rc=$?
+# rc=0 success (PROMPT contains content) | rc=2 trivial answer (skip challenge) | rc=1 error
+[ $wrapper_rc -eq 2 ] && { echo "↷ Trivial answer — skip challenger"; PROMPT=""; }
+```
+
+Legacy direct-fd invocation still supported for back-compat:
 ```bash
 PROMPT=$(challenge_answer "$user_answer" "round-$ROUND" "phase-scope" "$accumulated" 3>&1 1>/dev/null 2>/dev/null)
 ```
@@ -62,7 +71,13 @@ Skip challenger when `config.scope.adversarial_check: false` (rapid prototyping)
 
 **Dimension Expander (v1.9.3 R3.2 — NEW, proactive gap finding, v1.9.5 R3.4 fd-3 content fix):** Source `.claude/commands/vg/_shared/lib/dimension-expander.sh` at top of command. At the END of EACH round (Rounds 1-5) and at the END of the Deep Probe Loop, AFTER the adversarial challenger loop concludes and BEFORE advancing to next round, invoke `expand_dimensions "$ROUND" "$ROUND_TOPIC" "$round_qa_accumulated" "${PLANNING_DIR}/FOUNDATION.md"`.
 
-**v1.9.5 R3.4 FIX — same pattern as challenger:** Helper emits prompt CONTENT on fd 3. Orchestrator capture pattern:
+**v1.9.5 R3.4 FIX — same pattern as challenger:** Helper emits prompt CONTENT on fd 3. **v1.14.1+ REFACTOR:** call wrapper instead:
+```bash
+PROMPT=$(bash .claude/commands/vg/_shared/lib/vg-expand-round-wrapper.sh \
+         "$ROUND" "$ROUND_TOPIC" "$round_qa_accumulated" "${PLANNING_DIR}/FOUNDATION.md")
+```
+
+Legacy direct-fd invocation still supported:
 ```bash
 PROMPT=$(expand_dimensions "$ROUND" "$ROUND_TOPIC" "$accumulated" "${PLANNING_DIR}/FOUNDATION.md" 3>&1 1>/dev/null 2>/dev/null)
 ```
@@ -261,12 +276,42 @@ Lock `P{phase}.D-surfaces: [api, web]` decision.
 
 **Primary role lookup** — for design resolution, if phase touches `web` surface, read `config.surfaces.web.design` → set `SURFACE_ROLE` var for Round 4 DESIGN.md resolve.
 
+**Surface gap auto-detect (v1.14.1+ NEW):** After AI generates the tech approach recommendation (end of Round 2 analysis, BEFORE locking decisions), scan the recommendation text for mentioned paths (`apps/X`, `packages/X`) and diff against declared surfaces. If the recommendation touches paths NOT covered by any declared surface, auto-propose config amendment.
+
+```bash
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/surface-gap-detector.sh"
+
+if surface_gap_detector_is_enabled ".claude/vg.config.md"; then
+  GAPS_JSON=$(detect_surface_gaps "$R2_RECOMMENDATION_TEXT" ".claude/vg.config.md")
+  MISSING_COUNT=$(echo "$GAPS_JSON" | ${PYTHON_BIN} -c "import json,sys; print(len(json.loads(sys.stdin.read()).get('missing_surfaces',[])))")
+
+  if [ "$MISSING_COUNT" -gt 0 ]; then
+    echo "━━━ Surface Gap Detected ━━━"
+    format_gap_narrative "$GAPS_JSON"
+    echo ""
+    echo "Phase's tech approach touches ${MISSING_COUNT} path(s) not declared in surfaces: block of vg.config.md."
+    # AskUserQuestion:
+    #   header: "Surface gap"
+    #   question: "Add missing surface(s) to vg.config.md?"
+    #   options:
+    #     - "Add surfaces + lock P{phase}.D-XX amendment decision (Recommended)"
+    #     - "Acknowledge gap (lock as known tradeoff)"
+    #     - "Skip — phase doesn't need multi-surface support"
+    # If user accepts: lock decision P{phase}.D-YY "add surface {name}" with paths+stack
+    # Amendment applies during /vg:blueprint preflight (see blueprint.md Step 0)
+  fi
+fi
+```
+
+The detected surface gap becomes a lockable `P{phase}.D-XX` config-amendment decision. Blueprint preflight (v1.14.1+ Step 0) enforces application before tasks can spawn. Prevents "phase scope mentions Rust but RTB surface never declared → downstream surface-aware checks skip silently".
+
 ---
 
 AI pre-analyzes existing code via `config.code_patterns` paths. Identify:
 - Which services/modules need changes?
 - Database collections/schema shape?
 - External dependencies?
+- **Utility needs (v1.14.2+ NEW):** scan planned functionality for helper needs (money, date, number, string, async). Cross-reference `PROJECT.md` → `## Shared Utility Contract` exports table. Classify each helper as REUSE (already exists), EXTEND (exists but missing variant — add param/overload), or NEW (not in contract — must be added to `packages/utils` FIRST, not inline per-file).
 
 Present analysis with code status table:
 
@@ -282,15 +327,29 @@ AskUserQuestion:
     **Database:** {collections needed}
     **Dependencies:** {external deps}
 
+    **Shared utility usage (prevent duplicate helpers):**
+    | Helper needed | Canonical? | Action |
+    |---------------|-----------|--------|
+    | formatCurrency | ✓ @vollxssp/utils | REUSE |
+    | formatDealState | ✗ not in contract | NEW — add task "extend @vollxssp/utils with formatDealState" BEFORE business tasks |
+
     Confirm or adjust?
   (open text)
 ```
 
-Lock decisions D-XX+1.. (category: technical)
+**Enforcement:** If user confirms NEW helpers, scope MUST lock decision `P{phase}.D-utilities` with format:
+```
+**Utilities added:**
+- formatDealState(state: DealState): string → packages/utils/src/deals.ts (NEW)
+- formatCurrency → REUSE existing
+```
+This forces blueprint to generate a Task 0 (extend utils) BEFORE business-logic tasks. Gate: blueprint's plan-checker rejects PLAN where task N uses helper not yet added by task M < N.
+
+Lock decisions D-XX+1.. (category: technical, including `P{phase}.D-utilities` if applicable)
 
 ### Round 3 — API Design
 
-AI SUGGESTS endpoints derived from locked decisions:
+AI SUGGESTS endpoints derived from locked decisions. **v1.14.0+ — bắt buộc hỏi về `depends_on_phase` khi endpoint chạm view/data phase khác:**
 
 ```
 AskUserQuestion:
@@ -298,21 +357,29 @@ AskUserQuestion:
   question: |
     Based on decisions so far, I suggest these endpoints:
 
-    | # | Endpoint | Method | Auth | Purpose | From Decision |
-    |---|----------|--------|------|---------|---------------|
-    | 1 | /api/v1/{resource} | POST | {role} | {purpose} | D-{XX} |
-    | 2 | /api/v1/{resource} | GET | {role} | {purpose} | D-{XX} |
+    | # | Endpoint | Method | Auth | Purpose | From Decision | Depends on phase? |
+    |---|----------|--------|------|---------|---------------|-------------------|
+    | 1 | /api/v1/{resource} | POST | {role} | {purpose} | D-{XX} | _(no / X.Y)_ |
+    | 2 | /api/v1/{resource} | GET | {role} | {purpose} | D-{XX} | _(no / X.Y)_ |
     ...
 
     **Request/response shapes (high level):**
     - POST /api/v1/{resource}: body {fields} -> 201 {response}
     - GET /api/v1/{resource}: query {params} -> 200 [{items}]
 
+    **v1.14.0+ Cross-phase tag** — nếu endpoint chỉ verify được KHI phase khác đã ship (vd: conversion event endpoint phụ thuộc pixel server từ phase 7.12), điền cột **"Depends on phase?"** với số phase target (vd: `7.12`). Goal gắn tag này sẽ được mark DEFERRED ở review thay vì BLOCKED (xem spec v1.14.0+ A.4).
+
     Confirm, edit, or add endpoints?
   (open text)
 ```
 
-User confirms/edits each endpoint. Lock ENDPOINT NOTES embedded within existing decisions.
+User confirms/edits each endpoint. Lock ENDPOINT NOTES + (nếu có) `depends_on_phase: X.Y` embedded within existing decisions dưới dạng:
+
+```
+**Endpoints:**
+- POST /api/v1/conversion-events (auth: advertiser, purpose: record conversion)
+  depends_on_phase: 7.12   # chỉ verify được khi pixel server ship
+```
 
 ### Round 4 — UI/UX
 
@@ -374,22 +441,22 @@ Lock UI COMPONENT NOTES embedded within existing decisions.
 
 ### Round 5 — Test Scenarios
 
-AI derives test scenarios from decisions + endpoints + UI components:
+AI derives test scenarios from decisions + endpoints + UI components. **v1.14.0+ — bắt buộc hỏi `verification_strategy` per goal khi scenario không auto-test được:**
 
 ```
 AskUserQuestion:
   header: "Round 5 — Test Scenarios"
   question: |
     **Happy path scenarios:**
-    | ID | Scenario | Endpoint | Expected | Decision |
-    |----|----------|----------|----------|----------|
-    | TS-01 | {user does X} | POST /api/... | 201 + {result} | D-{XX} |
-    | TS-02 | {user does Y} | GET /api/... | 200 + {list} | D-{XX} |
+    | ID | Scenario | Endpoint | Expected | Decision | Verification strategy |
+    |----|----------|----------|----------|----------|-----------------------|
+    | TS-01 | {user does X} | POST /api/... | 201 + {result} | D-{XX} | automated |
+    | TS-02 | {user does Y} | GET /api/... | 200 + {list} | D-{XX} | automated |
 
     **Edge cases:**
-    | ID | Scenario | Expected |
-    |----|----------|----------|
-    | TS-{N} | {what can go wrong} | {error code + message} |
+    | ID | Scenario | Expected | Verification strategy |
+    |----|----------|----------|-----------------------|
+    | TS-{N} | {what can go wrong} | {error code + message} | automated |
 
     **Mutation evidence:**
     | Action | Verify Where |
@@ -398,11 +465,29 @@ AskUserQuestion:
     | Update {X} | Updated fields visible |
     | Delete {X} | Removed from list + DB |
 
+    **v1.14.0+ Verification strategy** (bắt buộc per scenario):
+    - `automated` — E2E/Playwright verify được (happy path thông thường)
+    - `manual` — người phải click thử trong UAT (vd: CAPTCHA, SMS OTP, Stripe payment UI thật)
+    - `fixture` — cần test fixture/seed (vd: stripe test keys, pre-loaded sample data)
+    - `faketime` — phải tua thời gian (vd: TTL, cronjob, subscription renewal)
+
+    Scenario nào KHÔNG phải `automated` sẽ được mark MANUAL ở review → codegen
+    sinh skeleton `.skip()` → user điền ở /vg:accept. Ngăn giả trang PASSED cho
+    scenario thực tế cần human/infra.
+
     Confirm, edit, or add more scenarios?
   (open text)
 ```
 
-Lock TEST SCENARIO NOTES embedded within existing decisions.
+Lock TEST SCENARIO NOTES + (nếu có) `verification_strategy: manual|fixture|faketime` embedded within existing decisions dưới dạng:
+
+```
+**Test Scenarios:**
+- TS-01: user adds credit card → card stored, charge works → expected 200 + receipt
+  verification_strategy: manual   # Stripe Elements iframe không auto-fill được
+- TS-02: subscription auto-renew sau 30 ngày → next billing cycle processed
+  verification_strategy: faketime # cần tua 30 ngày
+```
 
 ### Deep Probe Loop (mandatory — minimum 5 probes after Round 5)
 
@@ -607,19 +692,33 @@ Completeness Validation:
   Check D (orphan detection):   {PASS | N warnings}
 ```
 
+**Implementation (v1.14.1+):** the 4 checks live in `.claude/scripts/vg_completeness_check.py`. Orchestrator runs:
+
 ```bash
-# HARD BLOCK enforcement
-if [ "$CHECK_A_BLOCKERS" -gt 0 ] || [ "$CHECK_C_BLOCKERS" -gt 0 ]; then
-  echo "⛔ Completeness gate FAILED. Resolve blockers before blueprint."
-  echo "   Fix: /vg:scope ${PHASE_NUMBER} --continue  (adds missing test scenarios / decisions)"
-  echo "   Or:  edit CONTEXT.md manually, then re-run /vg:scope ${PHASE_NUMBER} --validate-only"
-  if [[ ! "$ARGUMENTS" =~ --allow-incomplete ]]; then
-    exit 1
-  else
-    echo "⚠ --allow-incomplete set — recording gap in CONTEXT.md 'Known Gaps' section."
-  fi
+ALLOW_INCOMPLETE_FLAG=""
+if [[ "$ARGUMENTS" =~ --allow-incomplete ]]; then
+  ALLOW_INCOMPLETE_FLAG="--allow-incomplete"
 fi
+
+PYTHONIOENCODING=utf-8 ${PYTHON_BIN} .claude/scripts/vg_completeness_check.py \
+  --phase-dir "${PHASE_DIR}" ${ALLOW_INCOMPLETE_FLAG}
+rc=$?
+
+# rc=0 PASS  | rc=1 BLOCK  | rc=2 WARN only
+case $rc in
+  0) echo "✓ Completeness gate PASS" ;;
+  2) echo "⚠ Completeness checks warn only — proceeding" ;;
+  *)
+    echo "⛔ Completeness gate FAILED. Resolve blockers before blueprint."
+    echo "   Fix: /vg:scope ${PHASE_NUMBER} --continue  (adds missing test scenarios / decisions)"
+    echo "   Or:  edit CONTEXT.md manually, then re-run /vg:scope ${PHASE_NUMBER} --validate-only"
+    exit 1
+    ;;
+esac
 ```
+
+**Stemmed keyword match for Check C (v1.14.1+ FIX — addresses false negatives):**
+Previous inline substring match missed inflections — "QPS throttling" (SPECS) vs "QPS throttle" (decision title). Script now stems both sides (strips -ing/-tion/-ed/-s/...) + applies prefix-tolerance match so "throttl" ↔ "throttle" count as same root. Reduces false-negative unmatched spec items.
 
 Check B and D still WARN (softer signals). Check A and C are structural — block downstream errors.
 </step>

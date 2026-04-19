@@ -13,7 +13,7 @@ unit gate can all pass even if tests never reference the goal.
 
 Usage:
   python verify-goal-test-binding.py \
-      --phase-dir .planning/phases/07.12-conversion-tracking-pixel \
+      --phase-dir .vg/phases/07.12-conversion-tracking-pixel \
       --wave-tag  vg-build-7.12-wave-2-start \
       --wave-number 2 \
       [--strict|--lenient] [--json]

@@ -11,7 +11,7 @@ Scans all phase dirs with UAT.md (accepted phases). For each:
 Outputs baselines.json consumed by regression-compare.py.
 
 USAGE
-  python3 regression-collect.py --phases-dir .planning/phases [--phase X] [--output FILE]
+  python3 regression-collect.py --phases-dir .vg/phases [--phase X] [--output FILE]
 
 EXIT CODES
   0 ok
@@ -207,7 +207,7 @@ def main():
     ap = argparse.ArgumentParser(description="Collect regression baselines")
     ap.add_argument("--phases-dir", required=True, type=Path)
     ap.add_argument("--phase", help="Single phase filter (e.g., 7.3)")
-    ap.add_argument("--output", default=".planning/regression-baselines.json")
+    ap.add_argument("--output", default=".vg/regression-baselines.json")
     ap.add_argument("--repo-root", type=Path, default=None)
     args = ap.parse_args()
 

@@ -9,7 +9,7 @@ block. Unjustified permissions = likely store rejection risk.
 
 USAGE
   python verify-mobile-permissions.py \
-      --phase-dir .planning/phases/07-onboarding \
+      --phase-dir .vg/phases/07-onboarding \
       [--ios-plist ios/App/Info.plist] \
       [--android-manifest android/app/src/main/AndroidManifest.xml] \
       [--expo-config app.json] \

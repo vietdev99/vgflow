@@ -1035,11 +1035,102 @@ p.write_text(json.dumps(s, indent=2))
 if [ -f "${PLANNING_DIR}/ROADMAP.md" ]; then
   sed -i "s/\*\*Status:\*\* .*/\*\*Status:\*\* complete/" "${PLANNING_DIR}/ROADMAP.md" 2>/dev/null || true
 fi
+
+# v1.14.0+ A.4 — flip CROSS-PHASE-DEPS rows chờ phase này
+# Khi phase X được accept → mọi row `Depends On == X` chưa flip sẽ được đánh dấu Flipped At = now
+# Script cũng gợi ý /vg:review {source} --reverify-deferred cho các phase bị ảnh hưởng
+CPD_SCRIPT="${REPO_ROOT:-.}/.claude/scripts/vg_cross_phase_deps.py"
+if [ -f "$CPD_SCRIPT" ]; then
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN} "$CPD_SCRIPT" flip "$PHASE_NUMBER" 2>&1 | sed 's/^/  /' || true
+fi
+
+# v1.14.0+ C.3 — DEPLOY-RUNBOOK lifecycle
+# Flow: auto-draft (nếu có .deploy-log.txt) → prompt user fill section 5
+# (skip nếu offline → PENDING-LESSONS-REVIEW) → promote staged → aggregator refresh
+RUNBOOK_DRAFTER="${REPO_ROOT:-.}/.claude/scripts/vg_deploy_runbook_drafter.py"
+RUNBOOK_AGGREGATOR="${REPO_ROOT:-.}/.claude/scripts/vg_deploy_aggregator.py"
+DEPLOY_LOG="${PHASE_DIR}/.deploy-log.txt"
+RUNBOOK_STAGED="${PHASE_DIR}/DEPLOY-RUNBOOK.md.staged"
+RUNBOOK_CANONICAL="${PHASE_DIR}/DEPLOY-RUNBOOK.md"
+
+if [ -f "$RUNBOOK_DRAFTER" ] && { [ -f "$DEPLOY_LOG" ] || [ -f "$RUNBOOK_STAGED" ] || [ -f "$RUNBOOK_CANONICAL" ]; }; then
+  # Luôn re-draft staged từ log mới nhất (idempotent)
+  if [ -f "$DEPLOY_LOG" ]; then
+    echo ""
+    echo "━━━ Sổ tay triển khai (DEPLOY-RUNBOOK) ━━━"
+    PYTHONIOENCODING=utf-8 ${PYTHON_BIN} "$RUNBOOK_DRAFTER" "$PHASE_DIR" 2>&1 | sed 's/^/  /'
+  fi
+
+  # Promote staged → canonical (if exists)
+  if [ -f "$RUNBOOK_STAGED" ]; then
+    # Keep canonical content nếu user đã edit section 5 (human-filled)
+    # Heuristic: nếu canonical EXISTS và có dấu "LESSONS_USER_INPUT_PENDING" → overwrite;
+    # else preserve (user đã fill, merge sẽ phức tạp — giữ nguyên canonical)
+    if [ -f "$RUNBOOK_CANONICAL" ] && ! grep -q "LESSONS_USER_INPUT_PENDING" "$RUNBOOK_CANONICAL" 2>/dev/null; then
+      echo "  ℹ Canonical RUNBOOK có section 5 filled — giữ nguyên, staged bỏ."
+      rm -f "$RUNBOOK_STAGED"
+    else
+      mv -f "$RUNBOOK_STAGED" "$RUNBOOK_CANONICAL"
+      echo "  ✓ Promoted: DEPLOY-RUNBOOK.md.staged → DEPLOY-RUNBOOK.md"
+    fi
+  fi
+
+  # Check pending lessons — add to queue nếu chưa fill
+  if [ -f "$RUNBOOK_CANONICAL" ] && grep -q "LESSONS_USER_INPUT_PENDING" "$RUNBOOK_CANONICAL" 2>/dev/null; then
+    mkdir -p .vg
+    PENDING_LESSONS=".vg/PENDING-LESSONS-REVIEW.md"
+    PHASE_PENDING_LINE="| ${PHASE_NUMBER} | ${PHASE_DIR}/DEPLOY-RUNBOOK.md | $(date -u +%FT%TZ) |"
+
+    if [ ! -f "$PENDING_LESSONS" ]; then
+      cat > "$PENDING_LESSONS" <<'EOT'
+# Pending Lessons Review — hàng đợi RUNBOOK chờ điền section 5
+
+Mỗi row = 1 phase đã accept nhưng section 5 (Lessons) còn marker
+`<!-- LESSONS_USER_INPUT_PENDING -->`. User điền khi online, xoá
+marker để de-queue.
+
+| Phase | RUNBOOK Path | Accepted At |
+|---|---|---|
+EOT
+    fi
+
+    # Idempotent: chỉ append nếu phase chưa có row
+    if ! grep -q "^| ${PHASE_NUMBER} " "$PENDING_LESSONS" 2>/dev/null; then
+      echo "$PHASE_PENDING_LINE" >> "$PENDING_LESSONS"
+      echo "  ⏳ Section 5 (Lessons) chưa fill — queued vào .vg/PENDING-LESSONS-REVIEW.md"
+      echo "     Mở DEPLOY-RUNBOOK.md, điền phần 'User-filled', xoá marker để de-queue."
+    fi
+  fi
+
+  # Aggregator refresh (6 outputs project-wide)
+  if [ -f "$RUNBOOK_AGGREGATOR" ]; then
+    echo ""
+    echo "━━━ Làm mới Bộ tổng hợp (aggregators) ━━━"
+    PYTHONIOENCODING=utf-8 ${PYTHON_BIN} "$RUNBOOK_AGGREGATOR" 2>&1 | sed 's/^/  /' || true
+  fi
+else
+  echo "ℹ Phase ${PHASE_NUMBER} không có `.deploy-log.txt` — skip RUNBOOK flow."
+  echo "   (Phase này không chạy qua --sandbox mode với deploy-logging bật.)"
+fi
 ```
 
-**Commit UAT.md**:
+**Commit UAT.md + RUNBOOK + cross-phase artifacts**:
 ```bash
+# Base artifacts
 git add "${PHASE_DIR}/${PHASE_NUMBER}-UAT.md" "${PHASE_DIR}/.step-markers/accept.done"
+
+# v1.14.0+ C.3 — RUNBOOK canonical (nếu đã promoted)
+[ -f "${PHASE_DIR}/DEPLOY-RUNBOOK.md" ] && git add "${PHASE_DIR}/DEPLOY-RUNBOOK.md"
+
+# v1.14.0+ A.4 + C.4 — project-wide aggregators có thể đã update
+for f in .vg/CROSS-PHASE-DEPS.md \
+         .vg/DEPLOY-LESSONS.md .vg/ENV-CATALOG.md \
+         .vg/DEPLOY-FAILURE-REGISTER.md .vg/DEPLOY-RECIPES.md \
+         .vg/DEPLOY-PERF-BASELINE.md .vg/SMOKE-PACK.md \
+         .vg/PENDING-LESSONS-REVIEW.md; do
+  [ -f "$f" ] && git add "$f"
+done
+
 git commit -m "docs(${PHASE_NUMBER}-accept): UAT accepted — {N_passed}/{N_total} items pass
 
 Covers goal: accept phase ${PHASE_NUMBER}"
@@ -1049,7 +1140,10 @@ Display:
 ```
 Phase {PHASE_NUMBER} ACCEPTED ✓
 Artifacts preserved: SPECS, CONTEXT, PLAN, API-CONTRACTS, TEST-GOALS, SUMMARY,
-                     RUNTIME-MAP, GOAL-COVERAGE-MATRIX, SANDBOX-TEST, RIPPLE-ANALYSIS, UAT
+                     RUNTIME-MAP, GOAL-COVERAGE-MATRIX, SANDBOX-TEST, RIPPLE-ANALYSIS, UAT,
+                     DEPLOY-RUNBOOK (v1.14.0+)
+Updated aggregators (v1.14.0+): CROSS-PHASE-DEPS, DEPLOY-LESSONS, ENV-CATALOG,
+                     DEPLOY-FAILURE-REGISTER, DEPLOY-RECIPES, DEPLOY-PERF-BASELINE, SMOKE-PACK
 Cleaned: scan-*.json, probe-*.json, .wave-context, discovery intermediates
 State: GSD roadmap updated (if installed)
 ▶ /vg:next

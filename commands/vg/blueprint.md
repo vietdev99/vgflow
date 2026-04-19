@@ -45,6 +45,50 @@ Sub-steps:
 
 **Config:** Read .claude/commands/vg/_shared/config-loader.md first.
 
+<step name="0_amendment_preflight">
+## Step 0: Scope Amendment Preflight (v1.14.1+ NEW)
+
+Before planning, enforce any `config_amendments_needed` locked during /vg:scope (e.g. new surfaces proposed in Round 2 via surface-gap detector). Running blueprint with stale config → tasks spawn against wrong surface paths → silent failure downstream.
+
+```bash
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/amendment-preflight.sh"
+
+# Mode from flag
+AMEND_MODE="block"   # default
+if [[ "$ARGUMENTS" =~ --apply-amendments ]]; then
+  AMEND_MODE="apply"
+elif [[ "$ARGUMENTS" =~ --skip-amendment-check ]]; then
+  AMEND_MODE="warn"
+fi
+
+amendment_block_if_pending "${PHASE_DIR}" ".claude/vg.config.md" "$AMEND_MODE"
+preflight_rc=$?
+
+if [ $preflight_rc -ne 0 ]; then
+  echo ""
+  echo "Retry options:"
+  echo "  /vg:blueprint ${PHASE_NUMBER} --apply-amendments     # auto-apply to config"
+  echo "  /vg:blueprint ${PHASE_NUMBER} --skip-amendment-check # debt mode"
+  exit 1
+fi
+
+# If amendments were applied, commit the config change before proceeding
+if [ "$AMEND_MODE" = "apply" ]; then
+  if ! git diff --quiet .claude/vg.config.md 2>/dev/null; then
+    git add .claude/vg.config.md
+    git commit -m "config(${PHASE_NUMBER}): apply scope amendments
+
+Auto-applied via /vg:blueprint ${PHASE_NUMBER} --apply-amendments.
+See PHASE_DIR/CONTEXT.md scope decisions for rationale."
+  fi
+fi
+```
+
+Scanner is authoritative: reads `PIPELINE-STATE.steps.scope.config_amendments_needed[]` array (populated by `/vg:scope` step 5). Enrichment pulls surface name + paths + stack from decision YAML snippet in CONTEXT.md. Generic (non-surface) amendments require manual edit — preflight blocks, user edits, re-runs.
+
+**Rationale:** surfaces config drives multi-surface gate, design-system lookup, multi-platform E2E routing. Missing surface → silent workflow misalignment. Forcing apply before tasks spawn ensures planner + executor see correct config.
+</step>
+
 <step name="1_parse_args">
 Extract from `$ARGUMENTS`: phase_number (required), plus optional flags:
 - `--skip-research`, `--gaps`, `--reviews`, `--text` — pass through to GSD planner
@@ -293,7 +337,148 @@ are Claude TOOL CALLS, not bash commands. Invoke directly via tool use after the
 bash block computes the variable inputs (CONTEXT endpoint list, CONTEXT file path list).
 DO NOT shell-out to graphify CLI — MCP tool round-trip is the supported path.
 
-Spawn planner agent with VG-specific rules + graphify brief:
+**v1.14.0+ C.5 — deploy_lessons injection** (silent, NO AskUserQuestion):
+
+Trước khi spawn planner, extract lessons + env vars liên quan services mà phase này tác động, tiêm vào prompt planner dưới `<deploy_lessons>` block. Planner MUST reference khi đề cập ORG dimensions 3 (Deploy) + 4 (Smoke) + 6 (Rollback).
+
+```bash
+DEPLOY_LESSONS_BRIEF="${PHASE_DIR}/.deploy-lessons-brief.md"
+DEPLOY_LESSONS_FILE=".vg/DEPLOY-LESSONS.md"
+ENV_CATALOG_FILE=".vg/ENV-CATALOG.md"
+
+if [ -f "$DEPLOY_LESSONS_FILE" ] || [ -f "$ENV_CATALOG_FILE" ]; then
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - "$PHASE_DIR" "$DEPLOY_LESSONS_FILE" "$ENV_CATALOG_FILE" "$DEPLOY_LESSONS_BRIEF" <<'PY'
+import re, sys
+from pathlib import Path
+
+phase_dir = Path(sys.argv[1])
+lessons_file = Path(sys.argv[2])
+env_file = Path(sys.argv[3])
+brief_out = Path(sys.argv[4])
+
+# 1. Infer services phase này touches (same heuristic aggregator)
+service_hints = [
+    ("apps/api",        [r"\bapi\b", r"fastify", r"modules?/", r"REST\s+API"]),
+    ("apps/web",        [r"\bweb\b", r"\bdashboard\b", r"\bpage\b", r"\bReact\b", r"\bFE\b", r"\badvertiser\b", r"\bpublisher\b", r"\badmin\b"]),
+    ("apps/rtb-engine", [r"\brtb[_-]?engine\b", r"\baxum\b", r"\bbid\s+request\b", r"\bauction\b"]),
+    ("apps/workers",    [r"\bworkers?\b", r"\bconsumer\b", r"\bkafka\s+consumer\b", r"\bcron\b"]),
+    ("apps/pixel",      [r"\bpixel\b", r"\bpostback\b", r"\btracking\b"]),
+    ("infra/clickhouse",[r"\bclickhouse\b", r"\bOLAP\b", r"\banalytic\b"]),
+    ("infra/mongodb",   [r"\bmongo(?:db)?\b", r"\bcollection\b"]),
+    ("infra/kafka",     [r"\bkafka\b", r"\btopic\b", r"\bpartition\b"]),
+    ("infra/redis",     [r"\bredis\b", r"\bcache\b"]),
+]
+services_touched = set()
+for fname in ("SPECS.md", "CONTEXT.md"):
+    f = phase_dir / fname
+    if not f.exists():
+        continue
+    text = f.read_text(encoding="utf-8", errors="ignore").lower()
+    for svc, pats in service_hints:
+        for pat in pats:
+            if re.search(pat, text, re.I):
+                services_touched.add(svc)
+                break
+
+# Also infer from phase name
+name_lower = phase_dir.name.lower()
+for svc, pats in service_hints:
+    for pat in pats:
+        if re.search(pat, name_lower, re.I):
+            services_touched.add(svc)
+            break
+
+# 2. Extract relevant lessons from DEPLOY-LESSONS View A (by service)
+lessons_by_service = {}
+if lessons_file.exists():
+    text = lessons_file.read_text(encoding="utf-8", errors="ignore")
+    # Parse View A: `### {service}` followed by `- **Phase X:** lesson`
+    current_svc = None
+    for line in text.splitlines():
+        svc_m = re.match(r"^### ((?:apps|infra)/\S+)\s*$", line)
+        if svc_m:
+            current_svc = svc_m.group(1)
+            lessons_by_service.setdefault(current_svc, [])
+            continue
+        # Stop at View B
+        if line.startswith("## View B"):
+            break
+        if current_svc:
+            bullet = re.match(r"^-\s+\*\*Phase ([\d.]+):\*\*\s+(.+)$", line)
+            if bullet:
+                lessons_by_service[current_svc].append((bullet.group(1), bullet.group(2)))
+
+# 3. Extract env vars touched services from ENV-CATALOG
+relevant_env = []
+if env_file.exists():
+    text = env_file.read_text(encoding="utf-8", errors="ignore")
+    for line in text.splitlines():
+        m = re.match(r"^\|\s*`(\w+)`\s*\|\s*([\d.]+)\s*\|\s*([^|]+)\s*\|", line)
+        if not m:
+            continue
+        name, phase_added, service_list = m.groups()
+        service_list = service_list.strip()
+        # Match any service token trong cột Service với services_touched
+        svc_tokens = re.split(r",\s*", service_list)
+        if any(t.strip() in services_touched for t in svc_tokens):
+            relevant_env.append((name, phase_added, service_list))
+
+# 4. Write brief
+out = ["# Deploy Lessons Brief — Phase-specific context cho planner", ""]
+out.append(f"**Services touched:** {', '.join(sorted(services_touched)) or '(chưa xác định)'}")
+out.append("")
+
+if lessons_by_service:
+    out.append("## Lessons từ phases trước (service-filtered)")
+    out.append("")
+    printed = 0
+    for svc in sorted(services_touched):
+        items = lessons_by_service.get(svc, [])
+        if not items:
+            continue
+        out.append(f"### {svc}")
+        for pid, lesson in items:
+            out.append(f"- **Phase {pid}:** {lesson}")
+            printed += 1
+        out.append("")
+    if printed == 0:
+        out.append("_(Không có lesson nào liên quan service này.)_")
+        out.append("")
+else:
+    out.append("_(DEPLOY-LESSONS.md chưa có lesson nào — phase đầu của v1.14.0+ flow.)_")
+    out.append("")
+
+if relevant_env:
+    out.append("## Env vars liên quan (từ ENV-CATALOG)")
+    out.append("")
+    out.append("| Name | Added Phase | Service |")
+    out.append("|---|---|---|")
+    for name, pid, svc in relevant_env[:20]:  # limit 20 để prompt gọn
+        out.append(f"| `{name}` | {pid} | {svc} |")
+    if len(relevant_env) > 20:
+        out.append(f"| _... và {len(relevant_env) - 20} env var nữa — xem ENV-CATALOG đầy đủ_ | | |")
+    out.append("")
+else:
+    out.append("_(ENV-CATALOG trống hoặc không có env var nào map tới services của phase này.)_")
+    out.append("")
+
+out.append("## Hướng dẫn cho planner")
+out.append("")
+out.append("- ORG dimension 3 (Deploy): reference lessons về build/restart timing + pitfalls nếu có.")
+out.append("- ORG dimension 4 (Smoke): include smoke check commands (xem SMOKE-PACK.md) cho services touched.")
+out.append("- ORG dimension 6 (Rollback): nếu phase trước đã document rollback steps cùng service → reuse pattern.")
+out.append("- Env vars liệt kê ở trên: nếu phase cần thêm var mới, tuân format reload/rotation/storage đã established.")
+out.append("")
+
+brief_out.write_text("\n".join(out), encoding="utf-8")
+print(f"✓ deploy_lessons brief: {brief_out} (services={len(services_touched)}, lessons={sum(len(v) for v in lessons_by_service.values())}, env_vars={len(relevant_env)})")
+PY
+else
+  echo "ℹ DEPLOY-LESSONS.md / ENV-CATALOG.md chưa tồn tại — skip deploy_lessons brief."
+fi
+```
+
+Spawn planner agent với VG-specific rules + graphify brief + deploy_lessons brief:
 ```
 Agent(subagent_type="general-purpose", model="${MODEL_PLANNER}"):
   prompt: |
@@ -304,6 +489,10 @@ Agent(subagent_type="general-purpose", model="${MODEL_PLANNER}"):
     <graphify_brief>
     @${PHASE_DIR}/.graphify-brief.md
     </graphify_brief>
+
+    <deploy_lessons>
+    @${PHASE_DIR}/.deploy-lessons-brief.md (if exists — v1.14.0+ C.5)
+    </deploy_lessons>
 
     <specs>
     @${PHASE_DIR}/SPECS.md
@@ -341,6 +530,15 @@ Agent(subagent_type="general-purpose", model="${MODEL_PLANNER}"):
       mitigation note (gradual rollout / feature flag / regression suite)
     - When task lists an endpoint in <edits-endpoint>, check brief's existing
       symbols table — if found, mark as REUSED-MODIFY not NEW-CREATE
+
+    DEPLOY_LESSONS USAGE (v1.14.0+ C.5, when brief exists):
+    - Nếu deploy_lessons có service-specific lessons → reference TRỰC TIẾP trong task
+      description của ORG dimensions 3/4/6. VD: "Rebuild incremental tsc (Phase 7.12
+      lesson: force --skip-lib-check if node_modules freshly cleared)".
+    - Nếu deploy_lessons có env vars liên quan → tasks add new env var PHẢI tuân
+      format reload/rotation/storage đã establish trong ENV-CATALOG (90-day vault
+      cho secrets, config-stable cho URLs, tuning-knob cho TTL/cache).
+    - Không có lessons liên quan → OK, ignore block.
 
     Output: ${PHASE_DIR}/PLAN.md with waves, task attributes, goal coverage.
 ```
@@ -1094,6 +1292,112 @@ Display:
 Verify 1 (grep): {N} endpoints checked, {M} field comparisons
 Result: {PASS|WARNING|BLOCK} — {N} mismatches
 ```
+</step>
+
+<step name="2c_verify_plan_paths">
+## Sub-step 2c1b: PLAN PATH VALIDATION (no AI, <5 sec)
+
+Catches stale `<file-path>` tags in PLAN — the class of bug seen in Phase 10:
+- Task 2 PLAN said `apps/api/src/infrastructure/clickhouse/migrations/0017_add_deal_columns.sql`
+  but that directory doesn't exist (real CH schemas in apps/workers/src/consumer/clickhouse/schemas.js)
+- Task 12 PLAN said `apps/rtb-engine/src/auction/pipeline.rs`
+  but that directory doesn't exist (real auction entry at apps/rtb-engine/src/handlers/bid.rs)
+
+Both were only caught when the executor agent opened the file. This step runs
+at blueprint time — catches them before /vg:build spawns executors.
+
+```bash
+PATH_CHECKER=".claude/scripts/verify-plan-paths.py"
+if [ -f "$PATH_CHECKER" ]; then
+  echo ""
+  echo "━━━ Sub-step 2c1b: PLAN path validation ━━━"
+  ${PYTHON_BIN:-python} "$PATH_CHECKER" \
+    --phase-dir "${PHASE_DIR}" \
+    --repo-root "${REPO_ROOT:-.}"
+  PATH_EXIT=$?
+
+  case "$PATH_EXIT" in
+    0)
+      echo "✓ All PLAN paths valid"
+      ;;
+    2)
+      echo "⚠ PLAN has path warnings — review output above."
+      echo "  If paths are intentional new subsystems, proceed (non-blocking)."
+      echo "  If paths are stale, fix PLAN now before /vg:build spawns executors against wrong paths."
+      # Non-blocking — planner may be creating new subsystems. User inspects.
+      ;;
+    1)
+      echo "⛔ PLAN has malformed paths — fix PLAN.md before proceeding."
+      exit 1
+      ;;
+  esac
+else
+  echo "⚠ verify-plan-paths.py missing — skipping PLAN path validation (older install)"
+fi
+```
+
+Classifications:
+- `VALID` — file exists (editing) OR parent dir exists (new file in existing dir) OR parent dir will be created by another task
+- `WARN` — parent dir doesn't exist and no other task creates it (likely stale, but could be intentional new subsystem)
+- `FAIL` — malformed path (absolute / escapes repo via `..` / has `+` separator / empty)
+
+WARN → non-blocking report. User can `<also-edits>foo/bar/` on an upstream task to declare the new dir is intentional.
+FAIL → hard exit 1. PLAN author must fix.
+</step>
+
+<step name="2c1c_verify_utility_reuse">
+## Sub-step 2c1c: UTILITY REUSE CHECK (no AI, <5 sec)
+
+Catches PLAN tasks that redeclare helper functions already exported from the shared utility contract in `PROJECT.md` → `## Shared Utility Contract`. Root cause of ~1500-2500 LOC duplicate seen in Phase 10 audit (16 files declaring own `formatCurrency`, 52 occurrences of `Intl.NumberFormat currency` pattern).
+
+```bash
+UTILITY_CHECKER=".claude/scripts/verify-utility-reuse.py"
+PROJECT_MD="${PLANNING_DIR}/PROJECT.md"
+
+if [ -f "$UTILITY_CHECKER" ] && [ -f "$PROJECT_MD" ]; then
+  echo ""
+  echo "━━━ Sub-step 2c1c: Utility reuse check (prevent duplicate helpers) ━━━"
+  ${PYTHON_BIN:-python} "$UTILITY_CHECKER" \
+    --project "$PROJECT_MD" \
+    --phase-dir "${PHASE_DIR}"
+  UTIL_EXIT=$?
+
+  case "$UTIL_EXIT" in
+    0)
+      echo "✓ No utility-reuse violations"
+      ;;
+    2)
+      echo "⚠ Utility-reuse warnings — consider consolidating into @vollxssp/utils"
+      echo "  Non-blocking. If phase legitimately needs new helper, add Task 0 (extend utils) in PLAN."
+      ;;
+    1)
+      echo "⛔ PLAN redeclares helpers already in shared utility contract."
+      echo "   Fix: replace re-declaration with import from @vollxssp/utils, OR"
+      echo "        if PLAN needs an extended variant, add Task 0 (extend utils) + reuse across tasks."
+      echo "   Rationale: every duplicate helper adds AST nodes (tsc slowdown) + graphify noise."
+      echo ""
+      echo "Override (NOT recommended): /vg:blueprint ${PHASE_NUMBER} --override-reason=<issue-id>"
+      if [[ ! "${ARGUMENTS:-}" =~ --override-reason= ]]; then
+        exit 1
+      fi
+      echo "⚠ --override-reason set — proceeding with utility duplication debt"
+      echo "utility-reuse: $(date -u +%FT%TZ) phase=${PHASE_NUMBER} override=yes" >> "${PHASE_DIR}/build-state.log"
+      ;;
+  esac
+else
+  [ ! -f "$UTILITY_CHECKER" ] && echo "⚠ verify-utility-reuse.py missing — skipping utility-reuse check (older install)"
+  [ ! -f "$PROJECT_MD" ] && echo "⚠ PROJECT.md missing — skipping utility-reuse check (run /vg:project first)"
+fi
+```
+
+BLOCK conditions:
+- Task declares a function name (via `function X`, `const X =`, `export function X`, "add helper X", etc.) AND that name exists in the contract table.
+- EXCEPTION: task's `<file-path>` is inside `packages/utils/` — that IS the canonical place.
+
+WARN conditions:
+- Task declares NEW helper (not in contract) AND spans ≥2 non-utils file paths — suggests reuse that should start in utils.
+
+**Override:** `--override-reason=<issue-id>` on `/vg:blueprint` allows passing with debt logged. Use only when the new helper is genuinely phase-local (e.g., deal-specific formatter only used in 1 file forever).
 </step>
 
 <step name="2c2_compile_check">

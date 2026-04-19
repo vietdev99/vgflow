@@ -1272,7 +1272,44 @@ Read and follow `.claude/commands/vg/_shared/crossai-invoke.md`.
 
 **Handle findings:**
 - Minor → auto-fix (update contracts or plan)
-- Major/Critical → present to user, re-verify if fixed
+- Major/Critical → present to user via AskUserQuestion, re-verify if fixed
+
+**MANDATORY when escalating CrossAI concerns to user (AskUserQuestion):**
+
+For EACH user-judgment concern (e.g., schema-vs-storage choice, architectural fork, test-strategy
+trade-off), the orchestrator MUST present options with an explicit recommended option. Pattern:
+
+1. **Pick the recommended option** before showing the question — base on:
+   - CrossAI consensus (if 2+ CLIs converge on same fix → that's the recommendation)
+   - Project context (CONTEXT.md decision wins over post-hoc PLAN drift)
+   - Codebase reality (if existing pattern in repo, prefer aligning to it)
+   - Security / correctness > convenience
+2. **Order options with recommended FIRST**, label with " (Recommended)" suffix.
+3. **Explain WHY recommended** in the option's `description` field — not just what it is.
+4. **Do NOT ask without recommendation** — silent multi-option choices put rationalization burden on user.
+   Per global guidance: "If you recommend a specific option, make that the first option in the
+   list and add '(Recommended)' at the end of the label."
+
+Bad example (no recommendation):
+```
+AskUserQuestion: "Refresh storage backend?"
+  - Redis-only
+  - Mongo collection
+  - Both
+```
+
+Good example (with recommendation):
+```
+AskUserQuestion: "Refresh token storage backend? Recommend Both — Mongo source-of-truth survives
+restart + Redis JTI cache provides fast revocation. CrossAI Codex flagged single-layer as conflict-prone."
+  - Both (Mongo persist + Redis cache) (Recommended)  — production-grade, audit-friendly, fast revocation
+  - Mongo only — simpler, slower revocation (each refresh checks DB)
+  - Redis only — fast but loses sessions on restart
+```
+
+Apply this pattern to ALL CrossAI-escalation questions. The user can still pick a non-recommended
+option (or "Other") — the recommendation just provides a default path so they don't have to
+re-derive the analysis CrossAI just did.
 
 ### 2d-7: Exhausted — user intervention
 
