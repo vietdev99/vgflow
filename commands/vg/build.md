@@ -1872,14 +1872,26 @@ if [ -n "$MISSING_SUMMARIES" ]; then
 fi
 
 # 2. Update PIPELINE-STATE.json — mark phase execution complete (no GSD dependency)
+#    IMPORTANT: must also append a structured ``steps.build`` entry so
+#    vg-progress.py state-driven path recognises build as done. Prior
+#    versions only wrote top-level fields (status/plans_*), which caused
+#    /vg:progress to keep showing build=⬜ even though SUMMARY.md existed.
 PIPELINE_STATE="${PHASE_DIR}/PIPELINE-STATE.json"
 ${PYTHON_BIN} -c "
-import json; from pathlib import Path
+import json; from datetime import datetime; from pathlib import Path
 p = Path('${PIPELINE_STATE}')
 s = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
 s['status'] = 'executed'; s['pipeline_step'] = 'build-complete'
 s['plans_completed'] = '${COMPLETED_COUNT}'; s['plans_total'] = '${PLAN_COUNT}'
-s['updated_at'] = __import__('datetime').datetime.now().isoformat()
+now = datetime.now().isoformat()
+s['updated_at'] = now
+s.setdefault('steps', {})['build'] = {
+    'status': 'done',
+    'finished_at': now,
+    'plans_completed': '${COMPLETED_COUNT}',
+    'plans_total': '${PLAN_COUNT}',
+    'summary': 'SUMMARY.md (atomic build artifact)',
+}
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
 

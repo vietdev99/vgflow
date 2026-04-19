@@ -300,39 +300,58 @@ def _apply_monotonic(steps: dict[str, dict]) -> None:
 def compute_steps(
     artifacts: dict, content: dict, state: dict | None
 ) -> dict[str, dict[str, str]]:
-    """Compute status per step. Prefer PIPELINE-STATE if available."""
+    """Compute status per step. Prefer PIPELINE-STATE, fallback to artifact per step.
+
+    Merge semantics (important): PIPELINE-STATE.json is authoritative ONLY for
+    steps it explicitly tracks. Older build.md versions wrote `status` + timing
+    fields at the root but forgot to append a ``steps.build`` entry — so a
+    pure state-driven read mis-reports build as pending. To stay robust, we
+    compute artifact-based status for every step first, then let any state
+    entry override on a per-step basis. Missing entries fall back to artifact.
+    """
     step_order = ["specs", "scope", "blueprint", "build", "review", "test", "accept"]
 
-    # State-driven path
-    if state and "steps" in state and not state.get("_error"):
-        result = {}
-        for s in step_order:
-            entry = state["steps"].get(s, {"status": "pending"})
-            status = entry.get("status", "pending")
-            # Normalize to our vocab
-            if status == "done":
-                icon = "✅"
-            elif status == "skipped":
-                icon = "⏭"
-            elif status == "in_progress":
-                icon = "🔄"
-            elif status == "failed":
-                icon = "❌"
-            else:
-                icon = "⬜"
-            result[s] = {
-                "status": status,
-                "icon": icon,
-                "source": "state",
-                "reason": entry.get("reason", ""),
-            }
-        return result
+    artifact_result = _compute_artifact_steps(artifacts, content)
 
-    # Artifact + content fallback
+    if not (state and "steps" in state and not state.get("_error")):
+        return artifact_result
+
+    result: dict[str, dict[str, str]] = {}
+    for s in step_order:
+        if s not in state["steps"]:
+            # State doesn't track this step yet — trust artifact detection.
+            result[s] = artifact_result[s]
+            continue
+        entry = state["steps"][s]
+        status = entry.get("status", "pending")
+        if status == "done":
+            icon = "✅"
+        elif status == "skipped":
+            icon = "⏭"
+        elif status == "in_progress":
+            icon = "🔄"
+        elif status == "failed":
+            icon = "❌"
+        else:
+            icon = "⬜"
+        result[s] = {
+            "status": status,
+            "icon": icon,
+            "source": "state",
+            "reason": entry.get("reason", ""),
+        }
+    return result
+
+
+def _compute_artifact_steps(
+    artifacts: dict, content: dict
+) -> dict[str, dict[str, str]]:
+    """Artifact + content based per-step detection (state-independent)."""
+
     def mk(status: str, icon: str, reason: str = "") -> dict:
         return {"status": status, "icon": icon, "source": "artifact", "reason": reason}
 
-    result = {}
+    result: dict[str, dict[str, str]] = {}
 
     # Step 0: specs
     result["specs"] = mk("done", "✅") if artifacts["specs"] else mk("pending", "⬜")
