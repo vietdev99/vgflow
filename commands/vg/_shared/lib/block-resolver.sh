@@ -328,6 +328,83 @@ block_resolve_l4_stuck() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════
+# block_resolve_l2_handoff — standardized L2 exit (v1.14.4+)
+# ═══════════════════════════════════════════════════════════════════════
+# Replaces ad-hoc `echo "▸ L2 architect proposal" >&2; exit 2` pattern with:
+#   1. Write proposal to ${PHASE_DIR}/.block-resolver-l2-brief.md
+#   2. Emit standardized marker `⛔ BLOCK_RESOLVER_L2_HANDOFF` on stderr
+#   3. Tell orchestrator explicitly to spawn Task tool + AskUserQuestion
+#   4. Exit 2
+#
+# Usage (in build.md/review.md/test.md):
+#   BR_RESULT=$(block_resolve "gate-id" "$ctx" "$ev" "$PHASE_DIR" "$candidates")
+#   BR_LVL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "...")
+#   if [ "$BR_LVL" = "L2" ]; then
+#     block_resolve_l2_handoff "gate-id" "$BR_RESULT" "$PHASE_DIR"
+#     exit 2
+#   fi
+block_resolve_l2_handoff() {
+  local gate_id="$1"
+  local br_result="$2"
+  local phase_dir="${3:-${PHASE_DIR:-.}}"
+  local brief="${phase_dir}/.block-resolver-l2-brief.md"
+
+  # Extract proposal fields from JSON result
+  local p_type=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('type','?'))" 2>/dev/null)
+  local p_summary=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('summary',''))" 2>/dev/null)
+  local p_confidence=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('confidence',0))" 2>/dev/null)
+  local p_rationale=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('rationale',''))" 2>/dev/null)
+  local p_actions=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('\n'.join('- ' + a for a in p.get('suggested_actions',[])))" 2>/dev/null)
+
+  # Write brief file for orchestrator Task tool
+  cat > "$brief" <<EOF
+# Block Resolver L2 Handoff — Gate: ${gate_id}
+
+**Generated:** $(date -u +%FT%TZ)
+**Phase:** ${VG_CURRENT_PHASE:-unknown}
+**Step:** ${VG_CURRENT_STEP:-unknown}
+**Level:** L2 (architect proposal — user decision required via L3)
+
+## Proposal
+
+- **Type:** ${p_type}
+- **Summary:** ${p_summary}
+- **Confidence:** ${p_confidence}
+- **Rationale:** ${p_rationale}
+
+## Suggested actions
+
+${p_actions:-_(architect did not provide explicit actions)_}
+
+## Orchestrator contract
+
+Build/review/test workflow has HALTED at this gate. Before re-running the blocked command:
+
+1. **Read this brief** — understand proposal type + rationale
+2. **Present to user via AskUserQuestion tool** (L3):
+   - Option A: Apply proposal (action depends on type)
+   - Option B: Override with \`--override-reason="<text>"\` (logs to override-debt register)
+   - Option C: Abort workflow — investigate manually
+3. **If user accepts**: execute proposal actions, delete this brief, re-run blocked command
+4. **If user rejects**: call \`block_resolve_l4_stuck\` helper to log STUCK + telemetry
+EOF
+
+  # Emit standardized marker (recognized by orchestrator as "halt + Task spawn required")
+  echo "⛔ BLOCK_RESOLVER_L2_HANDOFF gate=${gate_id} brief=${brief}" >&2
+  echo "   Orchestrator MUST:" >&2
+  echo "     1. Read ${brief}" >&2
+  echo "     2. Invoke AskUserQuestion with proposal options (L3)" >&2
+  echo "     3. Execute user choice → delete brief → re-run blocked command" >&2
+
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "block_architect_handoff" "${VG_CURRENT_PHASE:-unknown}" "${VG_CURRENT_STEP:-unknown}" "$gate_id" "L2_HANDOFF" \
+      "{\"proposal_type\":\"${p_type//\"/\\\"}\",\"brief\":\"${brief//\"/\\\"}\"}"
+  fi
+
+  return 2
+}
+
+# ═══════════════════════════════════════════════════════════════════════
 # block_resolve_l3_apply — telemetry helper when user accepts proposal
 # ═══════════════════════════════════════════════════════════════════════
 block_resolve_l3_apply() {

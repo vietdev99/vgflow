@@ -192,7 +192,7 @@ Sync chain flag:
 # (GSD auto-chain is N/A — VG uses explicit /vg:next routing)
 
 # Flag allowlist (v1.14.4+ — typo guard). Unknown flag = hard BLOCK, not silent skip.
-VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-context-rebuild|resume|allow-missing-commits|override-reason|force|help)$'
+VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-context-rebuild|resume|allow-missing-commits|allow-r5-violation|override-reason|force|help)$'
 UNKNOWN_FLAGS=""
 for tok in ${ARGUMENTS:-}; do
   case "$tok" in
@@ -209,7 +209,7 @@ if [ -n "$UNKNOWN_FLAGS" ]; then
   echo "⛔ Unknown flag(s):${UNKNOWN_FLAGS}"
   echo "   Valid flags: --wave, --only, --status, --gaps-only, --interactive, --auto,"
   echo "                --reset-queue, --skip-design-check, --skip-context-rebuild, --resume,"
-  echo "                --allow-missing-commits, --override-reason=<text>, --force, --help"
+  echo "                --allow-missing-commits, --allow-r5-violation, --override-reason=<text>, --force, --help"
   echo "   Có thể bạn gõ sai chính tả (typo). Check lại arguments trước khi chạy."
   exit 1
 fi
@@ -609,7 +609,7 @@ if grep -l "<design-ref>" "${PHASE_DIR}"/PLAN*.md 2>/dev/null; then
         BR_LEVEL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
         case "$BR_LEVEL" in
           L1) echo "✓ L1 auto-extracted — continuing" >&2 ;;
-          L2) echo "▸ L2 architect proposal — orchestrator invokes AskUserQuestion (L3)" >&2; exit 2 ;;
+          L2) block_resolve_l2_handoff "build-design-missing" "$BR_RESULT" "$PHASE_DIR"; exit 2 ;;
           *)  exit 1 ;;
         esac
       else
@@ -938,13 +938,75 @@ if [ -n "$SEEN_FILES" ]; then
     CONFLICT_GROUPS="${CONFLICT_GROUPS} ${TASKS}"
   done
   echo "  → Conflicting tasks will run SEQUENTIALLY within this wave."
-  # Split wave: parallel group (no conflicts) + sequential group (conflicts)
 fi
+
+# R5 enforcement (v1.14.4+): write explicit spawn plan for orchestrator
+# Bash detect xong rồi, nhưng spawn loop phải đọc plan này — không implicit nữa.
+SPAWN_PLAN="${PHASE_DIR}/.wave-spawn-plan.json"
+
+PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - <<PY > "$SPAWN_PLAN"
+import json, sys
+wave_files = """$(printf '%s\n' "${WAVE_FILES[@]}")"""
+pairs = [line.split(':', 1) for line in wave_files.strip().split('\n') if ':' in line]
+file_to_tasks = {}
+for t, f in pairs:
+    try:
+        file_to_tasks.setdefault(f, []).append(int(t))
+    except ValueError:
+        pass
+seq_groups = [sorted(set(tasks)) for tasks in file_to_tasks.values() if len(tasks) >= 2]
+seq_flat = {t for grp in seq_groups for t in grp}
+all_tasks = []
+for t, _ in pairs:
+    try:
+        all_tasks.append(int(t))
+    except ValueError:
+        pass
+parallel = sorted(set(all_tasks) - seq_flat)
+plan = {
+    "wave": "${N:-unknown}",
+    "parallel": parallel,
+    "sequential_groups": seq_groups,
+    "conflict_files": sorted(set(f for f, tasks in file_to_tasks.items() if len(tasks) >= 2)),
+}
+print(json.dumps(plan, indent=2))
+PY
+
+echo "✓ Wave ${N} spawn plan: $SPAWN_PLAN"
+${PYTHON_BIN} -c "
+import json
+p = json.load(open('$SPAWN_PLAN', encoding='utf-8'))
+print(f'  Parallel tasks ({len(p[\"parallel\"])}): {p[\"parallel\"]}')
+print(f'  Sequential groups ({len(p[\"sequential_groups\"])}): {p[\"sequential_groups\"]}')
+if p['conflict_files']:
+    print(f'  Conflict files: {p[\"conflict_files\"]}')
+"
 ```
 
 **Why:** When 2+ parallel agents edit the same file, git staging races cause one agent's
 changes to be absorbed into another's commit — the second agent loses its own commit silently.
 Detection prevents this class of bugs by forcing conflicting tasks to run sequentially.
+
+**⛔ SPAWN PLAN ENFORCEMENT (orchestrator MUST follow):**
+
+Orchestrator đọc `${PHASE_DIR}/.wave-spawn-plan.json` và spawn theo 2 group:
+1. **parallel[]** — spawn Agent cho mỗi task trong 1 message (multiple tool calls). Wait all.
+2. **sequential_groups[][]** — mỗi group spawn từng task 1, wait mỗi task trước khi spawn next.
+
+```
+Example plan:
+{
+  "parallel": [1, 2, 5],
+  "sequential_groups": [[3, 4], [6, 7, 8]]
+}
+Spawn order:
+  Message 1: Agent(task 1) + Agent(task 2) + Agent(task 5)   # parallel batch
+  Message 2: Agent(task 3), wait, Agent(task 4)             # group [3,4] serial
+  Message 3: Agent(task 6), wait, Agent(task 7), wait, Agent(task 8)   # group [6,7,8] serial
+```
+
+**POST-SPAWN verification** chạy trong step 8d — compare `.build-progress.json` timestamps
+vs plan. Nếu sequential_groups overlap (parallel execution) → R5 violation, BLOCK wave.
 
 DO NOT SKIP THIS. If scripts are missing or fail, inject:
   <sibling_context>UNAVAILABLE — scripts not found. Review peer modules manually.</sibling_context>
@@ -1145,6 +1207,93 @@ Starving context causes drift; expand to eliminate guess.
 
 **⛔ MANDATORY — orchestrator MUST run ALL steps below after EVERY wave. Skipping = build on broken code.**
 
+**Step 0-pre — R5 spawn plan honor check (MANDATORY, run FIRST v1.14.4+):**
+
+Verify orchestrator honored `.wave-spawn-plan.json` — sequential_groups must have ran one-at-a-time (no timestamp overlap). If violated → commit race likely → BLOCK before commit count check masks the issue.
+
+```bash
+SPAWN_PLAN_FILE="${PHASE_DIR}/.wave-spawn-plan.json"
+PROGRESS_FILE="${PHASE_DIR}/.build-progress.json"
+
+if [ -f "$SPAWN_PLAN_FILE" ] && [ -f "$PROGRESS_FILE" ]; then
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - "$SPAWN_PLAN_FILE" "$PROGRESS_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+
+plan = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+progress = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+
+# Build task_num → (started_at, finished_at) map
+tasks_info = {}
+for t in progress.get('tasks', []):
+    try:
+        tid = int(t.get('task_num', 0))
+    except (TypeError, ValueError):
+        continue
+    tasks_info[tid] = {
+        'started_at': t.get('started_at') or '',
+        'finished_at': t.get('finished_at') or '',
+    }
+
+seq_groups = plan.get('sequential_groups') or []
+if not seq_groups:
+    print("✓ R5 check: no sequential groups in this wave (all parallel)")
+    sys.exit(0)
+
+violations = []
+for group in seq_groups:
+    # Sort by started_at
+    with_ts = [(t, tasks_info.get(t, {})) for t in group]
+    with_ts = [(t, info) for t, info in with_ts if info.get('started_at')]
+    if len(with_ts) < 2:
+        continue  # not enough data to detect overlap
+    with_ts.sort(key=lambda x: x[1]['started_at'])
+    for i in range(len(with_ts) - 1):
+        t_curr, info_curr = with_ts[i]
+        t_next, info_next = with_ts[i+1]
+        curr_end = info_curr.get('finished_at') or ''
+        next_start = info_next.get('started_at') or ''
+        if curr_end and next_start and next_start < curr_end:
+            violations.append(
+                f"Tasks {t_curr} + {t_next} overlapped: "
+                f"task-{t_curr} finished={curr_end}, task-{t_next} started={next_start}"
+            )
+
+if violations:
+    print(f"⛔ R5 VIOLATION: {len(violations)} sequential group(s) ran in PARALLEL despite spawn plan:")
+    for v in violations:
+        print(f"   - {v}")
+    print("")
+    print("Nguyên nhân: orchestrator không đọc .wave-spawn-plan.json trước khi spawn.")
+    print("Hậu quả tiềm năng: commit race trên shared file — agent đè commit nhau silent.")
+    print("")
+    print("Hành động:")
+    print("  1. Kiểm tra git log — có commit nào chứa changes của task khác không (wrong attribution)?")
+    print("  2. Nếu có: revert wave, re-run với attention vào spawn plan")
+    print("     git reset --hard ${WAVE_TAG}")
+    print("     /vg:build ${PHASE_NUMBER} --wave ${N}")
+    print("  3. Nếu không (may mắn không race): document override-debt + proceed")
+    sys.exit(1)
+else:
+    print(f"✓ R5 check: all {len(seq_groups)} sequential group(s) ran one-at-a-time")
+PY
+
+  R5_RC=$?
+  if [ "$R5_RC" != "0" ]; then
+    echo "R5-violation wave=${N} phase=${PHASE_NUMBER} at=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
+    # Log to override-debt if --allow-r5-violation explicitly set, else hard block
+    if [[ "$ARGUMENTS" =~ --allow-r5-violation ]]; then
+      if type -t log_override_debt >/dev/null 2>&1; then
+        log_override_debt "build-r5-violation" "${PHASE_NUMBER}" "sequential group ran in parallel, commit race possible" "$PHASE_DIR"
+      fi
+      echo "⚠ --allow-r5-violation set — proceeding despite R5 breach, logged to debt register."
+    else
+      exit 1
+    fi
+  fi
+fi
+```
+
 **Step 0 — Agent commit verification (MANDATORY, run FIRST):**
 
 After all wave agents complete, count commits since wave tag. Each task MUST produce exactly 1 commit.
@@ -1217,9 +1366,7 @@ if [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ]; then
         ACTUAL_COMMITS=$(git log --oneline "${WAVE_TAG}..HEAD" | wc -l | tr -d ' ')
         [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ] && { echo "⛔ Still short after L1 retry ($ACTUAL_COMMITS / $EXPECTED_COMMITS)"; exit 1; }
       elif [ "$BR_LVL" = "L2" ]; then
-        echo "▸ Block resolver L2 proposal (có thể là refactor wave size / task granularity):"
-        echo "$BR_RES" | ${PYTHON_BIN} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('  type=' + p.get('type','?') + '\\n  summary=' + p.get('summary','?'))"
-        echo "   Orchestrator MUST present via AskUserQuestion (L3) before continuing."
+        block_resolve_l2_handoff "wave-commits" "$BR_RES" "$PHASE_DIR"
         exit 2
       else
         block_resolve_l4_stuck "wave-commits" "L1 re-dispatch failed, L2 architect returned no proposal"
@@ -1422,7 +1569,7 @@ if [ -z "$FAILED_GATE" ]; then
             BR_RESULT=$(block_resolve "build-test-unit-missing" "$BR_GATE_CONTEXT" "$BR_EVIDENCE" "$PHASE_DIR" "$BR_CANDIDATES")
             BR_LEVEL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
             [ "$BR_LEVEL" = "L1" ] && echo "✓ L1 resolved — test_unit_cmd suggestion applied" >&2
-            [ "$BR_LEVEL" = "L2" ] && { echo "▸ L2 architect proposal for test infra" >&2; exit 2; }
+            [ "$BR_LEVEL" = "L2" ] && { block_resolve_l2_handoff "build-test-unit-missing" "$BR_RESULT" "$PHASE_DIR"; exit 2; }
           fi
           FAILED_GATE="test_unit_missing"
         fi

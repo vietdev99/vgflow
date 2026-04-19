@@ -228,7 +228,7 @@ if [ "$needs_context" = "true" ] && [ ! -f "${PHASES_DIR}/${phase_dir}/CONTEXT.m
     BR_CANDIDATES='[]'
     BR_RESULT=$(block_resolve "blueprint-no-context" "$BR_GATE_CONTEXT" "$BR_EVIDENCE" "$PHASE_DIR" "$BR_CANDIDATES")
     BR_LEVEL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
-    [ "$BR_LEVEL" = "L2" ] && exit 2
+    [ "$BR_LEVEL" = "L2" ] && { block_resolve_l2_handoff "blueprint-no-context" "$BR_RESULT" "$PHASE_DIR"; exit 2; }
   fi
   echo "   Run first: /vg:scope ${PHASE_NUMBER}"
   exit 1

@@ -1637,9 +1637,7 @@ if [ "$GTB_MODE" != "off" ]; then
         echo "✓ Block resolver L1 self-resolved — re-run verification"
         ${PYTHON_BIN} .claude/scripts/verify-goal-test-binding.py ${GTB_ARGS} || { VERDICT="FAILED"; FAIL_REASON="goal_test_binding_phase_end"; }
       elif [ "$BR_LEVEL" = "L2" ]; then
-        echo "▸ Block resolver L2 đề xuất architectural proposal (có thể là sub-phase test harness):"
-        echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('  type=' + p.get('type','?') + '\\n  summary=' + p.get('summary','?'))"
-        echo "   Orchestrator MUST present proposal to user via AskUserQuestion (L3) before continuing."
+        block_resolve_l2_handoff "goal-test-binding" "$BR_RESULT" "$PHASE_DIR"
         VERDICT="FAILED"
         FAIL_REASON="goal_test_binding_phase_end_L2_proposal_pending"
       else

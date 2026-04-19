@@ -244,8 +244,7 @@ case "$VERDICT" in
         echo "✓ Block resolver L1 applied gaps-only rebuild — re-run /vg:accept ${PHASE_NUMBER}"
         exit 0
       elif [ "$BR_LVL" = "L2" ]; then
-        echo "▸ Block resolver L2 architect proposal — present to user via AskUserQuestion (L3):"
-        echo "$BR_RES" | ${PYTHON_BIN} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('  type=' + p.get('type','?') + '\\n  summary=' + p.get('summary','?') + '\\n  confidence=' + str(p.get('confidence',0)))"
+        block_resolve_l2_handoff "test-verdict-failed" "$BR_RES" "$PHASE_DIR"
         exit 2
       else
         block_resolve_l4_stuck "test-verdict-failed" "L1 gaps-rebuild declined, L2 architect unavailable"
@@ -304,7 +303,7 @@ if [ -n "$REG_REPORT" ]; then
         BR_RESULT=$(block_resolve "accept-regression" "$BR_GATE_CONTEXT" "$BR_EVIDENCE" "$PHASE_DIR" "$BR_CANDIDATES")
         BR_LEVEL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
         [ "$BR_LEVEL" = "L1" ] && echo "✓ L1 — regression fix-loop applied" >&2 && REG_FIXED="yes"
-        [ "$BR_LEVEL" = "L2" ] && { echo "▸ L2 architect proposal — AskUserQuestion with remediation plan" >&2; exit 2; }
+        [ "$BR_LEVEL" = "L2" ] && { block_resolve_l2_handoff "accept-regression" "$BR_RESULT" "$PHASE_DIR"; exit 2; }
         [ "$REG_FIXED" != "yes" ] && exit 1
       else
         exit 1
@@ -370,7 +369,7 @@ PY
         BR_LEVEL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
         case "$BR_LEVEL" in
           L1) echo "✓ L1 resolved — triage updated inline" >&2 ;;
-          L2) echo "▸ L2 architect proposal presented — orchestrator invokes AskUserQuestion" >&2; exit 2 ;;
+          L2) block_resolve_l2_handoff "accept-unreachable" "$BR_RESULT" "$PHASE_DIR"; exit 2 ;;
           *)  exit 1 ;;
         esac
       fi

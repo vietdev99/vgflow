@@ -290,9 +290,7 @@ if [ -n "$MISSING" ]; then
       }
     fi
     if [ -n "$MISSING" ] && [ "$BR_LEVEL" = "L2" ]; then
-      echo "▸ Block resolver L2 đề xuất proposal — orchestrator MUST invoke AskUserQuestion (L3) with proposal JSON:" >&2
-      echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('  type=' + p.get('type','?') + '\\n  summary=' + p.get('summary','?') + '\\n  confidence=' + str(p.get('confidence',0)))" >&2
-      echo "  Hành động gợi ý: chạy /vg:blueprint ${PHASE_NUMBER} (hoặc /vg:specs/amend tuỳ profile), rồi re-run /vg:review ${PHASE_NUMBER}" >&2
+      block_resolve_l2_handoff "review-prereq-missing" "$BR_RESULT" "$PHASE_DIR"
       exit 2
     elif [ -n "$MISSING" ]; then
       # L4 — genuinely stuck (resolver disabled or architect unavailable)
@@ -580,7 +578,7 @@ PY
       BR_CANDIDATES='[{"id":"re-run-ansible","cmd":"echo would re-run ansible-playbook (user must chạy explicitly)","confidence":0.3,"rationale":"re-run provisioning may fix BLOCKED infra"}]'
       BR_RESULT=$(block_resolve "infra-smoke-not-ready" "$BR_GATE_CONTEXT" "$BR_EVIDENCE" "$PHASE_DIR" "$BR_CANDIDATES")
       BR_LEVEL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
-      [ "$BR_LEVEL" = "L2" ] && exit 2
+      [ "$BR_LEVEL" = "L2" ] && { block_resolve_l2_handoff "infra-smoke-not-ready" "$BR_RESULT" "$PHASE_DIR"; exit 2; }
     fi
     exit 1
   fi
@@ -1483,10 +1481,7 @@ if type -t block_resolve >/dev/null 2>&1; then
   BR_LEVEL=$(echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
   case "$BR_LEVEL" in
     L1) echo "✓ L1 resolved — continuing local review with infra goals skipped" >&2 ;;
-    L2) echo "▸ L2 architect proposal — orchestrator MUST invoke AskUserQuestion (L3) with proposal JSON from BR_RESULT" >&2
-        echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('proposal',{}))" >&2
-        # Orchestrator then invokes AskUserQuestion with A/B/C options ONLY IF architect proposal recommends it
-        exit 2 ;;
+    L2) block_resolve_l2_handoff "infra-unavailable" "$BR_RESULT" "$PHASE_DIR"; exit 2 ;;
     *)  block_resolve_l4_stuck "infra-unavailable" "All candidates failed + no architect proposal"; exit 1 ;;
   esac
 fi
@@ -3214,9 +3209,8 @@ if [ "$INTERMEDIATE" -gt 0 ]; then
       if [ "$BR_LEVEL" = "L1" ]; then
         echo "✓ Block resolver L1 self-resolved — intermediate goals auto-fixed"
       elif [ "$BR_LEVEL" = "L2" ]; then
-        echo "▸ Block resolver L2 đề xuất proposal — orchestrator MUST invoke AskUserQuestion (L3) with proposal JSON:"
-        echo "$BR_RESULT" | ${PYTHON_BIN} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('  type=' + p.get('type','?') + '\\n  summary=' + p.get('summary','?') + '\\n  confidence=' + str(p.get('confidence',0)))"
-        echo "  Để proceed sau khi user chấp nhận proposal: re-run /vg:review ${PHASE_NUMBER} --allow-intermediate --reason='<applied proposal>'"
+        block_resolve_l2_handoff "not-scanned-defer" "$BR_RESULT" "$PHASE_DIR"
+        echo "  Để proceed sau khi user chấp nhận proposal: re-run /vg:review ${PHASE_NUMBER} --allow-intermediate --reason='<applied proposal>'" >&2
         exit 2
       else
         # L4 truly stuck — print human-direction message
