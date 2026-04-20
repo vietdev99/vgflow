@@ -46,6 +46,9 @@ Parse `$ARGUMENTS`: phase number (required), optional flags:
 - `--force` — re-convert even if VG artifacts already exist (backup existing first)
 - `--skip-contracts` — skip API-CONTRACTS.md generation (manual later)
 - `--skip-goals` — skip TEST-GOALS.md generation (manual later)
+- `--allow-semantic-gaps` — bypass step 9 VG semantic gates (CONTEXT 3-section/Persistence/Surface/Linkage). Logs override-debt. NOT recommended.
+- `--allow-hallucinated-eps` — bypass step 4 hallucination check (>10% endpoint not found in code). Logs override-debt.
+- `--self-test` — run on canonical fixture `.vg/fixtures/migrate/legacy-sample/` instead of real phase. Verify output passes all gates.
 </step>
 
 <step name="2_detect_artifacts">
@@ -320,13 +323,32 @@ if rewrites:
 print(f"✓ All decision bodies preserved (>= 80% similarity)")
 PY
 
-# ─── Gate 3: Sub-section coverage check (existing) ───
+# ─── Gate 3: Sub-section coverage check (3 sub-sections required, v1.14.4+) ───
 DECISIONS=$(grep -cE "^#+\s*D-[0-9]+" "$STAGING")
 ENDPOINTS=$(grep -c "^\*\*Endpoints:\*\*" "$STAGING")
+UI_COMPS=$(grep -c "^\*\*UI Components:\*\*" "$STAGING")
+TEST_SCENS=$(grep -c "^\*\*Test Scenarios:\*\*" "$STAGING")
+
+COVERAGE_FAIL=0
 if [ "$DECISIONS" != "$ENDPOINTS" ]; then
-  echo "⚠ WARNING: ${DECISIONS} decisions but ${ENDPOINTS} Endpoint sections. Some decisions may be missing sub-sections."
-  echo "   Proceeding (non-fatal) — user should verify manually."
+  echo "⛔ Gate 3 FAIL: ${DECISIONS} decisions but ${ENDPOINTS} **Endpoints:** sub-sections"
+  COVERAGE_FAIL=$((COVERAGE_FAIL + 1))
 fi
+if [ "$DECISIONS" != "$UI_COMPS" ]; then
+  echo "⛔ Gate 3 FAIL: ${DECISIONS} decisions but ${UI_COMPS} **UI Components:** sub-sections"
+  COVERAGE_FAIL=$((COVERAGE_FAIL + 1))
+fi
+if [ "$DECISIONS" != "$TEST_SCENS" ]; then
+  echo "⛔ Gate 3 FAIL: ${DECISIONS} decisions but ${TEST_SCENS} **Test Scenarios:** sub-sections"
+  echo "   Blueprint step 2a CONTEXT format validation will block downstream."
+  COVERAGE_FAIL=$((COVERAGE_FAIL + 1))
+fi
+
+if [ "$COVERAGE_FAIL" -gt 0 ]; then
+  echo "⛔ ${COVERAGE_FAIL} sub-section coverage gate(s) failed. Staging at $STAGING — re-run agent."
+  exit 1
+fi
+echo "✓ Gate 3: all ${DECISIONS} decisions có 3 sub-sections (Endpoints/UI/Test Scenarios)"
 
 # ─── All gates passed: promote staging → CONTEXT.md atomically ───
 echo ""
@@ -473,6 +495,22 @@ Agent(model="sonnet", description="Generate TEST-GOALS.md from enriched CONTEXT"
     
     Output format: follow TEST-GOALS.md template from blueprint step 2b5.
     Write to: ${PHASE_DIR}/TEST-GOALS.md.staged (STAGING — not final).
+    
+    7. **MANDATORY for mutation goals (Rule 3b — blueprint enforcement):**
+       Every goal có non-empty **Mutation evidence:** PHẢI có **Persistence check:** block:
+       ```
+       **Persistence check:**
+       - Pre-submit: read <field/row/state> value
+       - Action: <what user does>
+       - Post-submit wait: API 2xx + toast
+       - Refresh: page.reload() OR navigate away + back
+       - Re-read: <where to re-read>
+       - Assert: <field> = <new value> AND != <pre value>
+       ```
+       Skip Persistence check chỉ khi: read-only goal (no mutation), final-step wizard, file upload.
+    
+    8. **Surface classification REQUIRED** — mỗi goal có dòng `**Surface:** ui|api|data|integration|time-driven|custom`
+       (review/test pipeline cần để pick runner — backend phase tránh deadlock browser scan)
 ```
 
 **Preservation gate (tightened 2026-04-17):**
@@ -529,8 +567,146 @@ print(f"✓ All {len(orig_g)} existing goals preserved (+{len(set(new_g)-set(ori
 PY
 fi
 
+# ─── Persistence check gate (Rule 3b enforcement, v1.14.4+) ───
+PYTHONIOENCODING=utf-8 ${PYTHON_BIN:-python3} - "$STAGING" <<'PY' || exit 1
+import re, sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding='utf-8')
+
+# Parse per-goal sections — support 2-4 hash levels + optional "Goal" prefix
+goal_pat = re.compile(r'(^#{2,4}\s+(?:Goal\s+)?G-\d+[^\n]*)\n(.*?)(?=^#{2,4}\s+(?:Goal\s+)?G-\d+|\Z)', re.M | re.S)
+
+mutation_missing_persist = []
+no_surface = []
+mutation_count = 0
+persist_count = 0
+
+for m in goal_pat.finditer(text):
+    header = m.group(1).strip()
+    body = m.group(2)
+    gid_m = re.search(r'G-\d+', header)
+    gid = gid_m.group(0) if gid_m else '?'
+
+    # Mutation evidence non-empty
+    mut = re.search(r'\*\*Mutation evidence:\*\*\s*(.+?)(?=\n\s*\n|\n\*\*|\Z)', body, re.S)
+    has_mut = False
+    if mut:
+        v = mut.group(1).strip()
+        if v and not re.match(r'^(N/A|none|—|-|_|read-?only)\s*$', v, re.I):
+            has_mut = True
+            mutation_count += 1
+
+    has_persist = bool(re.search(r'\*\*Persistence check:\*\*', body))
+    if has_persist: persist_count += 1
+    if has_mut and not has_persist:
+        mutation_missing_persist.append(gid)
+
+    # Surface classification
+    if not re.search(r'\*\*Surface:\*\*\s*(ui|api|data|integration|time-driven|custom)', body, re.I):
+        no_surface.append(gid)
+
+errors = 0
+if mutation_missing_persist:
+    print(f"⛔ Rule 3b: {len(mutation_missing_persist)} mutation goals missing Persistence check:")
+    for g in mutation_missing_persist[:10]:
+        print(f"   - {g}")
+    errors += 1
+
+if no_surface:
+    print(f"⛔ Surface classification missing: {len(no_surface)} goals")
+    for g in no_surface[:10]:
+        print(f"   - {g}")
+    print("   Add: **Surface:** ui|api|data|integration|time-driven|custom")
+    errors += 1
+
+if errors:
+    print(f"\nStaging at $STAGING — re-run agent or manual fix")
+    sys.exit(1)
+
+print(f"✓ Rule 3b: {mutation_count} mutation goals, {persist_count} với Persistence check, surface classified")
+PY
+
 mv "$STAGING" "$TARGET"
-echo "✓ TEST-GOALS.md written"
+echo "✓ TEST-GOALS.md written + Rule 3b enforced"
+```
+</step>
+
+<step name="6_5_link_plan_goals">
+## Step 6.5 — Bidirectional PLAN ↔ TEST-GOALS linkage (v1.14.4+)
+
+Mirror blueprint step 2b5 post-gen linkage. Without this, build executor không know which goal a task implements → breaks `<goals-covered>` citation.
+
+```bash
+PLAN_GLOB="${PHASE_DIR}/PLAN*.md"
+GOALS_FILE="${PHASE_DIR}/TEST-GOALS.md"
+
+if [ ! -f "$GOALS_FILE" ]; then
+  echo "⚠ Skip linkage: TEST-GOALS.md missing (--skip-goals?)"
+else
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN:-python3} - "$PHASE_DIR" <<'PY'
+import re, sys, glob
+from pathlib import Path
+
+phase_dir = Path(sys.argv[1])
+goals_file = phase_dir / "TEST-GOALS.md"
+plan_files = sorted(glob.glob(str(phase_dir / "PLAN*.md")))
+if not plan_files:
+    print("⚠ No PLAN*.md files — skip linkage")
+    sys.exit(0)
+
+# Extract goal endpoints + IDs from TEST-GOALS
+goals_text = goals_file.read_text(encoding='utf-8')
+goal_ep_map = {}
+for m in re.finditer(r'(?ms)^#{2,3}\s+(?:Goal\s+)?(G-\d+)[^\n]*\n(.+?)(?=^#{2,3}\s+(?:Goal\s+)?G-\d+|\Z)', goals_text):
+    gid = m.group(1)
+    body = m.group(2)
+    eps = set()
+    for ep_m in re.finditer(r'\b(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)', body):
+        eps.add((ep_m.group(1), ep_m.group(2)))
+    goal_ep_map[gid] = eps
+
+# Annotate each plan task with <goals-covered>
+linked_tasks = 0
+orphan_tasks = 0
+for plan_path in plan_files:
+    p = Path(plan_path)
+    text = p.read_text(encoding='utf-8')
+    orig = text
+
+    # Per-task: find endpoints mentioned, match to goals
+    def annotate(task_match):
+        nonlocal linked_tasks, orphan_tasks
+        task_block = task_match.group(0)
+        # Skip if already has <goals-covered>
+        if re.search(r'<goals-covered>', task_block):
+            return task_block
+        task_eps = set()
+        for ep_m in re.finditer(r'\b(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)', task_block):
+            task_eps.add((ep_m.group(1), ep_m.group(2)))
+        matched = sorted({gid for gid, eps in goal_ep_map.items() if eps & task_eps})
+        if matched:
+            covered = f"<goals-covered>{', '.join(matched)}</goals-covered>"
+            linked_tasks += 1
+        else:
+            covered = "<goals-covered>no-goal-impact</goals-covered>"
+            orphan_tasks += 1
+        # Insert after task header
+        return re.sub(r'(^#{2,3}\s+Task\s+\d+[^\n]*\n)', r'\1' + covered + '\n', task_block, count=1, flags=re.M)
+
+    text = re.sub(
+        r'(?ms)^#{2,3}\s+Task\s+\d+.+?(?=^#{2,3}\s+Task\s+\d+|^#{2}\s+Wave|\Z)',
+        annotate,
+        text
+    )
+    if text != orig:
+        p.write_text(text, encoding='utf-8')
+
+print(f"✓ Linkage: {linked_tasks} tasks linked to goals, {orphan_tasks} marked no-goal-impact")
+PY
+fi
+
+touch "${PHASE_DIR}/.step-markers/6_5_link_plan_goals.done"
 ```
 </step>
 
@@ -923,8 +1099,103 @@ fi
 BACKUPS=$(ls "${PHASE_DIR}/.gsd-backup/" 2>/dev/null | wc -l)
 echo "  [INFO] ${BACKUPS} backup file(s) in .gsd-backup/"
 
+# === VG semantic gates (v1.14.4+ — real downstream verify) ===
+echo ""
+echo "=== VG Semantic Gates (mirror downstream blueprint/build/test requirements) ==="
+
+# Gate A: CONTEXT — 3 sub-sections per decision
+if [ -f "${PHASE_DIR}/CONTEXT.md" ]; then
+  D=$(grep -cE "^#+\s*D-[0-9]+" "${PHASE_DIR}/CONTEXT.md")
+  E=$(grep -c "^\*\*Endpoints:\*\*" "${PHASE_DIR}/CONTEXT.md")
+  U=$(grep -c "^\*\*UI Components:\*\*" "${PHASE_DIR}/CONTEXT.md")
+  T=$(grep -c "^\*\*Test Scenarios:\*\*" "${PHASE_DIR}/CONTEXT.md")
+  if [ "$D" = "$E" ] && [ "$D" = "$U" ] && [ "$D" = "$T" ] && [ "$D" -gt 0 ]; then
+    echo "  [PASS] CONTEXT semantic: ${D} decisions × 3 sub-sections all match"
+    ((PASS++))
+  else
+    echo "  [FAIL] CONTEXT semantic: D=${D} E=${E} U=${U} T=${T} (must all match)"
+    ((FAIL++))
+  fi
+fi
+
+# Gate B: TEST-GOALS — Persistence check coverage cho mutation goals
+if [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+  PERSIST_GAP=$(${PYTHON_BIN:-python3} - "${PHASE_DIR}/TEST-GOALS.md" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+gp = re.compile(r'(?ms)^#{2,4}\s+(?:Goal\s+)?(G-\d+).+?(?=^#{2,4}\s+(?:Goal\s+)?G-\d+|\Z)')
+gap = 0
+for m in gp.finditer(text):
+    body = m.group(0)
+    mut = re.search(r'\*\*Mutation evidence:\*\*\s*(.+?)(?=\n\s*\n|\n\*\*|\Z)', body, re.S)
+    if mut:
+        v = mut.group(1).strip()
+        has_mut = bool(v) and not re.match(r'^(N/A|none|—|_|read-?only|—\s*$|-\s*$)\s*$', v, re.I)
+        has_persist = bool(re.search(r'\*\*Persistence check:\*\*', body))
+        if has_mut and not has_persist:
+            gap += 1
+print(gap)
+PY
+)
+  if [ "${PERSIST_GAP:-0}" -eq 0 ]; then
+    echo "  [PASS] TEST-GOALS Rule 3b: all mutation goals có Persistence check"
+    ((PASS++))
+  else
+    echo "  [FAIL] TEST-GOALS Rule 3b: ${PERSIST_GAP} mutation goals missing Persistence check"
+    ((FAIL++))
+  fi
+
+  # Gate C: Surface classification coverage
+  TOTAL_G=$(grep -cE "^#{2,4}\s+(Goal\s+)?G-[0-9]+" "${PHASE_DIR}/TEST-GOALS.md")
+  WITH_SURFACE=$(grep -cE "^\*\*Surface:\*\*\s+(ui|api|data|integration|time-driven|custom)" "${PHASE_DIR}/TEST-GOALS.md")
+  if [ "$WITH_SURFACE" -eq "$TOTAL_G" ] && [ "$TOTAL_G" -gt 0 ]; then
+    echo "  [PASS] Surface classification: ${WITH_SURFACE}/${TOTAL_G} goals classified"
+    ((PASS++))
+  else
+    echo "  [FAIL] Surface classification: ${WITH_SURFACE}/${TOTAL_G} goals classified"
+    ((FAIL++))
+  fi
+fi
+
+# Gate D: PLAN ↔ TEST-GOALS bidirectional linkage
+if ls "${PHASE_DIR}"/PLAN*.md >/dev/null 2>&1 && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+  TASKS=$(grep -cE "^#{2,3}\s+Task\s+[0-9]+" "${PHASE_DIR}"/PLAN*.md | awk -F: '{s+=$2} END{print s}')
+  WITH_GOALS=$(grep -c "<goals-covered>" "${PHASE_DIR}"/PLAN*.md | awk -F: '{s+=$2} END{print s}')
+  if [ "${WITH_GOALS:-0}" -ge "${TASKS:-1}" ]; then
+    echo "  [PASS] Plan-Goal linkage: ${WITH_GOALS}/${TASKS} tasks có <goals-covered>"
+    ((PASS++))
+  else
+    echo "  [WARN] Plan-Goal linkage incomplete: ${WITH_GOALS}/${TASKS}"
+    ((WARN++))
+  fi
+fi
+
 echo ""
 echo "Result: ${PASS} pass, ${WARN} warn, ${FAIL} fail"
+
+# Final gate — fail nếu bất kỳ semantic gate FAIL
+if [ "$FAIL" -gt 0 ]; then
+  echo ""
+  echo "⛔ VG semantic gates failed (${FAIL} fails). Phase NOT ready for /vg:blueprint."
+  echo "   Re-run: /vg:migrate ${PHASE_NUMBER} --force"
+  echo "   Or fix manually: edit CONTEXT.md/TEST-GOALS.md, then re-run validation"
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "migrate_semantic_fail" "${PHASE_NUMBER}" "migrate.9" "validation" "FAIL" \
+      "{\"fails\":${FAIL},\"warns\":${WARN}}"
+  fi
+  if [[ ! "$ARGUMENTS" =~ --allow-semantic-gaps ]]; then
+    exit 1
+  fi
+  if type -t log_override_debt >/dev/null 2>&1; then
+    log_override_debt "migrate-semantic-gaps" "${PHASE_NUMBER}" "${FAIL} VG semantic gates failed" "$PHASE_DIR"
+  fi
+  echo "⚠ --allow-semantic-gaps set — proceeding, logged to debt"
+fi
+
+if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+  emit_telemetry_v2 "migrate_semantic_pass" "${PHASE_NUMBER}" "migrate.9" "validation" "PASS" \
+    "{\"pass\":${PASS},\"warn\":${WARN}}"
+fi
 ```
 
 **Display migration report:**
