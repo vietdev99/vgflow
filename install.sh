@@ -273,6 +273,33 @@ else
 fi
 
 # ============================================================
+# 5b. Enforcement hooks (v1.16.0 — runtime contract verification)
+# ============================================================
+# VG uses Claude Code hooks as the deterministic enforcement substrate. Without
+# this, skill-MD gates are prose-only (70-90% compliance per Anthropic docs).
+# Hooks run at Stop (verify runtime_contract) + PostToolUse (warn on skill edit).
+# Project-local install so enforcement travels with the repo.
+echo "[5b/7] Enforcement hooks..."
+if [ -f "$TARGET/.claude/scripts/vg-hooks-install.py" ]; then
+  ( cd "$TARGET" && python .claude/scripts/vg-hooks-install.py ) && {
+    echo "  → Stop hook: verify runtime_contract side-effects"
+    echo "  → PostToolUse hook: warn on VG skill edit (reload required)"
+
+    # Self-test — prove the hooks actually execute (not just installed)
+    if [ -f "$TARGET/.claude/scripts/vg-hooks-selftest.py" ]; then
+      echo "  Running hook self-test..."
+      if ( cd "$TARGET" && python .claude/scripts/vg-hooks-selftest.py >/dev/null 2>&1 ); then
+        echo "  ✓ Hook self-test: 4/4 passed (hooks confirmed functional)"
+      else
+        echo "  ⚠ Hook self-test failed. Re-run: cd $TARGET && python .claude/scripts/vg-hooks-selftest.py"
+      fi
+    fi
+  } || echo "  ⚠ Hooks install failed. Re-run: cd $TARGET && python .claude/scripts/vg-hooks-install.py"
+else
+  echo "  → vg-hooks-install.py not copied — skipping (check scripts step)"
+fi
+
+# ============================================================
 # 6. Config template
 # ============================================================
 echo "[6/7] Config template..."

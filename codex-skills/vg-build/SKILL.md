@@ -1096,6 +1096,14 @@ if [ "$R4_RC" != "0" ]; then
   echo "⛔ Executor spawn blocked — fix context budget or raise config.build.prompt_max_lines, then re-run."
   exit 1
 fi
+
+# Bootstrap rules injection (v1.15.1 — hard rule: learnings from past phases MUST
+# reach the executor). BOOTSTRAP_PAYLOAD_FILE is exported by config-loader.md;
+# scope DSL already filtered rules against current phase metadata at load time.
+# Here we render only rules whose target_step matches `build` or `global`.
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "build")
+vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "build" "${PHASE_NUMBER}"
 ```
 
 **Spawn executor agent (one per plan task):**
@@ -1105,6 +1113,10 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
     <vg_executor_rules>
     @.claude/commands/vg/_shared/vg-executor-rules.md
     </vg_executor_rules>
+
+    <bootstrap_rules>
+    ${BOOTSTRAP_RULES_BLOCK}
+    </bootstrap_rules>
 
     <build_config>
     typecheck_cmd: ${config.build_gates.typecheck_cmd}

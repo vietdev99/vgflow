@@ -13,6 +13,22 @@ allowed-tools:
   - Task
   - TaskCreate
   - TaskUpdate
+runtime_contract:
+  # /vg:accept MUST produce UAT.md with human verdict. Missing = phase not
+  # actually accepted despite claim.
+  must_write:
+    - "${PHASE_DIR}/UAT.md"
+  must_touch_markers:
+    - "1_artifact_precheck"
+    - "2_marker_precheck"
+    - "3_sandbox_verdict_gate"
+  must_emit_telemetry:
+    - event_type: "accept.started"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "accept.completed"
+      phase: "${PHASE_NUMBER}"
+  forbidden_without_override:
+    - "--override-reason"
 ---
 
 <rules>

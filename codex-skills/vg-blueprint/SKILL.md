@@ -688,13 +688,25 @@ else
 fi
 ```
 
-Spawn planner agent với VG-specific rules + graphify brief + deploy_lessons brief:
+Bootstrap rules injection (v1.15.1 — hard rule: promoted learnings MUST reach the planner so past-phase mistakes don't repeat):
+
+```bash
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint")
+vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint" "${PHASE_NUMBER}"
+```
+
+Spawn planner agent với VG-specific rules + graphify brief + deploy_lessons brief + bootstrap rules:
 ```
 Agent(subagent_type="general-purpose", model="${MODEL_PLANNER}"):
   prompt: |
     <vg_planner_rules>
     @.claude/commands/vg/_shared/vg-planner-rules.md
     </vg_planner_rules>
+
+    <bootstrap_rules>
+    ${BOOTSTRAP_RULES_BLOCK}
+    </bootstrap_rules>
 
     <graphify_brief>
     @${PHASE_DIR}/.graphify-brief.md
@@ -2291,12 +2303,21 @@ APPEND tasks covering the missing items. DO NOT rewrite existing tasks.
 Match each new task to 1 missing `P{phase}.D-XX` / `F-XX`, G-XX, or endpoint.
 EOF
 
+# Refresh bootstrap rules for gap-closure planner (same injection discipline as 2a)
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint")
+vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint" "${PHASE_NUMBER}"
+
 # Spawn planner via SlashCommand with gap context
 Agent(subagent_type="general-purpose", model="${MODEL_PLANNER}"):
   prompt: |
     <vg_planner_rules>
     @.claude/commands/vg/_shared/vg-planner-rules.md
     </vg_planner_rules>
+
+    <bootstrap_rules>
+    ${BOOTSTRAP_RULES_BLOCK}
+    </bootstrap_rules>
 
     PATCH MODE — do NOT replace existing PLAN.md. APPEND tasks covering gaps.
     Read ${PHASE_DIR}/GAPS-REPORT.md for specific missing items.

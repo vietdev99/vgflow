@@ -17,6 +17,32 @@ argument-instructions: |
   Example: /vg:build 7.1
   Example: /vg:build 7.1 --gaps-only
   Example: /vg:build 7.1 --wave 2
+runtime_contract:
+  # Hook checks these at Stop. Missing evidence = exit 2, force Claude to continue.
+  # Phase 13 failure mode (24 commits, 0 telemetry, 2/16 markers) is precisely
+  # what this contract catches. See .claude/scripts/vg-verify-claim.py.
+  must_write:
+    - "${PHASE_DIR}/SUMMARY.md"
+  must_touch_markers:
+    # Critical path — every long build MUST emit these. Wave tasks are dynamic
+    # so we verify the orchestrator envelope, not per-wave markers.
+    - "1_parse_args"
+    - "4_load_contracts_and_context"
+    - "7_discover_plans"
+    - "8_execute_waves"
+    - "9_post_execution"
+    - "10_postmortem_sanity"
+  must_emit_telemetry:
+    - event_type: "build.phase_start"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "build.phase_end"
+      phase: "${PHASE_NUMBER}"
+  forbidden_without_override:
+    # Every escape hatch must leave a debt-register trail.
+    - "--override-reason"
+    - "--allow-missing-commits"
+    - "--allow-r5-violation"
+    - "--force"
 ---
 
 <NARRATION_POLICY>

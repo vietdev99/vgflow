@@ -10,6 +10,23 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+runtime_contract:
+  # Scope MUST produce CONTEXT.md (enriched decisions) + DISCUSSION-LOG.md.
+  # Without these, blueprint has nothing to plan against.
+  must_write:
+    - "${PHASE_DIR}/CONTEXT.md"
+    - "${PHASE_DIR}/DISCUSSION-LOG.md"
+  must_touch_markers:
+    - "0_parse_and_validate"
+    - "1_deep_discussion"
+    - "2_artifact_generation"
+  must_emit_telemetry:
+    - event_type: "scope.started"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "scope.completed"
+      phase: "${PHASE_NUMBER}"
+  forbidden_without_override:
+    - "--skip-crossai"
 ---
 
 <rules>

@@ -12,6 +12,26 @@ allowed-tools:
   - Task
   - AskUserQuestion
   - BashOutput
+runtime_contract:
+  # Review MUST produce RUNTIME-MAP (ground truth of discovered UI) + coverage
+  # matrix. If review "ran" without these, discovery was hallucinated.
+  must_write:
+    - "${PHASE_DIR}/RUNTIME-MAP.json"
+    - "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
+  must_touch_markers:
+    - "0_parse_and_validate"
+    - "0b_goal_coverage_gate"
+    - "complete"
+  must_emit_telemetry:
+    - event_type: "review.started"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "review.completed"
+      phase: "${PHASE_NUMBER}"
+  forbidden_without_override:
+    - "--override-reason"
+    - "--skip-scan"
+    - "--skip-discovery"
+    - "--fix-only"
 ---
 
 <NARRATION_POLICY>

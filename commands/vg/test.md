@@ -12,6 +12,24 @@ allowed-tools:
   - Task
   - AskUserQuestion
   - BashOutput
+runtime_contract:
+  # /vg:test MUST produce SANDBOX-TEST.md with explicit pass/fail verdict per
+  # goal. Missing = test was skipped/simulated in AI head, not executed.
+  must_write:
+    - "${PHASE_DIR}/SANDBOX-TEST.md"
+  must_touch_markers:
+    - "0_parse_and_validate"
+    - "5b_runtime_contract_verify"
+  must_emit_telemetry:
+    - event_type: "test.started"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "test.completed"
+      phase: "${PHASE_NUMBER}"
+  forbidden_without_override:
+    - "--override-reason"
+    - "--skip-deploy"
+    - "--skip-flow"
+    - "--allow-missing-console-check"
 ---
 
 <NARRATION_POLICY>

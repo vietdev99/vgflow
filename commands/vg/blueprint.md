@@ -14,6 +14,35 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
   - SlashCommand
+runtime_contract:
+  # Deterministic Stop-hook check. If ANY required artifact is missing when
+  # orchestrator tries to Stop after /vg:blueprint <phase>, hook exits 2 and
+  # tells AI to continue. Paths use ${PHASE_DIR} = .vg/phases/{phase}-*.
+  must_write:
+    - "${PHASE_DIR}/PLAN.md"
+    - "${PHASE_DIR}/API-CONTRACTS.md"
+    - "${PHASE_DIR}/TEST-GOALS.md"
+  must_touch_markers:
+    # Subset of filter-steps.py output (feature profile). Missing any =
+    # step silently skipped = BLOCK Stop.
+    - "2a_plan"
+    - "2b_contracts"
+    - "2b5_test_goals"
+    - "2c_verify"
+    - "2d_crossai_review"
+  must_emit_telemetry:
+    # Events that MUST land in .vg/telemetry.jsonl for this phase+command.
+    # Hook greps event_type + phase + command match.
+    - event_type: "blueprint.plan_written"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "blueprint.contracts_generated"
+      phase: "${PHASE_NUMBER}"
+  forbidden_without_override:
+    # If these flags present, hook also checks override-debt register updated.
+    - "--allow-missing-persistence"
+    - "--allow-missing-org"
+    - "--allow-crossai-inconclusive"
+    - "--override-reason"
 ---
 
 <rules>
