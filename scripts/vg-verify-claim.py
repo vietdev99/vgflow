@@ -65,52 +65,116 @@ def log(msg: str) -> None:
         pass
 
 
+STALE_THRESHOLD_SECONDS = 30 * 60  # 30 minutes
+TRANSCRIPT_RECENT_TURNS = 6        # only consider last N user/assistant turn pairs
+
+
 def read_current_run() -> dict | None:
     """Orchestrator should write .vg/current-run.json at command entry.
-    If missing, we fall back to transcript inference.
+    If file is missing OR stale (> 30 min old), return None.
+
+    Staleness matters: abandoned/crashed /vg:* invocations leave the file
+    behind. Without age check, every subsequent Stop event false-fires.
     """
-    if CURRENT_RUN.exists():
-        try:
-            return json.loads(CURRENT_RUN.read_text(encoding="utf-8"))
-        except Exception as e:
-            log(f"current-run.json parse error: {e}")
-    return None
+    if not CURRENT_RUN.exists():
+        return None
+    try:
+        data = json.loads(CURRENT_RUN.read_text(encoding="utf-8"))
+    except Exception as e:
+        log(f"current-run.json parse error: {e}")
+        return None
+
+    # Staleness check — if started_at too old, treat as abandoned
+    try:
+        import datetime as _dt
+        started = data.get("started_at") or ""
+        if started:
+            # Accept either Z-suffix ISO or naive ISO
+            s = started.rstrip("Z")
+            ts = _dt.datetime.fromisoformat(s)
+            age = (_dt.datetime.utcnow() - ts).total_seconds()
+            if age > STALE_THRESHOLD_SECONDS:
+                log(f"current-run.json is {int(age)}s old — treating as abandoned (threshold {STALE_THRESHOLD_SECONDS}s)")
+                return None
+    except Exception as e:
+        log(f"current-run.json age check failed: {e}")
+        # Don't fail-close on parse error — proceed with content
+
+    return data
 
 
 def infer_last_command_from_transcript(transcript_path: str) -> dict | None:
-    """Fallback: grep last ~30 turns of Claude Code transcript for /vg:<cmd>
-    slash command invocation or last tool-use referencing a vg command file.
-    Returns {command, phase} dict or None.
+    """Fallback: scan the most recent ~6 turns of transcript for a VG slash
+    command invocation. Older entries are ignored to prevent stale triggers.
+
+    Why recency-bounded: Claude Code transcripts accumulate across a session.
+    Without this bound, Stop hooks fire on unrelated user turns long after a
+    /vg:* command finished, producing false positives like "SUMMARY.md
+    missing" when the user is just chatting.
     """
     if not transcript_path or not Path(transcript_path).exists():
         return None
 
-    # Transcript is JSONL. Each line is one message event.
+    # Transcript is JSONL. Each line = one message event (user|assistant|tool).
     try:
         tail = []
         with Path(transcript_path).open(encoding="utf-8") as f:
-            # Read last ~2000 lines max to bound cost on huge transcripts
             for line in f:
                 tail.append(line)
                 if len(tail) > 2000:
                     tail.pop(0)
 
-        # Walk backwards looking for slash command invocation pattern.
-        # Claude Code writes user turns with <command-name>/vg:build</command-name>.
         cmd_re = re.compile(r"<command-name>\s*(/vg:[\w-]+)\s*</command-name>")
         arg_re = re.compile(r"<command-args>\s*([^<]*)\s*</command-args>")
 
+        # Recency bound: count "user" entries from the end; stop after N turns.
+        # Each transcript line is a JSON object; we parse the "type" field.
+        user_turns_seen = 0
+        cmd_in_recent_window = None
+
         for line in reversed(tail):
-            m = cmd_re.search(line)
-            if m:
-                cmd_name = m.group(1).lstrip("/")  # e.g., "vg:build"
-                args_match = arg_re.search(line)
-                args = args_match.group(1).strip() if args_match else ""
-                phase = ""
-                parts = args.split()
-                if parts and re.match(r"^\d+(\.\d+)*$", parts[0]):
-                    phase = parts[0]
-                return {"command": cmd_name, "phase": phase, "source": "transcript"}
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+
+            msg_type = (obj.get("type") or "").lower()
+
+            # Count user turns as our "recent window" metric
+            if msg_type == "user":
+                user_turns_seen += 1
+                if user_turns_seen > TRANSCRIPT_RECENT_TURNS:
+                    break  # older than recent window — stop searching
+
+                # Check if THIS user turn contains a slash command
+                content = json.dumps(obj)  # search full message for command tag
+                m = cmd_re.search(content)
+                if m:
+                    cmd_name = m.group(1).lstrip("/")
+                    args_match = arg_re.search(content)
+                    args = args_match.group(1).strip() if args_match else ""
+                    phase = ""
+                    parts = args.split()
+                    if parts and re.match(r"^\d+(\.\d+)*$", parts[0]):
+                        phase = parts[0]
+                    cmd_in_recent_window = {
+                        "command": cmd_name,
+                        "phase": phase,
+                        "source": "transcript",
+                        "user_turns_back": user_turns_seen,
+                    }
+                    # Keep oldest-in-window (the one furthest back but still recent)
+                    # Actually we want the MOST RECENT /vg:* in window — so break:
+                    break
+
+        if cmd_in_recent_window:
+            log(f"Transcript: found {cmd_in_recent_window['command']} "
+                f"{cmd_in_recent_window['user_turns_back']} user-turn(s) back "
+                f"(within recent window of {TRANSCRIPT_RECENT_TURNS})")
+            return cmd_in_recent_window
+
+        log(f"Transcript: no /vg:* command in last {TRANSCRIPT_RECENT_TURNS} user turns")
+        return None
     except Exception as e:
         log(f"transcript inference error: {e}")
 
@@ -292,12 +356,35 @@ def verify(ctx: dict) -> dict:
         log(f"{command}: no runtime_contract in frontmatter — approving (not opted-in)")
         return result
 
+    # Phase inference guard: if command requires a phase (has ${PHASE_DIR}
+    # or ${PHASE_NUMBER} in its contract) but we couldn't infer one,
+    # skip verification. Phase-less verification produces false positives —
+    # the transcript-inferred command is almost certainly stale.
+    needs_phase = False
+    for section in ("must_write", "must_touch_markers", "must_emit_telemetry"):
+        items = contract.get(section) or []
+        blob = json.dumps(items)
+        if "${PHASE_DIR}" in blob or "${PHASE_NUMBER}" in blob:
+            needs_phase = True
+            break
+
+    if needs_phase and not phase:
+        log(f"{command}: contract requires phase but none inferred "
+            f"(transcript source, likely stale) — approving silently")
+        result["skip_reason"] = "no-phase-with-phase-dependent-contract"
+        return result
+
     # Resolve phase dir for path substitution
     phase_dir = resolve_phase_dir(phase) if phase else None
+    if not phase_dir and needs_phase:
+        log(f"{command}: phase='{phase}' but no matching phase dir — approving "
+            f"(phase may not exist yet, or legacy naming)")
+        result["skip_reason"] = "phase-dir-not-resolved"
+        return result
+
     if not phase_dir:
-        log(f"Phase dir not resolved for phase={phase} — skipping path-dependent checks")
-        # Can still check telemetry + override
-        phase_dir = REPO_ROOT  # dummy fallback
+        # Non-phase contract (none in current set but may exist future) — use repo root
+        phase_dir = REPO_ROOT
 
     # must_write
     items = contract.get("must_write") or []
