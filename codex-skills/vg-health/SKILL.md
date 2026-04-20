@@ -249,6 +249,35 @@ PY
   fi
   echo ""
 
+  echo "## Semantic enrichment (v1.14.0+ migrate gates)"
+  VERIFY_SCRIPT=""
+  [ -f "${REPO_ROOT}/.claude/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/.claude/scripts/verify-migrate-output.py"
+  [ -f "${REPO_ROOT}/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"
+
+  if [ -z "$VERIFY_SCRIPT" ]; then
+    echo "   (validator not installed — skip semantic check)"
+  else
+    needs_enrich=0
+    fully_enriched=0
+    no_test_goals=0
+    for phase_dir in "${PHASE_DIRS[@]}"; do
+      [ -f "$phase_dir/TEST-GOALS.md" ] || { no_test_goals=$((no_test_goals + 1)); continue; }
+      fail_count=$(${PYTHON_BIN} "$VERIFY_SCRIPT" --json "$phase_dir" 2>/dev/null \
+        | ${PYTHON_BIN} -c "import sys,json; print(json.loads(sys.stdin.read()).get('fail',0))" 2>/dev/null)
+      if [ "${fail_count:-0}" -gt 0 ]; then
+        needs_enrich=$((needs_enrich + 1))
+      else
+        fully_enriched=$((fully_enriched + 1))
+      fi
+    done
+    echo "   Fully enriched (all gates pass): ${fully_enriched}"
+    echo "   Needs enrichment (≥1 gate fails): ${needs_enrich}"
+    echo "   No TEST-GOALS yet:                 ${no_test_goals}"
+    [ "$needs_enrich" -gt 0 ] && echo "   Detail per phase: /vg:health {phase}"
+    [ "$needs_enrich" -gt 0 ] && echo "   Bulk re-enrich:  /vg:migrate {phase} --force (per phase)"
+  fi
+  echo ""
+
   echo "## Next actions"
   echo "   • Deep inspect:    /vg:health {phase}"
   echo "   • Integrity sweep: /vg:integrity"

@@ -119,6 +119,26 @@ fi
 → Show what's missing: API-CONTRACTS.md, TEST-GOALS.md, enriched CONTEXT.md
 → Do NOT auto-invoke migration. `/vg:next` is fast — migrations require interactive approval via `/vg:migrate`.
 
+**Route 0c (semantic enrichment gap, v1.14.0+):** Phase already migrated (no GSD legacy files) BUT TEST-GOALS missing v1.14.0 semantic fields (Persistence check, Surface classification, Plan-Goal linkage).
+
+```bash
+VERIFY_SCRIPT=""
+[ -f "${REPO_ROOT}/.claude/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/.claude/scripts/verify-migrate-output.py"
+[ -f "${REPO_ROOT}/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"
+
+if [ -n "$VERIFY_SCRIPT" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+  SEMANTIC_JSON=$(${PYTHON_BIN:-python3} "$VERIFY_SCRIPT" --json "$PHASE_DIR" 2>/dev/null)
+  FAIL_GATES=$(echo "$SEMANTIC_JSON" | ${PYTHON_BIN:-python3} -c "import sys,json; d=json.loads(sys.stdin.read()); print(','.join(r['name'] for r in d.get('results',[]) if r.get('status')=='FAIL'))" 2>/dev/null)
+  if [ -n "$FAIL_GATES" ]; then
+    echo "⚠ Phase ${PHASE_NUMBER}: v1.14.0 semantic gaps detected — ${FAIL_GATES}"
+    echo "  Re-run /vg:migrate ${PHASE_NUMBER} --force để enrich (preserves existing decisions/goals)."
+    echo "  Skip để continue pipeline với debt — but blueprint/build sẽ block khi gặp Rule 3b/Surface gates."
+  fi
+fi
+```
+
+Display only — không block. User decision: re-migrate (recommended) hay skip.
+
 **Recon routes** (derived from `NEXT_STEP`):
 - `NEXT_STEP == "scope"` → Next: `/vg:scope {phase}`
 - `NEXT_STEP == "blueprint"` → Next: `/vg:blueprint {phase}`
