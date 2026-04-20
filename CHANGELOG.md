@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.14.0] - 2026-04-20
+
+### Added — Migrate semantic gates (real enforcement, no decoration)
+- **Migrate VG semantic gates** (`commands/vg/migrate.md` step 9): enforces 4 downstream blueprint/build/test requirements:
+  - CONTEXT 3-section coverage (Endpoints + UI Components + Test Scenarios per decision)
+  - TEST-GOALS Rule 3b (every mutation goal has Persistence check block)
+  - Surface classification (ui/api/data/integration/time-driven/custom per goal)
+  - PLAN ↔ TEST-GOALS bidirectional linkage (`<goals-covered>` per task)
+- **Standalone validator** (`scripts/verify-migrate-output.py`): reusable gate validator. Used by step 9 + `--self-test` + CI tooling.
+- **Self-test fixture** (`fixtures/migrate/legacy-sample/`): generic legacy GSD sample with golden post-migration output. Verifies gate logic deterministically without AI agent spawn.
+- **`/vg:migrate --self-test` mode**: runs validator on golden fixture, diffs vs expected report. Exit 0 = gate logic correct.
+- **Step 4 strengthened**: Gate 3 now requires count-match for ALL 3 sub-sections (was Endpoints only — silent miss for Test Scenarios was downstream blocker).
+- **Step 6 strengthened**: agent prompt explicitly requires Persistence check + Surface classification. Post-staging Python gate validates before promotion.
+- **Step 6.5 NEW**: bidirectional PLAN ↔ TEST-GOALS linkage (mirrors blueprint step 2b5 logic).
+- **Override flags**: `--allow-semantic-gaps` (emergency bypass, logs override-debt).
+- **Telemetry events**: `migrate_semantic_pass`, `migrate_semantic_fail`, `migrate_self_test_pass`, `migrate_self_test_fail` visible in `/vg:gate-stats`.
+
+### Fixed
+- **Mutation evidence regex**: previously `^-` matched markdown bullet `- DOM:` as placeholder dash → real mutations counted as N/A. Fix strips bullet prefix before placeholder check.
+- **Goal header pattern**: 2-4 hash levels supported (matches both `## Goal G-XX` legacy and `#### G-XX:` convention).
+
+### Migration guidance
+- Existing legacy phases (without enrichment): gates correctly identify gaps. Verified on real project: 50 missing Persistence on a single phase.
+- Re-run `/vg:migrate <phase> --force` to apply enrichment with full semantic gates.
+- Override path: `--allow-semantic-gaps` for known-incomplete phases (logs override-debt, surfaces in `/vg:gate-stats`).
+
 ## [1.13.2] - 2026-04-20
 
 Thêm công cụ **UI Component Map** — vẽ cây component dạng ASCII + JSON từ code React/Vue/Svelte, dùng cho 2 mục đích:

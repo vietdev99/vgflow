@@ -41,14 +41,75 @@ When to use:
 **Config:** Read .claude/commands/vg/_shared/config-loader.md first.
 
 <step name="1_parse_args">
-Parse `$ARGUMENTS`: phase number (required), optional flags:
+Parse `$ARGUMENTS`: phase number (required, OR `--self-test`), optional flags:
 - `--dry-run` — show what would be converted, don't write files
 - `--force` — re-convert even if VG artifacts already exist (backup existing first)
 - `--skip-contracts` — skip API-CONTRACTS.md generation (manual later)
 - `--skip-goals` — skip TEST-GOALS.md generation (manual later)
-- `--allow-semantic-gaps` — bypass step 9 VG semantic gates (CONTEXT 3-section/Persistence/Surface/Linkage). Logs override-debt. NOT recommended.
-- `--allow-hallucinated-eps` — bypass step 4 hallucination check (>10% endpoint not found in code). Logs override-debt.
-- `--self-test` — run on canonical fixture `.vg/fixtures/migrate/legacy-sample/` instead of real phase. Verify output passes all gates.
+- `--allow-semantic-gaps` — bypass step 9 VG semantic gates. Logs override-debt. NOT recommended.
+- `--allow-hallucinated-eps` — bypass step 4 hallucination check. Logs override-debt.
+- `--self-test` — run gate logic on shipped fixture `<vgflow>/fixtures/migrate/legacy-sample/expected/`, diff vs golden report. Deterministic, no AI spawn. Use to verify gate logic correctness after editing migrate.md.
+
+### Self-test mode (deterministic, no AI)
+
+If `--self-test` flag passed, run gate validator against shipped fixture, diff vs golden report, exit. Skip all other steps.
+
+```bash
+if [[ "$ARGUMENTS" =~ --self-test ]]; then
+  # Locate fixture (relative to vgflow-repo install or .claude/commands/ in project)
+  FIXTURE_DIR=""
+  for candidate in \
+    "${REPO_ROOT}/fixtures/migrate/legacy-sample" \
+    "${REPO_ROOT}/.claude/fixtures/migrate/legacy-sample" \
+    "$(dirname "${0}")/../../fixtures/migrate/legacy-sample"; do
+    [ -d "$candidate" ] && FIXTURE_DIR="$candidate" && break
+  done
+
+  if [ -z "$FIXTURE_DIR" ]; then
+    echo "⛔ Self-test: fixture not found in any expected location."
+    echo "   Looked in: \${REPO_ROOT}/fixtures/, .claude/fixtures/, sibling to migrate.md"
+    exit 1
+  fi
+
+  echo "Self-test: fixture at $FIXTURE_DIR"
+  VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"
+  [ -f "$VERIFY_SCRIPT" ] || VERIFY_SCRIPT="${REPO_ROOT}/.claude/scripts/verify-migrate-output.py"
+  [ -f "$VERIFY_SCRIPT" ] || { echo "⛔ verify-migrate-output.py missing"; exit 1; }
+
+  ACTUAL=$(${PYTHON_BIN:-python3} "$VERIFY_SCRIPT" "${FIXTURE_DIR}/expected/" 2>&1)
+  ACTUAL_RC=$?
+  EXPECTED_FILE="${FIXTURE_DIR}/expected/validation-report.txt"
+
+  if [ "$ACTUAL_RC" != "0" ]; then
+    echo "⛔ Self-test FAIL: validator exit ${ACTUAL_RC} on golden fixture"
+    echo "$ACTUAL"
+    if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+      emit_telemetry_v2 "migrate_self_test_fail" "self-test" "migrate.1" "validator_fail" "FAIL" "{\"rc\":${ACTUAL_RC}}"
+    fi
+    exit 1
+  fi
+
+  # Diff actual vs golden (CRLF-tolerant for Windows)
+  DIFF_OUT=$(echo "$ACTUAL" | diff --strip-trailing-cr "$EXPECTED_FILE" - 2>&1)
+  if [ -z "$DIFF_OUT" ]; then
+    echo "✓ Self-test PASS: gate logic produces golden output"
+    if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+      emit_telemetry_v2 "migrate_self_test_pass" "self-test" "migrate.1" "fixture_match" "PASS" "{}"
+    fi
+    exit 0
+  else
+    echo "⛔ Self-test FAIL: actual output differs from golden:"
+    echo "$DIFF_OUT"
+    echo ""
+    echo "Either: (a) gate logic regressed — fix verify-migrate-output.py"
+    echo "        (b) intentional change — update fixtures/migrate/legacy-sample/expected/validation-report.txt"
+    if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+      emit_telemetry_v2 "migrate_self_test_fail" "self-test" "migrate.1" "golden_diff" "FAIL" "{}"
+    fi
+    exit 1
+  fi
+fi
+```
 </step>
 
 <step name="2_detect_artifacts">

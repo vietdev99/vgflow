@@ -1,0 +1,7 @@
+=== VG Semantic Gates (mirror downstream blueprint/build/test requirements) ===
+  [PASS] CONTEXT semantic: 5 decisions × 3 sub-sections all match
+  [PASS] TEST-GOALS Rule 3b: all 3 mutation goals có Persistence check
+  [PASS] Surface classification: 5/5 goals classified
+  [PASS] Plan-Goal linkage: 8/8 tasks có <goals-covered>
+
+Result: 4 pass, 0 warn, 0 fail
