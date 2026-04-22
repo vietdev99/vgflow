@@ -679,6 +679,7 @@ case "$PROFILE" in
     fi
     ;;
 esac
+```
 
 ### Section E: Deliverables summary (from SUMMARY*.md — for spot-check only)
 
@@ -1263,7 +1264,6 @@ Force-advance (NOT RECOMMENDED): /vg:next --allow-deferred
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 touch "${PHASE_DIR}/.step-markers/7_post_accept_actions.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 7_post_accept_actions 2>/dev/null || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_parse_and_validate 2>/dev/null || true
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.completed" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
 RUN_RC=$?

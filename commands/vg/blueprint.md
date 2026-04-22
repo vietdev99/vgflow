@@ -29,7 +29,11 @@ runtime_contract:
     - "2b_contracts"
     - "2b5_test_goals"
     - "2c_verify"
-    - "2d_crossai_review"
+    # OHOK-9 (d): crossai marker waived when --skip-crossai flag present
+    # (aligns with forbidden_without_override — user can opt-out via
+    # override-debt, marker check matches).
+    - name: "2d_crossai_review"
+      required_unless_flag: "--skip-crossai"
   must_emit_telemetry:
     # Events that MUST land in .vg/telemetry.jsonl for this phase+command.
     # Hook greps event_type + phase + command match.

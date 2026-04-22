@@ -776,7 +776,8 @@ source .claude/commands/vg/_shared/lib/namespace-validator.sh
 STAGED="${PHASE_DIR}/CONTEXT.md.staged"
 if ! validate_d_xx_namespace "$STAGED" "phase:${PHASE_NUMBER}"; then
   echo ""
-  echo "⛔ Scope gate chặn: CONTEXT.md.staged còn chứa bare D-XX. Sửa hết rồi chạy lại /vg:scope ${PHASE_NUMBER} --continue."
+  echo "⛔ Scope gate chặn: CONTEXT.md.staged còn chứa bare D-XX."
+  echo "   Sửa bare D-XX thành P${PHASE_NUMBER}.D-XX trong file .staged, rồi chạy lại /vg:scope ${PHASE_NUMBER}."
   exit 1
 fi
 mv "$STAGED" "${PHASE_DIR}/CONTEXT.md"
@@ -880,8 +881,8 @@ case $rc in
   2) echo "⚠ Completeness checks warn only — proceeding" ;;
   *)
     echo "⛔ Completeness gate FAILED. Resolve blockers before blueprint."
-    echo "   Fix: /vg:scope ${PHASE_NUMBER} --continue  (adds missing test scenarios / decisions)"
-    echo "   Or:  edit CONTEXT.md manually, then re-run /vg:scope ${PHASE_NUMBER} --validate-only"
+    echo "   Fix: /vg:scope ${PHASE_NUMBER}  (re-run discussion to add missing test scenarios / decisions)"
+    echo "   Or:  edit CONTEXT.md manually, then /vg:blueprint ${PHASE_NUMBER} (blueprint re-validates)"
     exit 1
     ;;
 esac
