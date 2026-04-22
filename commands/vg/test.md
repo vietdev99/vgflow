@@ -1079,7 +1079,71 @@ Per-goal commands (filled in dynamically for THIS phase):
 
 **Goal: avoid stopping at "gaps found" and making user manually stitch test → review → build. Auto-chain until PASSED or budget hit.**
 
-Loop counter: `TOTAL_ITER` (persisted in `${PHASE_DIR}/test-loop-state.json`, survives re-invocations).
+Loop counter: `TOTAL_ITER` (persisted in `${PHASE_DIR}/.fix-loop-state.json`, survives re-invocations).
+
+**OHOK Batch 5 B8 (2026-04-23): real counter bash.** Previously prose-only — no file was created / read / incremented. "Max 3 iterations" was fiction; each `/vg:test` run started fresh regardless of prior attempts. Now persistent across invocations.
+
+```bash
+# Load or initialize counter state
+FIX_LOOP_STATE="${PHASE_DIR}/.fix-loop-state.json"
+MAX_ITER=$(vg_config_get test.max_fix_loop_iterations 3 2>/dev/null || echo 3)
+
+if [ ! -f "$FIX_LOOP_STATE" ]; then
+  # First invocation — initialize
+  ${PYTHON_BIN:-python3} - <<PY > "$FIX_LOOP_STATE"
+import json
+from datetime import datetime
+print(json.dumps({
+    "iteration_count": 0,
+    "first_run_ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "last_run_ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "max_iterations": ${MAX_ITER},
+    "escalations": [],
+}, indent=2))
+PY
+  TOTAL_ITER=0
+else
+  TOTAL_ITER=$(${PYTHON_BIN:-python3} -c "
+import json; d=json.load(open('${FIX_LOOP_STATE}', encoding='utf-8'))
+print(d.get('iteration_count', 0))
+" 2>/dev/null || echo 0)
+fi
+
+echo "▸ Fix loop: iteration ${TOTAL_ITER}/${MAX_ITER}"
+
+# Budget enforcement — hard stop at MAX_ITER
+if [ "${TOTAL_ITER:-0}" -ge "${MAX_ITER:-3}" ]; then
+  echo "⛔ Auto-resolve budget exhausted (${TOTAL_ITER}/${MAX_ITER} iterations)." >&2
+  echo "   See FINAL GUIDANCE below for next actions." >&2
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.fix_loop_exhausted" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"iterations\":${TOTAL_ITER},\"max\":${MAX_ITER}}" >/dev/null 2>&1 || true
+
+  # Don't exit — let step continue to write SANDBOX-TEST.md verdict=GAPS_FOUND + REVIEW-FEEDBACK.md
+  # User must fix root cause + reset state manually:
+  #   rm ${PHASE_DIR}/.fix-loop-state.json && /vg:test ${PHASE_NUMBER}
+  BUDGET_EXHAUSTED=true
+fi
+
+# Increment counter (only if not at budget limit — will do actual loop body below)
+if [ "${BUDGET_EXHAUSTED:-false}" != "true" ]; then
+  TOTAL_ITER=$((TOTAL_ITER + 1))
+  ${PYTHON_BIN:-python3} - <<PY > "$FIX_LOOP_STATE"
+import json
+from datetime import datetime
+from pathlib import Path
+d = json.loads(Path("${FIX_LOOP_STATE}").read_text(encoding="utf-8"))
+d["iteration_count"] = ${TOTAL_ITER}
+d["last_run_ts"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+d.setdefault("escalations", []).append({
+    "iteration": ${TOTAL_ITER},
+    "ts": d["last_run_ts"],
+})
+print(json.dumps(d, indent=2))
+PY
+  echo "  Incremented → ${TOTAL_ITER}/${MAX_ITER}"
+fi
+```
 
 After 5c-fix completes:
 ```
