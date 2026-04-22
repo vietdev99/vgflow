@@ -305,21 +305,37 @@ AI reads SPECS.md goal + in-scope items. Pre-analyze:
 
 Present analysis, then ask:
 
+**Conversational preamble (R9 rule):**
+
+> "Vòng 1 (Domain & Business — bối cảnh nghiệp vụ) chốt **ai làm gì trong phase này và tại sao**: user story (kịch bản người dùng), role (vai trò — advertiser/publisher/admin/dsp-partner), và business rule (quy tắc nghiệp vụ — vd: chỉ publisher mới approve được inventory của chính họ). Đây là nền tảng cho 4 vòng còn lại — nếu sai ở đây, kỹ thuật + API + UI + test đều lệch theo.
+>
+> Tôi đã đọc SPECS.md và phân tích sơ bộ. Bạn review, chỉnh chỗ nào AI đoán sai, hoặc bổ sung context nếu thiếu."
+
 ```
 AskUserQuestion:
-  header: "Round 1 — Domain & Business"
+  header: "Round 1 — Bối cảnh nghiệp vụ"
   question: |
-    Based on SPECS.md, here's my understanding:
+    Dựa trên SPECS.md, đây là hiểu biết của tôi:
 
-    **Goal:** {extracted goal}
-    **User stories I see:**
+    **Mục tiêu phase:** {extracted goal}
+
+    **User stories (kịch bản người dùng — ai muốn làm gì):**
     - US-1: {story}
     - US-2: {story}
 
-    **Roles involved:** {roles}
-    **Business rules:** {rules}
+    Ví dụ đã điền:
+    - US-1: DSP partner muốn tạo deal mới với publisher để chạy campaign direct (không qua auction)
+    - US-2: SSP admin muốn review + approve/reject deal trước khi nó active
 
-    Confirm, edit, or add more context?
+    **Roles (vai trò — ai có quyền làm):** {roles}
+    Ví dụ: dsp-partner (tạo deal), ssp-admin (approve/reject), publisher (xem deal về inventory của mình)
+
+    **Business rule (quy tắc nghiệp vụ — luật bắt buộc):** {rules}
+    Ví dụ:
+    - Deal mới luôn start ở state 'pending', chỉ ssp-admin đổi sang 'approved'/'rejected'
+    - Publisher chỉ thấy deal về inventory của chính họ, không thấy deal khác
+
+    Câu trả lời: "ok" hoặc chỉnh cụ thể ("role X nên thêm quyền Y", "business rule Z chưa đầy đủ vì...").
   (open text)
 ```
 
