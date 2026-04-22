@@ -670,7 +670,7 @@ else
   if [ -f "$PARENT_MATRIX" ]; then
     FAILED_GOALS=$(grep -E '\|[[:space:]]*(BLOCKED|FAILED)[[:space:]]*\|' "$PARENT_MATRIX" | \
                    grep -oE 'G-[0-9]+' | sort -u)
-    FAILED_COUNT=$(echo "$FAILED_GOALS" | grep -c . || echo 0)
+    FAILED_COUNT=$([ -z "$FAILED_GOALS" ] && echo 0 || echo "$FAILED_GOALS" | wc -l | tr -d ' ')
     echo "▸ Parent BLOCKED/FAILED goals (${FAILED_COUNT}): $(echo $FAILED_GOALS | tr '\n' ' ')"
   else
     echo "⚠ Parent has no GOAL-COVERAGE-MATRIX — cannot verify delta coverage"
@@ -682,7 +682,7 @@ else
   BASELINE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD 2>/dev/null)
   DELTA_FILES=$(git diff --name-only "${BASELINE_SHA}" HEAD -- \
                 'apps/**/src/**' 'packages/**/src/**' 'infra/**' 2>/dev/null | sort -u)
-  DELTA_COUNT=$(echo "$DELTA_FILES" | grep -c . || echo 0)
+  DELTA_COUNT=$([ -z "$DELTA_FILES" ] && echo 0 || echo "$DELTA_FILES" | wc -l | tr -d ' ')
 
   if [ "$DELTA_COUNT" -eq 0 ]; then
     echo "⛔ Hotfix phase has 0 code files changed (apps/**/src|packages/**/src|infra/**)" >&2
@@ -890,7 +890,7 @@ else
   BASELINE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD 2>/dev/null)
   CODE_FILES=$(git diff --name-only "${BASELINE_SHA}" HEAD -- \
                'apps/**/src/**' 'packages/**/src/**' 'infra/**' 2>/dev/null | sort -u)
-  CODE_COUNT=$(echo "$CODE_FILES" | grep -c . || echo 0)
+  CODE_COUNT=$([ -z "$CODE_FILES" ] && echo 0 || echo "$CODE_FILES" | wc -l | tr -d ' ')
 
   if [ "$CODE_COUNT" -eq 0 ]; then
     echo "⛔ Bugfix phase has 0 code files changed in apps|packages|infra" >&2
@@ -907,7 +907,7 @@ else
   TEST_FILES=$(git diff --name-only "${BASELINE_SHA}" HEAD -- \
                '**/e2e/**/*.spec.ts' '**/__tests__/**' '**/*.test.ts' '**/*.test.js' \
                '**/tests/**/*.py' 2>/dev/null | sort -u)
-  TEST_COUNT=$(echo "$TEST_FILES" | grep -c . || echo 0)
+  TEST_COUNT=$([ -z "$TEST_FILES" ] && echo 0 || echo "$TEST_FILES" | wc -l | tr -d ' ')
   BUG_ID_SAFE=$(echo "$BUG_REF" | grep -oE '[A-Za-z0-9_-]+' | head -1)
 
   # Look for test file mentioning the bug ID (by name or content)
