@@ -320,28 +320,43 @@ def parse_verdict(text: str) -> dict | None:
     return {"verdict": verdict, "findings": findings, "raw_block": block[:4000]}
 
 
+class EmitError(Exception):
+    """Raised when event emission fails. Caller should treat as INFRA_FAILURE
+    and exit 2 — silently swallowing would mean validator later thinks the
+    iteration never ran."""
+
+
 def emit_event(event_type: str, phase: str, payload: dict) -> None:
     """OHOK-8: bypass the emit-event CLI (which blocks reserved `build.crossai_*`
     after round-3 forgery mitigation). Import db module directly so only this
     script — not user CLI — can land these events. Preserves hash chain because
     db.append_event serializes via _flock().
 
-    If db import fails (e.g. script invoked from outside repo), fall back to
-    stderr warning — do NOT silently swallow.
+    OHOK-8 round-3 hardening: raise EmitError on failure instead of silently
+    swallowing. An emit failure means the validator cannot later prove the
+    iteration ran → build would BLOCK anyway. Fail-closed here gives main() a
+    chance to exit 2 with the real cause surfaced.
     """
+    current_run_file = REPO_ROOT / ".vg" / "current-run.json"
+    if not current_run_file.exists():
+        raise EmitError(f"no current-run.json when emitting {event_type}")
     try:
-        # Load current run + push directly
-        current_run_file = REPO_ROOT / ".vg" / "current-run.json"
-        if not current_run_file.exists():
-            sys.stderr.write(f"⚠ emit {event_type}: no current-run.json\n")
-            return
         run = json.loads(current_run_file.read_text(encoding="utf-8"))
-        run_id = run.get("run_id")
-        command = run.get("command", "vg:build")
+    except Exception as e:
+        raise EmitError(f"current-run.json unreadable: {e}") from e
+    run_id = run.get("run_id")
+    if not run_id:
+        raise EmitError(f"current-run.json missing run_id field")
+    command = run.get("command", "vg:build")
 
-        # Import db lazily — adds orchestrator/ to sys.path once
+    # Import db lazily — adds orchestrator/ to sys.path once
+    if str(ORCHESTRATOR) not in sys.path:
         sys.path.insert(0, str(ORCHESTRATOR))
+    try:
         import db  # type: ignore[import-not-found]
+    except Exception as e:
+        raise EmitError(f"cannot import db module: {e}") from e
+    try:
         db.append_event(
             run_id=run_id,
             event_type=event_type,
@@ -352,7 +367,13 @@ def emit_event(event_type: str, phase: str, payload: dict) -> None:
             payload=payload,
         )
     except Exception as e:
-        sys.stderr.write(f"⚠ emit {event_type} exception: {e}\n")
+        # FOREIGN KEY failure here usually means run-start wasn't called or
+        # the runs row was deleted. Loud fail — validator BLOCKs downstream
+        # anyway, better surface root cause now.
+        raise EmitError(
+            f"db.append_event failed for {event_type!r} "
+            f"(run_id={run_id[:12]!r}): {e}"
+        ) from e
 
 
 def main() -> int:
@@ -538,4 +559,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except EmitError as e:
+        # OHOK-8: emit failure = INFRA_FAILURE. Caller sees exit 2 and knows
+        # to investigate. Validator later BLOCKs on missing events anyway —
+        # this just surfaces the real cause earlier.
+        sys.stderr.write(
+            f"⛔ vg-build-crossai-loop.py INFRA_FAILURE (emit): {e}\n"
+            f"   Iteration events may be missing — validator will BLOCK at\n"
+            f"   run-complete. Investigate .vg/events.db + run-start state,\n"
+            f"   then re-invoke this script.\n"
+        )
+        sys.exit(2)

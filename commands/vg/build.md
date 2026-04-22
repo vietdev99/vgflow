@@ -2726,55 +2726,75 @@ For each finding with severity=BLOCK:
 Do NOT refactor, do NOT add features beyond the fix. Stop and return.
 ```
 
+**IMPORTANT — this step is Claude-orchestrated, not bash-looped.**
+
+Bash auto-loop was wrong: re-running CrossAI on SAME unfixed code just
+re-produces the same findings. Main Claude (Opus) MUST orchestrate
+iteration-by-iteration with Sonnet Task subagent fixing between iters.
+
 ```bash
-# Invocation template. Main Claude (Opus) runs this block, iterating
-# up to 5 times, with Task subagent dispatches between iterations.
+# Phase 1 — iteration 1: establish baseline
+CROSSAI_PHASE="${PHASE_NUMBER:-${PHASE_ARG}}"
 CROSSAI_MAX_ITER=5
-CROSSAI_ITER=1
-CROSSAI_OUTCOME="NOT_RUN"
+echo "▸ CrossAI build-verify iteration 1/${CROSSAI_MAX_ITER}..."
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-build-crossai-loop.py \
+  --phase "${CROSSAI_PHASE}" --iteration 1 --max-iterations ${CROSSAI_MAX_ITER}
+CROSSAI_RC=$?
+echo "▸ iter 1 exit code: ${CROSSAI_RC} (0=CLEAN, 1=BLOCKS_FOUND, 2=INFRA_FAILURE)"
+```
 
-while [ $CROSSAI_ITER -le $CROSSAI_MAX_ITER ]; do
-  echo "▸ CrossAI build-verify iteration $CROSSAI_ITER/$CROSSAI_MAX_ITER..."
+**Now the orchestrator (main Claude Opus) reads CROSSAI_RC and decides**:
+
+- **CROSSAI_RC = 0**: loop script already emitted `build.crossai_loop_complete`.
+  Proceed directly to step 12 (run-complete). Build done clean at iter 1.
+
+- **CROSSAI_RC = 1**: BLOCK findings exist at
+  `${PHASE_DIR}/crossai-build-verify/findings-iter1.json`.
+  **Opus MUST dispatch a Sonnet Task subagent** with the findings JSON +
+  fix prompt (see template above). Subagent reads each finding, applies
+  minimal fix, commits with `feat(${PHASE}-1.fixN):` subject. After
+  subagent returns (all BLOCKS fixed + committed), Opus re-invokes:
+  ```bash
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-build-crossai-loop.py \
-    --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
-    --iteration "$CROSSAI_ITER" \
-    --max-iterations "$CROSSAI_MAX_ITER"
-  ITER_RC=$?
-  if [ $ITER_RC -eq 0 ]; then
-    CROSSAI_OUTCOME="CLEAN"
-    break
-  elif [ $ITER_RC -eq 1 ]; then
-    # Main Claude (Opus) must spawn Sonnet Task subagent here to fix
-    # findings. After subagent commits fixes, continue loop.
-    echo "⚠ BLOCK findings found at iter $CROSSAI_ITER — dispatch Sonnet fixer"
-    # [Task subagent spawn happens at Claude layer, not bash]
-    CROSSAI_ITER=$((CROSSAI_ITER + 1))
-  else
-    echo "⚠ CrossAI infra failure (rc=$ITER_RC) — escalate to user"
-    CROSSAI_OUTCOME="INFRA_FAILURE"
-    break
-  fi
-done
+    --phase "${CROSSAI_PHASE}" --iteration 2 --max-iterations ${CROSSAI_MAX_ITER}
+  ```
+  Repeat: exit 0 → done; exit 1 → fix + iter 3; ... up to iter 5.
 
-if [ "$CROSSAI_OUTCOME" = "CLEAN" ]; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-    "build.crossai_loop_complete" \
-    --payload "{\"iterations\":$CROSSAI_ITER,\"max\":$CROSSAI_MAX_ITER}" \
-    >/dev/null
-elif [ $CROSSAI_ITER -gt $CROSSAI_MAX_ITER ]; then
-  # Hit max — Claude (Opus) must prompt user for choice, then emit
-  # build.crossai_loop_exhausted OR build.crossai_loop_user_override
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-    "build.crossai_loop_exhausted" \
-    --payload "{\"iterations\":$CROSSAI_MAX_ITER}" \
-    >/dev/null
-  echo "━━━ ACTION REQUIRED ━━━"
-  echo "CrossAI loop exhausted after $CROSSAI_MAX_ITER iterations. Pick:"
-  echo "  (a) continue — another 5 iterations"
-  echo "  (b) defer — proceed to /vg:review with findings as known issues"
-  echo "  (c) skip + HARD debt — requires override with ticket URL"
-  # User picks → main Claude emits the corresponding override event
-fi
+- **CROSSAI_RC = 2**: CLI infra failure (Codex/Gemini network/timeout/parse
+  fail). Opus investigates (check `${PHASE_DIR}/crossai-build-verify/
+  codex-iter*.md` + `gemini-iter*.md` for error detail). Either retry
+  the same iteration after fixing infra OR escalate to user for override.
+
+**After iter 5 without clean** — Opus MUST prompt user with 3 options:
+
+```
+━━━ ACTION REQUIRED — CrossAI loop exhausted ━━━
+
+5 iterations ran without clean. Remaining BLOCK findings listed in
+${PHASE_DIR}/crossai-build-verify/findings-iter5.json.
+
+Pick one:
+  (a) continue — spawn another Sonnet fix round + run iterations 6-10
+  (b) defer — record exhausted + proceed to /vg:review with remaining
+      findings as known issues. Runs:
+      python .claude/scripts/vg-orchestrator emit-crossai-terminal exhausted \
+        --payload '{"iterations":5,"reason":"user_deferred"}'
+  (c) skip + HARD debt — requires override.used with crossai flag:
+      python .claude/scripts/vg-orchestrator override \
+        --flag=skip-crossai-build-loop --reason='<ticket URL or SHA ≥50ch>'
+      python .claude/scripts/vg-orchestrator emit-crossai-terminal user_override
+```
+
+Opus presents options, user picks, Opus invokes the chosen command. Run-
+complete (step 12) BLOCKs until ONE of the three terminal events lands.
+
+**Why no bash while-loop**: the fix between iterations needs a Task subagent
+(Sonnet with isolated context reading findings-iterN.json), which a bash
+block can't spawn. Each iteration is a discrete Claude-orchestrated step.
+
+**If Opus bypasses this step** entirely: step 12 fires
+`build-crossai-required` validator which sees 0 iteration events → BLOCK.
+No way to skip via "promise" — events.db evidence required (OHOK-7/8).
 ```
 
 ```bash
