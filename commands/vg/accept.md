@@ -14,24 +14,47 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 runtime_contract:
-  # /vg:accept MUST produce UAT.md with human verdict. Missing = phase not
-  # actually accepted despite claim.
+  # OHOK Batch 3 (2026-04-22): full-coverage contract + UAT quorum gate.
+  # Previously contract listed only 3 markers — UAT theatre (step 5 skip-all)
+  # could not be detected. Now 11 markers + forced response persistence gate.
   must_write:
-    # OHOK-8 round-4 Codex fix: skill writes ${PHASE_DIR}/${PHASE_NUMBER}-UAT.md
-    # (see step 6_write_uat_md line 901). Contract previously asked for bare
-    # UAT.md → validator BLOCK on valid artifact, or looked at wrong path.
     - "${PHASE_DIR}/${PHASE_NUMBER}-UAT.md"
+    # Batch 3 B4: response JSON must be persisted by AI during step 5
+    # (read by step 5_uat_quorum_gate). Missing / empty = BLOCK.
+    - "${PHASE_DIR}/.uat-responses.json"
   must_touch_markers:
+    # Hard gates — foundational + verdict enforcement
+    - "0_gate_integrity_precheck"
     - "1_artifact_precheck"
     - "2_marker_precheck"
     - "3_sandbox_verdict_gate"
+    - "3b_unreachable_triage_gate"
+    - "3c_override_resolution_gate"
+    - "5_interactive_uat"
+    - "5_uat_quorum_gate"
+    - "6_write_uat_md"
+    # Advisory / post-accept
+    - name: "0_load_config"
+      severity: "warn"
+    - name: "4_build_uat_checklist"
+      severity: "warn"
+    - "7_post_accept_actions"
   must_emit_telemetry:
     - event_type: "accept.started"
       phase: "${PHASE_NUMBER}"
     - event_type: "accept.completed"
       phase: "${PHASE_NUMBER}"
+  # forbidden flags (comments pulled above — inline comments break fallback YAML parser):
+  # --allow-uat-skips: Batch 3 B4 — log when UAT quorum breached
+  # --allow-empty-uat: Batch 3 B4 — log when .uat-responses.json absent
+  # --allow-unreachable: existing (3b gate)
+  # --allow-deferred: existing (DEFERRED bypass in /vg:next)
   forbidden_without_override:
     - "--override-reason"
+    - "--allow-uat-skips"
+    - "--allow-empty-uat"
+    - "--allow-unreachable"
+    - "--allow-deferred"
 ---
 
 <rules>
@@ -910,7 +933,156 @@ AskUserQuestion:
    [d] DEFER — partial accept, revisit later (record open items)"
 ```
 
-Record all responses with timestamps in orchestrator memory for step 6.
+### Response persistence (OHOK Batch 3 B4 — REQUIRED for quorum gate)
+
+**AI MUST write each AskUserQuestion response to `${PHASE_DIR}/.uat-responses.json` immediately after the user answers.** This is the source of truth read by step `5_uat_quorum_gate` below. Without persistence, the quorum gate BLOCKs (treats unset state as "user skipped everything").
+
+Format:
+```json
+{
+  "decisions": {"pass": 0, "fail": 0, "skip": 0, "items": [{"id": "P7.D-01", "verdict": "p|f|s", "ts": "..."}]},
+  "goals": {"pass": 0, "fail": 0, "skip": 0, "items": [{"id": "G-01", "status_before": "READY", "verdict": "p|f|s", "ts": "..."}]},
+  "ripples": {"verdict": "y|n|s|acknowledged|risk-accepted", "ts": "..."},
+  "designs": {"pass": 0, "fail": 0, "skip": 0, "items": [{"ref": "sites-list.default", "verdict": "p|f|s", "ts": "..."}]},
+  "mobile_gates": {"verdict": "y|n|s", "ts": "..."},
+  "final": {"verdict": "ACCEPT|REJECT|DEFER", "ts": "..."}
+}
+```
+
+AI can write/update this JSON via Bash heredoc after each section completes. Missing sections that are N/A for this profile (e.g. mobile_gates for web) should be omitted or set to `{"verdict": "n/a"}`.
+
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+touch "${PHASE_DIR}/.step-markers/5_interactive_uat.done"
+```
+</step>
+
+<step name="5_uat_quorum_gate">
+**⛔ UAT QUORUM GATE (OHOK Batch 3 B4 — block theatre UAT).**
+
+Before Batch 3 UAT was pure theatre — every AskUserQuestion offered `[s] Skip`, user could skip decisions + goals + ripples + designs all via `[s]`, phase ships with "DEFERRED" verdict, next phase reads note and proceeds. No mechanism enforced minimum due diligence.
+
+This gate counts SKIPs on critical sections (A decisions, B READY goals) and BLOCKs if over threshold. Config-driven via `config.accept.max_uat_skips_critical` (default 0 — strict).
+
+```bash
+# Config thresholds (default strict: 0 critical skips allowed)
+MAX_CRIT_SKIPS=$(${PYTHON_BIN:-python3} - <<'PY' 2>/dev/null || echo 0
+import re
+from pathlib import Path
+p = Path(".claude/vg.config.md")
+if not p.exists():
+    print(0); exit()
+text = p.read_text(encoding="utf-8", errors="replace")
+m = re.search(r"^\s*accept\s*:\s*\n(?:\s+[a-z_]+:.*\n)*?\s+max_uat_skips_critical\s*:\s*(\d+)", text, re.MULTILINE)
+print(m.group(1) if m else "0")
+PY
+)
+
+RESP_JSON="${PHASE_DIR}/.uat-responses.json"
+
+# Gate 1: response file must exist with content
+if [ ! -s "$RESP_JSON" ]; then
+  echo "⛔ UAT quorum gate: .uat-responses.json missing or empty." >&2
+  echo "   AI must persist each AskUserQuestion response in step 5." >&2
+  echo "   Silence / verbal-only answers = BLOCK (prevents theatre UAT)." >&2
+  if [[ ! "${ARGUMENTS}" =~ --allow-empty-uat ]]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.uat_quorum_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"no_response_json\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "accept-uat-empty" "${PHASE_NUMBER}" "UAT ran without persisted responses" "${PHASE_DIR}"
+fi
+
+# Gate 2: count critical skips (decisions + READY goals)
+CRITICAL_SKIPS=$(${PYTHON_BIN:-python3} - "$RESP_JSON" 2>/dev/null <<'PY' || echo 999
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.exists():
+    print(0); exit()
+try:
+    data = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    print(999); exit()  # malformed = treat as max skips
+
+dec_skip = (data.get("decisions") or {}).get("skip", 0)
+# Only count READY-goal skips as critical; BLOCKED/UNREACHABLE goals aren't asked
+goal_items = (data.get("goals") or {}).get("items", [])
+goal_skip_ready = sum(
+    1 for it in goal_items
+    if it.get("verdict") == "s" and it.get("status_before") == "READY"
+)
+# Fallback: if items[] not populated, use overall skip count
+if not goal_items:
+    goal_skip_ready = (data.get("goals") or {}).get("skip", 0)
+
+print(int(dec_skip) + int(goal_skip_ready))
+PY
+)
+
+TOTAL_SKIPS=$(${PYTHON_BIN:-python3} - "$RESP_JSON" 2>/dev/null <<'PY' || echo 0
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.exists():
+    print(0); exit()
+try:
+    data = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    print(0); exit()
+total = 0
+for section in ("decisions", "goals", "designs"):
+    total += (data.get(section) or {}).get("skip", 0)
+print(total)
+PY
+)
+
+echo "▸ UAT quorum: critical skips=${CRITICAL_SKIPS} (threshold=${MAX_CRIT_SKIPS}), total skips=${TOTAL_SKIPS}"
+
+if [ "${CRITICAL_SKIPS:-0}" -gt "${MAX_CRIT_SKIPS:-0}" ]; then
+  echo "⛔ UAT quorum FAILED: ${CRITICAL_SKIPS} critical skips > ${MAX_CRIT_SKIPS} (max)." >&2
+  echo "" >&2
+  echo "Critical = decisions (A) + READY goals (B). These MUST be verified, not skipped." >&2
+  echo "" >&2
+  echo "Options:" >&2
+  echo "  (a) Re-run /vg:accept ${PHASE_NUMBER} and actually verify the [s]-skipped items" >&2
+  echo "  (b) Raise threshold in config: accept.max_uat_skips_critical: N" >&2
+  echo "  (c) --allow-uat-skips override (logs to debt, DEFERRED verdict forced)" >&2
+
+  if [[ ! "${ARGUMENTS}" =~ --allow-uat-skips ]]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.uat_quorum_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"critical_skips\":${CRITICAL_SKIPS},\"threshold\":${MAX_CRIT_SKIPS}}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+
+  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "accept-uat-quorum" "${PHASE_NUMBER}" \
+    "${CRITICAL_SKIPS} critical UAT skips (threshold ${MAX_CRIT_SKIPS})" "${PHASE_DIR}"
+
+  echo "⚠ --allow-uat-skips — proceeding, forced DEFERRED verdict (not ACCEPTED)" >&2
+  # Rewrite final verdict to DEFER so downstream /vg:next still blocks
+  ${PYTHON_BIN:-python3} - "$RESP_JSON" <<'PY'
+import json, sys
+from datetime import datetime
+from pathlib import Path
+p = Path(sys.argv[1])
+d = json.loads(p.read_text(encoding="utf-8"))
+d.setdefault("final", {})
+d["final"]["verdict"] = "DEFER"
+d["final"]["forced_by"] = "uat_quorum_override"
+d["final"]["ts"] = datetime.utcnow().isoformat() + "Z"
+p.write_text(json.dumps(d, indent=2))
+PY
+fi
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.uat_quorum_passed" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"critical_skips\":${CRITICAL_SKIPS},\"total_skips\":${TOTAL_SKIPS}}" >/dev/null 2>&1 || true
+
+touch "${PHASE_DIR}/.step-markers/5_uat_quorum_gate.done"
+```
 </step>
 
 <step name="6_write_uat_md">
