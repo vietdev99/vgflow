@@ -95,7 +95,17 @@ Every browser tool call = `{MCP_PREFIX}browser_navigate`, `{MCP_PREFIX}browser_s
 If `${PLANNING_DIR}/vgflow-patches/gate-conflicts.md` exists, a prior `/vg:update` detected that the 3-way merge (gộp) altered one or more HARD gate blocks. BLOCK (chặn) until resolved via `/vg:reapply-patches --verify-gates`.
 
 ```bash
-if [ -f "${PLANNING_DIR}/vgflow-patches/gate-conflicts.md" ]; then
+# v2.2 — T8 gate now routes through block_resolve. L1 auto-clears stale
+# file when all entries carry resolution markers. Only genuine conflicts BLOCK.
+if [ -f "${REPO_ROOT}/.claude/commands/vg/_shared/lib/t8-gate-check.sh" ]; then
+  [ -f "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh" ] && \
+    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh"
+  source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/t8-gate-check.sh"
+  t8_gate_check "${PLANNING_DIR}" "test"
+  T8_RC=$?
+  [ "$T8_RC" -eq 2 ] && exit 2
+  [ "$T8_RC" -eq 1 ] && exit 1
+elif [ -f "${PLANNING_DIR}/vgflow-patches/gate-conflicts.md" ]; then
   echo "⛔ Gate integrity conflicts unresolved — run /vg:reapply-patches --verify-gates first."
   exit 1
 fi

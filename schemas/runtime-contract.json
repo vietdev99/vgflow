@@ -33,12 +33,23 @@
           {
             "type": "object",
             "required": ["name"],
+            "additionalProperties": false,
             "properties": {
               "name": {"type": "string"},
               "namespace": {
                 "type": "string",
                 "default": "shared",
                 "description": "Separates markers per-command to avoid conflicts. e.g. 'build/1_parse_args' vs 'blueprint/1_parse_args'"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["block", "warn"],
+                "default": "block",
+                "description": "OHOK-9 (d): 'block' = missing marker violates contract (default, preserves legacy behavior). 'warn' = missing marker emits contract.marker_warn telemetry event but run continues. Use for cross-cutting optional steps (crossai_review, reflection) that shouldn't hard-stop the pipeline."
+              },
+              "required_unless_flag": {
+                "type": "string",
+                "description": "OHOK-9 (d): when this flag appears in run_args (e.g. '--skip-crossai'), the marker check is waived entirely and contract.marker_waived INFO event is emitted. Matches the documented skip semantics of the named step."
               }
             }
           }

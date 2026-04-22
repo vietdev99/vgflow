@@ -106,7 +106,19 @@ Key difference from V4 execute: executors read API-CONTRACTS.md to ensure BE rou
 If `${PLANNING_DIR}/vgflow-patches/gate-conflicts.md` exists, a prior `/vg:update` detected that the 3-way merge (gộp) altered one or more HARD gate blocks. Until a human resolves them via `/vg:reapply-patches --verify-gates`, the pipeline cannot trust its own enforcement logic — so we BLOCK (chặn).
 
 ```bash
-if [ -f "${PLANNING_DIR}/vgflow-patches/gate-conflicts.md" ]; then
+# v2.2 — T8 gate now routes through block_resolve. L1 auto-clears stale
+# file if every entry carries a resolution marker ([resolved-upstream|
+# resolved-merged|skipped|manual-review]). Only genuinely unresolved
+# conflicts BLOCK. Helper unavailable → fall through to original hard exit.
+if [ -f "${REPO_ROOT}/.claude/commands/vg/_shared/lib/t8-gate-check.sh" ]; then
+  [ -f "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh" ] && \
+    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh"
+  source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/t8-gate-check.sh"
+  t8_gate_check "${PLANNING_DIR}" "build"
+  T8_RC=$?
+  [ "$T8_RC" -eq 2 ] && exit 2
+  [ "$T8_RC" -eq 1 ] && exit 1
+elif [ -f "${PLANNING_DIR}/vgflow-patches/gate-conflicts.md" ]; then
   echo "⛔ Gate integrity conflicts unresolved."
   echo "   File: ${PLANNING_DIR}/vgflow-patches/gate-conflicts.md"
   echo "   Cause: /vg:update 3-way merge altered hard-gate (cổng cứng) blocks."

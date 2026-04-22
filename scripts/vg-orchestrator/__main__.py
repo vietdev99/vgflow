@@ -1510,19 +1510,53 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
     if not contract:
         return (len(violations) == 0), violations
 
-    # must_write
+    # must_write — profile-aware + glob-aware (v2.2 OHOK-9)
     must_write = contracts.normalize_must_write(contract.get("must_write") or [])
+    phase_profile = contracts.detect_phase_profile(phase)
     missing_files = []
+    profile_skipped = []  # WARN, not BLOCK
     for item in must_write:
-        p = Path(contracts.substitute(item["path"], phase, phase_dir))
+        rendered = contracts.substitute(item["path"], phase, phase_dir)
+        p = Path(rendered)
         if not p.is_absolute():
             p = Path(os.getcwd()) / p
         result = evidence.check_artifact(
             p, min_bytes=item["content_min_bytes"],
             required_sections=item["content_required_sections"],
+            glob_fallback=True,
         )
-        if not result["ok"]:
-            missing_files.append({"path": str(p), "reason": result["reason"]})
+        if result["ok"]:
+            continue
+        # Missing — is this artifact even applicable for the phase profile?
+        if not contracts.artifact_applicable(phase_profile, rendered):
+            profile_skipped.append({
+                "path": str(p),
+                "reason": result["reason"],
+                "profile": phase_profile,
+            })
+            continue
+        missing_files.append({"path": str(p), "reason": result["reason"]})
+
+    if profile_skipped:
+        # Emit WARN event — visible in telemetry, not a violation
+        try:
+            for skip in profile_skipped:
+                db.append_event(
+                    run_id=run_id,
+                    event_type="contract.profile_skip",
+                    phase=phase,
+                    command=command,
+                    outcome="WARN",
+                    payload={
+                        "path": skip["path"],
+                        "profile": skip["profile"],
+                        "reason": skip["reason"],
+                    },
+                )
+        except Exception:
+            # telemetry failure must not break verify
+            pass
+
     if missing_files:
         violations.append({"type": "must_write", "missing": missing_files})
 
@@ -1540,18 +1574,78 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
 
     # must_touch_markers — fallback check against {command-short} namespace
     # so v1 flat markers + v2 per-command markers both satisfy contract.
+    # Severity-aware (v2.2 OHOK-9 d): markers with severity=warn emit
+    # telemetry instead of violation; required_unless_flag waives check
+    # when the named flag appears in run_args.
     markers = contracts.normalize_markers(contract.get("must_touch_markers") or [])
     if markers and phase_dir:
         if is_partial_wave:
             markers = [m for m in markers
                        if m.get("name") not in PARTIAL_EXEMPT_MARKERS]
+
+        # Separate flag-waived markers (conditional) from always-checked
+        checked = []
+        waived = []
+        for m in markers:
+            waiver = m.get("required_unless_flag")
+            if waiver and waiver in (run_args or ""):
+                waived.append(m)
+            else:
+                checked.append(m)
+
         cmd_ns = command.replace("vg:", "")
         missing_markers = state_mod.check_markers(
-            phase_dir, markers, fallback_namespaces=[cmd_ns, "shared"],
+            phase_dir, checked, fallback_namespaces=[cmd_ns, "shared"],
         )
-        if missing_markers:
+
+        # Split missing into block vs warn severity
+        block_missing = []
+        warn_missing = []
+        for missing_label in missing_markers:
+            # Find original marker spec by name (label may be "ns/name" form)
+            bare_name = missing_label.rsplit("/", 1)[-1]
+            m_spec = next(
+                (m for m in checked
+                 if m["name"] == bare_name or m["name"] == missing_label),
+                None,
+            )
+            if m_spec and m_spec.get("severity") == "warn":
+                warn_missing.append(missing_label)
+            else:
+                block_missing.append(missing_label)
+
+        if warn_missing:
+            try:
+                for wm in warn_missing:
+                    db.append_event(
+                        run_id=run_id,
+                        event_type="contract.marker_warn",
+                        phase=phase,
+                        command=command,
+                        outcome="WARN",
+                        payload={"marker": wm, "reason": "missing (severity=warn)"},
+                    )
+            except Exception:
+                pass
+
+        if waived:
+            try:
+                for wm in waived:
+                    db.append_event(
+                        run_id=run_id,
+                        event_type="contract.marker_waived",
+                        phase=phase,
+                        command=command,
+                        outcome="INFO",
+                        payload={"marker": wm["name"],
+                                 "flag": wm.get("required_unless_flag")},
+                    )
+            except Exception:
+                pass
+
+        if block_missing:
             violations.append({"type": "must_touch_markers",
-                               "missing": missing_markers})
+                               "missing": block_missing})
 
     # must_emit_telemetry
     telemetry_specs = contracts.normalize_telemetry(

@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import assert_expected_block, assert_nonzero
+
 
 ORCH = Path(__file__).resolve().parents[1] / "vg-orchestrator"
 PYTHON = sys.executable
@@ -111,7 +113,7 @@ def test_bypass_1_fake_artifacts_and_markers(sandbox):
         (phase_dir / ".step-markers" / f"{m}.done").touch()
 
     r = orch(sandbox, "run-complete")
-    assert r.returncode == 2, f"Expected BLOCK, got rc={r.returncode}"
+    assert_expected_block(r, "BV-2/3: fake artifacts + touched markers bypass")
     assert "must_emit_telemetry" in r.stderr or "scope.completed" in r.stderr
 
 
@@ -131,7 +133,7 @@ def test_bypass_2_forged_telemetry_jsonl(sandbox):
     )
     # Still missing markers + real events → BLOCK
     r = orch(sandbox, "run-complete")
-    assert r.returncode == 2, f"Expected BLOCK, got rc={r.returncode}"
+    assert_expected_block(r, "BV-4: forged telemetry.jsonl must not bypass events.db hash chain")
 
 
 def test_bypass_3_concurrent_run_start(sandbox):
@@ -139,7 +141,7 @@ def test_bypass_3_concurrent_run_start(sandbox):
     Expect: 2nd run-start rejected."""
     start_scope(sandbox)
     r = orch(sandbox, "run-start", "vg:blueprint", "99")
-    assert r.returncode != 0, "Concurrent run-start should be rejected"
+    assert_nonzero(r, "BV: concurrent run-start must be rejected while another run is active")
     assert "Active run exists" in r.stderr
 
 
@@ -158,7 +160,7 @@ def test_bypass_4_empty_context_md(sandbox):
     orch(sandbox, "emit-event", "scope.completed")
 
     r = orch(sandbox, "run-complete")
-    assert r.returncode == 2, f"Expected BLOCK, got rc={r.returncode}"
+    assert_expected_block(r, "BV-4: empty CONTEXT.md (no decisions) must block context-structure validator")
     assert "context-structure" in r.stderr or "decision" in r.stderr.lower()
 
 
@@ -178,7 +180,7 @@ def test_bypass_5_missing_completion_event(sandbox):
     # deliberately skip scope.completed emit
 
     r = orch(sandbox, "run-complete")
-    assert r.returncode == 2, f"Expected BLOCK, got rc={r.returncode}"
+    assert_expected_block(r, "BV-5: missing scope.completed event must block must_emit_telemetry")
     assert "scope.completed" in r.stderr
 
 
@@ -199,7 +201,7 @@ def test_bypass_6_forbidden_flag_without_override(sandbox):
     orch(sandbox, "emit-event", "scope.completed")
 
     r = orch(sandbox, "run-complete")
-    assert r.returncode == 2, f"Expected BLOCK, got rc={r.returncode}"
+    assert_expected_block(r, "BV-6: --skip-crossai without override.used event must block forbidden_without_override")
     assert "forbidden_without_override" in r.stderr or \
            "--skip-crossai" in r.stderr
 
@@ -210,7 +212,7 @@ def test_bypass_7_missing_phase_dir(sandbox):
     r = orch(sandbox, "run-start", "vg:scope", "99999")
     assert r.returncode == 0  # start itself succeeds
     r = orch(sandbox, "run-complete")
-    assert r.returncode == 2, f"Expected BLOCK, got rc={r.returncode}"
+    assert_expected_block(r, "BV-7: non-existent phase dir must block phase-exists validator")
 
 
 def test_bypass_8_hash_chain_tamper(sandbox):
@@ -227,9 +229,7 @@ def test_bypass_8_hash_chain_tamper(sandbox):
     conn.close()
 
     r = orch(sandbox, "verify-hash-chain")
-    assert r.returncode == 2, (
-        f"Expected hash-chain BLOCK, got rc={r.returncode}\nstdout={r.stdout}"
-    )
+    assert_expected_block(r, "BV-8: tampered events row must be caught by hash-chain verify")
     assert "BROKEN" in r.stderr or "BROKEN" in r.stdout
 
 
@@ -251,10 +251,7 @@ def test_bypass_9_fake_current_run_json(sandbox):
     r = orch(sandbox, "run-complete")
     # Either rc=1 (no run row) or rc=2 (contract check on fake run)
     # The point: CAN'T succeed with PASS
-    assert r.returncode != 0, (
-        f"Fake current-run.json produced PASS! rc={r.returncode}\n"
-        f"stdout={r.stdout}"
-    )
+    assert_nonzero(r, "BV-9: fake current-run.json without run-start must not PASS")
 
 
 def test_bypass_10_events_db_deleted_midrun(sandbox):
@@ -271,6 +268,4 @@ def test_bypass_10_events_db_deleted_midrun(sandbox):
     r = orch(sandbox, "run-complete")
     # Without events.db, run-complete either rebuilds empty (no run_id match
     # → some error) OR runs validators and they BLOCK on missing events
-    assert r.returncode != 0, (
-        f"events.db deleted but run-complete PASSED! rc={r.returncode}"
-    )
+    assert_nonzero(r, "BV-10: events.db deleted midrun must not PASS run-complete")

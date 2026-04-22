@@ -84,7 +84,14 @@ def _validate_against_schema(contract: dict, command: str) -> None:
 
 def _fallback_parse(fm_text: str) -> dict | None:
     """PyYAML-free parser — subset of runtime_contract shape.
-    Used when PyYAML not installed in hook environment."""
+    Used when PyYAML not installed in hook environment.
+
+    Handles block-form list objects with ANY starter field name
+    (e.g. `- name: crossai_review`, `- event_type: scope.completed`)
+    plus simple string list items. Extended (OHOK-9 d) to parse the
+    marker severity/waiver fields — name: / severity: / namespace: /
+    required_unless_flag: — via the generic nested field pattern.
+    """
     m = re.search(r"^runtime_contract:\s*\n((?:[ \t].*\n?)+)",
                   fm_text, re.MULTILINE)
     if not m:
@@ -102,19 +109,23 @@ def _fallback_parse(fm_text: str) -> dict | None:
             current_key = key_m.group(1)
             contract[current_key] = []
             continue
-        # Simple list item (string)
-        item_m = re.match(r"^    -\s+\"?([^\"#]+)\"?\s*$", line)
+        # List item: starter-field object  `- name: value` or `- event_type: value`
+        obj_start = re.match(
+            r"^    -\s+([a-z_]+):\s*\"?([^\"#]+?)\"?\s*$", line,
+        )
+        if obj_start and current_key:
+            contract[current_key].append({
+                obj_start.group(1): obj_start.group(2).strip(),
+            })
+            continue
+        # Simple list item (string) — must come AFTER obj_start to avoid
+        # eating `- key: value` as plain string.
+        item_m = re.match(r"^    -\s+\"?([^\"#:]+)\"?\s*$", line)
         if item_m and current_key:
             contract[current_key].append(item_m.group(1).strip())
             continue
-        # List item with nested (e.g. event_type object)
-        obj_start = re.match(r"^    -\s+event_type:\s*\"?([^\"#]+)\"?\s*$",
-                             line)
-        if obj_start and current_key:
-            contract[current_key].append({"event_type": obj_start.group(1).strip()})
-            continue
-        # Nested field on last object item
-        nested_m = re.match(r"^      ([a-z_]+):\s*\"?([^\"#]+)\"?\s*$", line)
+        # Nested field on last object item (indent 6)
+        nested_m = re.match(r"^      ([a-z_]+):\s*\"?([^\"#]+?)\"?\s*$", line)
         if nested_m and current_key and contract[current_key]:
             last = contract[current_key][-1]
             if isinstance(last, dict):
@@ -188,6 +199,80 @@ def substitute(template: str, phase: str, phase_dir: Path | None) -> str:
     return out
 
 
+# ─── Phase profile detection (v2.2 OHOK-9) ────────────────────────────
+# Drives profile-aware artifact gating in _verify_contract. Matches the
+# helper in .claude/commands/vg/_shared/lib/phase-profile.sh.
+
+_PROFILE_KEYWORDS = {
+    "migration": [r"\bmigration\b", r"\brollback\b", r"\bschema\s+change\b"],
+    "hotfix":    [r"\bhotfix\b", r"\bhot[-\s]fix\b"],
+    "bugfix":    [r"\bbugfix\b", r"\bbug[-\s]fix\b", r"^\s*issue[_-]?id\s*:"],
+    "infra":     [r"\binfra(structure)?\b", r"\bansible\b", r"\bterraform\b",
+                  r"\bVPS\b", r"\bdocker\s+compose\b"],
+    "docs":      [r"\bdocumentation\b", r"^\s*#\s+Documentation\b"],
+}
+
+# Artifacts REQUIRED per profile. Anything missing from the profile's list
+# converts to a WARN (not a BLOCK) when _verify_contract sees must_write.
+_PROFILE_REQUIRED_ARTIFACTS = {
+    "feature":   {"SPECS.md", "CONTEXT.md", "PLAN.md", "API-CONTRACTS.md",
+                  "TEST-GOALS.md", "SUMMARY.md", "DISCUSSION-LOG.md"},
+    "infra":     {"SPECS.md", "PLAN.md", "SUMMARY.md"},
+    "hotfix":    {"SPECS.md", "PLAN.md", "SUMMARY.md"},
+    "bugfix":    {"SPECS.md", "PLAN.md", "SUMMARY.md"},
+    "migration": {"SPECS.md", "PLAN.md", "SUMMARY.md", "ROLLBACK.md"},
+    "docs":      {"SPECS.md"},
+}
+
+
+def detect_phase_profile(phase: str) -> str:
+    """Detect phase profile from SPECS.md frontmatter + body keywords.
+    Falls back to 'feature' when SPECS missing or ambiguous.
+    Mirrors the bash helper at _shared/lib/phase-profile.sh."""
+    import re as _re
+    phase_dir = resolve_phase_dir(phase)
+    if phase_dir is None:
+        return "feature"
+    specs = phase_dir / "SPECS.md"
+    if not specs.exists():
+        return "feature"
+    try:
+        text = specs.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "feature"
+
+    # Frontmatter wins if explicit
+    fm_match = _re.match(r"^---\s*\n(.+?)\n---\s*\n", text, _re.DOTALL)
+    if fm_match:
+        fm = fm_match.group(1)
+        m = _re.search(r"^\s*profile\s*:\s*[\"']?(\w+)",
+                       fm, _re.MULTILINE)
+        if m and m.group(1).lower() in _PROFILE_REQUIRED_ARTIFACTS:
+            return m.group(1).lower()
+
+    # Heuristic — first matching profile wins (most specific first)
+    for prof in ("migration", "hotfix", "bugfix", "infra", "docs"):
+        for pat in _PROFILE_KEYWORDS.get(prof, []):
+            if _re.search(pat, text, _re.IGNORECASE | _re.MULTILINE):
+                return prof
+    return "feature"
+
+
+def artifact_applicable(profile: str, path: str) -> bool:
+    """True if the artifact filename is required for this phase profile.
+    Used to convert 'missing' violations into WARN for non-applicable
+    artifacts on non-feature profiles (e.g. CONTEXT.md on infra phase).
+    """
+    from pathlib import Path as _Path
+    name = _Path(path).name
+    required = _PROFILE_REQUIRED_ARTIFACTS.get(
+        profile, _PROFILE_REQUIRED_ARTIFACTS["feature"]
+    )
+    # Normalize: strip phase-number prefix so `14-UAT.md` → `UAT.md`
+    stripped = re.sub(r"^[0-9.]+-", "", name)
+    return stripped in required or name in required
+
+
 def normalize_must_write(items: list) -> list[dict]:
     """Normalize mixed string/dict items to unified dict shape."""
     result = []
@@ -207,15 +292,30 @@ def normalize_must_write(items: list) -> list[dict]:
 
 
 def normalize_markers(items: list) -> list[dict]:
-    """Normalize markers to {name, namespace} shape."""
+    """Normalize markers to {name, namespace, severity, required_unless_flag}.
+
+    Extended schema (OHOK-9 d):
+    - severity: "block" (default) | "warn" — warn emits telemetry event
+      `contract.marker_warn` instead of violation.
+    - required_unless_flag: str — if flag present in run_args, marker
+      check is skipped entirely (e.g. `--skip-crossai` waives crossai
+      marker requirement, matching the step's skip semantics).
+    String-form items keep default severity=block and no flag waiver
+    (backward compat — existing contracts don't change meaning).
+    """
     result = []
     for item in items or []:
         if isinstance(item, str):
-            result.append({"name": item, "namespace": "shared"})
+            result.append({
+                "name": item, "namespace": "shared",
+                "severity": "block", "required_unless_flag": None,
+            })
         elif isinstance(item, dict) and "name" in item:
             result.append({
                 "name": item["name"],
                 "namespace": item.get("namespace", "shared"),
+                "severity": item.get("severity", "block"),
+                "required_unless_flag": item.get("required_unless_flag"),
             })
     return result
 
