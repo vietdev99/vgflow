@@ -105,7 +105,7 @@ Backward-compat alias for users who learned the old workflow (`/vg:init` first).
 ## Soft alias execution
 
 ```bash
-PLANNING_DIR=".planning"
+PLANNING_DIR=".vg"
 FOUNDATION_FILE="${PLANNING_DIR}/FOUNDATION.md"
 PROJECT_FILE="${PLANNING_DIR}/PROJECT.md"
 

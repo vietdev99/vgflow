@@ -183,7 +183,7 @@ Before presenting roadmap to user, scan all proposed phase titles + descriptions
 
 ```bash
 # Source helper from _shared/foundation-drift.md (conceptual — inline in practice)
-PHASE_DIR=".planning"  # roadmap-level, not phase-specific
+PHASE_DIR=".vg"  # roadmap-level, not phase-specific
 FOUNDATION_FILE="${PLANNING_DIR}/FOUNDATION.md"
 
 if [ -f "$FOUNDATION_FILE" ]; then

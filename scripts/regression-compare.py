@@ -352,7 +352,7 @@ def main():
     ap.add_argument("--baselines", required=True, type=Path)
     ap.add_argument("--vitest-results", type=Path, default=None)
     ap.add_argument("--e2e-results", type=Path, default=None)
-    ap.add_argument("--output-dir", type=Path, default=Path(".planning"))
+    ap.add_argument("--output-dir", type=Path, default=Path(".vg"))
     ap.add_argument("--json-only", action="store_true")
     args = ap.parse_args()
 

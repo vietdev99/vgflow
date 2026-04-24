@@ -39,7 +39,7 @@ Produces a sorted table by total event volume, with per-outcome breakdown. Surfa
 ## Step 0: Parse filters + load helpers
 
 ```bash
-PLANNING_DIR=".planning"
+PLANNING_DIR=".vg"
 TELEMETRY_PATH="${PLANNING_DIR}/telemetry.jsonl"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 

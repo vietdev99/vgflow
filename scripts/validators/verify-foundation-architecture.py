@@ -4,7 +4,7 @@ Validator: verify-foundation-architecture.py
 
 Phase D v2.5 (2026-04-23): FOUNDATION.md §9 "Architecture Lock" section check.
 
-Reads .planning/FOUNDATION.md (glob fallback to .vg/FOUNDATION.md) and
+Reads .vg/FOUNDATION.md (legacy fallback to .planning/FOUNDATION.md) and
 validates that section 9 is present and contains all 8 required subsections
 with substantive content (≥3 non-empty bullet lines each).
 
@@ -133,17 +133,17 @@ def _read_config() -> dict:
 
 
 def _find_foundation() -> Path | None:
-    """Locate FOUNDATION.md — .planning/ first, then .vg/ fallback."""
+    """Locate FOUNDATION.md — .vg/ canonical first, .planning/ legacy fallback."""
     candidates = [
-        REPO_ROOT / ".planning" / "FOUNDATION.md",
         REPO_ROOT / ".vg" / "FOUNDATION.md",
+        REPO_ROOT / ".planning" / "FOUNDATION.md",
     ]
-    # Also glob for any FOUNDATION.md under .planning/
+    # Also glob for any FOUNDATION.md under .planning/ (legacy tolerance)
     for p in (REPO_ROOT / ".planning").glob("FOUNDATION.md") if (
         REPO_ROOT / ".planning"
     ).exists() else []:
         if p not in candidates:
-            candidates.insert(0, p)
+            candidates.append(p)
 
     for p in candidates:
         if p.exists():

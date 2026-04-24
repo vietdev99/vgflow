@@ -14,7 +14,7 @@ You are a scanner agent spawned by `/vg:design-extract`. Your ONLY job: normaliz
 ASSET_PATH        = "{absolute path to design file}"
 SLUG              = "{filesystem-safe slug}"
 HANDLER           = "playwright_render | passthrough | penboard_render | pencil_xml | figma_fallback"
-OUTPUT_DIR        = "{absolute output directory, e.g. .planning/design-normalized}"
+OUTPUT_DIR        = "{absolute output directory, e.g. .vg/design-normalized}"
 CAPTURE_STATES    = {true|false}
 NORMALIZER_SCRIPT = "{absolute path to design-normalize.py}"
 ```

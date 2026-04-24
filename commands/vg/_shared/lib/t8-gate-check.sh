@@ -18,7 +18,7 @@
 #   2 — L2 proposal dumped (caller presents to user)
 
 t8_gate_check() {
-  local planning_dir="${1:-.planning}"
+  local planning_dir="${1:-.vg}"
   local command_name="${2:-unknown}"
   local conflicts_file="${planning_dir}/vgflow-patches/gate-conflicts.md"
 

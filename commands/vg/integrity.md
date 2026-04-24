@@ -39,7 +39,7 @@ Produces a 3-bucket report (VALID / LEGACY / CORRUPT) per phase. Each CORRUPT ro
 ## Step 0: Parse + load helpers
 
 ```bash
-PLANNING_DIR=".planning"
+PLANNING_DIR=".vg"
 PHASES_DIR="${PLANNING_DIR}/phases"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 

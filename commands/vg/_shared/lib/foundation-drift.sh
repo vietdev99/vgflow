@@ -28,9 +28,9 @@ foundation_drift_semantic_check() {
 
   # Silence flag
   if [[ "${ARGUMENTS:-}" =~ --no-drift-check ]]; then
-    mkdir -p "$(dirname "${PHASE_DIR:-.planning}/build-state.log")" 2>/dev/null
+    mkdir -p "$(dirname "${PHASE_DIR:-.vg}/build-state.log")" 2>/dev/null
     echo "drift-check: skipped via --no-drift-check (source=${source})" \
-      >> "${PHASE_DIR:-.planning}/build-state.log" 2>/dev/null
+      >> "${PHASE_DIR:-.vg}/build-state.log" 2>/dev/null
     return 0
   fi
 

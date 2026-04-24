@@ -117,7 +117,7 @@ Pretty-printer on top of shared helpers. No corruption repair — that lives in 
 ## Step 0: Parse + load helpers
 
 ```bash
-PLANNING_DIR=".planning"
+PLANNING_DIR=".vg"
 PHASES_DIR="${PLANNING_DIR}/phases"
 TELEMETRY_PATH="${PLANNING_DIR}/telemetry.jsonl"
 DEBT_REGISTER="${PLANNING_DIR}/OVERRIDE-DEBT.md"

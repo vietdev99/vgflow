@@ -116,7 +116,7 @@ Classifies corruption into 6 types (clean / legacy-no-manifest / manifest-self-c
 ## Step 0: Parse args + load helpers
 
 ```bash
-PLANNING_DIR=".planning"
+PLANNING_DIR=".vg"
 PHASES_DIR="${PLANNING_DIR}/phases"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 

@@ -600,7 +600,7 @@ bash "$LOCK_SCRIPT" cleanup   # remove locks older than 1 hour
 
 ```bash
 vg_config_get() {
-  # Usage: vg_config_get design_assets.output_dir ".planning/design-normalized"
+  # Usage: vg_config_get design_assets.output_dir ".vg/design-normalized"
   #        vg_config_get semantic_regression.enabled true
   # Scalar values only. For arrays use vg_config_get_array.
   local path="${1:-}" default="${2:-}"

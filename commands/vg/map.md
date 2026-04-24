@@ -143,7 +143,7 @@ Always proceed to step 3 if: no codebase-map.md, --force, or stale (>5 commits).
 **NEW F12 incremental gate:** Before full rebuild, ask `graphify-incremental.py` whether full rebuild is actually needed. If only markdown/planning/doc files changed → skip. If structural files (package.json, tsconfig, vg.config) changed → full rebuild. If only code files changed → incremental (current graphify API only supports full rebuild; emit event for telemetry + do full).
 
 ```bash
-MARKER="${CONFIG_PATHS_PLANNING_DIR:-.planning}/.graphify-last-rebuild"
+MARKER="${CONFIG_PATHS_PLANNING_DIR:-.vg}/.graphify-last-rebuild"
 
 if [[ ! "$ARGUMENTS" =~ --force ]] && [[ ! "$ARGUMENTS" =~ --full ]]; then
   DECISION=$(${PYTHON_BIN} .claude/scripts/graphify-incremental.py decide \

@@ -24,7 +24,7 @@ fi
 ROUND="$1"
 TOPIC="$2"
 ACCUMULATED="$3"
-FOUNDATION="${4:-${PLANNING_DIR:-.planning}/FOUNDATION.md}"
+FOUNDATION="${4:-${PLANNING_DIR:-.vg}/FOUNDATION.md}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091

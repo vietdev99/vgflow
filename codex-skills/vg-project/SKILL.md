@@ -117,7 +117,7 @@ Pipeline: **project** → roadmap → map → prioritize → specs → scope →
 ## Step 0: Parse args + load config
 
 ```bash
-PLANNING_DIR=".planning"
+PLANNING_DIR=".vg"
 PROJECT_FILE="${PLANNING_DIR}/PROJECT.md"
 FOUNDATION_FILE="${PLANNING_DIR}/FOUNDATION.md"
 CONFIG_FILE=".claude/vg.config.md"
@@ -415,7 +415,7 @@ for pattern in ["docs/**/*.md", "BRIEF.md", "SPEC.md", "RFC*.md", "*-brief.md", 
             scan["docs_found"].append(f)
 
 # 9. ${PLANNING_DIR}/ deep scan — toàn bộ artifacts từ pipeline trước
-planning_dir = Path(".planning")
+planning_dir = Path(".vg")
 if planning_dir.is_dir():
     # 9a. PROJECT.md (legacy or current)
     legacy_project = planning_dir / "PROJECT.md"

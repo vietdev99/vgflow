@@ -140,7 +140,7 @@ if [ -z "${PHASE_NUMBER:-}" ]; then
   exit 1
 fi
 
-ROADMAP="${PLANNING_DIR:-.planning}/ROADMAP.md"
+ROADMAP="${PLANNING_DIR:-.vg}/ROADMAP.md"
 if [ ! -f "$ROADMAP" ]; then
   echo "⛔ ROADMAP.md not found at ${ROADMAP}" >&2
   echo "   Run /vg:roadmap first to derive phases from PROJECT.md." >&2
@@ -166,7 +166,7 @@ if [ -z "${PHASE_DIR:-}" ]; then
                | head -1 | sed -E 's/^##?\s+(Phase\s+)?[0-9.]+[\s:.-]+//; s/[[:space:]]+/-/g; s/[^a-zA-Z0-9-]//g' \
                | tr '[:upper:]' '[:lower:]' | head -c 60)
   [ -z "$PHASE_SLUG" ] && PHASE_SLUG="phase-${PHASE_NUMBER}"
-  PHASE_DIR="${PLANNING_DIR:-.planning}/phases/${PHASE_NUMBER}-${PHASE_SLUG}"
+  PHASE_DIR="${PLANNING_DIR:-.vg}/phases/${PHASE_NUMBER}-${PHASE_SLUG}"
   mkdir -p "$PHASE_DIR"
 fi
 

@@ -22,7 +22,7 @@ The engine spawns 3 external CLI agents in parallel, collects their outputs, bui
 ### `total-check`
 - **Called by:** /rtb:crossai-check
 - **Statefulness:** Stateless
-- **Purpose:** Full quality gate. Reads the entire `.planning/phases/{X}/` directory — all plans, specs, context, and code references. Each CLI performs a comprehensive audit covering correctness, completeness, consistency, and architectural alignment. This is the heaviest mode and should only be triggered explicitly.
+- **Purpose:** Full quality gate. Reads the entire `.vg/phases/{X}/` directory — all plans, specs, context, and code references. Each CLI performs a comprehensive audit covering correctness, completeness, consistency, and architectural alignment. This is the heaviest mode and should only be triggered explicitly.
 
 ### `execute-verify`
 - **Called by:** /rtb:execute after each wave
@@ -192,7 +192,7 @@ cat "$OUTPUT_DIR/claude.out"
 
 ### Session-Based Modes (execute-verify, test-generate, test-run)
 
-- Write context and outputs to `.planning/phases/{X}/crossai/`
+- Write context and outputs to `.vg/phases/{X}/crossai/`
 - File naming:
   - `execute-verify-{wave}.xml` — one file per execution wave
   - `test-generate.xml` — merged test suite with per-CLI attribution
