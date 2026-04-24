@@ -300,6 +300,13 @@ def normalize_must_write(items: list) -> list[dict]:
     v2.5 extensions (anti-forge patch):
     - glob_min_count: int — path is treated as a glob pattern; ≥N matches required
     - required_unless_flag: str — check waived when flag appears in run_args
+
+    v2.5.2 Phase K extensions (artifact-run binding):
+    - must_be_created_in_run: bool — require evidence manifest entry
+      with creator_run_id == current run (default: False to preserve
+      legacy behavior; new contracts opt in explicitly)
+    - check_provenance: bool — also verify source_inputs in manifest
+      still hash the same on disk (default: False)
     """
     result = []
     for item in items or []:
@@ -307,7 +314,9 @@ def normalize_must_write(items: list) -> list[dict]:
             result.append({"path": item, "content_min_bytes": 1,
                            "content_required_sections": [],
                            "glob_min_count": None,
-                           "required_unless_flag": None})
+                           "required_unless_flag": None,
+                           "must_be_created_in_run": False,
+                           "check_provenance": False})
         elif isinstance(item, dict) and "path" in item:
             result.append({
                 "path": item["path"],
@@ -317,6 +326,10 @@ def normalize_must_write(items: list) -> list[dict]:
                 ),
                 "glob_min_count": item.get("glob_min_count"),
                 "required_unless_flag": item.get("required_unless_flag"),
+                "must_be_created_in_run": bool(
+                    item.get("must_be_created_in_run", False)
+                ),
+                "check_provenance": bool(item.get("check_provenance", False)),
             })
     return result
 

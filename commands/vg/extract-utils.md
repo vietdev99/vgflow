@@ -10,6 +10,11 @@ allowed-tools:
   - Glob
   - Grep
   - Agent
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "extract_utils.started"
+    - event_type: "extract_utils.completed"
 ---
 
 <rules>

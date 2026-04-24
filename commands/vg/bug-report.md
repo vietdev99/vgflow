@@ -1,6 +1,11 @@
 ---
 user-invocable: true
 description: "Auto-detect workflow bugs + push to GitHub issues on vietdev99/vgflow. Opt-out default, anonymous URL fallback if no gh auth."
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "bug_report.started"
+    - event_type: "bug_report.completed"
 ---
 
 <rules>

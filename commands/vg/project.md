@@ -11,6 +11,11 @@ allowed-tools:
   - Grep
   - AskUserQuestion
   - BashOutput
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "project.started"
+    - event_type: "project.completed"
 ---
 
 <NARRATION_POLICY>

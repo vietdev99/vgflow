@@ -10,6 +10,11 @@ allowed-tools:
   - Grep
   - Agent
   - AskUserQuestion
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "migrate.started"
+    - event_type: "migrate.completed"
 ---
 
 <rules>

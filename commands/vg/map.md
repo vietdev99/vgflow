@@ -8,6 +8,11 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "map.started"
+    - event_type: "map.completed"
 ---
 
 <rules>

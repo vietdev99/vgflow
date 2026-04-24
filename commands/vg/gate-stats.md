@@ -7,6 +7,8 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+observation_only: true
+contract_exempt_reason: "read-only: queries events.db for gate_hit telemetry aggregation — no writes"
 ---
 
 <NARRATION_POLICY>

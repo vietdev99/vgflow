@@ -5,6 +5,11 @@ argument-hint: "[--check] [--no-source] [--no-global]"
 allowed-tools:
   - Bash
   - Read
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "sync.started"
+    - event_type: "sync.completed"
 ---
 
 <objective>

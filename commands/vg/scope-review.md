@@ -10,6 +10,11 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "scope_review.started"
+    - event_type: "scope_review.completed"
 ---
 
 <rules>

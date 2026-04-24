@@ -8,6 +8,11 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "recover.started"
+    - event_type: "recover.completed"
 ---
 
 <NARRATION_POLICY>

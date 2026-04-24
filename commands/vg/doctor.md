@@ -7,6 +7,8 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+observation_only: true
+contract_exempt_reason: "read-only: dispatcher routing to /vg:health, /vg:integrity, /vg:gate-stats, /vg:recover — no mutation itself"
 ---
 
 <NARRATION_POLICY>

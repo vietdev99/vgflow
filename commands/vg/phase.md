@@ -12,6 +12,11 @@ allowed-tools:
   - SlashCommand
   - TaskCreate
   - TaskUpdate
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "phase.started"
+    - event_type: "phase.completed"
 ---
 
 <objective>

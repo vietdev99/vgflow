@@ -1,6 +1,11 @@
 ---
 description: Manual lesson capture — rare backup when reflector missed something. Drafts a candidate from user's text for later review.
 argument-hint: "\"<lesson text>\""
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "lesson.started"
+    - event_type: "lesson.completed"
 ---
 
 # /vg:lesson

@@ -45,6 +45,24 @@ import contracts  # noqa: E402
 import state as state_mod  # noqa: E402
 import evidence  # noqa: E402
 
+# v2.5.2 Phase O — optional imports. Wrapped in try/except so missing
+# modules in older clones never break run-start. All call sites below
+# check hasattr / is-not-None before invoking.
+try:
+    import lock as _lock_mod  # noqa: E402
+except Exception:  # pragma: no cover
+    _lock_mod = None  # type: ignore
+
+try:
+    import journal as _journal_mod  # noqa: E402
+except Exception:  # pragma: no cover
+    _journal_mod = None  # type: ignore
+
+try:
+    import allow_flag_gate as _allow_flag_gate  # noqa: E402
+except Exception:  # pragma: no cover
+    _allow_flag_gate = None  # type: ignore
+
 
 def _git_sha() -> str | None:
     import subprocess
@@ -59,6 +77,222 @@ def _git_sha() -> str | None:
 
 
 _RUN_STALE_MINUTES = 30
+
+
+def _verify_artifact_run_binding(artifact_path: Path, run_id: str,
+                                 check_provenance: bool = False) -> dict:
+    """Phase K of v2.5.2 — verify artifact was created by current run.
+
+    Returns dict {ok: bool, reason: str}. Non-blocking lookup — if manifest
+    machinery missing, returns ok=False with actionable reason.
+
+    Checks (in order):
+      1. .vg/runs/{run_id}/evidence-manifest.json exists
+      2. Manifest has entry for this artifact path
+      3. entry.creator_run_id == run_id
+      4. entry.sha256 matches current file sha256 (not mutated after emit)
+      5. (optional) source_inputs hashes still match disk (--check-provenance)
+    """
+    import hashlib as _hashlib
+    import json as _json
+    from pathlib import Path as _Path
+
+    def _sha256(p: _Path) -> str | None:
+        try:
+            data = p.read_bytes()
+            data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            return _hashlib.sha256(data).hexdigest()
+        except (FileNotFoundError, PermissionError):
+            return None
+
+    repo_root = _Path(
+        subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+    ) if _Path(".git").exists() or True else _Path(os.getcwd())
+
+    manifest_path = repo_root / ".vg" / "runs" / run_id / "evidence-manifest.json"
+    if not manifest_path.exists():
+        return {
+            "ok": False,
+            "reason": (
+                f"evidence-manifest.json missing for run {run_id[:12]}... "
+                f"— emit-evidence-manifest.py was never called during this run"
+            ),
+        }
+
+    try:
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+    except _json.JSONDecodeError:
+        return {"ok": False, "reason": "evidence-manifest.json unparseable"}
+
+    # Match entry by relative path (portable)
+    try:
+        rel_path = artifact_path.resolve().relative_to(repo_root).as_posix()
+    except ValueError:
+        rel_path = str(artifact_path)
+
+    entry = next(
+        (e for e in manifest.get("entries", []) if e.get("path") == rel_path),
+        None,
+    )
+    if entry is None:
+        return {
+            "ok": False,
+            "reason": (
+                f"no manifest entry for {rel_path} — "
+                f"artifact exists but was not logged via emit-evidence-manifest"
+            ),
+        }
+
+    if entry.get("creator_run_id") != run_id:
+        return {
+            "ok": False,
+            "reason": (
+                f"entry.creator_run_id={entry.get('creator_run_id', '?')[:12]}... "
+                f"but current run_id={run_id[:12]}... — artifact from prior run (stale)"
+            ),
+        }
+
+    entry_hash = entry.get("sha256")
+    current_hash = _sha256(artifact_path)
+    if entry_hash and current_hash and entry_hash != current_hash:
+        return {
+            "ok": False,
+            "reason": (
+                f"file mutated after emit — manifest sha256={entry_hash[:12]}... "
+                f"vs current={current_hash[:12]}..."
+            ),
+        }
+
+    if check_provenance:
+        for src in entry.get("source_inputs", []):
+            src_path_str = src.get("path", "")
+            expected = src.get("sha256")
+            src_path = _Path(src_path_str)
+            if not src_path.is_absolute():
+                src_path = repo_root / src_path
+            current_src_hash = _sha256(src_path)
+            if expected and current_src_hash != expected:
+                return {
+                    "ok": False,
+                    "reason": (
+                        f"provenance drift: source input {src_path_str} "
+                        f"mutated since artifact emit"
+                    ),
+                }
+
+    return {"ok": True, "reason": None}
+
+
+def _mirror_sync_preflight(command: str, phase: str, extra_args: str) -> None:
+    """Phase 0 of v2.5.2 — check Codex skill mirror parity before registering run.
+
+    Modes via VG_SYNC_CHECK_MODE env:
+        "off"   — skip entirely (legacy default during rollout)
+        "warn"  — log drift to events.db but allow run (default after rollout)
+        "block" — reject run-start on drift (hard enforce)
+
+    Bypass flags:
+        VG_SYNC_CHECK_DISABLED=true in env
+        --allow-mirror-drift in run args (logs to override-debt per Phase O)
+
+    Does NOT raise exceptions — best-effort, never breaks run-start on its own
+    internal errors. Only blocks when (a) mode=block AND drift clearly detected.
+    """
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    if _os.environ.get("VG_SYNC_CHECK_DISABLED", "").lower() == "true":
+        return
+    if "--allow-mirror-drift" in extra_args:
+        return
+
+    mode = _os.environ.get("VG_SYNC_CHECK_MODE", "warn").lower()
+    if mode == "off":
+        return
+
+    # Locate validator — skip if not installed (pre-v2.5.2 repos)
+    try:
+        repo_root = _Path(_sp.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            stderr=_sp.DEVNULL, text=True,
+        ).strip())
+    except Exception:
+        return  # not in git repo — can't verify
+
+    validator = repo_root / ".claude" / "scripts" / "validators" / \
+        "verify-codex-skill-mirror-sync.py"
+    if not validator.exists():
+        return  # validator not installed yet
+
+    try:
+        env = _os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        r = _sp.run(
+            [_sys.executable, str(validator), "--quiet", "--json",
+             "--skip-vgflow"],
+            capture_output=True, text=True, timeout=10,
+            env=env, encoding="utf-8", errors="replace",
+        )
+    except (_sp.TimeoutExpired, FileNotFoundError):
+        return  # best-effort — don't block on infra issues
+
+    if r.returncode == 0:
+        return  # in sync, nothing to do
+
+    # Drift detected
+    try:
+        import json as _json
+        data = _json.loads(r.stdout) if r.stdout else {}
+        drift_count = data.get("drift_count", 0)
+    except Exception:
+        drift_count = "?"
+
+    # Emit telemetry event (always — even in warn mode) so drift is audit-visible
+    try:
+        db.append_event(
+            run_id="pre-run-preflight",  # no run_id yet — will be orphaned
+            event_type="mirror_sync.drift_detected",
+            phase=phase,
+            command=command,
+            actor="orchestrator",
+            outcome="WARN" if mode != "block" else "BLOCK",
+            payload={
+                "drift_count": drift_count,
+                "mode": mode,
+                "command_attempted": command,
+            },
+        )
+    except Exception:
+        pass
+
+    if mode == "block":
+        print(
+            f"⛔ Codex skill mirror drift detected "
+            f"({drift_count} skill(s) out of sync).\n"
+            f"   Running /{command} now risks Codex agents reading stale\n"
+            f"   skill contract — trust parity breach.\n\n"
+            f"   Fix (choose one):\n"
+            f"     (a) python .claude/scripts/sync-vg-skills.py\n"
+            f"     (b) DEV_ROOT=\"$PWD\" bash ../vgflow-repo/sync.sh\n"
+            f"     (c) VG_SYNC_CHECK_MODE=warn python vg-orchestrator run-start ...\n"
+            f"         (downgrade to warn for this run; logs drift event)\n"
+            f"     (d) --allow-mirror-drift in args (emergency bypass + debt)\n",
+            file=_sys.stderr,
+        )
+        _sys.exit(1)
+
+    # warn mode — pass through with visible warning
+    print(
+        f"⚠ Codex skill mirror drift: {drift_count} skill(s) out of sync\n"
+        f"   Continuing in warn mode (VG_SYNC_CHECK_MODE={mode}).\n"
+        f"   Fix: python .claude/scripts/sync-vg-skills.py",
+        file=_sys.stderr,
+    )
 
 
 def _is_run_stale(active: dict) -> bool:
@@ -190,6 +424,15 @@ def cmd_run_start(args) -> int:
                       f"   Cite concrete evidence: issue URL, test name, CI run ID, etc.",
                       file=sys.stderr)
                 return 2
+    # Phase 0 of v2.5.2 — Codex skill mirror sync preflight.
+    # Runs before run registration. Detects drift between .claude source,
+    # vgflow-repo mirror, and .codex/~/.codex Codex mirrors. If drift
+    # present, Codex agents could forge evidence against stale contract.
+    # Mode gated by env VG_SYNC_CHECK_MODE: "off" (skip), "warn" (log + pass,
+    # default), "block" (reject run-start). Bypass via VG_SYNC_CHECK_DISABLED=true.
+    # --allow-mirror-drift in args also bypasses (with override-debt logged).
+    _mirror_sync_preflight(args.command, args.phase, extra_str)
+
     run_id = db.create_run(
         command=args.command,
         phase=args.phase,
@@ -198,13 +441,44 @@ def cmd_run_start(args) -> int:
         git_sha=_git_sha(),
     )
 
-    state_mod.write_current_run({
+    # v2.5.2 Phase O — acquire repo-level advisory lock. Failure logs a
+    # warning event but does NOT block the run until config.orchestrator_lock
+    # flips to hard-enforce mode (future phase). This avoids breaking any
+    # caller that hasn't been upgraded yet.
+    lock_token = None
+    if _lock_mod is not None:
+        try:
+            lock_token = _lock_mod.acquire_repo_lock(
+                command=args.command, phase=args.phase,
+            )
+            if lock_token is None:
+                active_lock = _lock_mod.get_active_lock() or {}
+                try:
+                    db.append_event(
+                        run_id=run_id, event_type="lock.acquire_failed",
+                        phase=args.phase, command=args.command,
+                        actor="orchestrator", outcome="WARN",
+                        payload={
+                            "active_holder": active_lock.get("command"),
+                            "active_phase": active_lock.get("phase"),
+                            "active_pid": active_lock.get("pid"),
+                        },
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            lock_token = None
+
+    current_run_entry = {
         "run_id": run_id,
         "command": args.command,
         "phase": args.phase,
         "args": extra_str,
         "started_at": _now_iso(),
-    })
+    }
+    if lock_token:
+        current_run_entry["lock_token"] = lock_token
+    state_mod.write_current_run(current_run_entry)
 
     db.append_event(
         run_id=run_id,
@@ -296,6 +570,13 @@ def cmd_run_complete(args) -> int:
 
     if verdict:
         db.complete_run(run_id, outcome="PASS")
+        # v2.5.2 Phase O — release repo-lock if we own it
+        lock_token = current.get("lock_token")
+        if lock_token and _lock_mod is not None:
+            try:
+                _lock_mod.release_repo_lock(lock_token)
+            except Exception:
+                pass
         state_mod.clear_current_run()
         print(f"✓ {command} phase={phase} PASS")
         return 0
@@ -320,6 +601,13 @@ def cmd_run_abort(args) -> int:
         payload={"reason": args.reason},
     )
     db.complete_run(current["run_id"], outcome="ABORTED")
+    # v2.5.2 Phase O — release repo-lock on abort
+    lock_token = current.get("lock_token")
+    if lock_token and _lock_mod is not None:
+        try:
+            _lock_mod.release_repo_lock(lock_token)
+        except Exception:
+            pass
     state_mod.clear_current_run()
     print(f"aborted: {args.reason}")
     return 0
@@ -1080,6 +1368,53 @@ def cmd_override(args) -> int:
         )
         return 2
 
+    # v2.5.2 Phase O — allow-flag human gate. For --allow-* flags (vs
+    # --skip-*), verify caller is on a TTY or has VG_HUMAN_OPERATOR env
+    # set. AI subagents running headless without the env get blocked.
+    if args.flag.startswith("--allow-") and _allow_flag_gate is not None:
+        try:
+            is_human, approver = _allow_flag_gate.verify_human_operator(
+                args.flag,
+            )
+        except Exception:
+            is_human, approver = True, None  # fail-open on gate error
+        if not is_human:
+            print(
+                "⛔ --allow-* flags require a human operator (TTY session "
+                "or VG_HUMAN_OPERATOR env var).\n"
+                "   Rationale: these flags carry an approver identity for "
+                "audit. AI subagents without an audited approver cannot "
+                "authorize gate bypasses. If you're a human running "
+                "headless, export VG_HUMAN_OPERATOR=<your-handle> before "
+                "retrying.",
+                file=sys.stderr,
+            )
+            try:
+                db.append_event(
+                    run_id=current["run_id"],
+                    event_type="allow_flag.blocked",
+                    phase=current["phase"],
+                    command=current["command"],
+                    actor="orchestrator",
+                    outcome="BLOCK",
+                    payload={"flag": args.flag,
+                             "reason_head": args.reason[:120]},
+                )
+            except Exception:
+                pass
+            return 2
+        try:
+            _allow_flag_gate.log_allow_flag_used(
+                flag_name=args.flag,
+                approver=approver or "unknown",
+                reason=args.reason,
+                run_id=current["run_id"],
+                phase=current["phase"],
+                command=current["command"],
+            )
+        except Exception:
+            pass
+
     ev = db.append_event(
         run_id=current["run_id"],
         event_type="override.used",
@@ -1668,17 +2003,32 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
             required_sections=item["content_required_sections"],
             glob_fallback=True,
         )
-        if result["ok"]:
+        if not result["ok"]:
+            # Missing — is this artifact even applicable for the phase profile?
+            if not contracts.artifact_applicable(phase_profile, rendered):
+                profile_skipped.append({
+                    "path": str(p),
+                    "reason": result["reason"],
+                    "profile": phase_profile,
+                })
+                continue
+            missing_files.append({"path": str(p), "reason": result["reason"]})
             continue
-        # Missing — is this artifact even applicable for the phase profile?
-        if not contracts.artifact_applicable(phase_profile, rendered):
-            profile_skipped.append({
-                "path": str(p),
-                "reason": result["reason"],
-                "profile": phase_profile,
-            })
-            continue
-        missing_files.append({"path": str(p), "reason": result["reason"]})
+
+        # v2.5.2 Phase K: artifact-run binding check
+        # If contract declares must_be_created_in_run=true, verify evidence
+        # manifest entry exists + creator_run_id matches current run + sha256
+        # matches (not mutated after emit). Stale artifact from prior run
+        # would fail this check even though check_artifact passed on existence.
+        if item.get("must_be_created_in_run"):
+            binding = _verify_artifact_run_binding(
+                p, run_id, item.get("check_provenance", False),
+            )
+            if not binding["ok"]:
+                missing_files.append({
+                    "path": str(p),
+                    "reason": f"[artifact-run-binding] {binding['reason']}",
+                })
 
     # v2.5: emit INFO event for waived artifacts (audit trail)
     if waived_artifacts:

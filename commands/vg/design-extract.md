@@ -13,6 +13,11 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
   - AskUserQuestion
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "design_extract.started"
+    - event_type: "design_extract.completed"
 ---
 
 <rules>

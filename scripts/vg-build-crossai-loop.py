@@ -90,10 +90,13 @@ def _git(*args: str) -> str:
     """Run git, return stdout or empty on failure."""
     try:
         r = subprocess.run(
-            ["git", *args], capture_output=True, text=True,
+            ["git", *args], capture_output=True,
+            encoding="utf-8", errors="replace",
             timeout=20, cwd=REPO_ROOT,
         )
-        return r.stdout if r.returncode == 0 else ""
+        if r.returncode != 0:
+            return ""
+        return r.stdout or ""
     except Exception:
         return ""
 
@@ -163,7 +166,7 @@ artifacts below. This is NOT a generic code review. Check specifically:
 3. **Every decision D-XX in CONTEXT.md** is honored by code patterns. E.g.
    if D-09 says "CORS allowlist explicit", check cors.ts actually does that.
    Decision violated → BLOCK.
-4. **Every task in PLAN.md** has a matching `feat({phase}-NN):` commit. Task
+4. **Every task in PLAN.md** has a matching `feat({phase_num}-NN):` commit. Task
    not committed (or committed without the right files touched) → BLOCK.
 
 Style issues, optimization suggestions, refactoring opinions → MEDIUM/LOW
@@ -238,17 +241,21 @@ FLAG for HIGH findings. PASS if no HIGH+ findings.
 
 def invoke_codex(brief_text: str, output_path: Path) -> int:
     """Codex CLI — same pattern as prior CrossAI rounds."""
+    import shutil
+    codex_bin = shutil.which("codex") or "codex"
+    # Pass brief via stdin to avoid Windows CreateProcess argv limit (~32KB)
     cmd = [
-        "codex", "exec",
+        codex_bin, "exec",
         "--config", "approval_policy=never",
         "--config", "sandbox_mode=read-only",
         "--skip-git-repo-check",
         "--model", "gpt-5.4",
-        brief_text,
+        "-",
     ]
     try:
         r = subprocess.run(
-            cmd, capture_output=True, text=True,
+            cmd, input=brief_text, capture_output=True,
+            encoding="utf-8", errors="replace",
             timeout=CLI_TIMEOUT_SEC,
         )
         output_path.write_text(
@@ -268,15 +275,18 @@ def invoke_codex(brief_text: str, output_path: Path) -> int:
 
 
 def invoke_gemini(brief_text: str, output_path: Path) -> int:
-    """Gemini CLI — -p flag to avoid Windows pty issues."""
+    """Gemini CLI — read prompt from stdin to avoid Windows argv limit."""
+    import shutil
+    gemini_bin = shutil.which("gemini") or "gemini"
+    # Gemini -p reads from stdin when given "-"; fall back to file redirect via stdin
     cmd = [
-        "gemini",
+        gemini_bin,
         "--model", "gemini-3-pro-preview",
-        "-p", brief_text,
     ]
     try:
         r = subprocess.run(
-            cmd, capture_output=True, text=True,
+            cmd, input=brief_text, capture_output=True,
+            encoding="utf-8", errors="replace",
             timeout=CLI_TIMEOUT_SEC,
         )
         output_path.write_text(

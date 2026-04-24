@@ -7,6 +7,8 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+observation_only: true
+contract_exempt_reason: "read-only: inspects phase manifests + OVERRIDE-DEBT.md + drift register to print health report. No writes."
 ---
 
 <NARRATION_POLICY>

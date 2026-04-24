@@ -5,6 +5,8 @@ argument-hint: "[--since=<date>] [--phase=<X>] [--event=<type>] [--format=table|
 allowed-tools:
   - Bash
   - Read
+observation_only: true
+contract_exempt_reason: "read-only: parses .vg/telemetry.jsonl + events.db to print summaries — no writes"
 ---
 
 <objective>

@@ -13,6 +13,8 @@ allowed-tools:
   - Agent
   - TaskCreate
   - TaskUpdate
+observation_only: true
+contract_exempt_reason: "read-only in --report-only mode: scans prior phase test results to detect regressions. NOTE: --fix flag mutates, but default is read-only. Document split mode separately later."
 ---
 
 <rules>

@@ -5,6 +5,11 @@ argument-hint: "[--tools=adb,maestro,sdk,avd] [--avd=<name>] [--api=<level>]"
 allowed-tools:
   - Read
   - Bash
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "setup_mobile.started"
+    - event_type: "setup_mobile.completed"
 ---
 
 <rules>

@@ -1,6 +1,11 @@
 ---
 description: Bootstrap overlay inspection — view merged config, diff vs vanilla, health report, test fixtures, export/import
 argument-hint: "[--view|--diff|--health|--trace <id>|--test|--export|--import <file>]"
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "bootstrap.started"
+    - event_type: "bootstrap.completed"
 ---
 
 # /vg:bootstrap

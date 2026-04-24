@@ -1,6 +1,11 @@
 ---
 description: Review, promote, reject, or retract bootstrap candidates — user-gate for AI-proposed learnings
 argument-hint: "[--auto-surface|--review [id]|--review --all|--promote <id>|--reject <id> --reason '...'|--retract <id> --reason '...']"
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "learn.started"
+    - event_type: "learn.completed"
 ---
 
 # /vg:learn

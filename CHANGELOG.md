@@ -1,5 +1,136 @@
 # Changelog
 
+## [2.5.2] - 2026-04-24
+
+### Deep harness hardening — 8 phases (0, J, K, L, M, N, O, P, R, S)
+
+Post-v2.5.1 CrossAI round (Codex 7.2/10, Claude 7.2/10, both FLAG with
+`ship_with_changes`) surfaced 13 findings across consensus + individual
+reviewer flags. v2.5.2 ships hardening for each.
+
+### New contract schema fields (runtime-contract.json)
+
+- `mutates_repo`: bool — mutating commands must declare
+- `observation_only`: bool — read-only commands exempt from evidence checks
+- `contract_exempt_reason`: str — required when observation_only=true
+- `must_be_created_in_run`: bool — artifact's manifest entry must have
+  `creator_run_id == current run_id` (Phase K stale-artifact gate)
+- `check_provenance`: bool — also verify `source_inputs` haven't drifted
+- `validate_crossai_xml`: bool — invoke XML validator on crossai outputs
+- `must_have_consensus: N` — N CLI results must agree on verdict
+- `security_runtime`: object — runtime security validator dispatch
+- `mutation_journal`: object — require rollback-able mutation logging
+
+### Phase 0 — Codex mirror sync preflight (continuous, not release-gate-only)
+
+- `verify-codex-skill-mirror-sync.py` — SHA256 parity across
+  `.claude/commands/vg/` ↔ `.codex/skills/` ↔ `~/.codex/skills/` ↔
+  `vgflow-repo/` with CRLF/LF normalization for Windows
+- `sync-vg-skills.py` — orchestrated sync + version bump + commit+tag
+- `premutation-sync-check.sh` — 24h-cached pre-command hook
+- Orchestrator preflight wired in `cmd_run_start`
+
+### Phase J — Command contract coverage (34 commands backfilled)
+
+- `verify-command-contract-coverage.py` — catches skills missing
+  runtime_contract on mutating commands
+- 26 mutating commands: `mutates_repo: true` + `must_emit_telemetry`
+- 8 observation-only: `observation_only: true` + `contract_exempt_reason`
+
+### Phase K — Artifact-run binding + provenance chain
+
+- `emit-evidence-manifest.py` — writes sha256 + creator_run_id per
+  artifact to `.vg/runs/{run_id}/evidence-manifest.json`
+- `verify-artifact-freshness.py` — blocks stale artifacts from prior
+  runs satisfying must_write (prevents Codex-identified forge surface)
+
+### Phase L — Trust-anchor XML validation + CrossAI multi-CLI consensus
+
+- `validate-crossai-review-xml.py` — XPath checks: verdict in
+  {pass,flag,block}, score 0-10, reviewer non-empty, handles preamble
+- `verify-crossai-multi-cli.py` — N CLIs agreeing + reviewer diversity
+  (blocks single-reviewer spoofing)
+
+### Phase M — Security runtime enforcement (10 validators)
+
+**Infrastructure (6):** `verify-security-baseline-project.py` (orchestrator),
+`verify-cookie-flags-runtime.py`, `verify-security-headers-runtime.py`
+(HSTS/CSP/X-Frame/nosniff), `verify-authz-negative-paths.py`
+(cross-tenant IDOR probes), `verify-dependency-vuln-budget.py`
+(CVE budget per severity), `verify-container-hardening.py`
+(non-root + HEALTHCHECK + pinned tag).
+
+**Application auth (4):** `verify-jwt-session-policy.py` (RS256/ES256,
+≤15min access, ≤7d refresh, revocation path), `verify-oauth-pkce-enforcement.py`
+(PKCE S256 + state + nonce), `verify-2fa-gate.py` (TOTP/WebAuthn),
+`verify-log-hygiene.py` (SAST + runtime log scan for leaked
+Authorization/password/token/secret/email).
+
+### Phase N — DAST waive approver gate
+
+- `verify-dast-waive-approver.py` — each waived finding MUST have:
+  approver in allowlist, non-expired `waive_until`, 100+ char reason,
+  rubber-stamp detection (same approver+reason ≥3× → flag),
+  ratio gate (waived/total > 0.3 → warn)
+
+### Phase O — Orchestrator lock + journal + allow-flag human-only gate
+
+- `vg-orchestrator/lock.py` — repo-level advisory lock with stale-break
+  on dead pid OR ttl elapsed
+- `vg-orchestrator/journal.py` — append-only JSONL mutation journal +
+  `rollback_run()` for file_write/file_delete/config_change actions
+- `vg-orchestrator/allow_flag_gate.py` — TTY check + `VG_HUMAN_OPERATOR`
+  env override + rubber-stamp detection
+- 3 new validators: `verify-clean-failure-state.py`,
+  `verify-override-debt-sla.py`, `verify-allow-flag-audit.py`
+- `__main__.py` acquires lock in `cmd_run_start`, blocks `--allow-*`
+  flags for non-TTY/non-env-approver sessions
+
+### Phase P — Behavioral bootstrap verify
+
+- `vg-orchestrator/prompt_capture.py` — captures actual executor
+  prompts to `.vg/runs/{run_id}/executor-prompts/task-{N}.prompt.txt`
+  with sha256 manifest (AI cannot forge — capture is in orchestrator
+  path before subagent spawn)
+- `verify-bootstrap-carryforward.py` — greps active LEARN-RULES.md
+  rule text in captured prompts (behavioral — not event log)
+- `verify-learn-promotion.py` — Tier-A promotions must appear in
+  first subsequent-run prompts
+
+### Phase R — Prose-to-PY behavioral validators
+
+- `verify-executor-context-scope.py` — D-XX IDs in prompt MUST match
+  declared `<context-refs>` (blocks full-mode silent fallback)
+- `verify-review-loop-evidence.py` — consecutive review iterations
+  MUST show git file delta OR explicit `resolution: "no_fix_needed"`
+- `evaluate-test-requirements.py` — automated critical/important
+  goals must have test with ≥2 assertions + E2E if user-flow goal
+
+### Phase S — Validator registry + drift detection
+
+- `validators/registry.yaml` — catalog of 24 v2.5.2 validators
+- `validator-registry.py` — CLI: list/describe/missing/orphans/
+  validate/disable/enable
+- `verify-validator-drift.py` — detect never_fires / always_pass /
+  high_block_rate / perf_regression patterns over events.db
+- `/vg:validators` slash command (observation_only contract)
+
+### Test results
+
+- 214/214 v2.5.2 phase tests pass (8 test files, 29.7s)
+- Batch M1: 45/45 infra tests pass
+- Batch M2: 24/24 app-auth tests pass
+- Batch O: 45/45 orchestrator tests pass
+- Batch P+R+S: 14+26+12 = 52/52 behavioral tests pass
+- Batch N: 12/12 waive approver tests pass
+
+### Migration strategy
+
+- Grandfather phases 0-16, cutover phase 17+ hard enforce
+- Cold-start manifest bootstrap for grandfathered artifacts
+- `--allow-*` flags require TTY OR `VG_HUMAN_OPERATOR` env (human-only)
+- Rubber-stamp detection after 3× same-approver-same-flag usage
+
 ## [2.5.1] - 2026-04-24
 
 ### Anti-Forge Hardening — evidence-backed contracts

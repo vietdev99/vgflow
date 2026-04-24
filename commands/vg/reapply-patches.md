@@ -8,6 +8,11 @@ allowed-tools:
   - Edit
   - AskUserQuestion
 argument-hint: "[--verify-gates]"
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "reapply_patches.started"
+    - event_type: "reapply_patches.completed"
 ---
 
 <rules>

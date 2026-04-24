@@ -7,6 +7,8 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+observation_only: true
+contract_exempt_reason: "read-only: analyzes ROADMAP.md + phase artifacts, prints ranked recommendations — pure analysis"
 ---
 
 <rules>

@@ -1,6 +1,11 @@
 ---
 user-invocable: true
 description: "Migrate .planning/ → .vg/ (VG canonical path). Idempotent — re-run scans + updates. Skips GSD-owned files."
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "migrate_planning_vg.started"
+    - event_type: "migrate_planning_vg.completed"
 ---
 
 <rules>

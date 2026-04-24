@@ -1,6 +1,11 @@
 ---
 user-invocable: true
 description: "Design system lifecycle — browse/import/create/view/edit DESIGN.md (58 brand variants from getdesign.md ecosystem)"
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "design_system.started"
+    - event_type: "design_system.completed"
 ---
 
 <rules>

@@ -7,6 +7,11 @@ allowed-tools:
   - Read
   - Write
   - AskUserQuestion
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "update.started"
+    - event_type: "update.completed"
 ---
 
 <rules>

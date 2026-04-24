@@ -6,6 +6,11 @@ allowed-tools:
   - Bash
   - Read
   - Write
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "security_audit_milestone.started"
+    - event_type: "security_audit_milestone.completed"
 ---
 
 <objective>

@@ -6,6 +6,11 @@ allowed-tools:
   - Write
   - Bash
   - AskUserQuestion
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "init.started"
+    - event_type: "init.completed"
 ---
 
 <rules>

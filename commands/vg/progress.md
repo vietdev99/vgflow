@@ -7,6 +7,8 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+observation_only: true
+contract_exempt_reason: "read-only: parses .vg/phases/ artifacts + PIPELINE-STATE.json to render progress table. No writes, no git mutations, no telemetry events."
 ---
 
 <objective>

@@ -110,9 +110,10 @@ def test_github_pat_blocks(tmp_path):
 
 def test_stripe_live_key_blocks(tmp_path):
     repo = _setup_repo(tmp_path)
-    # Split literal so GitHub/GitLab secret scanners don't match source —
-    # Python concatenates at runtime, validator still sees full pattern
-    # in the staged file content.
+    # Split literal to sidestep GitHub push-protection scanner.
+    # The scanner matches at rest; we concatenate at runtime so the
+    # written file still contains a realistic stripe live-key pattern
+    # that the validator must detect as a secret.
     _stage_file(repo, "apps/api/src/payment.ts",
                 "const stripe = '" + "sk_live" + "_abc123XYZ456def789ghi0jklmno';\n")
     r = _run(repo)

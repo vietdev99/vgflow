@@ -7,6 +7,11 @@ allowed-tools:
   - Glob
   - Grep
   - SlashCommand
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "next.started"
+    - event_type: "next.completed"
 ---
 
 <objective>

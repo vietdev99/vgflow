@@ -7,6 +7,8 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+observation_only: true
+contract_exempt_reason: "read-only: hash-validates phase artifacts against manifest, reports drift — no writes"
 ---
 
 <NARRATION_POLICY>
