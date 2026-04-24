@@ -116,7 +116,10 @@ DOMAIN_RULES = [
     (("foundation", "project", "architecture", "scope", "pipeline"),
      "project"),
     (("drift", "registry", "codex-skill-mirror"), "meta"),
-    (("goal-security", "goal-perf", "input-validation"), "security"),
+    # v2.5.2.3: goal-perf split out to dedicated performance domain
+    # (Codex round-5 finding: security classification was a taxonomy miss).
+    (("goal-perf", "perf-budget", "performance"), "performance"),
+    (("goal-security", "input-validation"), "security"),
     (("validator-drift", "skill-runtime-contract"), "meta"),
     (("context-structure", "context-refs"), "context"),
     (("phase-exists", "plan-granularity"), "project"),

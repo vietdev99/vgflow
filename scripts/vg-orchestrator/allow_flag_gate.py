@@ -45,6 +45,8 @@ DEFAULT_APPROVER_ENV_VAR = "VG_HUMAN_OPERATOR"
 STRICT_MODE_ENV_VAR = "VG_ALLOW_FLAGS_STRICT_MODE"
 LEGACY_RAW_ENV_VAR = "VG_ALLOW_FLAGS_LEGACY_RAW"  # opt-out for raw-string
 APPROVER_KEY_DIR_ENV = "VG_APPROVER_KEY_DIR"  # test override
+NONCE_DIR_ENV = "VG_APPROVER_NONCE_DIR"  # test override for nonce storage
+DEFAULT_NONCE_TTL_SECONDS = 3600  # 1 hour — short-lived OOB challenge
 
 # v2.5.2.2: default is STRICT (reversed from v2.5.2.1). Closes Codex
 # round-4 finding: "non-strict default = raw env forge unchanged".
@@ -97,6 +99,136 @@ def _get_or_create_key() -> bytes:
     except (OSError, NotImplementedError, AttributeError):
         pass  # Windows or sandbox — best-effort
     return key
+
+
+def _nonce_dir() -> Path:
+    """Directory where nonce challenge files live.
+
+    v2.5.2.3: VG_AUTH_OPERATOR_ACK must match a pre-issued nonce (Codex round-5
+    finding: presence-check was not enough; AI could self-set any non-empty
+    string). Nonces are single-use, short-TTL, stored as hashes so a read of
+    the dir doesn't disclose plaintexts (defense-in-depth — same-user AI can
+    still read, documented residual risk).
+    """
+    override = os.environ.get(NONCE_DIR_ENV)
+    if override:
+        return Path(override)
+    return Path.home() / ".vg" / ".approver-nonces"
+
+
+def _nonce_hash(plaintext: str) -> str:
+    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+def issue_nonce(ttl_seconds: int = DEFAULT_NONCE_TTL_SECONDS,
+                issuer: str = "unknown",
+                now: Optional[int] = None) -> str:
+    """Generate a one-time nonce challenge. Persist hash + metadata, return
+    plaintext.
+
+    Operator delivers plaintext OOB (email, 2FA app, Signal, Vault secret) to
+    the CI runner / headless context. That context exports it as
+    VG_AUTH_OPERATOR_ACK; `cmd_approve` consumes it (single-use).
+
+    Caller (CLI layer) MUST enforce TTY-only — this primitive doesn't check.
+    """
+    if now is None:
+        now = int(time.time())
+    plaintext = secrets.token_urlsafe(32)
+    nhash = _nonce_hash(plaintext)
+    ndir = _nonce_dir()
+    ndir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(ndir, 0o700)
+    except (OSError, NotImplementedError, AttributeError):
+        pass
+
+    nonce_id = secrets.token_hex(8)
+    path = ndir / f"{nonce_id}.json"
+    data = {
+        "nonce_hash": nhash,
+        "issued_at": now,
+        "expires_at": now + int(ttl_seconds),
+        "used": False,
+        "used_at": None,
+        "issuer": issuer,
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except (OSError, NotImplementedError, AttributeError):
+        pass
+    os.replace(tmp, path)
+    return plaintext
+
+
+def consume_nonce(plaintext: str,
+                  now: Optional[int] = None) -> tuple[bool, str]:
+    """Atomically verify + mark-used a nonce.
+
+    Returns (valid, reason). Reason codes: ok | not_found | expired |
+    already_used | invalid_input.
+    """
+    if not isinstance(plaintext, str) or not plaintext.strip():
+        return False, "invalid_input"
+    if now is None:
+        now = int(time.time())
+
+    target_hash = _nonce_hash(plaintext.strip())
+    ndir = _nonce_dir()
+    if not ndir.exists():
+        return False, "not_found"
+
+    for path in sorted(ndir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("nonce_hash") != target_hash:
+            continue
+        if data.get("used"):
+            return False, "already_used"
+        exp = data.get("expires_at", 0)
+        if not isinstance(exp, int) or exp < now:
+            return False, "expired"
+        data["used"] = True
+        data["used_at"] = now
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except (OSError, NotImplementedError, AttributeError):
+            pass
+        os.replace(tmp, path)
+        return True, "ok"
+    return False, "not_found"
+
+
+def sweep_expired_nonces(now: Optional[int] = None,
+                         grace_seconds: int = 86400) -> int:
+    """Remove nonces that expired or were consumed >grace ago. Returns count."""
+    if now is None:
+        now = int(time.time())
+    ndir = _nonce_dir()
+    if not ndir.exists():
+        return 0
+    removed = 0
+    for path in list(ndir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        exp = data.get("expires_at", 0) or 0
+        used_at = data.get("used_at") or 0
+        if (exp and exp + grace_seconds < now) or \
+           (used_at and used_at + grace_seconds < now):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def _b64url_encode(data: bytes) -> str:

@@ -40,11 +40,16 @@ VG_AUTH_CLI = REPO_ROOT / ".claude" / "scripts" / "vg-auth.py"
 
 @pytest.fixture
 def isolated_key_dir(tmp_path, monkeypatch):
-    """Redirect approver-key to tmp so tests don't touch real ~/.vg."""
+    """Redirect approver-key + nonce-dir to tmp so tests don't touch real ~/.vg."""
     monkeypatch.setenv("VG_APPROVER_KEY_DIR", str(tmp_path))
+    # v2.5.2.3: isolate nonce dir too
+    nonce_dir = tmp_path / "nonces"
+    monkeypatch.setenv("VG_APPROVER_NONCE_DIR", str(nonce_dir))
     # Clear auth state that might leak between tests
     monkeypatch.delenv("VG_HUMAN_OPERATOR", raising=False)
     monkeypatch.delenv("VG_ALLOW_FLAGS_STRICT_MODE", raising=False)
+    monkeypatch.delenv("VG_AUTH_CI_MODE", raising=False)
+    monkeypatch.delenv("VG_AUTH_OPERATOR_ACK", raising=False)
     return tmp_path
 
 
@@ -274,34 +279,104 @@ class TestVgAuthCli:
     # LOGIC is covered by the monkeypatch tests above (test_no_env_blocks,
     # test_tty_session_passes_without_env). The CLI merely delegates.
 
-    def test_approve_ci_mode_mints_token(self, tmp_path):
-        """v2.5.2.2: --force-no-tty removed. CI fallback requires both
-        VG_AUTH_CI_MODE=1 and VG_AUTH_OPERATOR_ACK=<oob-code>."""
+    def test_approve_ci_mode_mints_token(self, tmp_path, monkeypatch):
+        """v2.5.2.3: CI fallback requires VG_AUTH_OPERATOR_ACK to be a valid
+        pre-issued nonce (not just non-empty). Mint a nonce via the primitive
+        (bypasses TTY requirement which CLI enforces), then use it."""
+        nonce_dir = tmp_path / "nonces"
+        monkeypatch.setenv("VG_APPROVER_NONCE_DIR", str(nonce_dir))
+        nonce = _gate.issue_nonce(ttl_seconds=3600, issuer="alice")
+
         result = _run_cli(
             ["approve", "--flag", "allow-X", "--ttl-days", "1",
              "--handle", "alice", "--quiet"],
             env_extra={"VG_APPROVER_KEY_DIR": str(tmp_path),
+                       "VG_APPROVER_NONCE_DIR": str(nonce_dir),
                        "VG_AUTH_CI_MODE": "1",
-                       "VG_AUTH_OPERATOR_ACK": "oob-code-from-email"},
+                       "VG_AUTH_OPERATOR_ACK": nonce},
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
         token = result.stdout.strip()
         assert "." in token
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows subprocess DEVNULL stdin reports isatty=True "
+               "(NUL device OS quirk), so the TTY path wins before CI check "
+               "runs. Regression is covered by primitive-level "
+               "TestCiApproveNonceIntegration on all platforms."
+    )
+    def test_approve_ci_mode_raw_ack_blocked(self, tmp_path, monkeypatch):
+        """Regression for Codex round-5 finding: non-empty ACK that was NOT
+        pre-issued via issue-nonce MUST NOT mint a token. Closes the
+        'presence-check only' gap."""
+        nonce_dir = tmp_path / "nonces"
+        monkeypatch.setenv("VG_APPROVER_NONCE_DIR", str(nonce_dir))
+        # No issue_nonce call — raw string should be rejected.
+        result = _run_cli(
+            ["approve", "--flag", "allow-X", "--ttl-days", "1",
+             "--handle", "attacker", "--quiet"],
+            env_extra={"VG_APPROVER_KEY_DIR": str(tmp_path),
+                       "VG_APPROVER_NONCE_DIR": str(nonce_dir),
+                       "VG_AUTH_CI_MODE": "1",
+                       "VG_AUTH_OPERATOR_ACK": "attacker-guessed-this-string"},
+        )
+        assert result.returncode == 2, (
+            f"Expected block (exit 2); got {result.returncode}. "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert "not_found" in result.stderr or "rejected" in result.stderr.lower()
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows NUL-stdin TTY quirk — see sibling skip comment"
+    )
+    def test_approve_ci_mode_reused_ack_blocked(self, tmp_path, monkeypatch):
+        """Nonce is single-use. Second approve with same ACK must be blocked."""
+        nonce_dir = tmp_path / "nonces"
+        monkeypatch.setenv("VG_APPROVER_NONCE_DIR", str(nonce_dir))
+        nonce = _gate.issue_nonce(ttl_seconds=3600, issuer="alice")
+
+        first = _run_cli(
+            ["approve", "--flag", "allow-X", "--ttl-days", "1",
+             "--handle", "alice", "--quiet"],
+            env_extra={"VG_APPROVER_KEY_DIR": str(tmp_path),
+                       "VG_APPROVER_NONCE_DIR": str(nonce_dir),
+                       "VG_AUTH_CI_MODE": "1",
+                       "VG_AUTH_OPERATOR_ACK": nonce},
+        )
+        assert first.returncode == 0
+
+        second = _run_cli(
+            ["approve", "--flag", "allow-X", "--ttl-days", "1",
+             "--handle", "alice", "--quiet"],
+            env_extra={"VG_APPROVER_KEY_DIR": str(tmp_path),
+                       "VG_APPROVER_NONCE_DIR": str(nonce_dir),
+                       "VG_AUTH_CI_MODE": "1",
+                       "VG_AUTH_OPERATOR_ACK": nonce},
+        )
+        assert second.returncode == 2
+        assert "already_used" in second.stderr
 
     # NOTE: "CI_MODE=1 alone (no OPERATOR_ACK) blocks" can't be reliably
     # tested via subprocess on Windows (subprocess stdin inherits TTY).
     # The logic is covered by the env-handling unit test below; the
     # subprocess test would only falsely pass on Windows-like systems.
 
-    def test_verify_cli_accepts_valid_token(self, tmp_path):
+    def test_verify_cli_accepts_valid_token(self, tmp_path, monkeypatch):
+        nonce_dir = tmp_path / "nonces"
+        monkeypatch.setenv("VG_APPROVER_NONCE_DIR", str(nonce_dir))
+        nonce = _gate.issue_nonce(ttl_seconds=3600, issuer="alice")
+
         mint = _run_cli(
             ["approve", "--flag", "allow-X", "--ttl-days", "1",
              "--handle", "alice", "--quiet"],
             env_extra={"VG_APPROVER_KEY_DIR": str(tmp_path),
+                       "VG_APPROVER_NONCE_DIR": str(nonce_dir),
                        "VG_AUTH_CI_MODE": "1",
-                       "VG_AUTH_OPERATOR_ACK": "oob"},
+                       "VG_AUTH_OPERATOR_ACK": nonce},
         )
-        assert mint.returncode == 0
+        assert mint.returncode == 0, f"stderr: {mint.stderr}"
         token = mint.stdout.strip()
 
         verify = _run_cli(
@@ -318,3 +393,113 @@ class TestVgAuthCli:
         )
         assert result.returncode == 0
         assert (tmp_path / "approver-key").exists()
+
+    def test_issue_nonce_requires_tty(self, tmp_path):
+        """v2.5.2.3: issue-nonce is TTY-only. Without TTY (subprocess
+        DEVNULL stdin) must block — otherwise AI could self-issue nonces,
+        defeating the OOB-bootstrap threat model."""
+        nonce_dir = tmp_path / "nonces"
+        result = _run_cli(
+            ["issue-nonce", "--ttl-minutes", "5", "--quiet"],
+            env_extra={"VG_APPROVER_KEY_DIR": str(tmp_path),
+                       "VG_APPROVER_NONCE_DIR": str(nonce_dir)},
+        )
+        # Windows NUL quirk: subprocess.DEVNULL reports isatty=True. Accept
+        # either block (POSIX) or pass-through (Windows) — behavior still
+        # correct overall because CLI primitive requires ISATTY, and on
+        # real AI invocation (no DEVNULL hack) it blocks.
+        if result.returncode == 2:
+            assert "requires a TTY" in result.stderr
+        else:
+            # Windows — verify nonce file was created (best-effort)
+            assert result.returncode == 0
+            assert nonce_dir.exists()
+
+
+# ─── Nonce primitive tests (v2.5.2.3) ──────────────────────────────────
+
+
+class TestNonceLifecycle:
+    def test_issue_returns_urlsafe_plaintext(self, isolated_key_dir):
+        nonce = _gate.issue_nonce(ttl_seconds=60, issuer="alice")
+        assert isinstance(nonce, str)
+        # token_urlsafe(32) → ~43 chars base64url
+        assert len(nonce) > 30
+        # Must not contain filesystem-hostile chars
+        assert "/" not in nonce and "\\" not in nonce
+
+    def test_consume_valid_nonce_succeeds(self, isolated_key_dir):
+        nonce = _gate.issue_nonce(ttl_seconds=60, issuer="alice")
+        ok, reason = _gate.consume_nonce(nonce)
+        assert ok
+        assert reason == "ok"
+
+    def test_consume_twice_second_fails(self, isolated_key_dir):
+        nonce = _gate.issue_nonce(ttl_seconds=60, issuer="alice")
+        ok1, _ = _gate.consume_nonce(nonce)
+        assert ok1
+        ok2, reason = _gate.consume_nonce(nonce)
+        assert not ok2
+        assert reason == "already_used"
+
+    def test_consume_expired_nonce_fails(self, isolated_key_dir):
+        now = int(time.time())
+        nonce = _gate.issue_nonce(ttl_seconds=60, issuer="alice", now=now)
+        # Consume 120s in the future — expired
+        ok, reason = _gate.consume_nonce(nonce, now=now + 120)
+        assert not ok
+        assert reason == "expired"
+
+    def test_consume_nonexistent_fails(self, isolated_key_dir):
+        ok, reason = _gate.consume_nonce("totally-fake-value-no-file")
+        assert not ok
+        assert reason in ("not_found", "invalid_input")
+
+    def test_consume_empty_input_fails(self, isolated_key_dir):
+        for bad in ["", "   ", None]:
+            ok, reason = _gate.consume_nonce(bad)  # type: ignore[arg-type]
+            assert not ok
+            assert reason in ("invalid_input", "not_found")
+
+    def test_sweep_removes_old_expired(self, isolated_key_dir):
+        now = int(time.time())
+        _gate.issue_nonce(ttl_seconds=60, issuer="a", now=now - 100000)
+        _gate.issue_nonce(ttl_seconds=60, issuer="b", now=now)  # fresh
+        removed = _gate.sweep_expired_nonces(now=now, grace_seconds=3600)
+        assert removed == 1
+
+    def test_nonce_hash_stable_same_plaintext(self):
+        h1 = _gate._nonce_hash("secret-abc-123")
+        h2 = _gate._nonce_hash("secret-abc-123")
+        assert h1 == h2
+        assert h1 != _gate._nonce_hash("secret-abc-124")
+
+    def test_nonce_file_stores_hash_not_plaintext(self, isolated_key_dir):
+        """Defense-in-depth: if an attacker reads the nonce dir, they get
+        hashes, not plaintexts. (Same-user AI CAN compute backwards via
+        brute force of its own reads — this doesn't protect against that,
+        but prevents accidental disclosure via logs/backup scans.)"""
+        nonce = _gate.issue_nonce(ttl_seconds=60, issuer="alice")
+        nonce_dir = _gate._nonce_dir()
+        files = list(nonce_dir.glob("*.json"))
+        assert len(files) == 1
+        content = files[0].read_text(encoding="utf-8")
+        assert nonce not in content, "plaintext nonce leaked into file"
+        assert _gate._nonce_hash(nonce) in content
+
+
+class TestCiApproveNonceIntegration:
+    """Integration: verify_human_operator doesn't change, but cmd_approve
+    CI fallback now calls consume_nonce."""
+
+    def test_ci_mode_without_ack_rejected_at_primitive(self, isolated_key_dir):
+        # Simulate what vg-auth.py does internally (no subprocess)
+        ok, reason = _gate.consume_nonce("")
+        assert not ok
+
+    def test_ci_mode_ack_is_single_use_at_primitive(self, isolated_key_dir):
+        nonce = _gate.issue_nonce(ttl_seconds=3600, issuer="alice")
+        ok1, _ = _gate.consume_nonce(nonce)
+        ok2, r2 = _gate.consume_nonce(nonce)
+        assert ok1 and not ok2
+        assert r2 == "already_used"

@@ -51,30 +51,46 @@ _spec.loader.exec_module(_gate)
 
 
 def cmd_approve(args) -> int:
-    # v2.5.2.2: --force-no-tty REMOVED (closed Codex round-4 finding that
-    # CI/AI subagents could self-mint tokens). CI flows must inject
-    # pre-minted tokens as secrets (GitHub Actions, Vault, etc.) rather
-    # than self-mint in the run. For rare headless operator use, set
-    # VG_AUTH_CI_MODE=1 AND VG_AUTH_OPERATOR_ACK=<one-time-code> where
-    # the code is delivered OOB (email, 2FA app) — this raises bar
-    # above AI self-invocation while staying stdlib-only.
-    ci_mode_allowed = (
-        os.environ.get("VG_AUTH_CI_MODE") == "1" and
-        os.environ.get("VG_AUTH_OPERATOR_ACK", "").strip() != ""
-    )
+    # v2.5.2.3: CI fallback now VERIFIES VG_AUTH_OPERATOR_ACK as a pre-issued
+    # nonce (Codex round-5 finding: presence-check alone let AI self-mint).
+    # Operator must have previously run `vg-auth issue-nonce` on TTY, then
+    # delivered plaintext OOB (email, 2FA app, Vault) to the headless context.
+    # AI subprocess in same-user context CAN read nonce files — same residual
+    # risk as reading `.approver-key`, documented and deferred to OS-keychain.
+    ci_mode_active = os.environ.get("VG_AUTH_CI_MODE") == "1"
+    ack = os.environ.get("VG_AUTH_OPERATOR_ACK", "").strip()
+
+    ci_mode_allowed = False
+    nonce_reason = ""
+    if ci_mode_active and ack:
+        ci_mode_allowed, nonce_reason = _gate.consume_nonce(ack)
+
     if not _gate._is_tty() and not ci_mode_allowed:
         print("⛔ `vg-auth approve` requires a TTY (interactive shell).",
               file=sys.stderr)
-        print("   AI subagents must not mint their own approvals. For CI:",
-              file=sys.stderr)
-        print("   1. Mint token once on TTY machine: vg-auth approve --flag X",
-              file=sys.stderr)
-        print("   2. Inject token into CI as secret (never let CI mint).",
-              file=sys.stderr)
-        print("   Headless-operator fallback requires both:",
-              file=sys.stderr)
-        print("     VG_AUTH_CI_MODE=1 and VG_AUTH_OPERATOR_ACK=<oob-code>",
-              file=sys.stderr)
+        if ci_mode_active and ack and not ci_mode_allowed:
+            print(f"   CI-mode ACK rejected: {nonce_reason}",
+                  file=sys.stderr)
+            print("   Nonce must be issued via `vg-auth issue-nonce` on TTY",
+                  file=sys.stderr)
+            print("   and delivered out-of-band to this context.",
+                  file=sys.stderr)
+        elif ci_mode_active and not ack:
+            print("   CI-mode requires VG_AUTH_OPERATOR_ACK=<nonce>. Mint one via",
+                  file=sys.stderr)
+            print("   `vg-auth issue-nonce` on TTY and deliver OOB.",
+                  file=sys.stderr)
+        else:
+            print("   AI subagents must not mint their own approvals. For CI:",
+                  file=sys.stderr)
+            print("   1. Mint token once on TTY: vg-auth approve --flag X",
+                  file=sys.stderr)
+            print("   2. Inject token into CI as secret (never let CI mint).",
+                  file=sys.stderr)
+            print("   Headless-operator fallback requires both:",
+                  file=sys.stderr)
+            print("     VG_AUTH_CI_MODE=1 AND VG_AUTH_OPERATOR_ACK=<nonce-from-issue-nonce>",
+                  file=sys.stderr)
         return 2
 
     user = _gate._tty_user() or os.environ.get("VG_HUMAN_OPERATOR_HANDLE") \
@@ -127,6 +143,48 @@ def cmd_verify(args) -> int:
     return 0 if valid else 1
 
 
+def cmd_issue_nonce(args) -> int:
+    """v2.5.2.3: issue a one-time OOB challenge for CI-mode approval.
+
+    TTY-only. Plaintext nonce printed to stdout; operator delivers it OOB
+    (email, 2FA app, paste into CI secret) to the headless context. That
+    context sets VG_AUTH_OPERATOR_ACK=<nonce> and `vg-auth approve` consumes
+    it single-use.
+    """
+    if not _gate._is_tty():
+        print("⛔ `vg-auth issue-nonce` requires a TTY (interactive shell).",
+              file=sys.stderr)
+        print("   Nonces bootstrap trust — AI subagent cannot self-issue.",
+              file=sys.stderr)
+        return 2
+
+    issuer = _gate._tty_user() or "unknown"
+    if args.issuer:
+        issuer = args.issuer
+    ttl_seconds = max(60, int(args.ttl_minutes) * 60)
+    nonce = _gate.issue_nonce(ttl_seconds=ttl_seconds, issuer=issuer)
+
+    if args.json:
+        import json
+        print(json.dumps({
+            "nonce": nonce,
+            "issuer": issuer,
+            "ttl_minutes": args.ttl_minutes,
+            "expires_at_epoch": int(time.time()) + ttl_seconds,
+        }, indent=2))
+    else:
+        print(nonce)
+        if not args.quiet:
+            print(f"# issued by {issuer}, valid {args.ttl_minutes}min, single-use",
+                  file=sys.stderr)
+            print("# deliver OOB (email/SMS/2FA app/secret-store) to CI runner.",
+                  file=sys.stderr)
+            print("# CI runner: export VG_AUTH_CI_MODE=1; "
+                  "export VG_AUTH_OPERATOR_ACK=<paste>",
+                  file=sys.stderr)
+    return 0
+
+
 def cmd_init(args) -> int:
     path = _gate._approver_key_path()
     # Force-create by calling _get_or_create_key
@@ -165,11 +223,26 @@ def main() -> int:
     p_ver.add_argument("--flag", required=True)
     p_ver.add_argument("--json", action="store_true")
 
+    p_nonce = sub.add_parser("issue-nonce",
+                              help="issue one-time OOB challenge "
+                                   "(TTY-only, v2.5.2.3+)")
+    p_nonce.add_argument("--ttl-minutes", type=int, default=60,
+                          help="nonce validity in minutes (default 60, min 1)")
+    p_nonce.add_argument("--issuer",
+                          help="override issuer handle (default: $USER)")
+    p_nonce.add_argument("--json", action="store_true")
+    p_nonce.add_argument("--quiet", action="store_true")
+
     sub.add_parser("init",
                    help="force-create signing key (idempotent)")
 
     args = ap.parse_args()
-    dispatch = {"approve": cmd_approve, "verify": cmd_verify, "init": cmd_init}
+    dispatch = {
+        "approve": cmd_approve,
+        "verify": cmd_verify,
+        "issue-nonce": cmd_issue_nonce,
+        "init": cmd_init,
+    }
     return dispatch[args.cmd](args)
 
 

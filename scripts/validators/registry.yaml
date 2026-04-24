@@ -493,7 +493,7 @@ validators:
     path: .claude/scripts/validators/verify-goal-perf.py
     severity: warn
     phases_active: [all]
-    domain: security
+    domain: performance
     runtime_target_ms: 5000
     added_in: pre-v2.5.2
     description: 'Validator: verify-goal-perf.py'
