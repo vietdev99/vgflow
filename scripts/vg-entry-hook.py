@@ -82,6 +82,45 @@ def already_active(command: str, phase: str) -> bool:
         return False
 
 
+def _looks_like_paste_back(prompt: str) -> bool:
+    """v2.5.2.5 — detect Stop-hook feedback echoed into next prompt.
+
+    Bug: Stop hook output contains `Command: /vg:review 7.14`; when user
+    pastes (or Claude Code auto-forwards) that feedback in the next turn,
+    VG_CMD_RE matched the embedded reference and re-registered a phantom
+    run. Resulting in an infinite stop-hook loop that could only be broken
+    by manual `run-abort`.
+
+    Signals we're looking at paste-back text, not a fresh user command:
+      - "Stop hook feedback" (Claude Code literal prefix)
+      - "runtime_contract violations" (verify-claim error text)
+      - "Command: /vg:" (verify-claim "Command:" line)
+      - "Fix options:" + "vg-orchestrator override" (verify-claim footer)
+      - "Missing evidence:" (verify-claim body marker)
+    """
+    markers = (
+        "Stop hook feedback",
+        "runtime_contract violations",
+        "Missing evidence:",
+        "vg-orchestrator override",
+        "vg-orchestrator run-abort",
+    )
+    return any(m in prompt for m in markers)
+
+
+def _vg_cmd_at_line_start(prompt: str):
+    """Find /vg:command matching a fresh invocation: MUST be first
+    non-whitespace content of a line. Embedded references like
+    `Command: /vg:review 7.14` fail this check.
+    """
+    for line in prompt.splitlines():
+        stripped = line.lstrip()
+        m = VG_CMD_RE.match(stripped)  # match (not search) — anchored to line start
+        if m:
+            return m
+    return None
+
+
 def main() -> int:
     try:
         hook_input = json.loads(sys.stdin.read() or "{}")
@@ -94,8 +133,19 @@ def main() -> int:
     if "/vg:" not in prompt:
         approve()
 
-    m = VG_CMD_RE.search(prompt)
+    # v2.5.2.5: reject paste-back text from Stop-hook feedback loops
+    if _looks_like_paste_back(prompt):
+        log(f"paste-back detected (Stop-hook feedback echo) — skipping run-start")
+        approve()
+
+    # v2.5.2.5: require /vg:cmd at START of a line (not embedded in prose).
+    # A fresh user invocation always has /vg:X at column 0 of some line.
+    # Paste-back text ("Command: /vg:review 7.14"), inline references
+    # ("just run /vg:X please"), or quoted examples in docs/prose will NOT
+    # match and are correctly skipped.
+    m = _vg_cmd_at_line_start(prompt)
     if not m:
+        log("/vg: pattern not at line start — treating as prose reference, skip")
         approve()
 
     cmd_name = m.group(1)
