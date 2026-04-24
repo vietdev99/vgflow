@@ -174,6 +174,41 @@ vg_commit_queue_release
 **Why mkdir instead of flock:** flock isn't shipped with Git Bash on Windows
 (VG must run cross-platform). `mkdir` is atomic on POSIX + NTFS.
 
+### Bash call hygiene — DO NOT chain commits with other work
+
+**Rule (v2.5.2.7+):** put `git commit` in its OWN `Bash` tool call. Do NOT
+combine it with other setup/cleanup commands in the same tool call.
+
+```bash
+# ❌ BAD — one Bash call does cleanup + commit
+bash release-lock.sh
+git add file.ts
+git commit -m "..."    # if BLOCK → whole Bash call "Error: Exit 1"
+                        #   cleanup + add success is masked red
+```
+
+```bash
+# ✓ GOOD — separate Bash calls
+# Call 1 (non-critical, should stay green):
+bash release-lock.sh
+git add file.ts
+
+# Call 2 (commit may legitimately BLOCK via commit-msg hook):
+git commit -m "feat(X-NN): subject
+
+Per CONTEXT.md D-XX
+"
+```
+
+**Why it matters:** commit-msg hook legitimately BLOCKs on missing citation,
+phantom D-XX, bypass red flags, or subject-format violation. When that
+happens, you should SEE the BLOCK reason (v2.5.2.6 emits clear stderr
+guidance). If commit is chained with prior work, the red "Exit 1" marker
+obscures which step failed and whether the prior cleanup actually ran.
+
+Separation also makes retry easier: after a BLOCK, you re-issue ONLY the
+commit with a fixed message — no need to re-run the cleanup.
+
 ## Contract adherence — 3 code blocks per endpoint
 
 API-CONTRACTS.md has **3 executable code blocks** per endpoint. Copy ALL 3 verbatim.

@@ -4391,8 +4391,14 @@ Findings (severity-grouped — full detail in REVIEW-FEEDBACK.md):
 Next steps (pick the matching path — DO NOT just re-run /vg:review blindly):
 
   A. Fix code bugs found → re-review:
-     # Edit affected files (paths above), then:
-     git add -A && git commit -m "fix({phase}-XX): {summary}"
+     # Edit affected files (paths above), then stage + commit as SEPARATE
+     # steps (v2.5.2.7: don't chain staging with commit — if commit-msg
+     # hook BLOCKs on missing citation, prior `git add` success gets
+     # masked by the red "Exit 1" UI label):
+     git add path/to/fixed-file.ts              # stage intentional files
+     git commit -m "fix({phase}-XX): {summary}
+
+Per CONTEXT.md D-XX OR Per API-CONTRACTS.md"  # body must cite
      /vg:review {phase} --retry-failed      # only re-scan failed goals (faster)
      # OR /vg:review {phase}                # full re-scan if many fixes
 
