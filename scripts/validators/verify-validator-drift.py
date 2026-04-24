@@ -165,6 +165,46 @@ def _p95(values: list[float]) -> float:
     return sorted_v[idx]
 
 
+def _discover_validator_files(validators_dir: Path) -> list[dict]:
+    """Walk scripts/validators/ for *.py files. Return list of {id, path}."""
+    if not validators_dir.exists():
+        return []
+    out = []
+    for p in sorted(validators_dir.glob("*.py")):
+        stem = p.stem
+        if stem.startswith("_") or stem == "registry":
+            continue
+        rid = stem
+        for prefix in ("verify-", "validate-", "evaluate-"):
+            if rid.startswith(prefix):
+                rid = rid[len(prefix):]
+                break
+        out.append({"id": rid, "path": str(p)})
+    return out
+
+
+def _detect_registry_coverage(registry: list[dict],
+                              validators_dir: Path) -> list[dict]:
+    """v2.5.2.1: flag validators on disk but missing from registry.
+
+    This closes CrossAI round 3 finding: registry cataloged only 24 of 60+
+    validators, so drift detection was blind to ~36 uncataloged scripts.
+    """
+    cataloged = {e.get("id") for e in registry if e.get("id")}
+    on_disk = _discover_validator_files(validators_dir)
+    findings = []
+    for v in on_disk:
+        if v["id"] not in cataloged:
+            findings.append({
+                "validator": v["id"],
+                "pattern": "missing_from_registry",
+                "severity": "warn",
+                "detail": f"file {v['path']!r} exists but no registry entry. "
+                          f"Run .claude/scripts/backfill-registry.py --apply.",
+            })
+    return findings
+
+
 def _detect_drift(registry: list[dict], stats: dict, min_runs: int,
                   fp_threshold: float) -> list[dict]:
     findings = []
@@ -252,7 +292,12 @@ def main() -> int:
         return 2
 
     stats = _query_validator_stats(db_path, args.lookback_days)
-    findings = _detect_drift(
+
+    # v2.5.2.1: check registry coverage first (missing-from-registry findings)
+    # Then behavioral drift on cataloged entries.
+    validators_dir = registry_path.parent
+    findings = _detect_registry_coverage(registry, validators_dir)
+    findings += _detect_drift(
         registry, stats, args.min_runs, args.fp_threshold,
     )
 

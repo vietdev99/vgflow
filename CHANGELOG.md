@@ -1,5 +1,119 @@
 # Changelog
 
+## [2.5.2.1] - 2026-04-24
+
+### Hotfix — close 3 major findings from v2.5.2 CrossAI round-3
+
+CrossAI round-3 consensus on v2.5.2 (Codex 7.9/10 FLAG, Claude 8.0/10 FLAG,
+Gemini 9.2/10 PASS; consensus FLAG ship_with_changes). 3 MAJOR findings
+consensus-flagged by Codex + Claude are closed in this patch.
+
+### Fix 1 — HMAC-signed allow-flag tokens (closes Codex+Claude major)
+
+**Problem:** v2.5.2 `VG_HUMAN_OPERATOR` env was a raw handle string.
+AI subprocess could `os.environ["VG_HUMAN_OPERATOR"] = "real-human"`
+before exec and bypass Phase O's allow-flag gate — same "narrated vs
+behavioral" forge surface v2.5.2 was meant to close, just shifted from
+validators to the gate itself.
+
+**Fix:**
+- `allow_flag_gate.py` now supports HMAC-SHA256 signed tokens. Token format:
+  `b64url(payload_json).b64url(sig)` where payload = `{handle, flag,
+  issued_at, expires_at}`. Signing key at `~/.vg/.approver-key` (0600 POSIX,
+  user-profile protected Windows). Wildcard flag `*` permitted for short-
+  lived session tokens.
+- Strict mode (via `allow_flags.strict_mode=true` config OR
+  `VG_ALLOW_FLAGS_STRICT_MODE=true` env) rejects raw-string env entirely.
+  Non-strict mode accepts raw string with `[unsigned-warning]` suffix in
+  approver (audit visibility).
+- New CLI `.claude/scripts/vg-auth.py`:
+  - `approve --flag X --ttl-days N` — TTY-only; mints token
+  - `verify --token T --flag X` — explicit verification (debugging)
+  - `init` — force-create signing key (idempotent)
+- Negative test: AI subprocess with different key dir → signature
+  invalid → blocked.
+
+**Residual risk:** same-user AI can read `~/.vg/.approver-key` file
+directly (file permissions don't isolate same-user processes). Mitigation:
+`strict_mode=true` + TTY-only approval at time of use.
+
+### Fix 2 — Full registry catalog + drift coverage (closes Codex+Claude major)
+
+**Problem:** Phase S shipped 24-entry registry covering v2.5.2 validators
+only. ~36 legacy pre-v2.5.2 validators stayed uncataloged. `verify-
+validator-drift` was blind to them — defeated the "close opacity gap"
+problem statement.
+
+**Fix:**
+- New `.claude/scripts/backfill-registry.py`: auto-discovers all
+  `validators/*.py`, parses docstring first line for description,
+  appends entries with placeholder metadata (`severity: warn`,
+  `domain: uncategorized`, `phases_active: [all]`,
+  `added_in: pre-v2.5.2`) for reviewer to tighten.
+- `registry.yaml` now has **60 entries** (was 24). Backfilled legacy
+  validators: acceptance-reconciliation, accessibility-scan, build-crossai-
+  required, build-telemetry-surface, check-override-events, commit-
+  attribution, context-structure, dast-scan-report, deferred-evidence,
+  deps-security-scan, event-reconciliation, goal-coverage, i18n-coverage,
+  mutation-layers, not-scanned-replay, override-debt-balance, runtime-
+  evidence, skill-runtime-contract, and 18+ more.
+- `verify-validator-drift.py` extended with
+  `_detect_registry_coverage()` that fires `missing_from_registry`
+  finding for any `*.py` file in validators/ without registry entry —
+  ops sees catalog gaps first before behavioral drift checks.
+
+### Fix 3 — `bootstrap-legacy-artifacts.py` shipped (closes Codex+Claude major)
+
+**Problem:** Phase K `verify-artifact-freshness` requires manifest entries
+with `creator_run_id == current_run_id`. Grandfathered phases 0-16 had
+no manifest → Phase 17+ cutover forced projects into
+`--allow-legacy-manifest-accept` flag whose env-approver path was the
+Fix 1 forge surface. Two weak gates compounded.
+
+**Fix:**
+- New `.claude/scripts/bootstrap-legacy-artifacts.py`: walks
+  `.vg/phases/*/`, discovers must_write artifacts (PLAN.md, API-CONTRACTS.md,
+  SPECS.md, CONTEXT.md, SUMMARY*.md, RUNTIME-MAP.json, GOAL-COVERAGE-MATRIX.md,
+  SANDBOX-TEST.md, UAT.md, FOUNDATION.md, ROADMAP.md, crossai/*.xml),
+  writes entries with `creator_run_id: "legacy-bootstrap"`,
+  `grandfathered: true`, `phase: <phase-name>`. `--dry-run` default;
+  `--apply` commits; `--phase FILTER` for single-phase mode.
+- New `verify-no-legacy-manifest-creation.py`: scans the legacy-bootstrap
+  manifest for entries with `phase > cutover_phase` (default 17) → BLOCK
+  (AI forging grandfather marker past cutover). Also scans all other run
+  manifests for `creator_run_id: "legacy-bootstrap"` OR `grandfathered:
+  true` → BLOCK (only bootstrap tool may emit those).
+
+### Test results
+
+- Fix 1: 19 new test cases (sign/verify, strict mode, AI forge attempts) + existing Phase O suite 12/12 green
+- Fix 2: 7 new test cases (backfill + drift) + existing Phase S 12/12 green
+- Fix 3: 10 new test cases (bootstrap + cutover enforcement)
+- **36 new tests, all pass + no existing regression.**
+
+### Schema / config additions
+
+- Config key `allow_flags.strict_mode: bool` (Fix 1)
+- Env vars: `VG_APPROVER_KEY_DIR` (test override),
+  `VG_ALLOW_FLAGS_STRICT_MODE` (runtime override)
+- Manifest fields: `grandfathered: true`, `phase: <phase-name>` (Fix 3)
+
+### Files new / modified
+
+New:
+- `.claude/scripts/vg-auth.py`
+- `.claude/scripts/backfill-registry.py`
+- `.claude/scripts/bootstrap-legacy-artifacts.py`
+- `.claude/scripts/validators/verify-no-legacy-manifest-creation.py`
+- `.claude/scripts/tests/test_allow_flag_signed_tokens.py`
+- `.claude/scripts/tests/test_registry_backfill.py`
+- `.claude/scripts/tests/test_bootstrap_legacy.py`
+
+Modified:
+- `.claude/scripts/vg-orchestrator/allow_flag_gate.py`
+- `.claude/scripts/validators/verify-validator-drift.py`
+- `.claude/scripts/validators/registry.yaml` (36 entries appended)
+
 ## [2.5.2] - 2026-04-24
 
 ### Deep harness hardening — 8 phases (0, J, K, L, M, N, O, P, R, S)

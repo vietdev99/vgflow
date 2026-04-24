@@ -1,0 +1,571 @@
+# Validator Registry — v2.5.2 Phase S
+#
+# Catalog of every validator in the VG workflow. Used by /vg:validators CLI
+# for listing, audit, and drift detection.
+#
+# Schema per entry:
+#   id:             stable ID (filename stem without verify- prefix)
+#   path:           repo-relative path
+#   severity:       block | warn | advisory
+#   phases_active:  list of phases this validator runs in
+#   domain:         category (artifact, contract, evidence, security, bootstrap, crossai, orchestrator, test)
+#   runtime_target_ms: target p95 runtime (CI perf budget)
+#   added_in:       version first shipped
+#   description:    one-line what it enforces
+#   disabled:       optional — temporary disable with reason + expiry
+
+validators:
+
+  # ──── Phase 0 — Codex mirror sync ────
+  - id: codex-skill-mirror-sync
+    path: .claude/scripts/validators/verify-codex-skill-mirror-sync.py
+    severity: block
+    phases_active: [preflight, release]
+    domain: sync
+    runtime_target_ms: 2000
+    added_in: v2.5.2
+    description: SHA256 parity between Claude source + codex mirrors (local+global+vgflow-repo)
+
+  # ──── Phase J — Contract coverage ────
+  - id: command-contract-coverage
+    path: .claude/scripts/validators/verify-command-contract-coverage.py
+    severity: block
+    phases_active: [all]
+    domain: contract
+    runtime_target_ms: 3000
+    added_in: v2.5.2
+    description: Every mutating VG command must declare runtime_contract with must_write + must_emit_telemetry
+
+  # ──── Phase K — Artifact-run binding ────
+  - id: artifact-freshness
+    path: .claude/scripts/validators/verify-artifact-freshness.py
+    severity: block
+    phases_active: [17+]
+    domain: evidence
+    runtime_target_ms: 1500
+    added_in: v2.5.2
+    description: must_write artifacts must have evidence-manifest entry with creator_run_id matching current run
+
+  # ──── Phase L — Trust-anchor XML ────
+  - id: crossai-review-xml
+    path: .claude/scripts/validators/validate-crossai-review-xml.py
+    severity: block
+    phases_active: [blueprint, review, accept]
+    domain: crossai
+    runtime_target_ms: 500
+    added_in: v2.5.2
+    description: CrossAI XML must parse + have verdict in pass/flag/block + score 0-10 + reviewer non-empty
+
+  - id: crossai-multi-cli
+    path: .claude/scripts/validators/verify-crossai-multi-cli.py
+    severity: block
+    phases_active: [blueprint, review, accept]
+    domain: crossai
+    runtime_target_ms: 500
+    added_in: v2.5.2
+    description: CrossAI consensus requires N CLIs agreeing + reviewer diversity (prevent spoofing)
+
+  # ──── Phase M Batch 1 — Security infra ────
+  - id: security-baseline-project
+    path: .claude/scripts/validators/verify-security-baseline-project.py
+    severity: warn
+    phases_active: [accept]
+    domain: security
+    runtime_target_ms: 30000
+    added_in: v2.5.2
+    description: Orchestrates runtime security sub-validators (cookie, headers, authz, deps, container)
+
+  - id: cookie-flags-runtime
+    path: .claude/scripts/validators/verify-cookie-flags-runtime.py
+    severity: warn
+    phases_active: [test, accept]
+    domain: security
+    runtime_target_ms: 5000
+    added_in: v2.5.2
+    description: Set-Cookie headers must have Secure/HttpOnly/SameSite flags
+
+  - id: security-headers-runtime
+    path: .claude/scripts/validators/verify-security-headers-runtime.py
+    severity: warn
+    phases_active: [test, accept]
+    domain: security
+    runtime_target_ms: 5000
+    added_in: v2.5.2
+    description: HSTS/CSP/X-Frame-Options/nosniff required on production endpoints
+
+  - id: authz-negative-paths
+    path: .claude/scripts/validators/verify-authz-negative-paths.py
+    severity: block
+    phases_active: [test, accept]
+    domain: security
+    runtime_target_ms: 20000
+    added_in: v2.5.2
+    description: Cross-tenant/cross-role probes must 403/404, never 200
+
+  - id: dependency-vuln-budget
+    path: .claude/scripts/validators/verify-dependency-vuln-budget.py
+    severity: block
+    phases_active: [accept, release]
+    domain: security
+    runtime_target_ms: 30000
+    added_in: v2.5.2
+    description: Package CVE counts within budget per severity
+
+  - id: container-hardening
+    path: .claude/scripts/validators/verify-container-hardening.py
+    severity: warn
+    phases_active: [accept]
+    domain: security
+    runtime_target_ms: 1000
+    added_in: v2.5.2
+    description: Dockerfile non-root + HEALTHCHECK + pinned tag + compose cap_drop
+
+  # ──── Phase M Batch 2 — Security app-auth ────
+  - id: jwt-session-policy
+    path: .claude/scripts/validators/verify-jwt-session-policy.py
+    severity: block
+    phases_active: [review, accept]
+    domain: security
+    runtime_target_ms: 3000
+    added_in: v2.5.2
+    description: JWT algorithm RS256/ES256 + access <=15min + refresh <=7d + revocation path
+
+  - id: oauth-pkce-enforcement
+    path: .claude/scripts/validators/verify-oauth-pkce-enforcement.py
+    severity: block
+    phases_active: [review, accept]
+    domain: security
+    runtime_target_ms: 2000
+    added_in: v2.5.2
+    description: OAuth public clients must use PKCE S256 + state + nonce (OIDC)
+
+  - id: 2fa-gate
+    path: .claude/scripts/validators/verify-2fa-gate.py
+    severity: block
+    phases_active: [review, accept]
+    domain: security
+    runtime_target_ms: 2000
+    added_in: v2.5.2
+    description: Routes requiring 2FA per TEST-GOALS must invoke TOTP/WebAuthn check
+
+  - id: log-hygiene
+    path: .claude/scripts/validators/verify-log-hygiene.py
+    severity: warn
+    phases_active: [review, accept]
+    domain: security
+    runtime_target_ms: 5000
+    added_in: v2.5.2
+    description: No Authorization header or password/token fields in logger output
+
+  # ──── Phase N — DAST waive approver ────
+  - id: dast-waive-approver
+    path: .claude/scripts/validators/verify-dast-waive-approver.py
+    severity: block
+    phases_active: [accept]
+    domain: security
+    runtime_target_ms: 1000
+    added_in: v2.5.2
+    description: Waived DAST findings must have allowlisted approver + non-expired until date + 100+ char reason
+
+  # ──── Phase O — Orchestrator hardening ────
+  - id: clean-failure-state
+    path: .claude/scripts/validators/verify-clean-failure-state.py
+    severity: block
+    phases_active: [post-failure]
+    domain: orchestrator
+    runtime_target_ms: 500
+    added_in: v2.5.2
+    description: After failed run, no stale locks + no .inflight files + manifest entries consistent
+
+  - id: override-debt-sla
+    path: .claude/scripts/validators/verify-override-debt-sla.py
+    severity: warn
+    phases_active: [release, weekly]
+    domain: orchestrator
+    runtime_target_ms: 500
+    added_in: v2.5.2
+    description: Override debt entries past SLA (default 30 days open) surface for resolve
+
+  - id: allow-flag-audit
+    path: .claude/scripts/validators/verify-allow-flag-audit.py
+    severity: warn
+    phases_active: [weekly]
+    domain: orchestrator
+    runtime_target_ms: 2000
+    added_in: v2.5.2
+    description: Detect rubber-stamp pattern in --allow-* flag usage (same approver+flag+reason >=3x)
+
+  # ──── Phase P — Bootstrap behavioral ────
+  - id: bootstrap-carryforward
+    path: .claude/scripts/validators/verify-bootstrap-carryforward.py
+    severity: block
+    phases_active: [post-run]
+    domain: bootstrap
+    runtime_target_ms: 2000
+    added_in: v2.5.2
+    description: Active LEARN-RULES must appear in captured executor prompts (behavioral, not event-grep)
+
+  - id: learn-promotion
+    path: .claude/scripts/validators/verify-learn-promotion.py
+    severity: block
+    phases_active: [post-accept]
+    domain: bootstrap
+    runtime_target_ms: 2000
+    added_in: v2.5.2
+    description: Recent Tier-A promotions must appear in first subsequent-run prompts
+
+  # ──── Phase R — Prose-to-PY behavioral ────
+  - id: executor-context-scope
+    path: .claude/scripts/validators/verify-executor-context-scope.py
+    severity: block
+    phases_active: [post-build]
+    domain: context
+    runtime_target_ms: 2000
+    added_in: v2.5.2
+    description: Prompt D-XX IDs must match task <context-refs> (prevents silent full-mode fallback)
+
+  - id: review-loop-evidence
+    path: .claude/scripts/validators/verify-review-loop-evidence.py
+    severity: block
+    phases_active: [review]
+    domain: evidence
+    runtime_target_ms: 3000
+    added_in: v2.5.2
+    description: Consecutive review iterations must show source file delta via git OR explicit no_fix_needed
+
+  - id: test-requirements
+    path: .claude/scripts/validators/evaluate-test-requirements.py
+    severity: warn
+    phases_active: [test]
+    domain: test
+    runtime_target_ms: 5000
+    added_in: v2.5.2
+    description: Automated critical/important goals must have test with >=2 assertions + E2E if user-flow
+
+  # ──── Backfilled v2.5.2.1 (pre-v2.5.2 legacy validators) ────
+  # Entries below were auto-discovered + need per-entry review
+  # (domain, severity, phases_active may need tightening).
+
+  - id: acceptance-reconciliation
+    path: .claude/scripts/validators/acceptance-reconciliation.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: acceptance-reconciliation.py'
+
+  - id: accessibility-scan
+    path: .claude/scripts/validators/accessibility-scan.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: accessibility-scan.py'
+
+  - id: build-crossai-required
+    path: .claude/scripts/validators/build-crossai-required.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: build-crossai-required.py — OHOK-7 MANDATORY enforcement.'
+
+  - id: build-telemetry-surface
+    path: .claude/scripts/validators/build-telemetry-surface.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: build-telemetry-surface.py'
+
+  - id: check-override-events
+    path: .claude/scripts/validators/check-override-events.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'check-override-events.py — OHOK Batch 5 B9.'
+
+  - id: commit-attribution
+    path: .claude/scripts/validators/commit-attribution.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: commit-attribution.py'
+
+  - id: context-structure
+    path: .claude/scripts/validators/context-structure.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: context-structure.py'
+
+  - id: dast-scan-report
+    path: .claude/scripts/validators/dast-scan-report.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: dast-scan-report.py'
+
+  - id: deferred-evidence
+    path: .claude/scripts/validators/deferred-evidence.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: deferred-evidence.py'
+
+  - id: deps-security-scan
+    path: .claude/scripts/validators/deps-security-scan.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: deps-security-scan.py'
+
+  - id: event-reconciliation
+    path: .claude/scripts/validators/event-reconciliation.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: event-reconciliation.py'
+
+  - id: goal-coverage
+    path: .claude/scripts/validators/goal-coverage.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: goal-coverage.py'
+
+  - id: i18n-coverage
+    path: .claude/scripts/validators/i18n-coverage.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: i18n-coverage.py'
+
+  - id: mutation-layers
+    path: .claude/scripts/validators/mutation-layers.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: mutation-layers.py'
+
+  - id: not-scanned-replay
+    path: .claude/scripts/validators/not-scanned-replay.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: not-scanned-replay.py'
+
+  - id: override-debt-balance
+    path: .claude/scripts/validators/override-debt-balance.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: override-debt-balance.py'
+
+  - id: phase-exists
+    path: .claude/scripts/validators/phase-exists.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: phase-exists.py'
+
+  - id: plan-granularity
+    path: .claude/scripts/validators/plan-granularity.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: plan-granularity.py'
+
+  - id: review-skip-guard
+    path: .claude/scripts/validators/review-skip-guard.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: review-skip-guard.py'
+
+  - id: runtime-evidence
+    path: .claude/scripts/validators/runtime-evidence.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'runtime-evidence validator — forces runtime verification over AI "code evidence".'
+
+  - id: secrets-scan
+    path: .claude/scripts/validators/secrets-scan.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: secrets-scan.py'
+
+  - id: task-goal-binding
+    path: .claude/scripts/validators/task-goal-binding.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: task-goal-binding.py'
+
+  - id: test-first
+    path: .claude/scripts/validators/test-first.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: test-first.py'
+
+  - id: authz-declared
+    path: .claude/scripts/validators/verify-authz-declared.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-authz-declared.py'
+
+  - id: context-refs
+    path: .claude/scripts/validators/verify-context-refs.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-context-refs.py'
+
+  - id: contract-runtime
+    path: .claude/scripts/validators/verify-contract-runtime.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-contract-runtime.py'
+
+  - id: foundation-architecture
+    path: .claude/scripts/validators/verify-foundation-architecture.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-foundation-architecture.py'
+
+  - id: goal-perf
+    path: .claude/scripts/validators/verify-goal-perf.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-goal-perf.py'
+
+  - id: goal-security
+    path: .claude/scripts/validators/verify-goal-security.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-goal-security.py'
+
+  - id: input-validation
+    path: .claude/scripts/validators/verify-input-validation.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-input-validation.py'
+
+  - id: security-baseline
+    path: .claude/scripts/validators/verify-security-baseline.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-security-baseline.py'
+
+  - id: security-test-plan
+    path: .claude/scripts/validators/verify-security-test-plan.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: verify-security-test-plan.py'
+
+  - id: validator-drift
+    path: .claude/scripts/validators/verify-validator-drift.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'verify-validator-drift.py — Phase S of v2.5.2 hardening.'
+
+  - id: vg-design-coherence
+    path: .claude/scripts/validators/vg-design-coherence.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: vg-design-coherence.py'
+
+  - id: wave-attribution
+    path: .claude/scripts/validators/wave-attribution.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: wave-attribution.py'
+
+  - id: wave-verify-isolated
+    path: .claude/scripts/validators/wave-verify-isolated.py
+    severity: warn
+    phases_active: [all]
+    domain: uncategorized
+    runtime_target_ms: 5000
+    added_in: pre-v2.5.2
+    description: 'Validator: wave-verify-isolated.py'
