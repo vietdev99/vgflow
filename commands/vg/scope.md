@@ -912,9 +912,45 @@ Check B and D still WARN (softer signals). Check A and C are structural — bloc
 </step>
 
 <step name="4_crossai_review">
-## Step 4: CROSSAI REVIEW (optional, config-driven)
+## Step 4: CROSSAI REVIEW (config-driven, explicit enforcement)
 
-**Skip if:** `$SKIP_CROSSAI` flag is set, OR `config.crossai_clis` is empty.
+**v2.5.2.9+ enforcement** — AI KHÔNG được silent skip. Bash block dưới đây bắt buộc chạy trước prose CrossAI invocation.
+
+```bash
+# ─────────────────────────────────────────────────────────────────────────
+# Explicit skip enforcement (v2.5.2.9)
+# Previously this step had prose "Skip if $SKIP_CROSSAI or empty crossai_clis"
+# and AI could silently fall through — scope CrossAI bị skip HOÀN TOÀN qua
+# 3 phase liên tiếp (7.14/7.15/7.16) với 0 events ghi nhận.
+# Now: explicit bash check → shared guard helper → emit event or block.
+# ─────────────────────────────────────────────────────────────────────────
+
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/crossai-skip-guard.sh" 2>/dev/null || {
+  echo "⚠ crossai-skip-guard.sh missing — không enforce được skip audit trail" >&2
+}
+
+SKIP_CAUSE=$(crossai_detect_skip_cause "${ARGUMENTS:-}" ".claude/vg.config.md" 2>/dev/null || echo "")
+
+if [ -n "$SKIP_CAUSE" ]; then
+  REASON_TEXT="scope CrossAI skip cho phase ${PHASE_NUMBER} (args=${ARGUMENTS:-none})"
+  if ! crossai_skip_enforce "vg:scope" "$PHASE_NUMBER" "scope.4_crossai_review" \
+       "$SKIP_CAUSE" "$REASON_TEXT"; then
+    echo "⛔ Guard chặn skip — exit. Chạy lại không có --skip-crossai hoặc đổi reason." >&2
+    exit 1
+  fi
+  # Skip allowed — mark marker + exit step. Không chạy CrossAI invocation bên dưới.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 4_crossai_review 2>/dev/null || true
+  mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+  touch "${PHASE_DIR}/.step-markers/4_crossai_review.done"
+  # Use return nếu step được source từ orchestrator, else bash 'return' ngoài function fails
+  # → dùng exit 0 khi no parent function, else return 0
+  return 0 2>/dev/null || exit 0
+fi
+
+echo "▸ CrossAI scope review starting — phase ${PHASE_NUMBER}"
+echo "  AI thứ 2 sẽ review SPECS + CONTEXT decisions để bắt drift/contradiction."
+echo "  Kết quả → ${PHASE_DIR}/crossai/result-*.xml + event crossai.verdict."
+```
 
 Prepare context file at `${VG_TMP}/vg-crossai-${PHASE_NUMBER}-scope-review.md`:
 

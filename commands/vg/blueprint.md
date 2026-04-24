@@ -2461,9 +2461,40 @@ jq --arg n "$NEXT_ITER" --argjson gaps "$(cat ...)" \
 
 ### 2d-6: CrossAI review (when gate PASSED)
 
-**Skip conditions (any match → go to 2d-8):**
-- `config.crossai_clis` is empty (no CLIs configured)
-- `$ARGUMENTS` contains `--skip-crossai` (per-run opt-out)
+**v2.5.2.9+ enforcement** — explicit bash skip-gate thay vì prose "Skip if..." mà AI có thể silent fall-through.
+
+```bash
+# ─────────────────────────────────────────────────────────────────────────
+# Explicit CrossAI skip enforcement (v2.5.2.9)
+# Phase 7.14 precedent: blueprint CrossAI bị skip với rationale "UI-only no
+# API change" rồi 7.15/7.16 copy-paste nguyên văn. 12+15+3 contract waives
+# logged nhưng AI tự quyết — user không được hỏi.
+# Now: guard chặn rubber-stamp + force event emit + debt log.
+# ─────────────────────────────────────────────────────────────────────────
+
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/crossai-skip-guard.sh" 2>/dev/null || {
+  echo "⚠ crossai-skip-guard.sh missing — skip audit không enforce được" >&2
+}
+
+SKIP_CAUSE_BP=$(crossai_detect_skip_cause "${ARGUMENTS:-}" ".claude/vg.config.md" 2>/dev/null || echo "")
+
+if [ -n "$SKIP_CAUSE_BP" ]; then
+  REASON_BP="blueprint CrossAI skip cho phase ${PHASE_NUMBER} (args=${ARGUMENTS:-none})"
+  if ! crossai_skip_enforce "vg:blueprint" "$PHASE_NUMBER" "blueprint.2d_crossai_review" \
+       "$SKIP_CAUSE_BP" "$REASON_BP"; then
+    echo "⛔ Rubber-stamp guard chặn skip — exit." >&2
+    echo "   Blueprint của phase này cần CrossAI chạy thật (không được copy lý do từ phase trước)." >&2
+    exit 1
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2d_crossai_review 2>/dev/null || true
+  mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+  touch "${PHASE_DIR}/.step-markers/2d_crossai_review.done"
+  return 0 2>/dev/null || exit 0
+fi
+
+echo "▸ CrossAI blueprint review starting — phase ${PHASE_NUMBER}"
+echo "  AI thứ 2 review plan + contracts + goals cho quality pass trước build."
+```
 
 Prepare context file at `${VG_TMP}/vg-crossai-{phase}-blueprint-review.md`:
 
