@@ -30,7 +30,9 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+from _repo_root import find_repo_root
+
+REPO_ROOT = find_repo_root(__file__)
 LOCKFILE = REPO_ROOT / ".vg" / ".repo-lock.json"
 DEFAULT_TTL_SECONDS = 3600
 STALE_BREAK_AFTER_SECONDS = 7200

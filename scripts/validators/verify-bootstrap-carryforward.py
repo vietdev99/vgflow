@@ -156,6 +156,7 @@ def main() -> int:
                     help="Which severity rules to enforce (default critical)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     rules_path = REPO_ROOT / args.rules_file

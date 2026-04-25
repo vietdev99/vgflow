@@ -41,7 +41,9 @@ import os
 from pathlib import Path
 from typing import Optional
 
-REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+from _repo_root import find_repo_root
+
+REPO_ROOT = find_repo_root(__file__)
 
 VALID_ACTIONS = {
     "file_write", "file_delete", "config_change",

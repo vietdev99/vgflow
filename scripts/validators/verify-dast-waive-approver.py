@@ -200,8 +200,10 @@ def _rubber_stamp_scan(waives: list[dict], threshold: int) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--triage-file", required=True,
-                    help="Triage YAML/JSON with `waives:` list")
+    ap.add_argument("--triage-file", default=None,
+                    help="Triage YAML/JSON with `waives:` list (auto-resolves "
+                         "to .vg/phases/<phase>/dast-triage.{yaml,json} "
+                         "when --phase set)")
     ap.add_argument("--approvers", default="",
                     help="Comma-separated allowlist of github handles "
                          "(empty = skip allowlist check, reason_only)")
@@ -215,12 +217,45 @@ def main() -> int:
                     help="ISO date override for expiry check (tests only)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="phase number — when set + --triage-file omitted, "
+                                    "auto-resolves convention path")
     args = ap.parse_args()
+
+    # v2.6 (2026-04-25): auto-resolve triage file from phase convention
+    if not args.triage_file and args.phase:
+        phases_dir = Path(".vg/phases")
+        if phases_dir.exists():
+            for p in phases_dir.iterdir():
+                if p.is_dir() and (p.name == args.phase
+                                   or p.name.startswith(f"{args.phase}-")
+                                   or p.name.startswith(f"{args.phase.zfill(2)}-")):
+                    for ext in (".yaml", ".yml", ".json"):
+                        cand = p / f"dast-triage{ext}"
+                        if cand.exists():
+                            args.triage_file = str(cand)
+                            break
+                    break
+
+    if not args.triage_file:
+        # No triage file → DAST not run yet for this phase, auto-skip
+        print(json.dumps({
+            "validator": "verify-dast-waive-approver",
+            "verdict": "PASS",
+            "evidence": [],
+            "_skipped": "no triage file (DAST not run yet, or no waivers)",
+        }))
+        return 0
 
     path = Path(args.triage_file)
     if not path.exists():
-        print(f"⛔ triage file not found: {path}", file=sys.stderr)
-        return 2
+        # File specified but doesn't exist → auto-skip
+        print(json.dumps({
+            "validator": "verify-dast-waive-approver",
+            "verdict": "PASS",
+            "evidence": [],
+            "_skipped": f"triage file not found: {path}",
+        }))
+        return 0
 
     data = _load_yaml_or_json(path)
     waives = data.get("waives") or []

@@ -143,11 +143,14 @@ def main() -> int:
     parser.add_argument("--fatigue-threshold", type=int, default=5)
     parser.add_argument("--repeat-flag-threshold", type=int, default=10)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--phase", help="(orchestrator-injected; ignored — flag audit is project-wide)")
     args = parser.parse_args()
 
     db_path = _resolve_db_path(args.db_path)
     if not db_path.exists():
         out = {
+            "validator": "verify-allow-flag-audit",
+            "verdict": "PASS",
             "ok": True,
             "note": f"no events.db at {db_path} — nothing to audit",
             "rubber_stamps": [],
@@ -169,6 +172,11 @@ def main() -> int:
 
     findings_total = len(rubber) + len(fatigue) + len(repeat)
     result = {
+        "validator": "verify-allow-flag-audit",
+        # v2.6 (2026-04-25): WARN (not BLOCK) — audit findings highlight
+        # ops behavior patterns (rubber-stamping, approval fatigue, repeat
+        # flag use) that operators should review but shouldn't hard-block ship.
+        "verdict": "PASS" if findings_total == 0 else "WARN",
         "ok": findings_total == 0,
         "db_path": str(db_path),
         "lookback_days": args.lookback_days,

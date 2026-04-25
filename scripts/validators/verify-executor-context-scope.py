@@ -127,6 +127,7 @@ def main() -> int:
                     help="Warn only on extra-IDs (used during migration)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     plan_path = REPO_ROOT / args.plan_file

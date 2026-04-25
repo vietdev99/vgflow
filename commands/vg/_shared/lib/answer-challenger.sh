@@ -29,18 +29,173 @@ challenger_enabled() {
   return 0
 }
 
-# Skip trivial answers (Y/N-only, single-word confirmations) — don't waste Haiku calls
+# Skip trivial answers (Y/N-only, single-word confirmations) — don't waste Haiku calls.
+#
+# v2.6 anti-lazy fix (2026-04-25):
+#   "approve" / "approve_all" REMOVED from trivial list. Those words mean
+#   "user is confirming AI's draft" — the draft IS the answer that needs
+#   challenging. Letting them count as trivial gave AI a lazy escape: present
+#   recommend-first answer, get user "approve all", skip entire 8-lens check.
+#   Phase 7.14 + 7.15 DISCUSSION-LOG entries proved this happened in real runs.
+#
+#   Same logic for "ok|okay|yes|y|đúng|có|next|proceed" — kept in trivial list
+#   ONLY when accumulated has NO AI-draft pattern. When draft present, challenger
+#   swaps the user's confirmation with the draft text (challenger_extract_ai_draft).
 challenger_is_trivial() {
   local ans="$1"
   local stripped
-  stripped=$(echo "$ans" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  # Use Python for unicode-aware lowercase (tr only handles ASCII; Vietnamese
+  # capital letters Đ / Â / Ấ / Ơ / Ư etc. need .lower() to normalize).
+  stripped=$(${PYTHON_BIN:-python3} -c 'import sys; print("".join(sys.argv[1].split()).lower())' "$ans" 2>/dev/null)
+  [ -z "$stripped" ] && stripped=$(echo "$ans" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
   local len=${#stripped}
-  # ≤3 chars, OR matches common confirm/deny tokens
+  # ≤3 chars, OR matches genuine deny/skip tokens (NOT approve patterns)
   [ "$len" -le 3 ] && return 0
   case "$stripped" in
-    yes|no|y|n|ok|okay|đúng|sai|có|không|skip|pass|next|proceed) return 0 ;;
+    # Genuine deny tokens — nothing to challenge, user explicitly rejecting
+    no|n|sai|không|skip|pass|cancel|abort|stop|huỷ|hủy) return 0 ;;
+    # Soft confirms — trivial ONLY when accumulated has no AI draft (caller swaps).
+    # Caller guards the swap; here we just flag triviality.
+    # NOTE: stripped removes whitespace so "approve all" → "approveall".
+    yes|y|ok|okay|đúng|có|next|proceed|continue|tiếp|tiếp_tục|tieptục|tieptuc|approve|approveall|approve_all|approved|confirm|confirmed|allgood|alright|sounds_good|soundsgood) return 0 ;;
+  esac
+
+  # v2.6.1 (2026-04-25): option-pick patterns — user replies with letter/number
+  # to pick from an AI-presented option list. The option content (not the
+  # letter) is what needs challenging. Caller swap logic extracts option text.
+  # Patterns: "a", "(a)", "[a]", "1", "(1)", "option a", "option 1",
+  #           "chọn a", "đáp án 1", "(theo recommended)", "theo a", "pick 1"
+  case "$stripped" in
+    # Single letter/digit (a-z, 0-9) — pure option pick
+    [a-z]|[0-9]) return 0 ;;
+    # Parenthesized/bracketed option: (a), [b], (1), [2]
+    \([a-z]\)|\[[a-z]\]|\([0-9]\)|\[[0-9]\]) return 0 ;;
+    # "option a" / "option 1" / "đáp án a" / "chọn 1" / "pick a" / "select 2"
+    option[a-z]|option[0-9]|đápán[a-z]|đápán[0-9]|chọn[a-z]|chọn[0-9]|pick[a-z]|pick[0-9]|select[a-z]|select[0-9]) return 0 ;;
+    # "theo recommended" / "(theo recommend)" / "per recommended" — confirm AI draft
+    theorecommended|theorecommend|perrecommended|perrecommend|recommended|recommend|đềxuất|theođềxuất|theoa|theob|theoc|theo1|theo2|theo3) return 0 ;;
+    # Bare option-with-paren: "(theo recommended)" → "theorecommended" after strip
+    \(theorecommended\)|\(theorecommend\)|\(theođềxuất\)|\(recommended\)|\(recommend\)) return 0 ;;
+    # Common "default", "as-is", "as proposed"
+    default|asis|as_is|asproposed|as_proposed|sameasrec|sameasrecommended|likerec|likerecommended|theyourcall|your_call|yourcall) return 0 ;;
   esac
   return 1
+}
+
+# v2.6.1 (2026-04-25): normalize an option-pick answer to a canonical token.
+# Returns one of:
+#   - single letter "a".."z"  → user picked option (a/b/c/...)
+#   - single digit  "0".."9"  → user picked option 1/2/3/...
+#   - "_recommended_"         → user said "(theo Recommended)" / "as proposed"
+#   - "" (empty)              → not an option pick (caller falls back to draft extract)
+challenger_normalize_pick() {
+  local ans="$1"
+  local stripped
+  # Unicode-aware lowercase (Vietnamese accented capitals)
+  stripped=$(${PYTHON_BIN:-python3} -c 'import sys; print("".join(sys.argv[1].split()).lower())' "$ans" 2>/dev/null)
+  [ -z "$stripped" ] && stripped=$(echo "$ans" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  # Strip surrounding parens/brackets
+  stripped="${stripped#\(}"; stripped="${stripped%\)}"
+  stripped="${stripped#\[}"; stripped="${stripped%\]}"
+
+  case "$stripped" in
+    [a-z]|[0-9])
+      echo "$stripped"; return ;;
+    option[a-z]|chọn[a-z]|pick[a-z]|select[a-z]|đápán[a-z]|theo[a-z])
+      echo "${stripped: -1}"; return ;;
+    option[0-9]|chọn[0-9]|pick[0-9]|select[0-9]|đápán[0-9]|theo[0-9])
+      echo "${stripped: -1}"; return ;;
+    theorecommended|recommended|perrecommended|đềxuất|theođềxuất|recommend|theorecommend|asproposed|as_proposed|sameasrec|sameasrecommended|likerec|likerecommended|default|asis|as_is)
+      echo "_recommended_"; return ;;
+  esac
+  echo ""
+}
+
+# v2.6.1 (2026-04-25): extract option (a) / (b) / (1) text from accumulated.
+# Patterns supported:
+#   - "- (a) text" or "* (a) text"
+#   - "- a) text"  or "* a) text"
+#   - "- a. text"  or "* a. text"
+#   - numbered lists: "1. text" / "(1) text"
+# Returns option body if ≥30 chars, else empty.
+challenger_extract_option() {
+  local accumulated="$1"
+  local pick="$2"
+  [ -z "$pick" ] && { echo ""; return; }
+  ${PYTHON_BIN:-python3} - "$accumulated" "$pick" <<'PY' 2>/dev/null
+import re, sys
+text, pick = sys.argv[1], sys.argv[2]
+pick_esc = re.escape(pick)
+# Try several option-list formats. Stop at next option marker, blank line,
+# next bold heading, or end-of-text.
+patterns = [
+    rf'^\s*[-*]\s*\({pick_esc}\)\s*(.*?)(?=\n\s*[-*]\s*\([a-z0-9]\)|\n\s*\n|\n\s*\*\*|\Z)',
+    rf'^\s*[-*]\s*{pick_esc}\)\s*(.*?)(?=\n\s*[-*]\s*[a-z0-9]\)|\n\s*\n|\n\s*\*\*|\Z)',
+    rf'^\s*[-*]\s*{pick_esc}\.\s*(.*?)(?=\n\s*[-*]\s*[a-z0-9]\.|\n\s*\n|\n\s*\*\*|\Z)',
+    rf'^\s*\({pick_esc}\)\s*(.*?)(?=\n\s*\([a-z0-9]\)|\n\s*\n|\n\s*\*\*|\Z)',
+    rf'^\s*{pick_esc}\)\s*(.*?)(?=\n\s*[a-z0-9]\)|\n\s*\n|\n\s*\*\*|\Z)',
+    rf'^\s*{pick_esc}\.\s*(.*?)(?=\n\s*[a-z0-9]\.|\n\s*\n|\n\s*\*\*|\Z)',
+]
+for pat in patterns:
+    m = re.search(pat, text, re.DOTALL | re.MULTILINE | re.IGNORECASE)
+    if m:
+        body = m.group(1).strip()
+        if len(body) >= 30:
+            print(body)
+            sys.exit(0)
+sys.exit(0)
+PY
+}
+
+# v2.6 anti-lazy fix (2026-04-25): extract AI's recommend-first draft from
+# accumulated text. When user gives a trivial confirmation ("ok", "approve all"),
+# the orchestrator's accumulated draft contains the AI's proposed answer and
+# THAT is what needs challenging — not the empty confirmation.
+#
+# Detection patterns (case-insensitive, multi-line aware):
+#   1. "**Recommended:**" or "**Recommend:**" or "**Đề xuất:**"
+#   2. "## Recommendation" heading
+#   3. <ai-draft>...</ai-draft> explicit XML tags
+#   4. "Recommended answer:" or "AI suggests:" or "Tôi đề xuất:"
+#
+# Returns: draft text if found (≥50 chars), empty string otherwise.
+# When empty, caller treats answer as genuinely trivial (skip challenger).
+challenger_extract_ai_draft() {
+  local accumulated="$1"
+  [ -z "$accumulated" ] && { echo ""; return; }
+
+  # Use Python for robust multi-line regex (bash awk is brittle on
+  # accumulated strings with embedded newlines + special chars).
+  ${PYTHON_BIN:-python3} - "$accumulated" <<'PY' 2>/dev/null
+import re, sys
+text = sys.argv[1]
+patterns = [
+    # XML tag — most explicit
+    (r'<ai-draft>(.*?)</ai-draft>', re.DOTALL | re.IGNORECASE),
+    # Bold marker patterns
+    (r'\*\*Recommended:\*\*\s*(.*?)(?=\n\n|\n\*\*[A-Z]|\n## |\Z)', re.DOTALL | re.IGNORECASE),
+    (r'\*\*Recommend:\*\*\s*(.*?)(?=\n\n|\n\*\*[A-Z]|\n## |\Z)', re.DOTALL | re.IGNORECASE),
+    (r'\*\*Đề xuất:\*\*\s*(.*?)(?=\n\n|\n\*\*[A-Z]|\n## |\Z)', re.DOTALL | re.IGNORECASE),
+    # Heading patterns
+    (r'## Recommendation\s*\n(.*?)(?=\n## |\n---|\Z)', re.DOTALL | re.IGNORECASE),
+    (r'## Đề xuất\s*\n(.*?)(?=\n## |\n---|\Z)', re.DOTALL | re.IGNORECASE),
+    # Inline patterns
+    (r'Recommended answer:\s*(.*?)(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
+    (r'AI suggests:\s*(.*?)(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
+    (r'Tôi đề xuất:\s*(.*?)(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE),
+]
+for pat, flags in patterns:
+    matches = re.findall(pat, text, flags)
+    if matches:
+        # Use the LAST match (most recent in accumulated context)
+        draft = matches[-1].strip()
+        # Filter: too-short drafts are likely false positives (heading echo,
+        # placeholder text). Genuine recommendations are 50+ chars.
+        if len(draft) >= 50:
+            print(draft)
+            sys.exit(0)
+sys.exit(0)
+PY
 }
 
 # Count prior challenges emitted for this phase/session — loop guard
@@ -85,9 +240,53 @@ challenge_answer() {
     echo '{"has_issue":false,"issue_kind":"","evidence":"","follow_up_question":"","proposed_alternative":"","_skipped":"disabled"}'
     return 0
   fi
+
+  # v2.6 anti-lazy fix (2026-04-25), v2.6.1 (option pick): when user confirms
+  # trivially ("ok", "approve all", "a", "1", "(theo Recommended)"), the
+  # substance to challenge is AI's recommend-first DRAFT or specific option
+  # in the accumulated context — not the empty confirmation. Extract and
+  # swap. Skip ONLY when no draft/option exists (genuine empty trivial).
+  local _user_confirmed_draft="false"
+  local _swap_kind=""  # "draft" | "option_letter" | "option_recommended"
   if challenger_is_trivial "$answer_text"; then
-    echo '{"has_issue":false,"issue_kind":"","evidence":"","follow_up_question":"","proposed_alternative":"","_skipped":"trivial"}'
-    return 0
+    local extracted_draft=""
+    local pick
+    pick=$(challenger_normalize_pick "$answer_text")
+
+    if [ -n "$pick" ] && [ "$pick" != "_recommended_" ]; then
+      # User picked option letter/digit (a/b/c/1/2/3) — extract that option
+      extracted_draft=$(challenger_extract_option "$accumulated" "$pick")
+      [ -n "$extracted_draft" ] && _swap_kind="option_${pick}"
+    fi
+
+    if [ -z "$extracted_draft" ]; then
+      # Either no specific pick OR pick="_recommended_" → fall back to
+      # generic draft extraction (looks for **Recommended:** / <ai-draft>)
+      extracted_draft=$(challenger_extract_ai_draft "$accumulated")
+      [ -n "$extracted_draft" ] && _swap_kind="${_swap_kind:-draft}"
+    fi
+
+    if [ -n "$extracted_draft" ] && [ "${#extracted_draft}" -ge 30 ]; then
+      # AI-drafted-then-confirmed pattern detected — challenge the DRAFT
+      _user_confirmed_draft="true"
+      local swap_note="USER CONFIRMED AI'S DRAFT"
+      [ -n "$pick" ] && [ "$pick" != "_recommended_" ] && \
+        swap_note="USER PICKED OPTION (${pick}) FROM AI'S OPTION LIST"
+      answer_text="[${swap_note} — challenger reviews the AI-proposed text below as if it were the user's authoritative answer, because user gave a trivial confirmation/pick.]
+
+${extracted_draft}"
+      # Telemetry: log the swap so we can measure how often AI lazy-presented
+      # drafts/options that user just rubber-stamped (this is the v2.6 metric).
+      if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+        emit_telemetry_v2 "scope_draft_swapped_for_confirm" "${VG_CURRENT_PHASE:-unknown}" \
+          "${scope_kind}" "adversarial-answer-check" "INFO" \
+          "{\"round_id\":\"$round_id\",\"swap_kind\":\"${_swap_kind}\",\"pick\":\"${pick}\",\"draft_chars\":${#extracted_draft}}"
+      fi
+    else
+      # Genuine trivial answer (no AI draft/option to challenge) — skip
+      echo '{"has_issue":false,"issue_kind":"","evidence":"","follow_up_question":"","proposed_alternative":"","_skipped":"trivial_no_draft"}'
+      return 0
+    fi
   fi
 
   local subagent_model="${CONFIG_SCOPE_ADVERSARIAL_MODEL:-opus}"  # v1.9.3 R3.2: upgraded from haiku
@@ -104,10 +303,32 @@ challenge_answer() {
   # subagents have sandbox isolation and cannot read /tmp files from parent.
   # Orchestrator captures fd 3 via: PROMPT=$(challenge_answer ... 3>&1 1>/dev/null 2>/dev/null)
   # then passes inline to Agent(prompt=$PROMPT).
+  # v2.6 anti-lazy fix: add mode marker so subagent prompt makes the
+  # confirmed-draft case explicit. Lens scoring should be STRICTER on
+  # AI-drafted content because the user didn't write it themselves —
+  # it's the AI's reasoning that needs to survive 8-lens scrutiny.
+  local mode_marker=""
+  if [ "$_user_confirmed_draft" = "true" ]; then
+    mode_marker="
+══════════════════════════════════════════════════════════════════════════════
+⚠ MODE: USER-CONFIRMED-DRAFT (v2.6 anti-lazy)
+══════════════════════════════════════════════════════════════════════════════
+
+The 'USER'S ANSWER' below is actually AI's recommend-first DRAFT that the
+user rubber-stamped with a trivial confirmation ('ok', 'approve all', etc).
+You MUST be STRICTER than usual: AI's draft was generated quickly and the
+user didn't rewrite it from their domain knowledge. Flag every plausible
+gap. Set has_issue=true unless ALL 8 lenses are convincingly clean.
+
+Default presumption: AI-drafted text has ≥1 hidden assumption or edge case.
+Your job is to find it.
+"
+  fi
+
   cat > "$prompt_path" <<PROMPT
 You are an Adversarial Answer Challenger. You have ZERO context about the parent session.
 Your ONLY job: challenge a user's design answer in a ${scope_kind} discussion round.
-
+${mode_marker}
 ══════════════════════════════════════════════════════════════════════════════
 ROUND: ${round_id}    SCOPE: ${scope_kind}
 ══════════════════════════════════════════════════════════════════════════════

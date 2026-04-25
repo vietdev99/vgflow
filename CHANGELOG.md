@@ -1,5 +1,101 @@
 # Changelog
 
+## [2.6.1] - 2026-04-26
+
+### 7-dimension audit + 7-batch fix release — closes 13 CRITICAL + most HIGH findings
+
+Comprehensive harness audit (`.vg/harness-audit-2026-04-26/`) ran 7 parallel
+Explore agents covering: validator wiring, override/bypass surfaces,
+migration debt, memory mechanism, step sync, config drift, self-test
+coverage. **125 findings** total: 13 CRITICAL, 43 HIGH, 37 MEDIUM, 32 LOW.
+
+Three most surprising discoveries:
+1. `inject_rule_cards` helper was 0/44 invoked — 783 extracted rules were
+   dead code, AI never read them at runtime
+2. 22 bypass flags (`--override-reason`, `--allow-*`, `--skip-*`), zero
+   had TTY/HMAC caller authentication — AI subagent could self-inject
+3. CI never ran harness Python tests — regressions in `.claude/scripts/*`
+   merged silently for months
+
+### Batch A — UNQUARANTINABLE protect 5 security validators (commit d541dc86)
+
+Wires 5 wired-but-unprotected validators into UNQUARANTINABLE allowlist:
+verify-authz-declared, verify-auth-flow-smoke, verify-oauth-pkce-enforcement,
+verify-rollback-procedure, verify-2fa-gate (severity bumped WARN→BLOCK).
+
+### Batch B — Activate rule card injection (commit 9415a755)
+
+Wires `inject_rule_cards` at first step of 7 high-traffic skills (vg-scope,
+specs, blueprint, build, review, test, accept). 783 rules + 331 anti-
+patterns now actually emitted to AI context at step start. Adds
+`verify-rule-cards-fresh` drift gate to `/vg:accept` step 1.
+
+### Batch C — Override caller-auth + quarantine recovery (commit a009dc2d)
+
+Closes the AI self-injection class of bugs:
+- `--override-reason` now requires TTY OR signed HMAC approver token
+  (`verify_human_operator()` reused from v2.5.2.1 `--allow-*` path)
+- Rubber-stamp escalator: same reason fingerprint copy-pasted across ≥2
+  prior phases → BLOCK
+- Stale-quarantine cleanup: validators promoted to UNQUARANTINABLE AFTER
+  being disabled never got a chance to recover. New helper +
+  `vg-orchestrator quarantine status / re-enable / force-enable-stale`
+  CLI subcommands.
+
+### Batch D — CI pytest gate + 19 critical security tests (commit 7dd9d650)
+
+`.github/workflows/ci.yml` adds harness-tests job:
+- Full suite warn-only (21 pre-existing Linux/Windows failures need v2.6.2)
+- Hard gate for `test_idempotency_coverage.py` (9 tests) +
+  `test_no_no_verify.py` (10 tests) — anti retry-storm/double-charge +
+  pre-commit hook bypass
+
+### Batch E — Schema drift canonicalization (commit 2524614d)
+
+6 validators canonicalize FAIL/OK/SKIP → BLOCK/PASS/SKIP at output point.
+Plus REAL bug: `verify-artifact-freshness` and `verify-command-contract-
+coverage` emitted JSON without top-level verdict field → orchestrator
+shim defaulted to PASS regardless of internal failures. Now emit
+"verdict": BLOCK when failures.
+
+### Batch F — UNQUARANTINABLE protect 11 more validators (commit fef97811)
+
+Closer inspection of D1 audit's 30 "orphan" validators: 29/30 were
+actually wired in COMMAND_VALIDATORS dict (audit grepped only `.md` files).
+1 genuine orphan (verify-design-gap-hunter — that's a SKILL not a validator).
+
+Of the 29 wired BLOCK validators, 11 security/integrity-critical were
+missing UNQUARANTINABLE protection. Added: container-hardening,
+cookie-flags-runtime, dast-waive-approver, dependency-vuln-budget,
+no-hardcoded-paths, no-no-verify, security-baseline-project, security-
+headers-runtime, allow-flag-audit, vps-deploy-evidence, clean-failure-state.
+
+### Batch G — Hotfix override resolution event correlation (commit 449ccdb7)
+
+Fixes 3 review.md `log_override_debt` calls that had positional args
+mis-ordered (flag-as-name, phase-dir-as-reason, gate_id always missing).
+New gate_id taxonomy: review-goal-coverage, bugfix-bugref-required,
+bugfix-code-delta-required.
+
+New `override_auto_resolve_clean_run` helper + wired into `/vg:review`
+step "complete". When current phase review runs clean, prior phases'
+matching debt entries auto-resolve. Closes the "hotfix debt piles up
+forever" pattern.
+
+### Net state v2.6.1
+
+- UNQUARANTINABLE: 18 → 34 entries (manifest)
+- Memory mechanism: dead → live (783 rules + 331 anti-patterns active)
+- CI: 3 jobs (build-ts, build-rust, audit) → 4 jobs (+ harness-tests)
+- Override surface: 22 flags w/o auth → all gated by TTY/HMAC + min-50
+  char + placeholder + rubber-stamp escalator
+
+### Deferred to v2.7 (genuine reasons)
+
+- 52 untested scripts (volume — ~26h work)
+- 21 pre-existing Linux CI failures (need Linux env to validate fixes)
+- 22 hardcoded SSH/path/port instances (touches deployment, needs phase)
+
 ## [2.5.2.1] - 2026-04-24
 
 ### Hotfix — close 3 major findings from v2.5.2 CrossAI round-3

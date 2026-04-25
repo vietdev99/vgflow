@@ -101,6 +101,7 @@ def main() -> int:
                          "ignored when counting iteration progress)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     phase_dir = Path(args.phase_dir)

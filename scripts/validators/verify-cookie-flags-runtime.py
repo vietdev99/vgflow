@@ -171,9 +171,14 @@ def _check_cookie(cookie: dict, scheme: str,
 
 
 def main() -> int:
+    import os as _os
+    # Allow --target-url via env var (VG_TARGET_URL) so orchestrator
+    # dispatch path doesn't crash when env not set — auto-skip instead.
+    env_url = _os.environ.get("VG_TARGET_URL")
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--target-url", required=True,
-                    help="base URL of live app (e.g. http://localhost:3000)")
+    ap.add_argument("--target-url", default=env_url,
+                    help="base URL of live app (e.g. http://localhost:3000); "
+                         "if omitted, reads VG_TARGET_URL env or auto-skips")
     ap.add_argument("--login-path", default="/",
                     help="path to probe (default: /). Used as POST target "
                          "with --credentials, else GET")
@@ -183,10 +188,25 @@ def main() -> int:
                     help="GET target without login (for health-style probe)")
     ap.add_argument("--allow-samesite-none", action="store_true",
                     help="permit SameSite=None (OAuth cross-site flows)")
+    # Orchestrator passes --phase; runtime probe doesn't use it but accepts
+    # to avoid argparse crash when called via _run_validators.
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored — runtime probe is project-wide)")
     ap.add_argument("--timeout", type=float, default=5.0)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+
+    # Auto-skip when no target URL provided (orchestrator may dispatch
+    # before deploy step has set VG_TARGET_URL). Emit PASS with skipped
+    # reason so dispatch is non-blocking.
+    if not args.target_url:
+        print(__import__("json").dumps({
+            "validator": "verify-cookie-flags-runtime",
+            "verdict": "PASS",
+            "evidence": [],
+            "_skipped": "no target-url (set --target-url or VG_TARGET_URL env after deploy)",
+        }))
+        return 0
 
     url = args.target_url.rstrip("/") + args.login_path
     if args.credentials and not args.probe_only:

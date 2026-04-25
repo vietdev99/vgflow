@@ -130,6 +130,7 @@ def main() -> int:
                     help="phases > this float → no legacy-bootstrap allowed")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     manifest_path = Path(args.manifest)

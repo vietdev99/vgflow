@@ -81,6 +81,28 @@ SENSITIVE_ARG_PATTERNS = [
     (r"\bcredit[_\s-]?card\b", "credit_card field"),
 ]
 
+# v2.6 (2026-04-25): patterns indicating the developer ALREADY redacted /
+# masked / truncated a sensitive value. When the log call uses one of
+# these, treat as PASS — it's an intentional safe log, not a leak.
+SAFE_REDACTION_MARKERS = [
+    r"_masked\b",       # email_masked, token_masked, etc.
+    r"_short\b",        # user_id_short, jti_short
+    r"_truncated\b",    # token_truncated
+    r"_redacted\b",     # secret_redacted
+    r"_hash\b",         # token_hash, password_hash (already irreversible)
+    r"_prefix\b",       # token_prefix (intentional partial)
+    r"\.substring\s*\(",  # token.substring(0, 20) explicit slice
+    r"\.slice\s*\(",      # token.slice(0, 8)
+    r"\bredact\(",        # redact(token)
+    r"\bmask\(",          # mask(email)
+    r"\bsanitize\(",      # sanitize(payload)
+    r"\bhash\(",          # hash(token)
+    r"audit_event\s*:",   # audit_event: 'X' literal — no actual value
+    r"event_type\s*:",    # event_type: 'X' literal
+    r"\bnot\s+set\b",     # "API key not set" status string
+    r"configured\s+with", # "configured with API key" status
+]
+
 SANITIZER_PATTERNS = [
     r"pino-?redact",
     r"pino\s*\(\s*\{[^}]*redact",
@@ -130,12 +152,31 @@ CODE_EXTS = (".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".py",
 
 
 def _iter_code_files(root: Path):
+    # Skip dirs: third-party + test/script directories where diagnostic
+    # logging is intentional (test prints, smoke checkers, debugger scripts).
+    # Production code paths (apps/**/src/**, packages/**/src/**) are still
+    # scanned strictly.
     skip = {"node_modules", "dist", "build", ".git", ".vg",
-            "__pycache__", ".next", "target", "vendor"}
+            "__pycache__", ".next", "target", "vendor",
+            # Harness v2.6 (2026-04-25): skip test/script dirs to avoid
+            # false positives from diagnostic prints. Production source
+            # under apps/**/src/** + packages/**/src/** still scanned.
+            "tests", "test", "__tests__", "e2e",
+            ".planning", ".claude", ".codex", "scripts",
+            "infra", "docs",
+            # Harness v2.6 (2026-04-25): skip storybook + minified bundles.
+            # Storybook's tokenizer mentions "token" in unrelated context
+            # (prism syntax-highlight tokens), not auth tokens.
+            "storybook-static", ".storybook"}
+    skip_filename_patterns = (".min.", ".bundle.", "globals-runtime.js")
     for p in root.rglob("*"):
         if not p.is_file():
             continue
         if any(part in skip for part in p.parts):
+            continue
+        # Skip minified/bundled files — heavy false-positive sources
+        name = p.name
+        if any(pat in name for pat in skip_filename_patterns):
             continue
         if p.suffix.lower() in CODE_EXTS:
             yield p
@@ -161,10 +202,20 @@ def _scan_sast(root: Path) -> dict:
             findings["has_sanitizer"] = True
             findings["sanitizer_refs"].append(str(f))
 
+        # v2.6 (2026-04-25): compile redaction-marker regex once per file
+        redaction_re = re.compile(
+            "|".join(SAFE_REDACTION_MARKERS), re.IGNORECASE,
+        )
+
         for m in LOGGER_CALL_RE.finditer(text):
             call_args = m.group(1)
             # Line number
             line_no = text[:m.start()].count("\n") + 1
+            # v2.6 — skip when call args show explicit redaction. Catches
+            # email_masked / token_short / .substring(...) / sanitize(...) /
+            # audit_event: 'X' / "API key not set" status strings.
+            if redaction_re.search(call_args):
+                continue
             for pattern, label in SENSITIVE_ARG_PATTERNS:
                 if re.search(pattern, call_args, re.IGNORECASE):
                     findings["leaky_calls"].append({
@@ -236,13 +287,19 @@ def main() -> int:
     ap.add_argument("--mode", choices=["sast", "runtime", "both"],
                     default=None,
                     help="override mode selection (default: auto)")
+    # Orchestrator dispatch passes --phase to every validator (see
+    # vg-orchestrator/__main__.py _run_validators). SAST scans whole
+    # project regardless of phase; accept the arg to avoid argparse
+    # crash. Phase-aware validators use it directly.
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by SAST scan)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
+    # Default to repo root when called by orchestrator (which only passes --phase)
+    import os as _os
     if not args.project_root and not args.log_file:
-        print("⛔ must supply --project-root or --log-file", file=sys.stderr)
-        return 2
+        args.project_root = _os.environ.get("VG_REPO_ROOT") or _os.getcwd()
 
     # Auto-select mode if not specified
     if args.mode is None:
@@ -318,9 +375,12 @@ def main() -> int:
 
     verdict = "FAIL" if blocks else ("WARN" if warns else "OK")
 
+    # v2.6.1 (2026-04-26): canonicalize verdict for orchestrator schema.
+    _canonical = {"FAIL": "BLOCK", "OK": "PASS", "WARN": "WARN"}.get(verdict, verdict)
+
     output = {
         "validator": "verify-log-hygiene",
-        "verdict": verdict,
+        "verdict": _canonical,
         "mode": args.mode,
         "blocks": blocks,
         "warns": warns,

@@ -200,6 +200,8 @@ def main() -> int:
         action="store_true",
         help="Skip indirect_prose_suspected findings (reduce noise during bulk migration)",
     )
+    # v2.6 (2026-04-25): orchestrator-injected --phase ignored (scans all)
+    p.add_argument("--phase", help="(orchestrator-injected; ignored)")
     args = p.parse_args()
 
     root = Path(args.root).resolve()

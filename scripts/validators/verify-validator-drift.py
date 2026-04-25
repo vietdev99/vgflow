@@ -280,6 +280,7 @@ def main() -> int:
                     help="block/fail rate above = high-FP pattern (default 0.8)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     registry_path = Path(args.registry)
@@ -302,6 +303,10 @@ def main() -> int:
     )
 
     report = {
+        "validator": "verify-validator-drift",
+        # v2.6 (2026-04-25): WARN (advisory) — drift findings tell ops
+        # which validators to demote/disable/optimize but don't hard-block.
+        "verdict": "PASS" if not findings else "WARN",
         "db_path": str(db_path),
         "registry": str(registry_path),
         "lookback_days": args.lookback_days,

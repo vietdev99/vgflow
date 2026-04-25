@@ -166,6 +166,7 @@ def main() -> int:
                     help="path to TEST-GOALS.md to parse for 2FA declarations")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     root = Path(args.project_root).resolve()
@@ -211,9 +212,13 @@ def main() -> int:
                 )
                 verdict = "WARN"
 
+    # v2.6.1 (2026-04-26): canonicalize verdict for orchestrator schema.
+    # Internal: SKIP/OK/WARN/FAIL → output: PASS/PASS/WARN/BLOCK.
+    _canonical = {"FAIL": "BLOCK", "OK": "PASS", "SKIP": "PASS", "WARN": "WARN"}.get(verdict, verdict)
+
     output = {
         "validator": "verify-2fa-gate",
-        "verdict": verdict,
+        "verdict": _canonical,
         "declared_2fa_goals": len(declared),
         "declared_details": declared[:10],
         "blocks": blocks,

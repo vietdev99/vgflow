@@ -118,6 +118,7 @@ def main() -> int:
     parser.add_argument("--today", default=None,
                         help="Override today's date (YYYY-MM-DD) for testing")
     parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("--phase", help="(orchestrator-injected; ignored — debt SLA is project-wide)")
     args = parser.parse_args()
 
     debt_path = Path(args.debt_file)
@@ -127,7 +128,10 @@ def main() -> int:
     if not debt_path.exists():
         msg = f"debt file not found: {debt_path} — treating as zero breaches"
         if args.json:
-            print(json.dumps({"ok": True, "breach_count": 0, "note": msg}))
+            # v2.6 (2026-04-25): emit `verdict` for orchestrator dispatch shim
+            print(json.dumps({"validator": "verify-override-debt-sla",
+                              "verdict": "PASS",
+                              "ok": True, "breach_count": 0, "note": msg}))
         else:
             print(msg)
         return 0
@@ -136,7 +140,9 @@ def main() -> int:
         entries = _parse_debt_file(debt_path)
     except Exception as e:
         if args.json:
-            print(json.dumps({"ok": False, "error": str(e)}))
+            print(json.dumps({"validator": "verify-override-debt-sla",
+                              "verdict": "BLOCK",
+                              "ok": False, "error": str(e)}))
         else:
             print(f"⛔ parse failed: {e}", file=sys.stderr)
         return 2
@@ -166,6 +172,11 @@ def main() -> int:
     top10 = breaches[:10]
 
     result = {
+        "validator": "verify-override-debt-sla",
+        # v2.6 (2026-04-25): emit verdict for orchestrator dispatch shim.
+        # WARN (not BLOCK) when breaches found — debts past SLA need
+        # attention but don't hard-block ship; ops decide priority.
+        "verdict": "PASS" if len(breaches) == 0 else "WARN",
         "ok": len(breaches) == 0,
         "debt_file": str(debt_path),
         "total_entries": len(entries),

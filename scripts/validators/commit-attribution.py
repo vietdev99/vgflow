@@ -52,8 +52,13 @@ REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 PHASES_DIR = REPO_ROOT / ".vg" / "phases"
 
 # Commit subject regex — phase-NN task ID format (`feat(7.6-04): add handler`)
+# v2.5.2.11: expanded to match CONVENTIONAL_SUBJECT_RE type allowlist (ci/build/
+# perf/style/revert/review were already valid at the conventional-commit layer
+# but SUBJECT_RE rejected them when paired with phase-task scope, producing
+# false "malformed subject" blocks for legitimate CI + perf + revert commits.
 SUBJECT_RE = re.compile(
-    r"^(feat|fix|refactor|test|chore|docs)\(([\d.]+)-(\d+)\):",
+    r"^(feat|fix|refactor|test|chore|docs|build|ci|perf|style|revert|review|specs|scope|blueprint|config)"
+    r"\(([\d.]+)-(\d+)\):",
     re.MULTILINE,
 )
 
@@ -61,8 +66,10 @@ SUBJECT_RE = re.compile(
 # to allow meta commits like `chore(vg): ...`, `feat(vgflow): ...`,
 # `chore(b7.1): ...` without blocking workflow-infra work.
 # Phantom citation check only runs when SUBJECT_RE matches (phase-tagged commit).
+# 2026-04-25 (phase 7.14.3 dogfood): added specs/scope/blueprint/config to match
+# skill commit templates (vg:specs uses specs(), vg:scope uses scope(), etc.)
 CONVENTIONAL_SUBJECT_RE = re.compile(
-    r"^(feat|fix|refactor|test|chore|docs|build|ci|perf|style|revert|review)"
+    r"^(feat|fix|refactor|test|chore|docs|build|ci|perf|style|revert|review|specs|scope|blueprint|config)"
     r"\(([^)]+)\):\s*\S",
     re.MULTILINE,
 )
@@ -475,8 +482,12 @@ def main() -> None:
             body = c["body"]
             files = c["files"]
 
-            # CHECK 1: subject regex
-            if not SUBJECT_RE.match(subject):
+            # CHECK 1: subject regex — phase-task pattern preferred, but
+            # meta-scope commits (fix(vg):, chore(vgflow):, test(build):) are
+            # acceptable for workflow-infra work that doesn't map to a phase
+            # task. Only flag when subject matches NEITHER phase-task NOR
+            # conventional-commit format.
+            if not SUBJECT_RE.match(subject) and not CONVENTIONAL_SUBJECT_RE.match(subject):
                 violations_subject.append((sha, subject))
 
             # CHECK 2: body citation (only if commit touches code)
@@ -524,7 +535,7 @@ def main() -> None:
                     f"{len(violations_subject)}/{len(commits)} commit(s) have "
                     f"malformed subject (expected `feat({args.phase}-NN): ...`)"
                 ),
-                expected=r"^(feat|fix|refactor|test|chore|docs)\(\d+[-.\d]*-\d+\):",
+                expected=r"^(feat|fix|refactor|test|chore|docs|build|ci|perf|style|revert|review)\(\d+[-.\d]*-\d+\):",
                 actual="; ".join(f"{sha}: {subj[:50]}" for sha, subj in sample),
                 fix_hint=(
                     "Rewrite commit subjects via `git commit --amend` OR squash + rebase. "

@@ -218,6 +218,10 @@ def main() -> int:
     ap.add_argument("--project-root", default=".")
     ap.add_argument("--require", action="store_true",
                     help="BLOCK when Dockerfile not found (instead of WARN)")
+    # Orchestrator passes --phase to every validator. Container hardening
+    # is project-wide (Dockerfile/compose are not phase-scoped); accept
+    # the arg to avoid argparse crash.
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored — container scan is project-wide)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()

@@ -119,13 +119,28 @@ CODE_EXTS = (".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".py",
 
 
 def _iter_code_files(root: Path):
-    """Yield source files under root, skipping vendor/build dirs."""
+    """Yield source files under root, skipping vendor/build dirs.
+
+    Harness v2.6 (2026-04-25): also skip TEST directories. Test fixtures
+    intentionally synthesize fake JWTs with HS256 + short TTLs for
+    assertion purposes. They aren't production auth code, so flagging
+    them as policy violations is a false positive.
+    """
     skip = {"node_modules", "dist", "build", ".git", ".vg",
-            "__pycache__", ".next", "target", "vendor"}
+            "__pycache__", ".next", "target", "vendor",
+            # v2.6 — test directories use HS256 fake JWTs in assertions
+            "__tests__", "tests", "test", "e2e",
+            ".storybook", "storybook-static",
+            ".planning", ".claude", ".codex"}
     for p in root.rglob("*"):
         if not p.is_file():
             continue
         if any(part in skip for part in p.parts):
+            continue
+        # v2.6 — also skip *.spec.ts / *.test.ts / *.test.js test files
+        # that may live alongside source rather than under __tests__/.
+        name = p.name
+        if any(pat in name for pat in (".spec.", ".test.", ".stories.")):
             continue
         if p.suffix.lower() in CODE_EXTS:
             yield p
@@ -183,11 +198,20 @@ def _scan_sast(root: Path) -> dict:
             secs = _ttl_to_seconds(m.group(1))
             if secs is None:
                 continue
-            # Context sensitivity: if "refresh" appears within ~200 chars
-            # before the match, attribute to refresh (avoids false-block
-            # on refresh rotation functions that set expiresIn: '7d').
+            # v2.6 (2026-04-25): skip API-response-payload context.
+            # Pattern `reply.send({ data: { expiresIn: '30d' } })` describes
+            # cookie/feature lifetime in the response body — NOT a JWT TTL.
+            # Look at preceding ~200 chars for response-payload markers.
             window_start = max(0, m.start() - 200)
             preceding = text[window_start:m.start()].lower()
+            payload_markers = (
+                "reply.send", "reply.status", "res.send", "res.status",
+                "res.json", "reply.code", "return.*reply", "data: {",
+                "trusted:", "send({", "send(\n",
+            )
+            if any(marker in preceding for marker in payload_markers):
+                continue
+            # Refresh-context detection (avoid blocking refresh rotation 7d)
             if "refresh" in preceding:
                 findings["refresh_ttls"].append(
                     (str(f), secs, m.group(1))
@@ -335,6 +359,7 @@ def main() -> int:
                     help="treat WARN-level findings as pass (exit 0)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     root = Path(args.project_root).resolve()
@@ -352,9 +377,14 @@ def main() -> int:
             blocks.append(f"sample token: {token_result['reason']}")
             verdict = "FAIL"
 
+    # v2.6.1 (2026-04-26): canonicalize verdict for orchestrator schema.
+    # Internal branching uses FAIL/WARN/OK (legacy) — output uses canonical
+    # BLOCK/WARN/PASS. Closes AUDIT.md D1 schema drift S4.
+    _canonical = {"FAIL": "BLOCK", "OK": "PASS", "WARN": "WARN"}.get(verdict, verdict)
+
     output = {
         "validator": "verify-jwt-session-policy",
-        "verdict": verdict,
+        "verdict": _canonical,
         "jwt_detected": sast["jwt_detected"],
         "files_scanned": sast["files_scanned"],
         "blocks": blocks,

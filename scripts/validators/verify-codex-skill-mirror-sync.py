@@ -285,6 +285,7 @@ def main() -> int:
                     help="check one skill only (by name, e.g. 'blueprint')")
     ap.add_argument("--skip-vgflow", action="store_true",
                     help="don't check vgflow-repo upstream")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     repo_root = _resolve_repo_root()
@@ -306,6 +307,11 @@ def main() -> int:
 
     if args.json:
         print(json.dumps({
+            "validator": "verify-codex-skill-mirror-sync",
+            # v2.6 (2026-04-25): WARN (not BLOCK) — mirror drift means
+            # .codex/skills/ are stale relative to .claude/commands/vg/,
+            # but doesn't hard-block ship. Operator should /vg:sync.
+            "verdict": "PASS" if drift_count == 0 else "WARN",
             "repo_root": str(repo_root),
             "vgflow_repo": str(vgflow_repo) if vgflow_repo else None,
             "skills_checked": len(skills_to_check),

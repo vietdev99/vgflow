@@ -29,7 +29,9 @@ from typing import Any, Iterator
 SCHEMA_VERSION = 1
 LOCK_STALE_SECONDS = 30
 
-REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+from _repo_root import find_repo_root  # noqa: E402
+
+REPO_ROOT = find_repo_root(__file__)
 DB_PATH = REPO_ROOT / ".vg" / "events.db"
 LOCK_PATH = REPO_ROOT / ".vg" / ".events.lock"
 PROJECTION_PATH = REPO_ROOT / ".vg" / "events.jsonl"

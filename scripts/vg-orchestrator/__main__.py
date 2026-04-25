@@ -44,6 +44,9 @@ import db  # noqa: E402
 import contracts  # noqa: E402
 import state as state_mod  # noqa: E402
 import evidence  # noqa: E402
+from _repo_root import find_repo_root  # noqa: E402
+
+_REPO_ROOT = find_repo_root(__file__)
 
 # v2.5.2 Phase O — optional imports. Wrapped in try/except so missing
 # modules in older clones never break run-start. All call sites below
@@ -424,6 +427,129 @@ def cmd_run_start(args) -> int:
                       f"   Cite concrete evidence: issue URL, test name, CI run ID, etc.",
                       file=sys.stderr)
                 return 2
+
+        # Harness v2.6.1 (2026-04-26): wire TTY/HMAC caller-auth on
+        # --override-reason. Per AUDIT.md D2 finding: AI subagent could
+        # craft 50+ char "professional-looking" reason and bypass any hard
+        # gate. Min-length + placeholder check filters obvious sloppiness
+        # but doesn't block determined self-justification.
+        #
+        # Same gate verify_human_operator() used for --allow-* flags
+        # (v2.5.2.1). TTY OR HMAC-signed token required. AI subagent
+        # without TTY + without signing-key access → BLOCK.
+        #
+        # Override the gate via VG_ALLOW_FLAGS_LEGACY_RAW=true (audit-flagged
+        # back-compat path) — but DEFAULT is strict per v2.5.2.2.
+        try:
+            from allow_flag_gate import verify_human_operator  # type: ignore
+            is_human, approver = verify_human_operator("override-reason")
+            if not is_human:
+                print(
+                    "⛔ --override-reason requires TTY session OR signed "
+                    "approver token (HMAC).\n"
+                    "   AI subagents cannot self-inject overrides — this "
+                    "would bypass hard security gates with self-crafted\n"
+                    "   reasons. Min-length + placeholder check is not "
+                    "sufficient defense against determined misuse.\n"
+                    "\n"
+                    "   To approve as human:\n"
+                    "     a) Run /vg:* command from interactive shell "
+                    "(TTY) — auto-approved.\n"
+                    "     b) Mint signed token: python3 .claude/scripts/"
+                    "vg-auth.py approve --flag override-reason\n"
+                    "        Then export VG_HUMAN_OPERATOR=<token> before "
+                    "invoking the command.\n"
+                    f"\n   Got reason: {reason[:80]!r}{'...' if len(reason) > 80 else ''}",
+                    file=sys.stderr,
+                )
+                # Audit trail
+                try:
+                    db.append_event(
+                        run_id="orchestrator-preflight",
+                        event_type="override.blocked_caller_auth",
+                        phase=args.phase or "",
+                        command=args.command,
+                        actor="orchestrator",
+                        outcome="BLOCK",
+                        payload={
+                            "flag": "--override-reason",
+                            "reason_head": reason[:120],
+                            "reason_len": len(reason),
+                        },
+                    )
+                except Exception:
+                    pass
+                return 2
+
+            # Rubber-stamp escalator: same reason fingerprint copy-pasted
+            # across ≥2 prior phases → BLOCK with prompt for fresh
+            # justification. Uses check_skip_flag_rubber_stamp from v2.5.2.
+            # Only runs when override-reason is paired with a --skip-* flag
+            # (the typical rubber-stamp scenario).
+            if override_flag and override_flag.startswith("--skip-"):
+                try:
+                    from allow_flag_gate import check_skip_flag_rubber_stamp  # type: ignore
+                    # Recent override.used events for rubber-stamp pattern check
+                    recent_events_raw = db.query_events(
+                        event_type="override.used",
+                        limit=500,
+                    ) or []
+                    # Normalize payload (db.query_events returns payload_json string)
+                    recent_events = []
+                    for ev in recent_events_raw:
+                        ev_copy = dict(ev)
+                        if "payload_json" in ev_copy and isinstance(ev_copy["payload_json"], str):
+                            try:
+                                ev_copy["payload"] = json.loads(ev_copy["payload_json"])
+                            except Exception:
+                                ev_copy["payload"] = {}
+                        recent_events.append(ev_copy)
+                    is_rubber_stamp, hit_count, matching = check_skip_flag_rubber_stamp(
+                        events=recent_events,
+                        flag_name=override_flag,
+                        reason=reason,
+                        current_phase=args.phase or "",
+                        threshold=2,
+                    )
+                    if is_rubber_stamp:
+                        print(
+                            f"⛔ Rubber-stamp detected: same justification "
+                            f"used in {hit_count} prior phase(s) for "
+                            f"{override_flag}.\n"
+                            f"   Matching phases: {', '.join(matching[:5])}\n"
+                            f"   Echo-chamber risk — copy-paste rationale "
+                            f"defeats CrossAI/2nd-opinion gates.\n"
+                            f"\n   Required: write a NEW justification "
+                            f"specific to this phase's context.\n"
+                            f"   Or escalate via interactive prompt with "
+                            f"phase-specific evidence.",
+                            file=sys.stderr,
+                        )
+                        try:
+                            db.append_event(
+                                run_id="orchestrator-preflight",
+                                event_type="override.blocked_rubber_stamp",
+                                phase=args.phase or "",
+                                command=args.command,
+                                actor="orchestrator",
+                                outcome="BLOCK",
+                                payload={
+                                    "flag": override_flag,
+                                    "matching_phases": matching,
+                                    "hit_count": hit_count,
+                                },
+                            )
+                        except Exception:
+                            pass
+                        return 2
+                except ImportError:
+                    pass  # check_skip_flag_rubber_stamp absent — older install
+        except ImportError:
+            # allow_flag_gate not yet built (older install) — fall through
+            # with min-length + placeholder check only. Operator should
+            # upgrade to get full caller-auth.
+            pass
+
     # Phase 0 of v2.5.2 — Codex skill mirror sync preflight.
     # Runs before run registration. Detects drift between .claude source,
     # vgflow-repo mirror, and .codex/~/.codex Codex mirrors. If drift
@@ -1027,7 +1153,7 @@ def _verify_sha_in_repo(sha: str) -> bool:
         r = subprocess.run(
             ["git", "cat-file", "-t", sha],
             capture_output=True, text=True, timeout=3,
-            cwd=os.environ.get("VG_REPO_ROOT") or os.getcwd(),
+            cwd=str(_REPO_ROOT),
         )
         # Output should be one of: commit, tree, blob, tag
         return r.returncode == 0 and r.stdout.strip() in {
@@ -1169,7 +1295,7 @@ def cmd_promote_goal_manual(args) -> int:
         )
         return 2
 
-    repo = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd())
+    repo = _REPO_ROOT
     phase_dirs = list((repo / ".vg" / "phases").glob(f"{phase}-*")) or \
                  list((repo / ".vg" / "phases").glob(f"{phase.zfill(2)}-*"))
     if not phase_dirs:
@@ -1268,8 +1394,7 @@ def cmd_promote_goal_manual(args) -> int:
     # OHOK-6 (Codex P1): write failures previously swallowed silently —
     # audit trail could vanish without anyone noticing. Now surface loudly
     # + emit debt_register.write_failed event.
-    register = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()) / \
-               ".vg" / "OVERRIDE-DEBT.md"
+    register = _REPO_ROOT / ".vg" / "OVERRIDE-DEBT.md"
     try:
         register.parent.mkdir(parents=True, exist_ok=True)
         with register.open("a", encoding="utf-8") as f:
@@ -1511,8 +1636,7 @@ def cmd_override(args) -> int:
     )
 
     # Append human-readable entry to OVERRIDE-DEBT.md
-    register = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()) / \
-               ".vg" / "OVERRIDE-DEBT.md"
+    register = _REPO_ROOT / ".vg" / "OVERRIDE-DEBT.md"
     try:
         register.parent.mkdir(parents=True, exist_ok=True)
         with register.open("a", encoding="utf-8") as f:
@@ -1678,6 +1802,116 @@ def cmd_query_events(args) -> int:
     return 0
 
 
+def cmd_quarantine(args) -> int:
+    """Harness v2.6.1 (2026-04-26): quarantine inspection + recovery.
+
+    Closes AUDIT.md D2 finding: 14 validators auto-disabled across runs
+    with no operator-visible recovery path. Auto-recovery via PASS/WARN
+    works ONLY when validator gets a chance to run — which it doesn't
+    when entry["disabled"]=true skips it. Catch-22 broken by:
+
+      status               — list all quarantined + last-fail timestamp
+      re-enable            — manually clear one entry (with audit reason)
+      force-enable-stale   — bulk clean any UNQUARANTINABLE entry that
+                             leaked into the disabled list
+    """
+    state = _load_quarantine()
+
+    if args.action == "status":
+        if not state:
+            print("✓ No quarantine state — all validators healthy.")
+            return 0
+        print(f"━━━ Validator quarantine state ({len(state)} entries) ━━━")
+        for v_name in sorted(state.keys()):
+            entry = state[v_name]
+            disabled = entry.get("disabled", False)
+            consecutive = entry.get("consecutive_fails", 0)
+            last_fail = entry.get("last_fail_at", "—")
+            tags: list[str] = []
+            if disabled:
+                tags.append("DISABLED")
+            if v_name in UNQUARANTINABLE:
+                tags.append("UNQUARANTINABLE")
+            tag_str = " ".join(f"[{t}]" for t in tags) or "[active]"
+            print(f"  {v_name:<48s} {tag_str:<32s} fails={consecutive} last_fail={last_fail}")
+        disabled_count = sum(1 for e in state.values() if e.get("disabled"))
+        if disabled_count:
+            print(f"\n{disabled_count} validator(s) DISABLED — re-enable via:")
+            print("  python3 .claude/scripts/vg-orchestrator quarantine re-enable --validator <name> --reason '<audit text>'")
+            stale = [v for v in state if v in UNQUARANTINABLE and state[v].get("disabled")]
+            if stale:
+                print(f"\n⚠ {len(stale)} UNQUARANTINABLE entries are stale-disabled — clean via:")
+                print("  python3 .claude/scripts/vg-orchestrator quarantine force-enable-stale")
+        return 0
+
+    if args.action == "re-enable":
+        if not args.validator:
+            print("⛔ --validator required for re-enable", file=sys.stderr)
+            return 2
+        if args.validator not in state:
+            print(f"⛔ '{args.validator}' not in quarantine state.", file=sys.stderr)
+            return 1
+        if not state[args.validator].get("disabled"):
+            print(f"✓ '{args.validator}' is already enabled — no action.")
+            return 0
+        if not args.reason or len(args.reason) < 10:
+            print(
+                "⛔ --reason required (min 10 chars). Re-enabling a "
+                "quarantined validator without justification defeats "
+                "the audit trail.\n"
+                "   Example: --reason 'transient infra issue 2026-04-22 "
+                "— validator dependency restored'",
+                file=sys.stderr,
+            )
+            return 2
+        state[args.validator]["disabled"] = False
+        state[args.validator]["consecutive_fails"] = 0
+        state[args.validator]["re_enabled_at"] = _now_iso()
+        state[args.validator]["re_enabled_reason"] = args.reason[:500]
+        _save_quarantine(state)
+        print(f"✓ Re-enabled {args.validator}")
+        try:
+            db.append_event(
+                run_id="quarantine-recovery",
+                event_type="quarantine.re_enabled",
+                phase="",
+                command="quarantine",
+                actor="user",
+                outcome="INFO",
+                payload={
+                    "validator": args.validator,
+                    "reason": args.reason[:500],
+                },
+            )
+        except Exception:
+            pass
+        return 0
+
+    if args.action == "force-enable-stale":
+        forced = _force_enable_unquarantinable_stale()
+        if not forced:
+            print("✓ No stale UNQUARANTINABLE entries — quarantine state clean.")
+            return 0
+        print(f"✓ Force-enabled {len(forced)} stale UNQUARANTINABLE entries:")
+        for v in forced:
+            print(f"  - {v}")
+        try:
+            db.append_event(
+                run_id="quarantine-recovery",
+                event_type="quarantine.force_enabled_stale",
+                phase="",
+                command="quarantine",
+                actor="user",
+                outcome="INFO",
+                payload={"validators": forced, "count": len(forced)},
+            )
+        except Exception:
+            pass
+        return 0
+
+    return 0
+
+
 def _record_rule_outcomes(run_id: str, command: str, phase: str,
                           run_passed: bool) -> None:
     """Emit bootstrap.outcome_recorded for every rule that fired this run.
@@ -1715,7 +1949,10 @@ def _record_rule_outcomes(run_id: str, command: str, phase: str,
 
 
 COMMAND_VALIDATORS = {
-    "vg:scope": ["phase-exists", "context-structure"],
+    # vg:scope — see harness v2.6 entry below (de-dup) which adds
+    # verify-human-language-response. Keeping single canonical entry
+    # at bottom of dict for clarity. Python dict-literal: later key
+    # wins on duplicate, but explicit is better than implicit.
     "vg:blueprint": ["phase-exists", "context-structure", "plan-granularity",
                      "task-goal-binding", "vg-design-coherence",
                      # Phase C (2026-04-23): warn when scoped mode tasks lack
@@ -1731,7 +1968,35 @@ COMMAND_VALIDATORS = {
                      # check. Validates all 8 sections, enum values, cross-checks
                      # with FOUNDATION §9.5 (GDPR consistency). Mandatory from
                      # phase 14. critical+DAST=None → HARD BLOCK. UNQUARANTINABLE.
-                     "verify-security-test-plan"],
+                     "verify-security-test-plan",
+                     # Harness v2.6 (2026-04-25): platform-aware TEST-GOALS
+                     # essentials registry — fires at 2b5 alongside skill-inline
+                     # invocation for defense-in-depth. Manifest-driven via
+                     # dispatch-manifest.json. Critical/important goals require
+                     # platform-mandatory categories (table+filter+paging on
+                     # web; list_screen+touch_target on mobile; ...).
+                     "verify-test-goals-platform-essentials",
+                     # Harness v2.6 (2026-04-25): blueprint META-gate at 2c.
+                     # Goal-plan coverage, endpoint-goal coverage, surface
+                     # essentials, mutation Layer-4, state-machine guards,
+                     # ORG 6-dim, rollback, UI states. Catches under-detailed
+                     # blueprints before build wave spawn.
+                     "verify-blueprint-completeness",
+                     # Harness v2.6 (2026-04-25): contract-stage idempotency
+                     # gate for critical-domain mutations. Catches missing
+                     # **Idempotency:** declarations BEFORE build wave.
+                     "verify-idempotency-coverage",
+                     # Harness v2.6 (2026-04-25): auth flow integrity smoke.
+                     # Login↔logout pair, **Auth:** declared, sensitive
+                     # endpoints rate-limited, email-enumeration protection,
+                     # reset token TTL. Skips silently when phase has no
+                     # auth endpoints.
+                     "verify-auth-flow-smoke",
+                     # Harness v2.6 (2026-04-25): rollback procedure gate
+                     # at planning stage. Migration profile or destructive
+                     # PLAN tasks must declare rollback path. Catches
+                     # missing recovery plan BEFORE build wave runs.
+                     "verify-rollback-procedure"],
     # OHOK v2 Day 2 expansion — build previously had min enforcement (phase-exists
     # only). Now catches: commit format drift (R1), missing citations (R2),
     # goal-binding gap, plan granularity drift, override-debt balance per-step
@@ -1781,7 +2046,52 @@ COMMAND_VALIDATORS = {
                  # baseline — TLS version, headers middleware,
                  # secrets in .env.example, cookie flags, CORS, lockfile.
                  # Fires per-phase at build (idempotent grep scan).
-                 "verify-security-baseline"],
+                 "verify-security-baseline",
+                 # Harness v2.6 (2026-04-25): SAST log-leak detection.
+                 # Source code MUST NOT pass Authorization headers,
+                 # req.body, password, token, secret, raw email to
+                 # logger.* / console.log calls. Sanitization middleware
+                 # (pino-redact, winston mask) required.
+                 "verify-log-hygiene",
+                 # Harness v2.6 (2026-04-25): OAuth PKCE enforcement.
+                 # Public clients (SPA/mobile) MUST use code_challenge=S256
+                 # + state + nonce (OIDC). Confidential server WARN-only.
+                 "verify-oauth-pkce-enforcement",
+                 # Harness v2.6 (2026-04-25): JWT TTL + signing algo gate.
+                 # Access ≤15min, refresh ≤7d rotated, RS256/ES256 (NOT
+                 # HS256-shared-weak), revocation mechanism. Catches the
+                 # 30d access-token + HS256 misconfigurations real on
+                 # this repo's auth.routes.ts.
+                 "verify-jwt-session-policy",
+                 # Harness v2.6 (2026-04-25): 2FA gate. Self-skips when
+                 # phase doesn't touch auth (verdict=SKIP → PASS).
+                 # Otherwise asserts TOTP/SMS fallback policy declared.
+                 "verify-2fa-gate",
+                 # Harness v2.6 (2026-04-25): dependency CVE budget.
+                 # Critical CVE in lockfile = BLOCK; high CVE configurable.
+                 "verify-dependency-vuln-budget",
+                 # Harness v2.6 (2026-04-25): anti grandfather-marker
+                 # forge. Phase >= cutover MUST NOT create legacy-bootstrap
+                 # manifest entries (would be self-forging the grandfather
+                 # exemption).
+                 "verify-no-legacy-manifest-creation",
+                 # Harness v2.6 (2026-04-25): per-wave executor context
+                 # scope check — orchestrator auto-injects --run-id +
+                 # --plan-file. Validates scoped <context-refs> mode.
+                 "verify-executor-context-scope",
+                 # Harness v2.6 (2026-04-25): clean-failure-state check —
+                 # auto-injects --run-id. Validates UI components handle
+                 # empty/loading/error state, no bare-null returns.
+                 "verify-clean-failure-state",
+                 # Harness v2.6 (2026-04-25): anti --no-verify bypass.
+                 # Source code MUST NOT contain --no-verify / --no-gpg-sign /
+                 # HUSKY=0. Pre-commit hooks (typecheck + commit-attribution
+                 # + secrets-scan) are non-negotiable.
+                 "verify-no-no-verify",
+                 # Harness v2.6 (2026-04-25): design-ref honor check.
+                 # Tasks with <design-ref> must point to existing assets;
+                 # commits must cite slug. Phase 7.14.3 retro fix.
+                 "verify-design-ref-honored"],
     # Review doesn't enforce goal-coverage — tests land in /vg:test, so review
     # always fails before tests exist. Enforcement moved to /vg:test + /vg:accept
     # where tests MUST exist. Review's in-skill 0b gate warns advisory only.
@@ -1816,7 +2126,26 @@ COMMAND_VALIDATORS = {
                   # v2.5 Phase B.2 (2026-04-23): perf_budget check at review.
                   "verify-goal-perf",
                   # v2.5 Phase B.3 (2026-04-23): project-wide security baseline.
-                  "verify-security-baseline"],
+                  "verify-security-baseline",
+                  # Harness v2.6 (2026-04-25): test spec selectors must
+                  # match impl exposure (data-testid / data-column-id /
+                  # aria-current / role=status / input[name]). Catches
+                  # Wave-N spec authoring that drifts from Wave-(N-1) impl.
+                  "verify-spec-selectors-against-impl",
+                  # Harness v2.6 (2026-04-25): user-facing prose narration
+                  # must read as a story (preamble + examples + EN gloss).
+                  # Reviews summarize work — terse confirmations skip
+                  # context the user needs.
+                  "verify-human-language-response",
+                  # Harness v2.6 (2026-04-25): no hardcoded SSH/VPS paths
+                  # in source/skill/command files (must reference
+                  # config.environments.<env>.{run_prefix,project_path}).
+                  # Allowlist Ansible inventory + Cloudflare DNS configs.
+                  "verify-no-hardcoded-paths",
+                  # Harness v2.6 (2026-04-25): anti --no-verify at review.
+                  "verify-no-no-verify",
+                  # Harness v2.6 (2026-04-25): design-ref honor at review.
+                  "verify-design-ref-honored"],
     "vg:test": ["phase-exists", "goal-coverage", "runtime-evidence",
                 "deferred-evidence",
                 # SEC-2 (2026-04-23): test pipeline also runs security pre-ship.
@@ -1841,7 +2170,42 @@ COMMAND_VALIDATORS = {
                 # v2.5 Phase B.5 (2026-04-23): DAST report severity routing.
                 # Report path via env or default PHASE_DIR/dast-report.json.
                 # Non-blocking if report missing (advisory).
-                "dast-scan-report"],
+                "dast-scan-report",
+                # Harness v2.6 (2026-04-25): spec selectors vs impl —
+                # also runs at test step 5d-pre as defense-in-depth. Test
+                # pipeline catches selectors that survived review phase 1.
+                "verify-spec-selectors-against-impl",
+                # Harness v2.6 (2026-04-25): idempotency check at test stage
+                # — defense-in-depth. Build phase declares contract,
+                # test phase verifies via runtime double-submit (skill
+                # vg-test step 5b-2 already does runtime; this catches
+                # missing declaration if build skipped).
+                "verify-idempotency-coverage",
+                # Harness v2.6 (2026-04-25): auth flow smoke at test phase.
+                # Login form HTML/JSX shape + contract integrity.
+                "verify-auth-flow-smoke",
+                # Harness v2.6 (2026-04-25): runtime cookie flag probe.
+                # Auto-skips when VG_TARGET_URL env not set; vg-test
+                # step 5a deploy sets it before this dispatches. Asserts
+                # auth cookies have Secure + HttpOnly + SameSite at
+                # runtime (catches CDN/proxy header strip).
+                "verify-cookie-flags-runtime",
+                # Harness v2.6 (2026-04-25): runtime security headers
+                # probe. Asserts HSTS / X-Content-Type-Options /
+                # X-Frame-Options / CSP at runtime. Same auto-skip
+                # behavior on missing VG_TARGET_URL.
+                "verify-security-headers-runtime",
+                # Harness v2.6 (2026-04-25): authz negative-paths probe.
+                # Wrong-role → 403 verification per endpoint. Auto-skips
+                # without VG_TARGET_URL or fixtures file.
+                "verify-authz-negative-paths",
+                # Harness v2.6 (2026-04-25): VPS deploy evidence — phase
+                # claiming deploy/running/installed must have curl 200
+                # / pm2 list / health-check in SUMMARY. Closes "execute
+                # not just files" rule from CLAUDE.md (Phase 0 incident).
+                "verify-vps-deploy-evidence",
+                # Harness v2.6 (2026-04-25): anti --no-verify at test stage.
+                "verify-no-no-verify"],
     # OHOK v2 Day 4 — add acceptance-reconciliation as final gate.
     # Catches: critical goals not passing, HARD override-debt active,
     # scope branching unresolved, step markers missing after build waves.
@@ -1851,12 +2215,125 @@ COMMAND_VALIDATORS = {
                   "acceptance-reconciliation",
                   # Phase D v2.5 (2026-04-23): final gate — STP schema must
                   # be valid before a phase is accepted as complete.
-                  "verify-security-test-plan"],
+                  "verify-security-test-plan",
+                  # Harness v2.6 (2026-04-25): final UAT prose narration
+                  # must read as a story (user-facing summary must include
+                  # context, examples, EN-term gloss).
+                  "verify-human-language-response",
+                  # Harness v2.6 (2026-04-25): final no-hardcoded-paths
+                  # gate at accept — catches drift introduced after build
+                  # (manual edits, late-stage hotfixes).
+                  "verify-no-hardcoded-paths",
+                  # Harness v2.6 (2026-04-25): final container hardening
+                  # gate before phase ship. Dockerfile/compose: non-root
+                  # user, read-only rootfs, port whitelist, AppArmor/
+                  # SELinux profile. WARN if no Dockerfile (project may
+                  # not containerize); BLOCK on hardening regression.
+                  "verify-container-hardening",
+                  # Harness v2.6 (2026-04-25): SAST log-hygiene gate at
+                  # accept — final check that no source/recent commit
+                  # logs Authorization / password / raw token.
+                  "verify-log-hygiene",
+                  # Harness v2.6 (2026-04-25): runtime cookie flags +
+                  # security headers — final live probe before phase
+                  # ship. Auto-skips when VG_TARGET_URL not set
+                  # (production deploy MUST set it).
+                  "verify-cookie-flags-runtime",
+                  "verify-security-headers-runtime",
+                  # Harness v2.6 (2026-04-25): bootstrap rule promotion
+                  # behavioral check — promoted Tier-A rule text must
+                  # appear in ≥1 captured prompt of next-phase run.
+                  # Anti fake-promote.
+                  "verify-learn-promotion",
+                  # Harness v2.6 (2026-04-25): every /vg:* command must
+                  # declare input contract + emit documented telemetry
+                  # events. Catches drift between code and contract.
+                  "verify-command-contract-coverage",
+                  # Harness v2.6 (2026-04-25): aggregated security baseline
+                  # — orchestrates cookie-flags + security-headers + dep-
+                  # vuln + container-hardening into one verdict. Auto-skips
+                  # when VG_TARGET_URL not set.
+                  "verify-security-baseline-project",
+                  # Harness v2.6 (2026-04-25): override-debt SLA audit.
+                  # Open OVERRIDE-DEBT entries past --max-days (default 30)
+                  # → WARN. Operator should review/clear/extend.
+                  "verify-override-debt-sla",
+                  # Harness v2.6 (2026-04-25): allow-flag audit. Detects
+                  # rubber-stamping (same flag, no review) / approval
+                  # fatigue / repeat-flag use over events.db lookback
+                  # window. WARN-level — ops behavior signal.
+                  "verify-allow-flag-audit",
+                  # Harness v2.6 (2026-04-25): validator drift meta-check.
+                  # Always-pass high-FP / never-fires / perf regressions
+                  # surfaced as WARN findings. Operator decides demotion
+                  # / disable / optimize.
+                  "verify-validator-drift",
+                  # Harness v2.6 (2026-04-25): .codex/skills/ mirrors stay
+                  # synced with .claude/commands/vg/ source-of-truth.
+                  # WARN — operator should /vg:sync to align mirrors.
+                  "verify-codex-skill-mirror-sync",
+                  # Harness v2.6 (2026-04-25): narration coverage audit —
+                  # detects hardcoded English Evidence/messages instead
+                  # of i18n keys. BLOCK — slows i18n rollout if not enforced.
+                  "verify-narration-coverage",
+                  # Harness v2.6 (2026-04-25): artifact freshness audit —
+                  # auto-injects --run-id. Catches stale CONTEXT/PLAN/
+                  # API-CONTRACTS relative to source.
+                  "verify-artifact-freshness",
+                  # Harness v2.6 (2026-04-25): bootstrap carry-forward —
+                  # auto-injects --run-id. Verifies promoted rules
+                  # propagate across phase transitions.
+                  "verify-bootstrap-carryforward",
+                  # Harness v2.6 (2026-04-25): review loop evidence —
+                  # auto-injects --phase-dir. Asserts review iter pairs
+                  # have verifiable git delta (anti forged-iteration).
+                  "verify-review-loop-evidence",
+                  # Harness v2.6 (2026-04-25): CrossAI multi-CLI consensus
+                  # check. Auto-resolves glob from .vg/phases/<phase>/
+                  # crossai/*.xml. WARN on disagreement.
+                  "verify-crossai-multi-cli",
+                  # Harness v2.6 (2026-04-25): DAST waiver approver gate.
+                  # Auto-resolves triage file from .vg/phases/<phase>/
+                  # dast-triage.{yaml,json}. WARN on rubber-stamping.
+                  "verify-dast-waive-approver",
+                  # Harness v2.6 (2026-04-25): VPS deploy evidence at accept.
+                  # Defense-in-depth — same check as test stage.
+                  "verify-vps-deploy-evidence",
+                  # Harness v2.6 (2026-04-25): Vietnamese summary coverage.
+                  # User-facing rule: each accepted phase must have
+                  # substantive XX-SUMMARY-VI.md (≥500 bytes, ≥3 VN
+                  # diacritics, ≥2 headings). Anti English-only ship.
+                  "verify-summary-vi-coverage",
+                  # Harness v2.6 (2026-04-25): step markers final audit.
+                  # Universal rule: every <step> writes .step-markers/<step>.done
+                  # as final action. Missing marker = step skipped silently.
+                  "verify-step-markers",
+                  # Harness v2.6 (2026-04-25): rollback procedure final
+                  # check at accept (defense-in-depth with blueprint stage).
+                  "verify-rollback-procedure",
+                  # Harness v2.6 (2026-04-25): anti --no-verify final gate.
+                  # Catches drift introduced after build/review.
+                  "verify-no-no-verify",
+                  # Harness v2.6 (2026-04-25): design-ref honor final gate.
+                  # Catches drift introduced after build/review.
+                  "verify-design-ref-honored",
+                  # Harness v2.6 (2026-04-25): RULES-CARDS.md fresh check.
+                  # Cards extracted from skill bodies — must regenerate
+                  # when skills change. Advisory WARN.
+                  "verify-rule-cards-fresh"],
+    # Add scope command — was missing from orchestrator dispatch (only
+    # COMMAND_VALIDATORS keys hit dispatcher; vg:scope previously had
+    # "phase-exists, context-structure" hardcoded but no human-language
+    # gate. Harness v2.6 fix: scope-round answers must read as stories.
+    "vg:scope": ["phase-exists", "context-structure",
+                 # Harness v2.6 (2026-04-25): scope rounds emit user-facing
+                 # prose. Validator scores text on sentence ratio, examples,
+                 # preamble, EN-term gloss. Schema-dump answers fail.
+                 "verify-human-language-response"],
 }
 
 
-QUARANTINE_FILE = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()
-                       ) / ".vg" / "validator-quarantine.json"
+QUARANTINE_FILE = _REPO_ROOT / ".vg" / "validator-quarantine.json"
 QUARANTINE_THRESHOLD = 3  # consecutive crashes OR BLOCKs → auto-disable
 
 # OHOK-8 round-3 P0.4: validators on this allowlist NEVER get quarantined.
@@ -1889,7 +2366,128 @@ UNQUARANTINABLE = {
     # critical+DAST=None is a hard security mismatch — AI cannot bypass
     # by repeatedly failing to trigger quarantine.
     "verify-security-test-plan",
+    # Phase 7.14.3 retro (2026-04-25): catches test-vs-impl selector drift
+    # at /vg:review step 1 (code scan) and /vg:test step 5d-pre. Wave-N
+    # spec authors can't ship selectors that the Wave-(N-1) impl doesn't
+    # expose. AI can't game this by repeatedly failing — would let drift
+    # land in main and surface 1+ hour into /vg:test runtime.
+    "verify-spec-selectors-against-impl",
+    # Phase 7.14.3 retro (2026-04-25): platform-aware TEST-GOALS coverage.
+    # Forces every phase touching a list/table/form/auth flow to declare
+    # goals covering the platform's mandatory essentials (filter, paging,
+    # column count, sort, Layer-4 mutation reload, state guards, ...).
+    # AI can't slip ship a phase that never wrote a paging goal.
+    "verify-test-goals-platform-essentials",
+    # Phase 7.14.3 retro (2026-04-25): user-facing prose must read as a
+    # story (preamble → details → close), not bullet/schema dumps.
+    # Validator scores text on sentence ratio, examples, EN-term gloss.
+    # AI can't pass terse confirmations that skip context the user needs.
+    "verify-human-language-response",
+    # Harness v2.6 (2026-04-25): meta-gate over the whole blueprint —
+    # PLAN + API-CONTRACTS + TEST-GOALS coverage, ORG 6-dimensions,
+    # mutation Layer-4, state-machine guards, empty/loading/error UI
+    # states, rollback for destructive operations. Per user feedback
+    # "blueprint thiếu chi tiết → toàn bộ khâu sau lỏng". AI cannot
+    # ship under-detailed blueprints by repeatedly failing the gate.
+    "verify-blueprint-completeness",
+    # Harness v2.6 (2026-04-25): critical-domain mutation idempotency
+    # contract gate. Auth/billing/payout/payment/transaction mutations
+    # without **Idempotency:** declaration → BLOCK. Anti retry-storm
+    # / double-charge / duplicate-session class of bugs. UNQUARANTINABLE
+    # because retry-safety is a hard correctness property, not an
+    # advisory — AI must not game this by failing 3x.
+    "verify-idempotency-coverage",
+    # Harness v2.6 (2026-04-25): JWT signing algo + TTL policy. Found
+    # real HS256 + 30d-access-token misconfig on this repo's auth code.
+    # UNQUARANTINABLE — JWT weak-algo / long-TTL bypass = full account
+    # compromise risk.
+    "verify-jwt-session-policy",
+    # Harness v2.6 (2026-04-25): anti grandfather-marker forge. Phase
+    # past cutover MUST NOT create legacy-bootstrap manifest entries.
+    # UNQUARANTINABLE — letting AI fail 3x to disable would let it
+    # re-introduce the grandfather exemption to itself.
+    "verify-no-legacy-manifest-creation",
+    # Harness v2.6.1 audit (2026-04-26): 5 security-critical validators
+    # were wired in COMMAND_VALIDATORS but missed UNQUARANTINABLE.
+    # If AI subagent intentionally fails them 3x → quarantine →
+    # auto-skip on iteration 4 = silent bypass of security gates.
+    # All 5 protect against contract/auth/recovery class of bugs;
+    # quarantine pattern unacceptable for these.
+    "verify-authz-declared",          # endpoint **Auth:** declaration
+    "verify-auth-flow-smoke",         # login/logout pair, rate-limit, reset-token TTL
+    "verify-oauth-pkce-enforcement",  # SPA/mobile PKCE S256
+    "verify-rollback-procedure",      # destructive PLAN tasks need rollback path
+    "verify-2fa-gate",                # 2FA declared+missing impl = false advertising
+
+    # Harness v2.6.1 Batch F audit (2026-04-26): 11 BLOCK validators wired
+    # in COMMAND_VALIDATORS but missing UNQUARANTINABLE. Same pattern as
+    # Batch A — AI subagent could fail 3x to disable then bypass on
+    # iteration 4. All 11 protect against security/correctness class of
+    # bugs; quarantine pattern unacceptable.
+    "verify-container-hardening",         # container security (RUN as root, secrets in image)
+    "verify-cookie-flags-runtime",        # HttpOnly/Secure/SameSite
+    "verify-dast-waive-approver",         # DAST signoff for critical phases
+    "verify-dependency-vuln-budget",      # CVE threshold budget
+    "verify-no-hardcoded-paths",          # paths/credentials leak in code
+    "verify-no-no-verify",                # pre-commit hook bypass (test_no_no_verify covers)
+    "verify-security-baseline-project",   # TLS/headers/CORS/lockfile baseline
+    "verify-security-headers-runtime",    # runtime CSP/HSTS/X-Frame-Options
+    "verify-allow-flag-audit",            # override flag misuse audit
+    "verify-vps-deploy-evidence",         # actual deploy ran (anti "build-only" forge)
+    "verify-clean-failure-state",         # recovery state integrity post-crash
 }
+
+
+# Per-validator extra-arg injection. Orchestrator passes `--phase <N>` to
+# every validator. Some validators ALSO need run-id / phase-dir / plan-file
+# / target-url which orchestrator can derive. This map declares those
+# extras so dispatch supplies them automatically.
+#
+# Format: validator_name → list of (flag, source) tuples where source ∈
+#   {"run_id", "phase_dir", "plan_file", "target_url", "events_db"}
+VALIDATOR_EXTRA_ARGS: dict[str, list[tuple[str, str]]] = {
+    "verify-artifact-freshness":     [("--run-id", "run_id")],
+    "verify-clean-failure-state":    [("--run-id", "run_id")],
+    "verify-bootstrap-carryforward": [("--run-id", "run_id")],
+    "verify-executor-context-scope": [("--run-id", "run_id"),
+                                      ("--plan-file", "plan_file")],
+    "verify-review-loop-evidence":   [("--phase-dir", "phase_dir")],
+    # Phase-dir-aware validators that already accept --phase don't need
+    # extras here; they resolve phase_dir from --phase internally.
+}
+
+
+def _resolve_extra_arg(source: str, run_id: str, phase: str) -> str | None:
+    """Compute the actual value for an extra-arg source key."""
+    repo_root = _REPO_ROOT
+    if source == "run_id":
+        return run_id
+    if source == "phase_dir":
+        # Resolve phase dir using same logic as phase-resolver.sh
+        phases_dir = repo_root / ".vg" / "phases"
+        if not phases_dir.exists():
+            return None
+        for p in phases_dir.iterdir():
+            if not p.is_dir():
+                continue
+            name = p.name
+            # Match P{phase}-* OR {phase}-* OR exact phase
+            if name == phase or name.startswith(f"{phase}-") or name.startswith(f"{phase.zfill(2)}-"):
+                return str(p)
+        return None
+    if source == "plan_file":
+        phase_dir = _resolve_extra_arg("phase_dir", run_id, phase)
+        if phase_dir:
+            for p in Path(phase_dir).glob("PLAN*.md"):
+                return str(p)
+        return None
+    if source == "target_url":
+        # Read from VG_TARGET_URL env (set by deploy step)
+        return os.environ.get("VG_TARGET_URL")
+    if source == "events_db":
+        db = repo_root / ".vg" / "events.db"
+        return str(db) if db.exists() else None
+    return None
 
 
 def _load_quarantine() -> dict:
@@ -1907,6 +2505,40 @@ def _save_quarantine(state: dict) -> None:
         QUARANTINE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+
+def _force_enable_unquarantinable_stale() -> list[str]:
+    """Harness v2.6.1 (2026-04-26): clean stale entries.
+
+    UNQUARANTINABLE list grew across versions. Validators promoted to the
+    list AFTER being quarantined never get a chance to re-enable — they
+    stay disabled because _run_validators skips them (line 2308
+    `continue`), so they never PASS, so the auto-recovery path
+    (verdict in PASS/WARN → entry["disabled"] = False) never fires.
+
+    Catch-22 closed here: at orchestrator import, scan quarantine state.
+    For each UNQUARANTINABLE entry with disabled=true, force-enable +
+    reset consecutive_fails + emit audit event. Idempotent — runs every
+    boot; later boots find nothing stale.
+
+    Returns list of validator names that were force-enabled (for audit).
+    """
+    state = _load_quarantine()
+    forced: list[str] = []
+    for v_name in list(state.keys()):
+        if v_name in UNQUARANTINABLE and state[v_name].get("disabled"):
+            state[v_name]["disabled"] = False
+            state[v_name]["consecutive_fails"] = 0
+            state[v_name]["force_enabled_at"] = _now_iso()
+            state[v_name]["force_enabled_reason"] = (
+                "v2.6.1 stale UNQUARANTINABLE cleanup — validator was "
+                "disabled before allowlist promoted it; auto-recovery path "
+                "blocked because skipped validators never PASS."
+            )
+            forced.append(v_name)
+    if forced:
+        _save_quarantine(state)
+    return forced
 
 
 def _quarantine_record(v_name: str, verdict: str) -> bool:
@@ -1978,11 +2610,33 @@ def _run_validators(command: str, phase: str, run_id: str,
         if v_name == "override-debt-balance":
             args.extend(["--run-id", run_id, "--flags", run_args])
 
+        # v2.6 (2026-04-25): inject extra args from VALIDATOR_EXTRA_ARGS map.
+        # Validators needing run-id / phase-dir / plan-file / target-url
+        # get them auto-supplied by orchestrator dispatch (no skill-file
+        # wiring needed). Sources resolved on demand; missing values are
+        # silently skipped (validator handles the absence — usually with
+        # auto-skip PASS).
+        for flag, source in VALIDATOR_EXTRA_ARGS.get(v_name, []):
+            value = _resolve_extra_arg(source, run_id, phase)
+            if value:
+                args.extend([flag, value])
+
         try:
-            r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+            # Timeout 60s — accommodates SAST validators (verify-oauth-pkce-enforcement,
+            # verify-log-hygiene SAST mode) that walk the entire project tree.
+            # Was 30s before harness v2.6 wired SAST validators (2026-04-25).
+            r = subprocess.run(args, capture_output=True, text=True, timeout=60,
+                               errors="replace")
             if not r.stdout.strip():
                 continue
-            out = json.loads(r.stdout)
+            # Some validators stream a non-JSON warning before the JSON body
+            # (e.g. container-hardening prints "⚠ No Dockerfile found" then
+            # JSON). Find the JSON object by locating the first "{" line.
+            stdout = r.stdout
+            json_start = stdout.find("{")
+            if json_start > 0:
+                stdout = stdout[json_start:]
+            out = json.loads(stdout)
         except Exception as e:
             _quarantine_record(v_name, "CRASH")
             block_results.append({
@@ -1992,6 +2646,35 @@ def _run_validators(command: str, phase: str, run_id: str,
                               "message": f"validator crash: {e}"}],
             })
             continue
+
+        # Schema shim — older validators (verify-log-hygiene, verify-oauth-pkce,
+        # verify-container-hardening) emit verdict in their own vocabulary
+        # (FAIL/OK/success/etc.) instead of the _common.py schema (PASS/WARN/
+        # BLOCK). Normalize so the rest of the dispatch code sees one schema.
+        raw_verdict = str(out.get("verdict", "PASS")).upper()
+        if raw_verdict in ("PASS", "OK", "SUCCESS", "CLEAN", "GREEN"):
+            out["verdict"] = "PASS"
+        elif raw_verdict in ("SKIP", "SKIPPED", "N/A", "NA", "NOT_APPLICABLE"):
+            # Validator self-skipped (e.g. feature not present, runtime probe
+            # without target URL). Treat as PASS for gating, but preserve
+            # the SKIP info in the evidence trail.
+            out["verdict"] = "PASS"
+            out.setdefault("evidence", []).append({
+                "type": "validator_self_skip",
+                "message": f"validator self-skipped (raw verdict: {raw_verdict})",
+            })
+        elif raw_verdict in ("WARN", "WARNING", "ADVISORY"):
+            out["verdict"] = "WARN"
+        elif raw_verdict in ("BLOCK", "FAIL", "FAILED", "ERROR", "RED"):
+            out["verdict"] = "BLOCK"
+        else:
+            # Unknown verdict — be conservative and treat as BLOCK so
+            # broken validators surface as operator pain (prefer over silent skip)
+            out["verdict"] = "BLOCK"
+            out.setdefault("evidence", []).append({
+                "type": "schema_drift",
+                "message": f"validator emitted unknown verdict '{raw_verdict}' — normalized to BLOCK; please normalize to PASS|WARN|BLOCK|SKIP",
+            })
 
         # Update quarantine state (3 consecutive BLOCKs → auto-disable).
         _quarantine_record(v_name, out["verdict"])
@@ -2451,6 +3134,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--since", default=None)
     s.add_argument("--limit", type=int, default=1000)
     s.set_defaults(func=cmd_query_events)
+
+    # Harness v2.6.1 (2026-04-26): quarantine inspection + manual recovery
+    s = sub.add_parser("quarantine", help="Inspect/manage validator quarantine state")
+    s.add_argument("action", choices=["status", "re-enable", "force-enable-stale"],
+                   help="status: list quarantined; re-enable: force one validator; force-enable-stale: clean UNQUARANTINABLE entries")
+    s.add_argument("--validator", default=None,
+                   help="Validator name (required for re-enable)")
+    s.add_argument("--reason", default="",
+                   help="Justification for re-enable (logged to audit)")
+    s.set_defaults(func=cmd_quarantine)
 
     return p
 

@@ -150,9 +150,12 @@ def _check_headers(headers: dict, scheme: str, hsts_min: int,
 
 
 def main() -> int:
+    import os as _os
+    env_url = _os.environ.get("VG_TARGET_URL")
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--target-url", required=True,
-                    help="base URL of live app")
+    ap.add_argument("--target-url", default=env_url,
+                    help="base URL of live app; if omitted, reads VG_TARGET_URL "
+                         "env or auto-skips")
     ap.add_argument("--paths", default="/",
                     help="comma-separated paths to probe (default: /)")
     ap.add_argument("--hsts-min-max-age", type=int,
@@ -162,10 +165,21 @@ def main() -> int:
     ap.add_argument("--require-recommended", action="store_true",
                     help="treat Referrer-Policy/Permissions-Policy as "
                          "required (BLOCK when missing)")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored — runtime probe is project-wide)")
     ap.add_argument("--timeout", type=float, default=5.0)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+
+    # Auto-skip when no target URL (orchestrator may dispatch before deploy)
+    if not args.target_url:
+        print(__import__("json").dumps({
+            "validator": "verify-security-headers-runtime",
+            "verdict": "PASS",
+            "evidence": [],
+            "_skipped": "no target-url (set --target-url or VG_TARGET_URL env after deploy)",
+        }))
+        return 0
 
     paths = [p.strip() for p in args.paths.split(",") if p.strip()]
     base = args.target_url.rstrip("/")

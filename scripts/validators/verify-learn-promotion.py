@@ -169,6 +169,7 @@ def main() -> int:
                     default=".vg/bootstrap/CANDIDATES.md")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     candidates_path = REPO_ROOT / args.candidates_file

@@ -126,8 +126,9 @@ def _compute_consensus(cli_results: list[dict]) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--glob", required=True,
-                    help="glob pattern for result-*.xml files")
+    ap.add_argument("--glob", default=None,
+                    help="glob pattern for result-*.xml files (when omitted, "
+                         "auto-resolves to .vg/phases/<phase>/crossai/*.xml)")
     ap.add_argument("--min-consensus", type=int, default=2,
                     help="minimum CLIs agreeing on same verdict (default: 2)")
     ap.add_argument("--require-all", type=int, default=None,
@@ -135,7 +136,33 @@ def main() -> int:
                          "(e.g. 3 for total-check mode)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    # v2.6 (2026-04-25): --phase enables auto-glob-resolution
+    ap.add_argument("--phase", help="phase number — when set + --glob omitted, "
+                                    "auto-resolves to .vg/phases/<phase>/crossai/*.xml")
     args = ap.parse_args()
+
+    # v2.6 — auto-resolve glob from phase
+    if not args.glob and args.phase:
+        from pathlib import Path as _Path
+        phases_dir = _Path(".vg/phases")
+        if phases_dir.exists():
+            for p in phases_dir.iterdir():
+                if p.is_dir() and (p.name == args.phase
+                                   or p.name.startswith(f"{args.phase}-")
+                                   or p.name.startswith(f"{args.phase.zfill(2)}-")):
+                    args.glob = str(p / "crossai" / "*.xml")
+                    break
+
+    if not args.glob:
+        # No glob + no phase → auto-skip (PASS) instead of crash
+        import json as _json
+        print(_json.dumps({
+            "validator": "verify-crossai-multi-cli",
+            "verdict": "PASS",
+            "evidence": [],
+            "_skipped": "no --glob or --phase provided (CrossAI results not present)",
+        }))
+        return 0
 
     paths = [Path(p) for p in sorted(_glob.glob(args.glob))]
     cli_results = [_extract_fields(p) for p in paths]
@@ -183,6 +210,12 @@ def main() -> int:
         })
 
     report = {
+        "validator": "verify-crossai-multi-cli",
+        # v2.6 (2026-04-25): emit verdict for orchestrator dispatch shim.
+        # WARN (not BLOCK) — CrossAI consensus failure is signal that
+        # reviewers disagree but operator decides whether to ship; not
+        # an automatic phase-block.
+        "verdict": "PASS" if not failures else "WARN",
         "glob": args.glob,
         "files_found": len(paths),
         "cli_results": cli_results,

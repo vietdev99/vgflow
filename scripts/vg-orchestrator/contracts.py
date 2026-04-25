@@ -8,7 +8,9 @@ import os
 import re
 from pathlib import Path
 
-REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+from _repo_root import find_repo_root
+
+REPO_ROOT = find_repo_root(__file__)
 COMMANDS_DIR = REPO_ROOT / ".claude" / "commands" / "vg"
 PHASES_DIR = REPO_ROOT / ".vg" / "phases"
 

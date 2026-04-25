@@ -209,6 +209,7 @@ def main() -> int:
                     help="machine-readable output")
     ap.add_argument("--quiet", action="store_true",
                     help="suppress output on pass")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     repo_root = _resolve_repo_root()
@@ -242,7 +243,12 @@ def main() -> int:
     failures = [r for r in results if r["verdict"] != "OK"]
 
     if args.json:
+        # v2.6.1 (2026-04-26): top-level verdict for orchestrator schema.
+        # Without it, dispatch reads out.get("verdict", "PASS") → silent PASS
+        # despite internal failures. Closes AUDIT.md D1 schema drift S2.
         print(json.dumps({
+            "validator": "verify-artifact-freshness",
+            "verdict": "BLOCK" if failures else "PASS",
             "run_id": run_id,
             "checked": len(results),
             "failures": len(failures),

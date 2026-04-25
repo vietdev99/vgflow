@@ -232,6 +232,10 @@ def main() -> int:
     ap.add_argument("--declared-flows",
                     help="optional SECURITY-TEST-PLAN.md path for cross-check")
     ap.add_argument("--allow-warn", action="store_true")
+    # Orchestrator dispatch passes --phase to every validator. SAST
+    # scans whole project regardless of phase; accept the arg to avoid
+    # argparse crash.
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by SAST scan)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
@@ -244,9 +248,12 @@ def main() -> int:
     sast = _scan(root)
     verdict, blocks, warns = _evaluate(sast)
 
+    # v2.6.1 (2026-04-26): canonicalize verdict for orchestrator schema.
+    _canonical = {"FAIL": "BLOCK", "OK": "PASS", "WARN": "WARN"}.get(verdict, verdict)
+
     output = {
         "validator": "verify-oauth-pkce-enforcement",
-        "verdict": verdict,
+        "verdict": _canonical,
         "oauth_detected": sast["oauth_detected"],
         "is_public_client_hint": (
             bool(sast["public_client_hints"]) or bool(sast["spa_hints"])

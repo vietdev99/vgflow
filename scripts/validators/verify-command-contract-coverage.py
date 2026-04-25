@@ -287,6 +287,7 @@ def main() -> int:
                     help="treat HEURISTIC_MUTATING as hard miss (no grace)")
     ap.add_argument("--command", default=None,
                     help="check one command only by name")
+    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
     args = ap.parse_args()
 
     repo_root = _resolve_repo_root()
@@ -328,7 +329,12 @@ def main() -> int:
     issues = sum(1 for r in results if r["verdict"] != "OK")
 
     if args.json:
+        # v2.6.1 (2026-04-26): top-level verdict for orchestrator schema.
+        # Closes AUDIT.md D1 schema drift S3 — without verdict field,
+        # dispatch silently treats issues as PASS.
         print(json.dumps({
+            "validator": "verify-command-contract-coverage",
+            "verdict": "BLOCK" if issues > 0 else "PASS",
             "repo_root": str(repo_root),
             "commands_checked": len(results),
             "issue_count": issues,

@@ -120,6 +120,61 @@ PY
   fi
 }
 
+# v2.6.1 (2026-04-26) — auto-resolve helper for re-run-based correlation.
+# When a review/test command runs CLEAN (no overrides this phase), prior
+# phases' overrides for the same gate_id can auto-resolve.
+#
+# Usage: override_auto_resolve_clean_run GATE_ID CURRENT_PHASE [TELEMETRY_EVENT_ID]
+#   GATE_ID  — the gate_id whose check passed clean
+#   CURRENT_PHASE — current phase (skipped from resolution; only PRIOR phases resolve)
+#   TELEMETRY_EVENT_ID — optional, defaults to "auto-resolve:CURRENT_PHASE"
+#
+# For each OPEN debt entry where:
+#   - gate_id == GATE_ID
+#   - phase != CURRENT_PHASE (don't self-resolve)
+#   - resolved_by_event_id is empty
+# Mark RESOLVED with telemetry_event_id.
+override_auto_resolve_clean_run() {
+  local gate_id="$1"
+  local current_phase="$2"
+  local event_id="${3:-auto-resolve:${current_phase}}"
+  local register="${CONFIG_DEBT_REGISTER_PATH:-${PLANNING_DIR}/OVERRIDE-DEBT.md}"
+  [ -f "$register" ] || return 0
+  [ -z "$gate_id" ] && return 0
+
+  ${PYTHON_BIN:-python3} - "$register" "$gate_id" "$current_phase" "$event_id" <<'PY'
+import re, sys
+from pathlib import Path
+register, gate_id, current_phase, event_id = sys.argv[1:5]
+p = Path(register)
+if not p.exists(): sys.exit(0)
+text = p.read_text(encoding='utf-8')
+lines = text.splitlines()
+row_re = re.compile(
+  r'^\|\s*(DEBT-\d+-\d+)\s*\|([^|]*)\|\s*([^|]*?)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*(OPEN|RESOLVED|WONT_FIX)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|'
+)
+out = []
+matched = 0
+for line in lines:
+  m = row_re.match(line)
+  if not m:
+    out.append(line); continue
+  did, sev, ph, step, flag, reason, ts, status, gid, rbe, legacy = [g.strip() for g in m.groups()]
+  if (status == 'OPEN' and gid == gate_id and ph != current_phase
+      and (not rbe or rbe.lower() in ('', 'null', 'none'))):
+    new_line = f"| {did} | {sev} | {ph} | {step} | {flag} | {reason} | {ts} | RESOLVED | {gid} | {event_id} | {legacy or 'false'} |"
+    out.append(new_line)
+    matched += 1
+    print(f"override_auto_resolve: {did} (phase={ph}, gate={gid}) → RESOLVED via {event_id}", file=sys.stderr)
+  else:
+    out.append(line)
+p.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
+if matched:
+  print(f"override_auto_resolve_clean_run: resolved {matched} prior debt entries for gate={gate_id}", file=sys.stderr)
+PY
+}
+
+
 # Helper — list unresolved overrides (resolved_by_event_id == null, status == OPEN)
 # Returns: JSON array to stdout. Each entry: {id, severity, phase, step, flag, reason, logged_ts, gate_id, legacy}
 override_list_unresolved() {
