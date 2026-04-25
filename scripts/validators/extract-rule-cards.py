@@ -198,6 +198,31 @@ NUMBERED_RULE_RE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 
+# v2.6 Phase D — phase_pattern attribute extraction.
+# Source SKILL.md may declare a per-rule phase_pattern in three forms:
+#   1. Inline marker in body: `phase_pattern: "^7\."` or `phase_pattern: ^7\.`
+#   2. XML-style attr on <rule>: `<rule phase_pattern="^7\.">` (future-proof)
+#   3. Frontmatter line in rule body: starts with `phase_pattern:`
+# Default ".*" if absent (grandfather all 783+ existing rules).
+PHASE_PATTERN_RE = re.compile(
+    r'phase_pattern\s*[:=]\s*"([^"]+)"|phase_pattern\s*[:=]\s*([^\s,]+)',
+    re.IGNORECASE,
+)
+
+
+def _extract_phase_pattern(text: str) -> str:
+    """Extract phase_pattern from rule body. Returns ".*" when absent."""
+    m = PHASE_PATTERN_RE.search(text)
+    if not m:
+        return ".*"
+    return (m.group(1) or m.group(2) or ".*").strip()
+
+
+def _strip_phase_pattern_marker(text: str) -> str:
+    """Remove phase_pattern marker from body text so it isn't rendered twice
+    (once in body, once as explicit continuation line). Idempotent."""
+    return PHASE_PATTERN_RE.sub("", text).rstrip(" ,;.").strip()
+
 
 def _load_validator_manifest() -> dict:
     """Load dispatch-manifest.json to know which rules have validator gates."""
@@ -391,10 +416,16 @@ def _extract_top_rules(text: str) -> list[dict]:
         return rules
     block_text = rules_block.group(1)
     for m in NUMBERED_RULE_RE.finditer(block_text):
+        # Capture full rule text BEFORE shortening so phase_pattern survives
+        full_body = m.group(3)
+        phase_pattern = _extract_phase_pattern(m.group(2) + " " + full_body)
+        # Strip the phase_pattern marker from rendered body so it isn't shown twice
+        clean_body = _strip_phase_pattern_marker(full_body) if phase_pattern != ".*" else full_body
         rules.append({
             "num": m.group(1),
             "title": _shorten(m.group(2), 80),
-            "body": _shorten(m.group(3), 200),
+            "body": _shorten(clean_body, 200),
+            "phase_pattern": phase_pattern,
         })
     return rules
 
@@ -419,10 +450,15 @@ def _extract_step_rules(step_body: str) -> list[dict]:
         if normalized in seen:
             return False
         seen.add(normalized)
+        # v2.6 Phase D — extract phase_pattern from rule text if declared inline
+        phase_pattern = _extract_phase_pattern(text)
+        # Strip the marker from rendered text so it isn't shown twice
+        clean_text = _strip_phase_pattern_marker(text) if phase_pattern != ".*" else text
         entry = {
             "kind": kind,
             "marker": marker,
-            "text": text,
+            "text": clean_text,
+            "phase_pattern": phase_pattern,
         }
         if severity_hint:
             entry["severity_hint"] = severity_hint
@@ -653,6 +689,10 @@ def render_markdown(card_data: dict) -> str:
             validator_ref = f" → `{r['validator']}`" if r.get("validator") else ""
             lines.append(f"- **R{r['num']} — {r['title']}** {tag}{validator_ref}")
             lines.append(f"  {r['body']}")
+            # v2.6 Phase D — emit phase_pattern explicitly (default ".*")
+            # so inject-rule-cards.sh + verify-rule-phase-scope.py can read it.
+            phase_pattern = r.get("phase_pattern", ".*")
+            lines.append(f'  phase_pattern: "{phase_pattern}"')
             lines.append("")
 
     if card_data["steps"]:
@@ -667,6 +707,9 @@ def render_markdown(card_data: dict) -> str:
                     tag = f"[{r['class']}]"
                     validator_ref = f" → `{r['validator']}`" if r.get("validator") else ""
                     lines.append(f"- {tag} **{r['marker']}**: {r['text']}{validator_ref}")
+                    # v2.6 Phase D — emit phase_pattern as continuation line
+                    phase_pattern = r.get("phase_pattern", ".*")
+                    lines.append(f'  phase_pattern: "{phase_pattern}"')
             if s["anti_patterns"]:
                 lines.append("")
                 lines.append("**Anti-patterns:**")

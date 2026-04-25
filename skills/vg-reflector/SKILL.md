@@ -183,8 +183,68 @@ esac
   # tier field NOT set by reflector — computed downstream by learn-tier-classify.py
   # on surface (at /vg:accept step 6c) based on confidence + impact + reject_count
 
+  # v2.6 Phase A — adaptive shadow evaluation telemetry (start in shadow mode)
+  shadow_mode: true                        # candidate enters shadow mode by default — telemetry-only until threshold met
+  shadow_since_phase: "{phase number}"     # phase in which shadow tracking began
+  shadow_correct: null                     # populated by bootstrap-shadow-evaluator.py
+  shadow_total: null                       # populated by bootstrap-shadow-evaluator.py
+  adaptive_threshold: null                 # snapshot at last tier decision
+  confirmed_by_telemetry: null             # {rate, n_samples} written on subsequent surface
+
+  # v2.6 Phase D — phase-scoped injection (regex against current phase number)
+  # Reflector MUST inspect evidence_shas commit subjects to extract phase
+  # numbers and propose a narrow pattern when all evidence concentrates in
+  # one milestone. Default ".*" when evidence spans 2+ disjoint milestones.
+  phase_pattern: ".*"                      # POSIX ERE matched against phase.number — narrow when evidence is milestone-local
+
   origin_incident: "phase-{number}-{short-desc}"
 ```
+
+**v2.6 Phase A note:** new candidates MUST set `shadow_mode: true` and
+`shadow_since_phase: "{current phase}"`. The other shadow fields stay
+`null` until `bootstrap-shadow-evaluator.py` computes them at
+`/vg:accept` step 6c. Shadow mode prevents premature auto-promotion;
+the candidate sits at Tier C until correctness ≥ threshold AND
+`n_samples ≥ shadow_min_phases` (default 5).
+
+**v2.6 Phase D — phase_pattern suggestion from evidence commits:** when
+aggregating `evidence_shas` (or `evidence[].sha` entries) for a candidate,
+the reflector MUST extract phase numbers from each commit subject using
+the canonical pattern `^[a-z]+\(([0-9]+(?:\.[0-9]+)*)-[0-9]+\):` (matches
+`feat(7.14-04): ...`, `fix(12.3-01): ...`, etc.). Aggregate the major
+component of each phase number (e.g. `7.14.3` → `7`, `12` → `12`).
+
+Decision rule:
+- All evidence majors are identical (e.g. all `7`) → suggest
+  `phase_pattern: "^7\\."` (narrow to that milestone).
+- Two adjacent majors (e.g. `7` and `8`) → suggest `^(7|8)\\.`.
+- Three or more disjoint majors, OR a single piece of evidence → suggest
+  `.*` (insufficient signal to narrow).
+- Evidence subject doesn't match commit pattern (e.g. user_message only) →
+  suggest `.*` (grandfather default).
+
+Example draft snippet (reflector pseudo-code):
+
+```python
+import re
+phases = []
+for sha_subject in evidence_subjects:
+    m = re.match(r"^[a-z]+\(([0-9]+(?:\.[0-9]+)*)-[0-9]+\):", sha_subject)
+    if m:
+        phases.append(m.group(1).split(".")[0])  # major component
+majors = set(phases)
+if len(majors) == 1:
+    pattern = f"^{majors.pop()}\\."
+elif len(majors) == 2:
+    pattern = f"^({'|'.join(sorted(majors))})\\."
+else:
+    pattern = ".*"
+candidate["phase_pattern"] = pattern
+```
+
+Operator can widen the pattern in `e` (edit) mode at `/vg:accept` step 6c
+surface — narrow suggestion is just the default. Goal: prevent silent
+global drift from milestone-local lessons.
 
 **Impact field guidance:**
 - `critical` — security rule (auth bypass, rate limit, CSRF), data integrity (transaction safety, idempotency), deploy safety (rollback gate, migration verify). User rejection uncommon; auto-promote after N confirms appropriate.

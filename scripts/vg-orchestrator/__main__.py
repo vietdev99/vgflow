@@ -1818,6 +1818,36 @@ def cmd_quarantine(args) -> int:
     state = _load_quarantine()
 
     if args.action == "status":
+        # Phase E (2026-04-26): structured JSON output for dogfood-dashboard.py.
+        # Backward compat: default still prints human-readable; only --json flips
+        # the format. Exposes UNQUARANTINABLE tag per validator so dashboard can
+        # render a "policy-locked" badge.
+        if getattr(args, "json", False):
+            entries = []
+            for v_name in sorted(state.keys()):
+                entry = state[v_name]
+                entries.append({
+                    "validator": v_name,
+                    "disabled": bool(entry.get("disabled", False)),
+                    "consecutive_fails": int(entry.get("consecutive_fails", 0)),
+                    "last_fail_at": entry.get("last_fail_at"),
+                    "unquarantinable": v_name in UNQUARANTINABLE,
+                    "re_enabled_at": entry.get("re_enabled_at"),
+                    "re_enabled_reason": entry.get("re_enabled_reason"),
+                })
+            disabled_count = sum(1 for e in entries if e["disabled"])
+            stale = [e["validator"] for e in entries
+                     if e["unquarantinable"] and e["disabled"]]
+            payload = {
+                "schema": "quarantine.status.v1",
+                "total": len(entries),
+                "disabled_count": disabled_count,
+                "stale_unquarantinable": stale,
+                "entries": entries,
+            }
+            print(json.dumps(payload, indent=2, default=str))
+            return 0
+
         if not state:
             print("✓ No quarantine state — all validators healthy.")
             return 0
@@ -1909,6 +1939,380 @@ def cmd_quarantine(args) -> int:
             pass
         return 0
 
+    return 0
+
+
+def cmd_calibrate(args) -> int:
+    """Harness v2.6 Phase F (2026-04-26): severity calibration subcommand.
+
+    Mirrors cmd_quarantine shape (status / apply / apply-all). Shells
+    out to registry-calibrate.py for compute logic + manifest mutation,
+    so this wrapper only handles argparse → subprocess + audit emission
+    on success.
+
+    Apply path is gated by:
+      * --reason min 50 chars (same gate as --override-reason)
+      * verify_human_operator() TTY-OR-HMAC (same gate as --allow-* flags)
+
+    Both gates also live inside registry-calibrate.py, so direct CLI
+    use is equally protected. This wrapper exists for operator UX
+    (single discoverable orchestrator surface) + audit symmetry with
+    quarantine.
+    """
+    import subprocess as _sub
+    script = _REPO_ROOT / ".claude" / "scripts" / "registry-calibrate.py"
+    if not script.exists():
+        print(f"⛔ registry-calibrate.py not found at {script}",
+              file=sys.stderr)
+        return 1
+
+    # status branch — pure read, no gating, allow --json passthrough
+    if args.action == "status":
+        cmd_args = [sys.executable, str(script), "status"]
+        if getattr(args, "lookback_phases", None) is not None:
+            cmd_args += ["--lookback-phases", str(args.lookback_phases)]
+        if getattr(args, "json", False):
+            cmd_args.append("--json")
+        result = _sub.run(cmd_args, cwd=str(_REPO_ROOT))
+        return result.returncode
+
+    # apply / apply-all branches — local gates BEFORE shelling out so
+    # we emit a single coherent audit story per apply attempt.
+    if args.action in ("apply", "apply-all"):
+        reason = getattr(args, "reason", "") or ""
+        if len(reason) < 50:
+            print(
+                "⛔ --reason required (min 50 chars). Calibration "
+                "changes alter hard gate behavior — audit text must "
+                "explain the data + operator verification.",
+                file=sys.stderr,
+            )
+            return 2
+
+        # TTY/HMAC gate — same surface as --override-reason / --allow-*
+        try:
+            sys.path.insert(
+                0,
+                str(_REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"),
+            )
+            from allow_flag_gate import verify_human_operator  # type: ignore
+            is_human, approver = verify_human_operator("calibrate-apply")
+        except Exception as e:
+            print(
+                f"⛔ caller-auth unavailable: {e}",
+                file=sys.stderr,
+            )
+            return 2
+        if not is_human:
+            print(
+                "⛔ calibrate apply requires TTY OR signed approver "
+                "token (HMAC). AI subagents cannot self-mutate "
+                "validator severity.\n"
+                "   To approve as human:\n"
+                "     a) Run from interactive shell (TTY) — auto-approved.\n"
+                "     b) Mint signed token: python3 .claude/scripts/"
+                "vg-auth.py approve --flag calibrate-apply\n"
+                "        Then export VG_HUMAN_OPERATOR=<token>.",
+                file=sys.stderr,
+            )
+            try:
+                db.append_event(
+                    run_id="calibrate-apply",
+                    event_type="calibrate.blocked_caller_auth",
+                    phase="",
+                    command="calibrate",
+                    actor="orchestrator",
+                    outcome="BLOCK",
+                    payload={
+                        "action": args.action,
+                        "suggestion_id": getattr(
+                            args, "suggestion_id", ""
+                        ),
+                        "reason_head": reason[:120],
+                        "reason_len": len(reason),
+                    },
+                )
+            except Exception:
+                pass
+            return 2
+
+        # Delegate to registry-calibrate.py — it re-runs the same gates
+        # internally (defense in depth) but they should pass given we
+        # just verified them here.
+        cmd_args = [sys.executable, str(script), args.action]
+        if args.action == "apply":
+            sid = getattr(args, "suggestion_id", "") or ""
+            if not sid:
+                print("⛔ --suggestion-id required for apply",
+                      file=sys.stderr)
+                return 2
+            cmd_args += ["--suggestion-id", sid]
+        cmd_args += ["--reason", reason]
+        # Pass the verified approver downstream (subprocess inherits env)
+        env = os.environ.copy()
+        if approver and "VG_HUMAN_OPERATOR" not in env:
+            env["VG_HUMAN_OPERATOR"] = approver
+        # Allow legacy raw so downstream re-verify doesn't re-block on
+        # token-format mismatch — orchestrator already gated above.
+        env.setdefault("VG_ALLOW_FLAGS_LEGACY_RAW", "true")
+        result = _sub.run(cmd_args, cwd=str(_REPO_ROOT), env=env)
+        # Audit emission — best-effort, regardless of subprocess outcome
+        try:
+            db.append_event(
+                run_id="calibrate-apply",
+                event_type=("calibrate.applied"
+                            if result.returncode == 0
+                            else "calibrate.apply_failed"),
+                phase="",
+                command="calibrate",
+                actor="user",
+                outcome="INFO" if result.returncode == 0 else "BLOCK",
+                payload={
+                    "action": args.action,
+                    "suggestion_id": getattr(args, "suggestion_id", ""),
+                    "reason": reason[:500],
+                    "operator_token": (approver or "tty")[:120],
+                    "exit_code": result.returncode,
+                },
+            )
+        except Exception:
+            pass
+        return result.returncode
+
+    print(f"⛔ unknown calibrate action: {args.action}", file=sys.stderr)
+    return 2
+
+
+def _candidate_block(candidates_path: Path, cid: str) -> tuple[str, int, int] | None:
+    """Locate fenced ```yaml block whose body contains `id: <cid>`.
+
+    Returns (block_text, start_idx, end_idx) where start/end are byte offsets
+    of the FULL fence (including ```yaml ... ``` markers) so caller can splice.
+    None if not found. Stdlib-only — same regex pattern used by
+    learn-tier-classify._parse_candidates.
+    """
+    if not candidates_path.exists():
+        return None
+    text = candidates_path.read_text(encoding="utf-8", errors="replace")
+    fence_re = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
+    for m in fence_re.finditer(text):
+        body = m.group(1)
+        # Match `id: <cid>` at line start (allow leading spaces)
+        if re.search(r"^\s*id\s*:\s*" + re.escape(cid) + r"\b",
+                     body, re.MULTILINE):
+            return (m.group(0), m.start(), m.end())
+    return None
+
+
+def cmd_learn(args) -> int:
+    """Harness v2.6 Phase G (2026-04-26): /vg:learn TTY/HMAC parity gate.
+
+    Phase F shipped TTY+HMAC on `cmd_calibrate apply`. Promoting a learn
+    candidate is equally mutating — it injects the rule into every
+    subsequent executor prompt. Without this gate, an AI subagent could
+    fabricate a candidate, then `learn promote` it and persist behaviour
+    change across phases. Same surface, same defense.
+
+    Read-only actions (`--list`, `--review`) bypass the gate. Mutating
+    actions (`promote`, `reject`) require:
+      * --reason min 50 chars (audit text)
+      * verify_human_operator() — TTY OR signed HMAC token
+      * audit event emission on success/failure/blocked-attempt
+
+    The actual file mutation is intentionally minimal in this wrapper:
+      * promote — move candidate block from CANDIDATES.md → ACCEPTED.md
+      * reject  — move candidate block from CANDIDATES.md → REJECTED.md
+    Schema validation, conflict detection, and rule-file generation
+    documented in `.claude/commands/vg/learn.md` flow remain the operator
+    workflow surface. This subcommand is the auth-gated tail (the part
+    that actually writes the new state).
+    """
+    bootstrap_dir = _REPO_ROOT / ".vg" / "bootstrap"
+    candidates_path = bootstrap_dir / "CANDIDATES.md"
+    accepted_path = bootstrap_dir / "ACCEPTED.md"
+    rejected_path = bootstrap_dir / "REJECTED.md"
+
+    # ─── Read-only actions — no auth gate ─────────────────────────────
+    if args.action == "list":
+        # Shell out to learn-tier-classify.py --all (existing read-only
+        # entry point). No mutation, no gate.
+        import subprocess as _sub
+        script = _REPO_ROOT / ".claude" / "scripts" / "learn-tier-classify.py"
+        if not script.exists():
+            print(f"⛔ learn-tier-classify.py not found at {script}",
+                  file=sys.stderr)
+            return 1
+        cmd_args = [sys.executable, str(script), "--all"]
+        if getattr(args, "include_retired", False):
+            cmd_args.append("--include-retired")
+        result = _sub.run(cmd_args, cwd=str(_REPO_ROOT))
+        return result.returncode
+
+    if args.action == "review":
+        cid = (getattr(args, "candidate", "") or "").strip()
+        if not cid:
+            print(
+                "⛔ --candidate <L-XXX> required for review",
+                file=sys.stderr,
+            )
+            return 2
+        block = _candidate_block(candidates_path, cid)
+        if block is None:
+            print(
+                f"⛔ candidate '{cid}' not found in {candidates_path}",
+                file=sys.stderr,
+            )
+            return 1
+        print(block[0])
+        return 0
+
+    # ─── Mutating actions — auth-gated ────────────────────────────────
+    if args.action not in ("promote", "reject"):
+        print(f"⛔ unknown learn action: {args.action}", file=sys.stderr)
+        return 2
+
+    cid = (getattr(args, "candidate", "") or "").strip()
+    if not cid:
+        print(
+            f"⛔ --candidate <L-XXX> required for {args.action}",
+            file=sys.stderr,
+        )
+        return 2
+
+    reason = (getattr(args, "reason", "") or "").strip()
+    if len(reason) < 50:
+        print(
+            f"⛔ --reason required (min 50 chars) for {args.action}.\n"
+            f"   Promoting/rejecting a learn candidate alters the rule\n"
+            f"   set injected into every subsequent executor prompt.\n"
+            f"   Audit text must justify the decision concretely:\n"
+            f"   evidence count, phases observed, conflict assessment.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # TTY/HMAC gate — same surface as --override-reason and calibrate apply.
+    try:
+        sys.path.insert(
+            0,
+            str(_REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"),
+        )
+        from allow_flag_gate import verify_human_operator  # type: ignore
+        is_human, approver = verify_human_operator(f"learn-{args.action}")
+    except Exception as e:
+        print(f"⛔ caller-auth unavailable: {e}", file=sys.stderr)
+        return 2
+
+    if not is_human:
+        print(
+            f"⛔ learn {args.action} requires TTY OR signed approver "
+            "token (HMAC).\n"
+            "   AI subagents cannot self-mutate the bootstrap rule set —\n"
+            "   a fabricated candidate could be self-promoted into every\n"
+            "   future executor prompt without human review.\n"
+            "   To approve as human:\n"
+            "     a) Run from interactive shell (TTY) — auto-approved.\n"
+            "     b) Mint signed token: python3 .claude/scripts/"
+            "vg-auth.py approve --flag learn-promote\n"
+            "        Then export VG_HUMAN_OPERATOR=<token>.",
+            file=sys.stderr,
+        )
+        # Forensic audit event for failed/unauthenticated attempt
+        try:
+            db.append_event(
+                run_id=f"learn-{args.action}",
+                event_type=f"learn.{args.action}_attempt_unauthenticated",
+                phase="",
+                command="learn",
+                actor="orchestrator",
+                outcome="BLOCK",
+                payload={
+                    "candidate_id": cid,
+                    "reason_head": reason[:120],
+                    "reason_len": len(reason),
+                },
+            )
+        except Exception:
+            pass
+        return 2
+
+    # Locate candidate block — required for both promote + reject
+    block = _candidate_block(candidates_path, cid)
+    if block is None:
+        print(
+            f"⛔ candidate '{cid}' not found in {candidates_path}",
+            file=sys.stderr,
+        )
+        return 1
+    block_text, b_start, b_end = block
+
+    # Determine destination + tier (best-effort) for audit payload
+    tier = ""
+    m_tier = re.search(r"^\s*tier\s*:\s*([A-C])\b",
+                       block_text, re.MULTILINE)
+    if m_tier:
+        tier = m_tier.group(1)
+
+    # Splice block out of CANDIDATES.md
+    src_text = candidates_path.read_text(encoding="utf-8", errors="replace")
+    new_src = src_text[:b_start] + src_text[b_end:]
+    # Trim consecutive blank lines left by removal
+    new_src = re.sub(r"\n{3,}", "\n\n", new_src)
+
+    # Append block + audit metadata to destination
+    dest_path = accepted_path if args.action == "promote" else rejected_path
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    # auth_method classification: HMAC token in env → "hmac"; else "tty".
+    # verify_human_operator prefers TTY when a TTY exists, but when both
+    # a TTY AND token are present we still tag as "tty" because it was the
+    # primary auth signal returned. The env-token presence is the signal
+    # for the HMAC/automation escape hatch documented in learn.md.
+    _env_token = (os.environ.get("VG_HUMAN_OPERATOR", "") or "").strip()
+    auth_method = "hmac" if (_env_token and "." in _env_token) else "tty"
+    appended = (
+        f"\n<!-- {args.action} L-id={cid} approver={approver or 'tty'} "
+        f"auth={auth_method} at={timestamp} -->\n"
+        f"{block_text}\n"
+        f"<!-- reason: {reason[:500]} -->\n"
+    )
+    if dest_path.exists():
+        dest_text = dest_path.read_text(encoding="utf-8", errors="replace")
+        dest_path.write_text(dest_text.rstrip() + "\n" + appended,
+                             encoding="utf-8")
+    else:
+        header = (
+            f"# Bootstrap "
+            f"{'ACCEPTED' if args.action == 'promote' else 'REJECTED'}\n\n"
+        )
+        dest_path.write_text(header + appended, encoding="utf-8")
+
+    # Atomic-ish: write candidates.md last so a crash leaves dest+candidates
+    # both populated rather than block lost (operator can dedupe by id).
+    candidates_path.write_text(new_src, encoding="utf-8")
+
+    # Audit event emission — success path
+    try:
+        db.append_event(
+            run_id=f"learn-{args.action}",
+            event_type=f"learn.{'promoted' if args.action == 'promote' else 'rejected'}",
+            phase="",
+            command="learn",
+            actor="user",
+            outcome="INFO",
+            payload={
+                "candidate_id": cid,
+                "tier": tier,
+                "reason": reason[:500],
+                "operator_token": (approver or "tty")[:120],
+                "auth_method": auth_method,
+            },
+        )
+    except Exception:
+        pass
+
+    verb = "Promoted" if args.action == "promote" else "Rejected"
+    print(f"✓ {verb} {cid} → {dest_path.relative_to(_REPO_ROOT)}")
     return 0
 
 
@@ -2320,7 +2724,12 @@ COMMAND_VALIDATORS = {
                   # Harness v2.6 (2026-04-25): RULES-CARDS.md fresh check.
                   # Cards extracted from skill bodies — must regenerate
                   # when skills change. Advisory WARN.
-                  "verify-rule-cards-fresh"],
+                  "verify-rule-cards-fresh",
+                  # Harness v2.6 Phase D (2026-04-26): rule-phase scope check.
+                  # WARN when an accepted rule has fired in 3+ distinct
+                  # phases without an explicit phase_pattern (silent
+                  # global drift risk). Hygiene only — never BLOCK.
+                  "verify-rule-phase-scope"],
     # Add scope command — was missing from orchestrator dispatch (only
     # COMMAND_VALIDATORS keys hit dispatcher; vg:scope previously had
     # "phase-exists, context-structure" hardcoded but no human-language
@@ -3143,7 +3552,70 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Validator name (required for re-enable)")
     s.add_argument("--reason", default="",
                    help="Justification for re-enable (logged to audit)")
+    # Phase E (2026-04-26): structured JSON output for dogfood-dashboard.py
+    s.add_argument("--json", action="store_true", default=False,
+                   help="Emit status as structured JSON (machine-readable)")
     s.set_defaults(func=cmd_quarantine)
+
+    # Harness v2.6 Phase F (2026-04-26): severity calibration subcommand
+    s = sub.add_parser(
+        "calibrate",
+        help=("Per-validator severity calibration — review/apply "
+              "BLOCK↔WARN suggestions"),
+    )
+    s.add_argument(
+        "action",
+        choices=["status", "apply", "apply-all"],
+        help=("status: compute + write CALIBRATION-SUGGESTIONS.md; "
+              "apply: mutate dispatch-manifest.json for one suggestion; "
+              "apply-all: bulk-apply current suggestions"),
+    )
+    s.add_argument(
+        "--suggestion-id", default="",
+        help="Suggestion id from CALIBRATION-SUGGESTIONS.md (apply only)",
+    )
+    s.add_argument(
+        "--reason", default="",
+        help="Audit text for apply/apply-all (min 50 chars)",
+    )
+    s.add_argument(
+        "--lookback-phases", type=int, default=5,
+        help="Decay-policy footer for status output (advisory)",
+    )
+    s.add_argument(
+        "--json", action="store_true", default=False,
+        help="Status: emit suggestions as JSON to stdout",
+    )
+    s.set_defaults(func=cmd_calibrate)
+
+    # Harness v2.6 Phase G (2026-04-26): /vg:learn TTY/HMAC parity
+    s = sub.add_parser(
+        "learn",
+        help=("Bootstrap learn candidate gate — list/review (read-only) "
+              "and promote/reject (TTY/HMAC + --reason)"),
+    )
+    s.add_argument(
+        "action",
+        choices=["list", "review", "promote", "reject"],
+        help=("list: enumerate non-retired candidates; "
+              "review: print one candidate block; "
+              "promote: move candidate → ACCEPTED.md (TTY/HMAC gated); "
+              "reject: move candidate → REJECTED.md (TTY/HMAC gated)"),
+    )
+    s.add_argument(
+        "--candidate", default="",
+        help="Candidate id L-XXX (required for review/promote/reject)",
+    )
+    s.add_argument(
+        "--reason", default="",
+        help=("Audit text for promote/reject (min 50 chars). "
+              "Read-only actions ignore this flag."),
+    )
+    s.add_argument(
+        "--include-retired", action="store_true", default=False,
+        help="list: include RETIRED candidates in output",
+    )
+    s.set_defaults(func=cmd_learn)
 
     return p
 

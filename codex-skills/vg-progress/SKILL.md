@@ -99,6 +99,40 @@ Pipeline steps: specs → scope → blueprint → build → review → test → 
 Read .claude/commands/vg/_shared/config-loader.md first.
 </step>
 
+<step name="0a_dashboard_shortcut">
+**Phase E (2026-04-26): `--dashboard` shortcut.**
+
+If `$ARGUMENTS` contains `--dashboard`, generate the dogfood dashboard and
+open it in the default browser, then exit early — skip the per-phase
+artifact scan below. The dashboard is a separate read-only surface and
+runs on a different cadence than the table view.
+
+```bash
+if echo "$ARGUMENTS" | grep -q -- "--dashboard"; then
+  LOOKBACK=$(echo "$ARGUMENTS" | grep -oE -- "--lookback-phases [0-9]+" | awk '{print $2}')
+  LOOKBACK=${LOOKBACK:-10}
+  OUTPUT="${REPO_ROOT:-.}/.vg/dashboard.html"
+
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN:-python3} \
+    "${REPO_ROOT:-.}/.claude/scripts/dogfood-dashboard.py" \
+    --lookback-phases "$LOOKBACK" \
+    --output "$OUTPUT"
+
+  # Cross-platform open: Python's webbrowser.open() handles win/mac/linux uniformly.
+  # Quiet mode — never block the user if browser launch fails.
+  ${PYTHON_BIN:-python3} -c "import webbrowser, sys; webbrowser.open('file://' + sys.argv[1])" "$OUTPUT" 2>/dev/null || true
+  echo ""
+  echo "✓ Dashboard at $OUTPUT"
+  exit 0
+fi
+```
+
+Flag synopsis:
+- `/vg:progress --dashboard` — generate + open dashboard.html with default 10-phase lookback
+- `/vg:progress --dashboard --lookback-phases 5` — narrower window
+- Other flags (`[phase]`, `--all`) ignored when `--dashboard` is set.
+</step>
+
 <step name="0b_version_banner">
 Show VG version + update availability. Daily cache to avoid hammering GitHub API (60/hr unauth quota).
 

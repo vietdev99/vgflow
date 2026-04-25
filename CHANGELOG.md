@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.7.0] - 2026-04-26
+
+VG workflow-hardening v2.6 plan — 8 phases shipped in atomic commits with goal-backward verification.
+Cumulative: 180 tests passing on source repo (45 v2.6 phase tests + 19 v2.6.1 security regression + 112 root-verifier backfill + 4 learn TTY).
+
+### Added
+- **Phase A** (Bootstrap shadow evaluator + critic merged) — adaptive rule promotion replacing fixed `tier_a_auto_promote_after_confirms=3`. Reads `.vg/events.jsonl`, computes correctness rate per candidate via commit-msg citation parser. Optional `--critic` flag emits Haiku LLM advisory verdict per Tier-B candidate.
+- **Phase C** (Conflict auto-retire) — pairwise Jaccard + opposing-verb conflict detection, reuses `learn-dedupe.py` similarity. New `RETIRED_BY_CONFLICT` candidate status, `conflict_winner` field. Surfaces in same accept.md step 6c y/n/e/s loop.
+- **Phase D** (Phase-scoped rules) — `phase_pattern` regex field per rule. `inject-rule-cards.sh --current-phase X.Y` filters rules whose pattern doesn't match. New `verify-rule-phase-scope.py` validator.
+- **Phase E** (Dogfood metrics dashboard) — single-file HTML aggregator. 5 panels: autonomy %, override rate, friction time per skill, shadow correctness, conflict + quarantine snapshot. Reuses existing `vg-orchestrator quarantine status --json` and `query-events`. Stdlib-only.
+- **Phase F** (Auto-severity calibration) — `registry-calibrate.py` + `vg-orchestrator calibrate` subcommand. Computes severity downgrade/upgrade suggestions (BLOCK→WARN if override > 60%, WARN→BLOCK if downstream-correlation > 80%). UNQUARANTINABLE list (34 entries) hard-exempt from downgrade. TTY/HMAC + min-50-char reason gate on apply.
+- **Phase G** (`/vg:learn` TTY/HMAC parity) — promote/reject mutating ops now require TTY OR HMAC-signed token. Audit events on success + on blocked-attempt forensic trail. Closes parity gap with `--override-reason` and `cmd_calibrate apply`.
+- **Phase H** (Manual rule-card adoption) — 50 operator-curated `RULES-CARDS-MANUAL.md` entries across 4 high-traffic skills (vg-build, vg-review, vg-test, vg-accept). 14 validator-linked. Closes AUDIT.md dim-4 finding 4 (manual adoption: 4.5% → 13.3%).
+- **Phase I** (Root-verifier test backfill) — 112 unit tests across 13 root verifiers (10 UNQUARANTINABLE, 3 BLOCK-severity high-LOC) + bootstrap-test-runner meta-test. Closes AUDIT.md dim-7 HIGH gap.
+
+### Changed
+- `learn-tier-classify.py` accepts `--shadow-jsonl` for adaptive threshold (grandfathers v2.5 behavior when absent)
+- `vg-reflector/SKILL.md` candidate emit adds `shadow_mode: true` + `confirmed_by_telemetry` + `phase_pattern` suggestion
+- `accept.md` step 6c surface accommodates 3 sources: shadow-evaluator promotions (A), conflict pairs (C), phase_pattern proposals (D)
+- `.claude/vg.config.md` + 4 new key groups: `bootstrap.shadow.*`, `bootstrap.critic.*`, `telemetry.dashboard_lookback_phases`, `calibration.*`
+
+### Migration
+Backward compatible. Existing 783 rules without `phase_pattern` continue injecting unchanged. Existing event types preserved. Operator runs `python3 .claude/scripts/validators/extract-rule-cards.py` separately if RULES-CARDS regen wanted.
+
 ## [2.6.1] - 2026-04-26
 
 ### 7-dimension audit + 7-batch fix release — closes 13 CRITICAL + most HIGH findings

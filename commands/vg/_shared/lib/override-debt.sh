@@ -124,17 +124,32 @@ PY
 # When a review/test command runs CLEAN (no overrides this phase), prior
 # phases' overrides for the same gate_id can auto-resolve.
 #
-# Usage: override_auto_resolve_clean_run GATE_ID CURRENT_PHASE [TELEMETRY_EVENT_ID]
-#   GATE_ID  — the gate_id whose check passed clean
-#   CURRENT_PHASE — current phase (skipped from resolution; only PRIOR phases resolve)
-#   TELEMETRY_EVENT_ID — optional, defaults to "auto-resolve:CURRENT_PHASE"
+# v2.6 Phase C (2026-04-26) — extended with --target flag to support TWO consumers:
 #
-# For each OPEN debt entry where:
-#   - gate_id == GATE_ID
-#   - phase != CURRENT_PHASE (don't self-resolve)
-#   - resolved_by_event_id is empty
-# Mark RESOLVED with telemetry_event_id.
+#   target=override-debt (DEFAULT, backward compat)
+#     Usage: override_auto_resolve_clean_run GATE_ID CURRENT_PHASE [TELEMETRY_EVENT_ID]
+#     Scan OPEN debt entries by gate_id; mark RESOLVED.
+#
+#   target=rule-retire (Phase C — bootstrap conflict resolution)
+#     Usage: override_auto_resolve_clean_run --target rule-retire CANDIDATE_ID REASON
+#     Mark candidate L-XXX in .vg/bootstrap/CANDIDATES.md as RETIRED_BY_CONFLICT
+#     with `conflict_winner` field referencing the winning rule's id.
+#     REASON encodes "winner=L-WIN" so the schema entry can be filled.
+#
+# Single helper, two consumers — same audit-event-emitted shape across both.
 override_auto_resolve_clean_run() {
+  # Phase C extension: --target flag. Default to override-debt (back-compat).
+  local target="override-debt"
+  if [ "${1:-}" = "--target" ]; then
+    target="${2:-override-debt}"
+    shift 2
+  fi
+
+  if [ "$target" = "rule-retire" ]; then
+    _override_auto_resolve_rule_retire "$@"
+    return $?
+  fi
+
   local gate_id="$1"
   local current_phase="$2"
   local event_id="${3:-auto-resolve:${current_phase}}"
@@ -172,6 +187,88 @@ p.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
 if matched:
   print(f"override_auto_resolve_clean_run: resolved {matched} prior debt entries for gate={gate_id}", file=sys.stderr)
 PY
+}
+
+
+# v2.6 Phase C — rule-retire branch. Marks a candidate rule as RETIRED_BY_CONFLICT
+# in .vg/bootstrap/CANDIDATES.md and records the winning rule id under
+# `conflict_winner`. Companion of `bootstrap-conflict-detector.py` — when
+# operator selects "y" at accept step 6c, this helper does the file edit.
+#
+# Usage (internal): _override_auto_resolve_rule_retire CANDIDATE_ID REASON
+#   CANDIDATE_ID — losing candidate (e.g., L-067)
+#   REASON       — must include "winner=L-XXX" so the field can be set;
+#                  free-text after that is logged as audit context.
+_override_auto_resolve_rule_retire() {
+  local candidate_id="$1"
+  local reason="${2:-}"
+  local candidates_file="${CONFIG_BOOTSTRAP_CANDIDATES_PATH:-.vg/bootstrap/CANDIDATES.md}"
+  [ -f "$candidates_file" ] || { echo "rule-retire: $candidates_file not found" >&2; return 0; }
+  [ -z "$candidate_id" ] && { echo "rule-retire: candidate_id required" >&2; return 1; }
+
+  ${PYTHON_BIN:-python3} - "$candidates_file" "$candidate_id" "$reason" <<'PY'
+import re, sys
+from pathlib import Path
+
+candidates_file, candidate_id, reason = sys.argv[1:4]
+p = Path(candidates_file)
+if not p.exists():
+    sys.exit(0)
+
+# Extract winner=L-XXX from reason (rest is freeform audit).
+winner_m = re.search(r"winner=(L-\d+)", reason)
+winner = winner_m.group(1) if winner_m else ""
+
+text = p.read_text(encoding="utf-8")
+fence_re = re.compile(r"(```yaml\s*\n)(.*?)(```)", re.DOTALL)
+
+def patch_block(match):
+    head, body, tail = match.group(1), match.group(2), match.group(3)
+    id_m = re.search(r"^id\s*:\s*['\"]?(L-\d+)['\"]?\s*$", body, re.MULTILINE)
+    if not id_m or id_m.group(1) != candidate_id:
+        return match.group(0)
+    # Update status: → RETIRED_BY_CONFLICT (replace existing or append).
+    if re.search(r"^status\s*:", body, re.MULTILINE):
+        new_body = re.sub(
+            r"^status\s*:.*$",
+            "status: RETIRED_BY_CONFLICT",
+            body,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        new_body = body.rstrip() + "\nstatus: RETIRED_BY_CONFLICT\n"
+    # Set conflict_winner.
+    if re.search(r"^conflict_winner\s*:", new_body, re.MULTILINE):
+        new_body = re.sub(
+            r"^conflict_winner\s*:.*$",
+            f"conflict_winner: {winner}" if winner else "conflict_winner: null",
+            new_body,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        line = f"conflict_winner: {winner}" if winner else "conflict_winner: null"
+        new_body = new_body.rstrip() + f"\n{line}\n"
+    return head + new_body + tail
+
+new_text, count = fence_re.subn(patch_block, text)
+if count and new_text != text:
+    p.write_text(new_text, encoding="utf-8")
+    print(
+        f"rule-retire: {candidate_id} → RETIRED_BY_CONFLICT"
+        + (f" (winner={winner})" if winner else " (no winner declared)"),
+        file=sys.stderr,
+    )
+else:
+    print(f"rule-retire: {candidate_id} not found in {candidates_file}", file=sys.stderr)
+PY
+
+  # Audit-event mirror — same shape as override_resolved.
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "bootstrap.rule_retired" "" "" "" "PASS" \
+      "{\"candidate_id\":\"$candidate_id\",\"reason\":${reason@Q}}"
+  fi
 }
 
 

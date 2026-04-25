@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VG Bootstrap — Learn Tier Classifier (v2.5 Phase H)
+VG Bootstrap — Learn Tier Classifier (v2.5 Phase H + v2.6 Phase A adaptive)
 
 Compute tier per candidate based on confidence + impact + reject history.
 
@@ -10,10 +10,17 @@ Tiers:
   C — low confidence or nice impact → silent, only via --review --all
   RETIRED — rejected >= retire_after_rejects times → never surface again
 
+v2.6 Phase A: when `--shadow-jsonl PATH` is supplied (output of
+`bootstrap-shadow-evaluator.py`), the classifier OVERRIDES the
+fixed-threshold path with the evaluator's adaptive `tier_proposed`.
+Backward-compat: candidates without shadow telemetry fall back to the
+v2.5 confidence+impact heuristic (grandfather behaviour).
+
 Usage:
     python learn-tier-classify.py --all
     python learn-tier-classify.py --candidate L-042
     python learn-tier-classify.py --all --include-retired
+    python learn-tier-classify.py --all --shadow-jsonl .vg/shadow.jsonl
 
 Output:
   --all:          JSONL to stdout, one line per non-retired candidate
@@ -58,11 +65,18 @@ def _load_config() -> dict:
         "retire_after_rejects": 2,
         "tier_a_threshold_confidence": 0.85,
         "tier_b_threshold_confidence": 0.6,
+        # v2.6 Phase A: kept for backward-compat fallback when no shadow telemetry
         "tier_a_auto_promote_after_confirms": 3,
         "tier_b_max_per_phase": 2,
         "auto_surface_at_accept": True,
         "stale_after_phases_without_action": 10,
         "dedupe_title_similarity": 0.8,
+        # v2.6 Phase A — adaptive shadow evaluation
+        "shadow_mode_default": True,
+        "shadow_min_phases": 5,
+        "shadow_correctness_critical": 0.95,
+        "shadow_correctness_important": 0.80,
+        "shadow_stale_phases": 10,
     }
 
     if not CONFIG_PATH.exists():
@@ -279,12 +293,50 @@ def _classify_tier(candidate: dict, reject_count: int, config: dict) -> tuple[st
     return "C", f"confidence={confidence} < {tier_b_conf} threshold"
 
 
+# ─── Shadow evaluator output loader (v2.6 Phase A) ───────────────────────────
+
+def _load_shadow_output(path: Path | None) -> dict[str, dict]:
+    """Read JSONL emitted by bootstrap-shadow-evaluator.py, return {id: record}.
+
+    Records carry: tier_proposed, correctness, n_samples, demote,
+    adaptive_threshold, optional critic_verdict/critic_reason.
+    Returns {} if file absent or unreadable — classifier then falls back
+    to the v2.5 fixed-threshold heuristic.
+    """
+    if not path or not path.exists():
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            cid = rec.get("id")
+            if isinstance(cid, str) and cid.startswith("L-"):
+                out[cid] = rec
+    except OSError:
+        return {}
+    return out
+
+
 # ─── Main functions ───────────────────────────────────────────────────────────
 
 def classify_all(candidates: list[dict], config: dict,
                  reject_counts: dict[str, int],
-                 include_retired: bool = False) -> list[dict]:
-    """Classify all candidates, return list of result dicts."""
+                 include_retired: bool = False,
+                 shadow_records: dict[str, dict] | None = None) -> list[dict]:
+    """Classify all candidates, return list of result dicts.
+
+    v2.6 Phase A: when `shadow_records` is supplied (one record per candidate
+    from bootstrap-shadow-evaluator.py), the adaptive `tier_proposed` from
+    the evaluator OVERRIDES the v2.5 confidence+impact heuristic.
+    Candidates without a shadow record fall back to v2.5 logic (grandfather).
+    """
+    shadow_records = shadow_records or {}
     results = []
     for c in candidates:
         cid = c.get("id", "unknown")
@@ -304,7 +356,30 @@ def classify_all(candidates: list[dict], config: dict,
         if impact not in ("critical", "important", "nice"):
             impact = "important"
 
-        results.append({
+        # v2.6 Phase A: adaptive override from shadow evaluator output
+        shadow = shadow_records.get(cid)
+        adaptive_meta: dict = {}
+        if shadow and tier != "RETIRED":
+            proposed = shadow.get("tier_proposed")
+            if proposed in ("A", "B", "C"):
+                tier = proposed
+                reason = (
+                    f"shadow correctness={shadow.get('correctness'):.2f} "
+                    f"n_samples={shadow.get('n_samples')} "
+                    f"threshold={shadow.get('adaptive_threshold')}"
+                )
+            adaptive_meta = {
+                "shadow_correctness": shadow.get("correctness"),
+                "shadow_n_samples": shadow.get("n_samples"),
+                "adaptive_threshold": shadow.get("adaptive_threshold"),
+                "demote": bool(shadow.get("demote", False)),
+            }
+            if "critic_verdict" in shadow:
+                adaptive_meta["critic_verdict"] = shadow["critic_verdict"]
+            if "critic_reason" in shadow:
+                adaptive_meta["critic_reason"] = shadow["critic_reason"]
+
+        record = {
             "id": cid,
             "tier": tier,
             "confidence": confidence,
@@ -312,7 +387,9 @@ def classify_all(candidates: list[dict], config: dict,
             "reject_count": rc,
             "reason": reason,
             "title": c.get("title", ""),
-        })
+        }
+        record.update(adaptive_meta)
+        results.append(record)
     return results
 
 
@@ -325,6 +402,9 @@ def main() -> int:
     ap.add_argument("--include-retired", action="store_true", help="Include RETIRED in --all output")
     ap.add_argument("--candidates-path", help="Path to CANDIDATES.md (default: .vg/bootstrap/CANDIDATES.md)")
     ap.add_argument("--rejected-path", help="Path to REJECTED.md (default: .vg/bootstrap/REJECTED.md)")
+    ap.add_argument("--shadow-jsonl", metavar="PATH",
+                    help="(v2.6 Phase A) JSONL output from bootstrap-shadow-evaluator.py — "
+                         "adaptive tier_proposed overrides fixed-threshold heuristic when present")
     args = ap.parse_args()
 
     if not args.all and not args.candidate:
@@ -341,6 +421,11 @@ def main() -> int:
     candidates_by_title = {c.get("id", ""): c for c in candidates}
     reject_counts = _count_rejected(candidates_by_title, rejected_path)
 
+    # v2.6 Phase A: load shadow evaluator output if supplied
+    shadow_records = _load_shadow_output(
+        Path(args.shadow_jsonl) if args.shadow_jsonl else None
+    )
+
     if args.candidate:
         # Single candidate mode
         target_id = args.candidate.strip()
@@ -349,32 +434,24 @@ def main() -> int:
             print(json.dumps({"error": f"Candidate {target_id} not found in {candidates_path}"}))
             return 1
 
-        rc = reject_counts.get(target_id, 0)
-        tier, reason = _classify_tier(match, rc, config)
-
-        raw_conf = match.get("confidence")
-        try:
-            confidence = float(raw_conf) if raw_conf is not None else 0.5
-        except (ValueError, TypeError):
-            confidence = 0.5
-
-        impact = match.get("impact", "important")
-        if impact not in ("critical", "important", "nice"):
-            impact = "important"
-
-        print(json.dumps({
-            "id": target_id,
-            "tier": tier,
-            "confidence": confidence,
-            "impact": impact,
-            "reject_count": rc,
-            "reason": reason,
-            "title": match.get("title", ""),
-        }))
+        # Reuse classify_all path so adaptive override applies uniformly
+        single = classify_all(
+            [match], config, reject_counts,
+            include_retired=True,
+            shadow_records=shadow_records,
+        )
+        if not single:
+            print(json.dumps({"error": f"Candidate {target_id} retired/filtered"}))
+            return 1
+        print(json.dumps(single[0]))
         return 0
 
     # --all mode: emit JSONL
-    results = classify_all(candidates, config, reject_counts, args.include_retired)
+    results = classify_all(
+        candidates, config, reject_counts,
+        args.include_retired,
+        shadow_records=shadow_records,
+    )
     for item in results:
         print(json.dumps(item))
 

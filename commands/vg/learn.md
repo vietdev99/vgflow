@@ -1,16 +1,58 @@
 ---
 description: Review, promote, reject, or retract bootstrap candidates — user-gate for AI-proposed learnings
-argument-hint: "[--auto-surface|--review [id]|--review --all|--promote <id>|--reject <id> --reason '...'|--retract <id> --reason '...']"
+argument-hint: "[--auto-surface|--review [id]|--review --all|--promote <id> --reason '...'|--reject <id> --reason '...'|--retract <id> --reason '...']"
 mutates_repo: true
 runtime_contract:
   must_emit_telemetry:
     - event_type: "learn.started"
     - event_type: "learn.completed"
+    - event_type: "learn.promoted"  # on successful promote
+    - event_type: "learn.rejected"  # on successful reject
+    - event_type: "learn.promote_attempt_unauthenticated"  # blocked attempt
 ---
 
 # /vg:learn
 
 User gate for bootstrap overlay changes. Primary entry point: **end-of-step reflection** auto-drafts candidates into `.vg/bootstrap/CANDIDATES.md`. This command reviews them.
+
+## Authentication (harness v2.6 Phase G, 2026-04-26)
+
+Mutating actions (`--promote`, `--reject`) write to the bootstrap rule
+set, which is injected into every subsequent executor prompt. A
+fabricated candidate self-promoted by an AI subagent would silently
+alter platform behaviour across phases. Same authentication surface as
+`/vg:override-resolve` and `/vg:calibrate apply`:
+
+| Action | Auth required | --reason required |
+|---|---|---|
+| `--auto-surface` | no | per-prompt y/n |
+| `--review [id]` | no | no |
+| `--review --all` | no | no |
+| `--promote <id>` | **TTY OR HMAC token** | **min 50 chars** |
+| `--reject <id>` | **TTY OR HMAC token** | **min 50 chars** |
+| `--retract <id>` | **TTY OR HMAC token** | **min 50 chars** |
+
+The orchestrator subcommand `learn promote/reject` enforces the gate via
+`verify_human_operator()`. Two valid auth paths:
+
+1. **TTY (interactive shell)** — auto-approved when run from a real
+   terminal. Approver recorded as `$USER` / `$USERNAME`.
+2. **HMAC-signed token (CI / automation escape hatch)** — mint via
+   `python3 .claude/scripts/vg-auth.py approve --flag learn-promote`,
+   then `export VG_HUMAN_OPERATOR=<token>`. Token is HMAC-signed against
+   `~/.vg/.approver-key` (mode 0600 on POSIX).
+
+Failed authentication paths emit
+`learn.{promote,reject}_attempt_unauthenticated` events for the forensic
+trail. Successful applies emit `learn.{promoted,rejected}` with
+`{candidate_id, tier, reason, operator_token, auth_method}` payload —
+auditors can reconstruct who/when/why for every rule-set mutation.
+
+**The `--reason` flag is mandatory for promote/reject/retract and must
+be ≥50 characters.** Audit text must justify the decision concretely:
+evidence count, phases observed, conflict assessment. Placeholder reasons
+(`"approved"`, `"obvious"`, `"per Claude"`) are filtered by the same
+length gate as `--override-reason`.
 
 ## v2.5 Phase H: tiered auto-surface (fixes UX fatigue)
 
@@ -85,11 +127,20 @@ Display with mandatory confirm prompt:
 Promote? [y/n/edit]
 ```
 
-### `/vg:learn --promote <id>`
+### `/vg:learn --promote <id> --reason "..."`
 
 Apply candidate to bootstrap zone.
 
-**MANDATORY pre-check:**
+**MANDATORY auth gate (harness v2.6 Phase G):** Before any pre-check
+runs, the orchestrator subcommand `learn promote` requires:
+- TTY OR HMAC-signed `VG_HUMAN_OPERATOR` token (see Authentication
+  section above), AND
+- `--reason "..."` ≥ 50 characters citing concrete evidence
+
+Failed auth → BLOCK with rc=2 + `learn.promote_attempt_unauthenticated`
+audit event. AI subagents cannot self-promote.
+
+**MANDATORY pre-check (after auth passes):**
 1. Schema validate (for `config_override`): target key must be in `schema/overlay.schema.yml` allowlist
    - If not in allowlist → offer fallback: "convert to prose rule?"
 2. Scope syntax validate via `scope-evaluator.py --context-json <empty> --scope-json <scope>` → exit 2 = malformed
@@ -136,11 +187,20 @@ Apply candidate to bootstrap zone.
 
 ### `/vg:learn --reject <id> --reason "..."`
 
-Decline candidate. Reason is REQUIRED (prevents silent dismissal).
+Decline candidate. Reason is REQUIRED — same auth gate as promote
+(harness v2.6 Phase G):
+- TTY OR HMAC-signed token, AND
+- `--reason "..."` ≥ 50 characters
+
+Why same gate as promote? An AI subagent rejecting a candidate that
+flags its own corner-cutting pattern is just as much a self-mutation —
+the rule never gets reconsidered. Symmetric defense: both directions
+require human accountability.
 
 1. Move candidate block from `CANDIDATES.md` to `REJECTED.md`
 2. Append rejection metadata: user, timestamp, reason, dedupe_key
-3. Emit telemetry `bootstrap.candidate_rejected`
+3. Emit telemetry `learn.rejected` (success) or
+   `learn.reject_attempt_unauthenticated` (auth fail)
 
 Reflector checks `REJECTED.md` dedupe_key before future drafts — 2+ rejects of same key → silent skip forever.
 

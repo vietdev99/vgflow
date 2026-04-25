@@ -1378,8 +1378,29 @@ else
     ${PYTHON_BIN:-python3} .claude/scripts/learn-dedupe.py --apply 2>&1 | tail -5 || \
       echo "  (dedupe dry-run or failed, non-blocking)"
 
-    # 2. Classify all pending candidates by tier
-    TIER_JSONL=$(${PYTHON_BIN:-python3} .claude/scripts/learn-tier-classify.py --all 2>/dev/null || echo "")
+    # 2a. (v2.6 Phase A) Shadow evaluator — compute adaptive correctness rate per candidate.
+    #     Output JSONL fed to classifier as --shadow-jsonl override. Critic flag
+    #     opt-in via bootstrap.critic_enabled in vg.config.md.
+    SHADOW_JSONL="${PHASE_DIR}/.shadow-eval.jsonl"
+    CRITIC_ENABLED=$(${PYTHON_BIN:-python3} -c "
+import re
+for line in open('.claude/vg.config.md', encoding='utf-8'):
+    m = re.match(r'^\s*critic_enabled:\s*(true|false)', line, re.IGNORECASE)
+    if m: print(m.group(1).lower()); break
+" 2>/dev/null || echo "false")
+    SHADOW_ARGS=""
+    [ "$CRITIC_ENABLED" = "true" ] && SHADOW_ARGS="--critic"
+    ${PYTHON_BIN:-python3} .claude/scripts/bootstrap-shadow-evaluator.py \
+      $SHADOW_ARGS --output-jsonl "$SHADOW_JSONL" 2>/dev/null || \
+      echo "  (shadow evaluator unavailable — classifier falls back to fixed-threshold)"
+
+    # 2b. Classify all pending candidates by tier (adaptive override when shadow JSONL exists)
+    if [ -s "$SHADOW_JSONL" ]; then
+      TIER_JSONL=$(${PYTHON_BIN:-python3} .claude/scripts/learn-tier-classify.py \
+        --all --shadow-jsonl "$SHADOW_JSONL" 2>/dev/null || echo "")
+    else
+      TIER_JSONL=$(${PYTHON_BIN:-python3} .claude/scripts/learn-tier-classify.py --all 2>/dev/null || echo "")
+    fi
 
     if [ -z "$TIER_JSONL" ]; then
       echo "  (no pending candidates to surface)"
@@ -1399,13 +1420,33 @@ for line in sys.stdin:
       A_COUNT=0
       for AID in $TIER_A_IDS; do
         [ -z "$AID" ] && continue
-        echo "  ✓ Auto-promoted Tier A candidate ${AID} (≥3 phase confirms, high confidence)"
+        echo "  ✓ Auto-promoted Tier A candidate ${AID} (adaptive shadow correctness ≥ threshold)"
         # Emit telemetry — actual promote happens via /vg:learn --promote (orchestrator must invoke)
         type -t emit_telemetry >/dev/null 2>&1 && \
-          emit_telemetry "bootstrap.rule_promoted" "PASS" "{\"id\":\"${AID}\",\"tier\":\"A\",\"auto\":true}" 2>/dev/null || true
+          emit_telemetry "bootstrap.rule_promoted" "PASS" "{\"id\":\"${AID}\",\"tier\":\"A\",\"auto\":true,\"path\":\"shadow_adaptive\"}" 2>/dev/null || true
         A_COUNT=$((A_COUNT+1))
       done
       [ "$A_COUNT" -gt 0 ] && echo ""
+
+      # 3a. (v2.6 Phase A) Stale Tier A demotion — evaluator flagged demote=true
+      #     for promoted rules whose correctness dropped below shadow_correctness_important.
+      DEMOTE_IDS=$(echo "$TIER_JSONL" | ${PYTHON_BIN:-python3} -c "
+import json, sys
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    try:
+        d=json.loads(line)
+        if d.get('demote') is True:
+            print(d['id'])
+    except Exception: pass
+")
+      for DID in $DEMOTE_IDS; do
+        [ -z "$DID" ] && continue
+        echo "  ⚠ Stale Tier A demote: ${DID} (correctness dropped below threshold over stale_phases window)"
+        type -t emit_telemetry >/dev/null 2>&1 && \
+          emit_telemetry "bootstrap.rule_demoted" "WARN" "{\"id\":\"${DID}\",\"reason\":\"stale_low_correctness\"}" 2>/dev/null || true
+      done
 
       # 4. Tier B surface — cap via config, interactive y/n/e/s
       TIER_B_MAX=$(${PYTHON_BIN:-python3} -c "
@@ -1432,6 +1473,28 @@ print(n)
         echo "  ▸ ${TIER_B_COUNT} Tier B candidate(s) pending. Surface max ${TIER_B_MAX} now;"
         echo "    rest defer to next phase. Access all via: /vg:learn --review --all"
         echo ""
+
+        # v2.6 Phase D — show proposed phase_pattern alongside each Tier B candidate.
+        # Reflector populates phase_pattern based on evidence commit majors. Operator
+        # can widen/narrow via e (edit) mode in the y/n/e/s gate before promotion.
+        echo "$TIER_JSONL" | ${PYTHON_BIN:-python3} -c "
+import json, sys
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    try:
+        d=json.loads(line)
+    except Exception: continue
+    if d.get('tier') != 'B': continue
+    pat = d.get('phase_pattern', '.*')
+    pat_note = '' if pat == '.*' else ' [phase_pattern=' + pat + ']'
+    print('    • {id}{note}: {title}'.format(
+        id=d.get('id','?'),
+        note=pat_note,
+        title=d.get('title','(untitled)')[:80],
+    ))
+" 2>/dev/null || true
+
         # Orchestrator must call /vg:learn --auto-surface interactively for user y/n/e/s
         echo "  → Invoking /vg:learn --auto-surface (interactive)"
         # Emit surfaced event
@@ -1456,6 +1519,55 @@ print(n)
 ")
       [ "${TIER_C_COUNT:-0}" -gt 0 ] && echo "  (Tier C parking: ${TIER_C_COUNT} low-confidence, silent — /vg:learn --review --all to view)"
     fi
+
+    # v2.6 Phase C — pairwise conflict surface. Reuses the SAME y/n/e/s loop
+    # as Tier B above (no new step number). When a contradiction is detected
+    # between two ACTIVE candidates (similar prose OR opposing verbs), the
+    # operator chooses to retire the loser, defer, edit, or skip. Winner is
+    # auto-suggested via Phase A correctness → evidence_count fallback.
+    CONFLICT_JSONL="${PHASE_DIR}/.conflict-pairs.jsonl"
+    ${PYTHON_BIN:-python3} .claude/scripts/bootstrap-conflict-detector.py \
+      --output-jsonl "$CONFLICT_JSONL" >/dev/null 2>&1 || \
+      echo "  (conflict detector unavailable — skip conflict surface)"
+
+    if [ -s "$CONFLICT_JSONL" ]; then
+      CONFLICT_COUNT=$(wc -l < "$CONFLICT_JSONL" | tr -d ' ')
+      echo ""
+      echo "  ▸ ${CONFLICT_COUNT} conflict pair(s) detected between ACTIVE candidates."
+      echo "    Each pair surfaces in the same y/n/e/s prompt loop as Tier B above."
+      echo "    Options: y=retire loser+keep winner, n=defer both, e=edit, s=skip."
+      echo ""
+      ${PYTHON_BIN:-python3} -c "
+import json, sys
+with open(r'''${CONFLICT_JSONL}''', encoding='utf-8') as fh:
+    for line in fh:
+        line = line.strip()
+        if not line: continue
+        try:
+            c = json.loads(line)
+        except Exception:
+            continue
+        verb = c.get('opposing_verb')
+        sim = c.get('similarity', 0.0)
+        winner = c.get('winner') or 'TIE — operator decides'
+        ec_a = c.get('evidence_count_a', 0)
+        ec_b = c.get('evidence_count_b', 0)
+        co_a = c.get('correctness_a')
+        co_b = c.get('correctness_b')
+        co_str = lambda v: f'{v:.2f}' if isinstance(v,(int,float)) else 'n/a'
+        print(f\"    • {c['id_a']} vs {c['id_b']}\")
+        sig = f'similarity={sim:.2f}'
+        if verb: sig += f', opposing={verb}'
+        print(f'      {sig}')
+        print(f\"      winner suggestion: {winner} \"
+              f\"(correctness {co_str(co_a)}/{co_str(co_b)}, evidence {ec_a}/{ec_b})\")
+"
+      # Orchestrator must call /vg:learn --auto-surface interactively to
+      # process conflict pairs in the same loop as Tier B candidates.
+      echo "  → Invoking /vg:learn --auto-surface (conflict resolution interactive)"
+      type -t emit_telemetry >/dev/null 2>&1 && \
+        emit_telemetry "bootstrap.conflict_surfaced" "PASS" "{\"phase\":\"${PHASE_NUMBER}\",\"conflict_count\":${CONFLICT_COUNT}}" 2>/dev/null || true
+    fi
   fi
 
   touch "${PHASE_DIR}/.step-markers/6c_learn_auto_surface.done"
@@ -1463,6 +1575,15 @@ fi
 ```
 
 **Orchestrator hook:** khi step này echo `→ Invoking /vg:learn --auto-surface`, orchestrator MUST call the slash command inline so user can make y/n/e/s decisions. Non-interactive fallback: Tier B candidates stay in CANDIDATES.md for next phase's accept surface.
+
+**v2.6 Phase C — conflict pair handler:** trong cùng prompt loop, nếu user chọn `y` cho pair (id_a vs id_b, winner=L-WIN), orchestrator MUST call:
+
+```bash
+source .claude/commands/vg/_shared/lib/override-debt.sh
+override_auto_resolve_clean_run --target rule-retire <LOSER_ID> "winner=<WINNER_ID> conflict-resolved-at-accept"
+```
+
+Loser is whichever id ≠ winner; if winner=null (tie) and user picks `y`, prompt for a manual winner first. Mirrors override-debt auto-resolve pattern (single helper, two consumers).
 </step>
 
 <step name="6_write_uat_md">
