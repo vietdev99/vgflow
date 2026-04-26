@@ -2797,10 +2797,17 @@ Blueprint complete for Phase {N}.
   Next: /vg:build {phase}
 ```
 
-Commit all artifacts:
+Commit all artifacts (track every blueprint output — N9 fix: prevent UI-MAP-AS-IS / TEST-GOALS / UI-SPEC / UI-MAP / FLOW-SPEC silent orphan):
 ```bash
-git add ${PHASE_DIR}/PLAN*.md ${PHASE_DIR}/API-CONTRACTS.md ${PHASE_DIR}/crossai/
-git commit -m "blueprint({phase}): plans + API contracts — CrossAI {verdict}"
+git add "${PHASE_DIR}/PLAN"*.md \
+        "${PHASE_DIR}/API-CONTRACTS.md" \
+        "${PHASE_DIR}/TEST-GOALS.md" \
+        "${PHASE_DIR}/crossai/"
+# Optional artifacts — only present when the relevant generator fired this phase.
+for opt in UI-SPEC.md UI-MAP.md UI-MAP-AS-IS.md FLOW-SPEC.md; do
+  [ -f "${PHASE_DIR}/${opt}" ] && git add "${PHASE_DIR}/${opt}"
+done
+git commit -m "blueprint({phase}): plans + contracts + goals — CrossAI {verdict}"
 ```
 
 ```bash

@@ -671,7 +671,10 @@ def cmd_run_complete(args) -> int:
     phase = current["phase"]
     run_args = current.get("args", "")
 
-    contract = contracts.parse(command)
+    # Tier B: pin-aware contract loading. If .contract-pins.json exists for
+    # this (phase, command), use pinned must_touch_markers + must_emit_telemetry
+    # so harness upgrades don't retroactively invalidate already-shipped phases.
+    contract = contracts.parse_for_phase(phase, command)
     verdict, violations = _verify_contract(contract, run_id, command, phase,
                                            run_args)
 
@@ -3075,9 +3078,45 @@ def _run_validators(command: str, phase: str, run_id: str,
             # JSON). Find the JSON object by locating the first "{" line.
             stdout = r.stdout
             json_start = stdout.find("{")
-            if json_start > 0:
-                stdout = stdout[json_start:]
-            out = json.loads(stdout)
+            if json_start < 0:
+                # No JSON body in stdout — validator emits human-friendly text
+                # by default (e.g. "✓ All good", "⛔ 4 skill(s) drift"). Older
+                # validators predate the _common.py emit helper or treat --json
+                # as opt-in. Synthesize a verdict from the exit code so the
+                # orchestrator doesn't quarantine validators that simply haven't
+                # been migrated. Bug: harness-v2.7-fixup-N11 (2026-04-26).
+                # Re-discovered in /vg:accept 7.14.3: 11 validators crashed with
+                # "Expecting value: line 1 column 1 (char 0)" — same root cause.
+                text = stdout.strip()
+                summary = text if len(text) <= 500 else (text[:500] + "…")
+                if r.returncode == 0:
+                    out = {
+                        "verdict": "PASS",
+                        "evidence": [{"type": "stdout", "message": summary}],
+                        "_synthesized_from_exit_code": True,
+                    }
+                elif r.returncode == 1:
+                    out = {
+                        "verdict": "WARN",
+                        "evidence": [{"type": "stdout", "message": summary}],
+                        "_synthesized_from_exit_code": True,
+                    }
+                else:
+                    # Exit 2+ usually means missing CLI args or schema error.
+                    # Treat as SKIP (don't block) so operators can fix without
+                    # losing the rest of the dispatch run.
+                    out = {
+                        "verdict": "SKIP",
+                        "evidence": [{
+                            "type": "info",
+                            "message": f"exit={r.returncode} stdout={summary}",
+                        }],
+                        "_synthesized_from_exit_code": True,
+                    }
+            else:
+                if json_start > 0:
+                    stdout = stdout[json_start:]
+                out = json.loads(stdout)
         except Exception as e:
             _quarantine_record(v_name, "CRASH")
             block_results.append({

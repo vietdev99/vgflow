@@ -1057,7 +1057,19 @@ DECISION_COUNT=$(grep -cE '^### (P[0-9.]+\.)?D-' "${PHASE_DIR}/CONTEXT.md")
 ENDPOINT_COUNT=$(grep -c '^\- .* /api/' "${PHASE_DIR}/CONTEXT.md" || echo 0)
 TEST_SCENARIO_COUNT=$(grep -c '^\- TS-' "${PHASE_DIR}/CONTEXT.md" || echo 0)
 
-git add "${PHASE_DIR}/CONTEXT.md" "${PHASE_DIR}/DISCUSSION-LOG.md" "${PHASE_DIR}/PIPELINE-STATE.json"
+# Tier B (2026-04-26) — write per-phase contract pin so future harness
+# upgrades that mutate must_touch_markers / must_emit_telemetry don't
+# retroactively invalidate this phase. Subsequent /vg:blueprint, /vg:build,
+# /vg:review, /vg:test, /vg:accept will validate against this pin instead
+# of the live skill body.
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-contract-pins.py write \
+  "${PHASE_NUMBER}" 2>/dev/null || \
+  echo "⚠ contract-pin write failed (non-fatal — orchestrator will fall back to current skill)"
+
+git add "${PHASE_DIR}/CONTEXT.md" "${PHASE_DIR}/DISCUSSION-LOG.md" \
+        "${PHASE_DIR}/PIPELINE-STATE.json"
+[ -f "${PHASE_DIR}/.contract-pins.json" ] && \
+  git add "${PHASE_DIR}/.contract-pins.json"
 git commit -m "scope(${PHASE_NUMBER}): ${DECISION_COUNT} decisions, ${ENDPOINT_COUNT} endpoints, ${TEST_SCENARIO_COUNT} test scenarios"
 
 # v2.2: mark final step + emit completion event + invoke run-complete.

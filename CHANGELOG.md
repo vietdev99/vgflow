@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.8.2 (2026-04-26) — Skill-version drift permanently solved
+
+### Tier A — `/vg:migrate-state` (commit 6324c2fd in source)
+New command for retroactive marker drift repair. Idempotent scan + apply
+based on artifact evidence. Logs single override-debt entry per applied
+phase (no register bloat). Multi-plan phases (07.13-style with 07.13-NN-PLAN.md
+naming) handled via glob evidence patterns.
+
+Modes: `--scan`, `{phase}` shorthand, `--apply-all`, `--dry-run`, `--json`.
+
+### Tier B — Per-phase contract pinning (commit 227ea852 in source)
+`.vg/phases/{phase}/.contract-pins.json` written at `/vg:scope`,
+snapshotting `must_touch_markers` + `must_emit_telemetry` for all 6
+tracked commands. Subsequent runs validate against the pinned contract,
+not the live skill body. Harness upgrades that mutate marker contracts
+no longer retroactively invalidate already-shipped phases.
+
+`/vg:migrate-state --apply` writes pins for legacy phases at current
+harness version (best-effort retroactive lock).
+
+### Bug fix — orchestrator tolerates non-JSON validator stdout (commit 9515cd86)
+11 validators that emit human-friendly text by default (e.g. "✓ All good",
+"⛔ Drift") were crashing the validator dispatcher with
+`Expecting value: line 1 column 1 (char 0)`. Orchestrator now synthesizes
+verdict from exit code when stdout has no `{`: 0 → PASS, 1 → WARN, 2+ → SKIP.
+Validators still preferred to emit JSON when invoked with `--json`.
+
+### Audit fixups — N9 + N10 (commit a44503c0)
+- N9: `/vg:blueprint` commit step now tracks every blueprint output
+  (TEST-GOALS.md unconditionally + UI-SPEC/UI-MAP/UI-MAP-AS-IS/FLOW-SPEC
+  via existence guards). Prevents silent orphan files.
+- N10: `/vg:sync --verify` mode hashes post-`</codex_skill_adapter>` mirror
+  content vs post-frontmatter source content. Catches functional drift
+  invisible in the line-level `sync.sh --check` diff.
+
+### Verification
+55/55 regression tests pass (idempotency, no-no-verify, orchestrator
+dispatch, mirror equivalence, validator non-JSON tolerance, migrate-state,
+contract pins).
+
 ## v2.8.1 (2026-04-26) — Hotfix
 
 Audit-driven fixups against `/vg:build` vs `/vg:blueprint` artifact flow.

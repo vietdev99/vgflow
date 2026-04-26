@@ -1,7 +1,7 @@
 ---
 name: vg:sync
 description: Sync VG workflow across source → mirror → installations (.claude/ → vgflow/ → ~/.codex/)
-argument-hint: "[--check] [--no-source] [--no-global]"
+argument-hint: "[--check] [--verify] [--no-source] [--no-global]"
 allowed-tools:
   - Bash
   - Read
@@ -59,9 +59,21 @@ export DEV_ROOT="$(pwd)"
 </step>
 
 <step name="1_run_sync">
-Parse args: `--check` (dry-run), `--no-source` (skip source→mirror), `--no-global` (skip ~/.codex)
+Parse args: `--check` (dry-run), `--verify` (codex mirror equivalence), `--no-source` (skip source→mirror), `--no-global` (skip ~/.codex)
+
+**`--verify` short-circuits the rest of the pipeline.** It hashes the
+post-`</codex_skill_adapter>` content of every `.codex/skills/vg-*/SKILL.md`
+mirror against the post-frontmatter content of its source
+`.claude/commands/vg/<name>.md`. This catches functional drift that the
+regular `sync.sh --check` line-level diff hides inside the ~80-line offset
+introduced by the codex adapter block (N10 fix from build-vs-blueprint audit).
 
 ```bash
+if echo " $ARGUMENTS " | grep -q ' --verify '; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/verify-codex-mirror-equivalence.py
+  exit $?
+fi
+
 bash "$SYNC_SH" $ARGUMENTS
 ```
 
@@ -69,10 +81,12 @@ Output shows:
 - Files changed (new/updated)
 - Summary count
 - Dry-run indication nếu --check
+- Per-skill drift table nếu --verify
 
 Exit code:
-- 0: nothing to do OR sync applied
+- 0: nothing to do OR sync applied OR --verify all-equivalent
 - 1 (with --check): drift detected, needs sync
+- 1 (with --verify): functional drift between source and codex mirror — re-run `/vg:sync` (without flag) to regenerate mirrors
 </step>
 
 <step name="2_report">
@@ -95,4 +109,5 @@ Nếu --check báo drift:
 - `vgflow/codex-skills/*/SKILL.md` deployed to both `.codex/skills/` và `~/.codex/skills/`
 - Report accurate file count delta
 - Zero data loss (no silent overwrites khi src missing)
+- `/vg:sync --verify` reports zero drift between `.claude/commands/vg/<name>.md` and `.codex/skills/vg-<name>/SKILL.md` (post-adapter SHA256 match)
 </success_criteria>

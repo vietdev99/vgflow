@@ -1,8 +1,8 @@
 ---
-name: "vg-sync"
-description: "Sync VG workflow across source → mirror → installations (.claude/ → vgflow/ → ~/.codex/)"
+name: "vg-migrate-state"
+description: "Detect + backfill phase state drift (missing step markers) after VG harness upgrades"
 metadata:
-  short-description: "Sync VG workflow across source → mirror → installations (.claude/ → vgflow/ → ~/.codex/)"
+  short-description: "Detect + backfill phase state drift (missing step markers) after VG harness upgrades"
 ---
 
 <codex_skill_adapter>
@@ -81,108 +81,155 @@ Pool name in Codex: `codex` (separate from Claude's `claude` pool). Lock manager
 
 ## Invocation
 
-This skill is invoked by mentioning `$vg-sync`. Treat all user text after `$vg-sync` as arguments.
+This skill is invoked by mentioning `$vg-migrate-state`. Treat all user text after `$vg-migrate-state` as arguments.
 
 If argument-hint in source frontmatter is not empty and user provides no args, ask once via request_user_input before proceeding.
 </codex_skill_adapter>
 
 
 <objective>
-Keep VG workflow files consistent across 3 locations:
-1. **Source**: `.claude/commands/vg/` (edit here trong dev repo)
-2. **Mirror**: `vgflow/` (distribute this to other projects)
-3. **Installations**:
-   - `.codex/skills/vg-*/` (current project Codex)
-   - `~/.codex/skills/vg-*/` (global Codex — dùng cho mọi project)
+Repair phase state drift introduced by VG harness upgrades. When a skill
+adds new `<step>` blocks (or wires `mark-step` where it wasn't wired
+before), phases that already ran the OLD skill miss the new markers.
+`/vg:accept` then BLOCKs even though the pipeline actually ran end-to-end.
 
-Script delegates to `vgflow/sync.sh`. Runs bidirectional sync: edit ở source → mirror về vgflow → deploy tới installations.
+This command detects + backfills missing markers based on artifact
+evidence (PLAN.md, REVIEW-FEEDBACK.md, SANDBOX-TEST.md, etc.). Idempotent.
+Companion to Tier B (`.contract-pins.json` written at `/vg:scope`) which
+prevents future drift; this command repairs legacy phases that pre-date
+the pin mechanism.
+
+Drift is detected per (phase, command) pair:
+- Read step list from `.claude/commands/vg/{cmd}.md`
+- Check artifact evidence (e.g. PLAN.md proves `/vg:blueprint` ran)
+- If evidence present + markers missing → drift candidate
+- If no evidence → skip (don't fabricate markers for commands that never ran)
 </objective>
 
 <process>
 
-<step name="0_detect">
-
-**v1.11.0 R5 — `vgflow/` folder deprecated. Use external `vgflow-repo` clone:**
+<step name="0_session_lifecycle">
+Standard session banner + EXIT trap. No state mutation.
 
 ```bash
-# Resolution priority (highest first):
-SYNC_SH=""
-for candidate in \
-  "${VGFLOW_REPO:-}/sync.sh" \
-  "../vgflow-repo/sync.sh" \
-  "../../vgflow-repo/sync.sh" \
-  "${HOME}/Workspace/Messi/Code/vgflow-repo/sync.sh" \
-  "vgflow/sync.sh"  ; do
-  if [ -f "$candidate" ]; then
-    SYNC_SH="$candidate"
-    break
-  fi
+PHASE_NUMBER="${PHASE_NUMBER:-migrate-state}"
+mkdir -p ".vg/.tmp"
+```
+</step>
+
+<step name="1_parse_args">
+Parse positional + flag arguments.
+
+```bash
+PHASE_ARG=""
+SCAN=0
+APPLY_ALL=0
+DRY_RUN=0
+JSON=0
+for arg in $ARGUMENTS; do
+  case "$arg" in
+    --scan)        SCAN=1 ;;
+    --apply-all)   APPLY_ALL=1 ;;
+    --dry-run)     DRY_RUN=1 ;;
+    --json)        JSON=1 ;;
+    --*)           echo "⛔ Unknown flag: $arg" >&2; exit 2 ;;
+    *)             PHASE_ARG="$arg" ;;
+  esac
 done
 
-if [ -z "$SYNC_SH" ]; then
-  echo "⛔ vgflow-repo sync.sh not found."
-  echo "   Setup options:"
-  echo "   1. Set env: export VGFLOW_REPO=/path/to/vgflow-repo"
-  echo "   2. Clone sibling: git clone https://github.com/vietdev99/vgflow ../vgflow-repo"
-  echo "   Then re-run /vg:sync"
-  exit 1
+# Default: --scan if no positional + no apply-all
+if [ -z "$PHASE_ARG" ] && [ $APPLY_ALL -eq 0 ] && [ $SCAN -eq 0 ]; then
+  SCAN=1
 fi
-
-echo "✓ Using sync script: $SYNC_SH"
-export DEV_ROOT="$(pwd)"
 ```
 </step>
 
-<step name="1_run_sync">
-Parse args: `--check` (dry-run), `--verify` (codex mirror equivalence), `--no-source` (skip source→mirror), `--no-global` (skip ~/.codex)
-
-**`--verify` short-circuits the rest of the pipeline.** It hashes the
-post-`</codex_skill_adapter>` content of every `.codex/skills/vg-*/SKILL.md`
-mirror against the post-frontmatter content of its source
-`.claude/commands/vg/<name>.md`. This catches functional drift that the
-regular `sync.sh --check` line-level diff hides inside the ~80-line offset
-introduced by the codex adapter block (N10 fix from build-vs-blueprint audit).
+<step name="2_run_migrate">
+Delegate to `migrate-state.py`. Script handles scan/apply/dry-run logic.
 
 ```bash
-if echo " $ARGUMENTS " | grep -q ' --verify '; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/verify-codex-mirror-equivalence.py
-  exit $?
-fi
+ARGS=()
+[ -n "$PHASE_ARG" ] && ARGS+=("$PHASE_ARG")
+[ $SCAN -eq 1 ]      && ARGS+=("--scan")
+[ $APPLY_ALL -eq 1 ] && ARGS+=("--apply-all")
+[ $DRY_RUN -eq 1 ]   && ARGS+=("--dry-run")
+[ $JSON -eq 1 ]      && ARGS+=("--json")
 
-bash "$SYNC_SH" $ARGUMENTS
+"${PYTHON_BIN:-python3}" .claude/scripts/migrate-state.py "${ARGS[@]}"
+RC=$?
+
+# Emit telemetry
+EVENT_TYPE="migrate_state.scanned"
+[ $APPLY_ALL -eq 1 ] || ([ -n "$PHASE_ARG" ] && [ $DRY_RUN -eq 0 ]) && \
+  EVENT_TYPE="migrate_state.applied"
+
+PAYLOAD=$(printf '{"phase":"%s","mode":"%s","exit":%d}' \
+  "${PHASE_ARG:-all}" \
+  "$([ $DRY_RUN -eq 1 ] && echo dry-run || echo apply)" \
+  "$RC")
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "$EVENT_TYPE" --payload "$PAYLOAD" >/dev/null 2>&1 || true
 ```
 
-Output shows:
-- Files changed (new/updated)
-- Summary count
-- Dry-run indication nếu --check
-- Per-skill drift table nếu --verify
-
-Exit code:
-- 0: nothing to do OR sync applied OR --verify all-equivalent
-- 1 (with --check): drift detected, needs sync
-- 1 (with --verify): functional drift between source and codex mirror — re-run `/vg:sync` (without flag) to regenerate mirrors
+Exit codes:
+- 0 → no drift OR migration applied successfully
+- 1 → drift detected (--scan/--dry-run only)
+- 2 → invalid args / phase not found / IO error
 </step>
 
-<step name="2_report">
-After apply (not --check), surface:
-- Số files synced
-- Locations touched
-- Nếu có global deploy: remind user Codex sessions hiện tại cần restart để load skills mới
+<step name="3_complete">
+Self-mark final step.
 
-Nếu --check báo drift:
-- Suggest: `/vg:sync` (without --check) để apply
-- Hoặc `/vg:sync --no-global` nếu không muốn deploy global
+```bash
+mkdir -p ".vg/.step-markers/migrate-state" 2>/dev/null
+touch ".vg/.step-markers/migrate-state/3_complete.done"
+```
 </step>
 
 </process>
 
 <success_criteria>
-- `.claude/commands/vg/*.md` ↔ `vgflow/commands/vg/*.md` identical
-- `.claude/skills/{api-contract,vg-*}/` ↔ `vgflow/skills/` identical
-- `.claude/scripts/*.py` ↔ `vgflow/scripts/*.py` identical
-- `vgflow/codex-skills/*/SKILL.md` deployed to both `.codex/skills/` và `~/.codex/skills/`
-- Report accurate file count delta
-- Zero data loss (no silent overwrites khi src missing)
-- `/vg:sync --verify` reports zero drift between `.claude/commands/vg/<name>.md` and `.codex/skills/vg-<name>/SKILL.md` (post-adapter SHA256 match)
+- `--scan` produces a project-wide drift table without writing anything
+- `--apply` (or `{phase}` shorthand) backfills missing markers based on artifact evidence
+- Single OD entry per applied phase (not per marker — prevents register bloat)
+- Idempotent: re-running on a sync'd phase prints "no drift" + zero new OD entries
+- `--dry-run` reports what would be backfilled without writing
+- Phases without artifact evidence for a command are skipped (no fabricated markers)
 </success_criteria>
+
+<usage_examples>
+
+**See project-wide drift before deciding what to fix:**
+```
+/vg:migrate-state --scan
+```
+Output: phase × (ran-commands, skipped, missing-markers) table.
+
+**Preview what one phase would change:**
+```
+/vg:migrate-state 7.14.3 --dry-run
+```
+
+**Fix one phase + log audit trail:**
+```
+/vg:migrate-state 7.14.3
+```
+
+**Batch fix every phase with drift:**
+```
+/vg:migrate-state --apply-all
+```
+
+**Pipe machine-readable scan into other tooling:**
+```
+/vg:migrate-state --scan --json | jq '.scan[] | select(.totals.missing_markers > 0).phase'
+```
+
+</usage_examples>
+
+<related>
+- `marker-migrate.py` — one-time legacy fix for empty marker files (different drift class)
+- `verify-step-markers.py` — gate that detects drift at `/vg:accept` time
+- `.vg/OVERRIDE-DEBT.md` — schema-versioned audit trail
+- Tier B (`/vg:scope` writes `.contract-pins.json`) — prevents future drift
+</related>

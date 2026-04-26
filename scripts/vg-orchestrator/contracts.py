@@ -1,9 +1,19 @@
 """
 Parse runtime_contract block from skill-MD frontmatter.
 Substitute ${PHASE_DIR} and ${PHASE_NUMBER} template variables.
+
+Tier B addition (2026-04-26):
+  parse_for_phase(phase, command) — pin-aware contract loader. If
+  .vg/phases/{phase}/.contract-pins.json exists with an entry for
+  `command`, override must_touch_markers + must_emit_telemetry with
+  pinned values. This freezes the marker/telemetry contract per-phase
+  so harness upgrades don't retroactively invalidate already-shipped
+  phases. Other fields (must_write, forbidden_without_override) still
+  load from the current skill.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -13,6 +23,7 @@ from _repo_root import find_repo_root
 REPO_ROOT = find_repo_root(__file__)
 COMMANDS_DIR = REPO_ROOT / ".claude" / "commands" / "vg"
 PHASES_DIR = REPO_ROOT / ".vg" / "phases"
+PIN_FILENAME = ".contract-pins.json"
 
 
 def parse(command: str) -> dict | None:
@@ -154,6 +165,61 @@ def _fallback_parse(fm_text: str) -> dict | None:
             if isinstance(last, dict):
                 last[nested_m.group(1)] = nested_m.group(2).strip()
     return contract
+
+
+def _read_phase_pin(phase: str, command: str) -> dict | None:
+    """Read pinned contract for (phase, command) from
+    .vg/phases/{phase}/.contract-pins.json. Returns None when no pin
+    file exists, the file is malformed, or no entry matches `command`.
+    """
+    phase_dir = resolve_phase_dir(phase)
+    if not phase_dir:
+        return None
+    pin_file = phase_dir / PIN_FILENAME
+    if not pin_file.exists():
+        return None
+    try:
+        data = json.loads(pin_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return (data.get("commands") or {}).get(command)
+
+
+def parse_for_phase(phase: str, command: str) -> dict | None:
+    """Pin-aware contract loader.
+
+    Resolution order:
+      1. Parse current skill via parse(command) — provides full contract
+         (must_write, forbidden_without_override, etc.).
+      2. If .contract-pins.json has an entry for this (phase, command),
+         OVERRIDE must_touch_markers + must_emit_telemetry with the
+         pinned values. Other fields keep current-skill values.
+
+    Why partial override:
+      must_touch_markers + must_emit_telemetry change with skill version
+      and break legacy phases. Other contract fields (must_write paths,
+      forbidden flags) are stable enough to safely track current skill.
+    """
+    contract = parse(command)
+    pinned = _read_phase_pin(phase, command)
+    if not pinned:
+        return contract
+    # Pin exists — copy current contract and override the volatile fields.
+    merged = dict(contract or {})
+    if "must_touch_markers" in pinned:
+        # Pinned schema can be either a flat list of marker names (Tier B
+        # canonical form) or the original skill structure (mix of strings
+        # and {name, severity} dicts). normalize_markers downstream handles
+        # both shapes.
+        merged["must_touch_markers"] = pinned["must_touch_markers"]
+    if "must_emit_telemetry" in pinned:
+        # Pinned form is a flat list of event_type strings; expand to the
+        # `event_type:` dict shape that the downstream verifier expects.
+        merged["must_emit_telemetry"] = [
+            {"event_type": e} if isinstance(e, str) else e
+            for e in pinned["must_emit_telemetry"]
+        ]
+    return merged
 
 
 def resolve_phase_dir(phase: str) -> Path | None:
