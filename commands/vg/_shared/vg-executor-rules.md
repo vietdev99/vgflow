@@ -337,6 +337,130 @@ When `<design_context>` is present:
 - Interactive behaviors MUST follow interactions.md
 - Do NOT "improve" or reinvent the design — match it exactly
 
+## URL state for list views (R7 — v2.8.4 Phase J — MANDATORY)
+
+When you build a **list / table / grid view** that has any of:
+filter dropdown, filter chip, multi-select, sort column header, search
+input, pagination control — the state of those controls **MUST sync to
+URL search params** via the framework's router primitives.
+
+### Why mandatory
+
+Modern dashboard UX baseline (Linear, Stripe, GitHub, ProductHunt — all
+default this way):
+- **Refresh preserves state** — F5 must not lose user's filter/sort/page
+- **Share URL = share state** — paste URL in Slack → recipient sees same view
+- **Browser back/forward navigates state changes** — back button respects history
+- **Deep-link works** — `/campaigns?status=active&sort=created_at&dir=desc&page=2` opens directly to that view
+
+Without URL sync, list views break user expectation and cannot be shared
+or bookmarked. This is not a nice-to-have; it is table stakes.
+
+### Required wiring
+
+For each control in your list view:
+
+| Control | Required URL behavior |
+|---------|----------------------|
+| Filter dropdown / chip | onChange → write `?{filter-name}={value}` |
+| Multi-select filter | onChange → write `?{filter-name}={csv}` (array_format from config) |
+| Search input | onChange (debounced per `debounce_search_ms`) → write `?q={value}` |
+| Sort column header | onClick → toggle asc↔desc, write `?sort={col}&dir={asc\|desc}` |
+| Pagination next/prev/numbered | onClick → write `?page={N}` (page-size also if user-configurable) |
+
+### Pagination UI pattern (locked)
+
+The pagination control UI **MUST** render this exact layout (config:
+`ui_state_conventions.pagination_ui`):
+
+```
+[<<]  [<]  [N-5] [N-4] [N-3] [N-2] [N-1] [N] [N+1] [N+2] [N+3] [N+4] [N+5]  [>]  [>>]
+
+Showing 21–40 of 1,247 records          Page 2 of 63
+```
+
+- `<<` first-page jump, `>>` last-page jump (one click to extreme)
+- `<` prev, `>` next (one step)
+- Numbered window: current page ±5 (config `window_radius`). Truncate with
+  ellipsis when window can't reach edges. Each number is a clickable button.
+- "Showing X–Y of Z records" + "Page N of M" labels MANDATORY (helps user
+  understand position + total).
+- All control clicks update URL `?page=N`.
+
+**BANNED** patterns:
+- `[< Prev]  Page 2  [Next >]` — only prev/next without numbered window. User
+  must click 50 times to reach page 50. Unacceptable for any non-trivial list.
+- Numbered window without `<<` / `>>` — forces N clicks to reach last page.
+- Missing "of Z records" / "of M pages" — user has no signal whether more data exists.
+
+If config explicitly overrides (rare — e.g. infinite-scroll project), must
+declare in FOUNDATION §9.9 + emit `pagination_ui_pattern: "infinite-scroll"`
+override at TEST-GOALS goal level.
+
+Use framework primitives — never reinvent:
+- **Next.js**: `useSearchParams() + router.replace()` (or `useRouter().query` for pages router)
+- **React Router v6**: `useSearchParams()` hook
+- **Vue Router**: `useRoute() + router.replace()`
+- **SvelteKit**: `$page.url.searchParams + goto()`
+
+Initial state: read from URL on mount, hydrate component state. Do NOT
+default-to-empty if URL has params — that breaks deep-link.
+
+### Contract with TEST-GOALS
+
+Every list view goal in TEST-GOALS.md MUST declare `interactive_controls`
+block. The blueprint generator (step 2b5) emits this automatically based
+on detected list/table/grid in main_steps. If the block is missing, the
+validator at /vg:review phase 2.7 BLOCKS (phase ≥ 14) or WARNs
+(grandfather).
+
+### Naming convention
+
+Read from `vg.config.md → ui_state_conventions`:
+- `url_param_naming: "kebab"` → `?sort-by=`, `?page-size=` (default)
+- `url_param_naming: "camel"` → `?sortBy=`, `?pageSize=`
+- `array_format: "csv"` → `?tags=premium,mobile` (default)
+- `array_format: "repeat"` → `?tag=premium&tag=mobile`
+
+### Override (rare)
+
+If state is genuinely **local-only** (e.g. modal-internal filter that
+resets when modal closes, transient sort during drag-and-drop), declare
+in TEST-GOALS:
+```yaml
+interactive_controls:
+  url_sync: false
+  url_sync_waive_reason: "modal-internal filter, resets on modal close — not shareable by design"
+```
+This logs a soft OD entry. Validator passes. Reviewer can flag if waive
+reason is weak.
+
+### Anti-patterns (NEVER write these)
+
+```typescript
+// ❌ State only in component, lost on refresh
+const [status, setStatus] = useState('all');
+
+// ❌ Filter applied via fetch but URL not updated
+<select onChange={(e) => fetchCampaigns({status: e.target.value})}>
+
+// ❌ Page click triggers re-render but URL stays /campaigns
+<button onClick={() => setPage(page + 1)}>Next</button>
+```
+
+```typescript
+// ✓ Status synced to URL — refresh preserves
+const [searchParams, setSearchParams] = useSearchParams();
+const status = searchParams.get('status') ?? 'all';
+
+const handleStatusChange = (value: string) => {
+  const params = new URLSearchParams(searchParams);
+  if (value === 'all') params.delete('status');
+  else params.set('status', value);
+  setSearchParams(params);
+};
+```
+
 ## Wave alignment
 
 When `<wave_context>` lists parallel tasks:

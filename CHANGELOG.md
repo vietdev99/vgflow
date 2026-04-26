@@ -1,5 +1,110 @@
 # Changelog
 
+## v2.8.4 (2026-04-26) — Phase J: Interactive Controls (URL state + pagination UI)
+
+Closes blind spot in `/vg:review` and `/vg:test` for list/table/grid views.
+6-layer enforcement stack ensures AI executors ship dashboard list views
+with proper URL state sync + correct pagination UI pattern.
+
+### Layers
+
+1. **TEST-GOAL schema** — `interactive_controls` block (filters / pagination /
+   search / sort + `url_sync` flag) with assertion fields per control.
+2. **FOUNDATION §9.9 + `vg.config.md` `ui_state_conventions`** — locks
+   project convention (kebab/csv/300ms/page-size 20 + pagination UI pattern).
+3. **Executor R7** — MANDATORY at `/vg:build`: list view state MUST sync URL
+   via framework router (Next `useSearchParams`, React Router, etc.).
+   Pagination UI MUST be `<<  <  N±5  >  >>` + "Showing X-Y of Z" + "Page N of M".
+   Plain prev-next-only is BANNED.
+4. **Blueprint generator (step 2b5 rule 7)** — auto-populates
+   `interactive_controls` for list view goals based on main_steps signals.
+5. **Static validator `verify-url-state-sync.py`** — BLOCKs missing block;
+   rejects banned `ui_pattern` values; severity follows phase cutover.
+6. **Review gate (phase 2.7)** — invokes validator with `--allow-no-url-sync`
+   override path → soft OD debt.
+
+### Migration
+
+| Phase | Mode |
+|-------|------|
+| Phase < 14 (legacy) | WARN (grandfather) |
+| Phase ≥ 14 (cutover) | HARD BLOCK (mandatory) |
+| Override per-goal | `interactive_controls.url_sync: false` + `url_sync_waive_reason` |
+| Override per-phase | CLI flag `--allow-no-url-sync` → soft OD debt |
+
+`severity_phase_cutover` configurable in `vg.config.md` (default 14).
+
+### Pagination UI rule (locked)
+
+```
+[<<]  [<]  [N-5] [N-4] [N-3] [N-2] [N-1] [N] [N+1] [N+2] [N+3] [N+4] [N+5]  [>]  [>>]
+
+Showing 21–40 of 1,247 records          Page 2 of 63
+```
+
+Defaults (`vg.config.md` `ui_state_conventions.pagination_ui`):
+- `pattern: "first-prev-numbered-window-next-last"` (locked)
+- `window_radius: 5`
+- `show_total_records: true`, `show_total_pages: true`
+- `truncate_with_ellipsis: true`
+
+Override only with explicit infinite-scroll declaration in FOUNDATION §9.9.
+
+### Tests
+
+- `test_url_state_sync_validator.py` — 12 cases
+- Regression: 30/30 (hybrid hook, migrate-state, contract-pins, codex-mirror)
+- Codex mirror equivalence: 44/44 functionally equivalent
+
+---
+
+## v2.8.3 (2026-04-26) — Hybrid Stop-hook marker-drift auto-recovery
+
+Tier C complement to Tier A (`/vg:migrate-state`) and Tier B (contract pins).
+When `run-complete` BLOCKs purely on `must_touch_markers` (no `must_write`,
+no `must_emit_telemetry` violations), drift is tracked per-`run_id` in
+`.vg/.session-drift.json`:
+
+  - 1st drift in session → BLOCK with hint, increment counter
+  - 2nd+ drift → auto-fire `migrate-state {phase} --apply`, retry
+    `run-complete`; on PASS approve + emit `hook.marker_drift_recovered`
+    telemetry event
+
+### Anti-forge contract
+
+`AUTO_FIRE_ELIGIBLE_TYPES` is hard-coded to `{must_touch_markers}`.
+Mixed violations always BLOCK because telemetry/file gaps signal real
+pipeline issues, not paperwork drift. `must_write` (artifacts) and
+`must_emit_telemetry` (events) cannot be backfilled without proof.
+
+### Why hybrid instead of always-block / always-auto-fire
+
+- **Always-block**: forces session restart for skill-cache, infinite loop pain.
+- **Always-auto-fire**: AI learns marker discipline doesn't matter, kỷ luật loãng.
+- **Hybrid**: 1st miss = lesson, 2nd+ = recover (no value in repeating same hint).
+
+### Drift state schema
+
+`.vg/.session-drift.json`:
+```json
+{
+  "<run_id>": {
+    "drift_count": 1,
+    "first_drift_at": "ISO",
+    "last_drift_at": "ISO",
+    "violations_seen": ["must_touch_markers"]
+  }
+}
+```
+
+GC'd after 120 minutes of inactivity per run_id.
+
+### Tests
+
+- `test_verify_claim_hybrid.py` — 9 cases
+- Regression: 21/21 (migrate-state, contract-pins, codex-mirror)
+
+
 ## v2.8.2 (2026-04-26) — Skill-version drift permanently solved
 
 ### Tier A — `/vg:migrate-state` (commit 6324c2fd in source)

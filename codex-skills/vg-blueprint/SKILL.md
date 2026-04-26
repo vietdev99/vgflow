@@ -1380,6 +1380,50 @@ RULES:
    Determine infra scope by reading PLAN.md — services explicitly provisioned in tasks = in scope.
    Services referenced but not provisioned = external infra dep.
 
+7. **URL state interactive_controls (MANDATORY for list/table/grid views — v2.8.4 Phase J):**
+   If a goal has `surface: ui` AND its main_steps OR title mentions list/table/grid (or trigger is `GET /<plural-noun>`), the goal MUST declare `interactive_controls` frontmatter block. This is the dashboard UX baseline (executor R7) — list view filter/sort/page/search state MUST sync to URL search params so refresh/share-link/back-forward work.
+
+   Auto-populate based on goal context:
+   - If main_steps mention "filter by X" or trigger has `?status=`/`?type=` → emit `filters:` array with name + values + assertion
+   - If main_steps mention "page through" or list endpoint returns >20 rows → emit `pagination:` block (page_size from config default 20)
+   - If main_steps mention "search by name" or has search input → emit `search:` block (debounce_ms from config default 300)
+   - If main_steps mention "sort by X" or table has sortable columns → emit `sort:` block
+
+   Default url_param_naming reads from `config.ui_state_conventions.url_param_naming` (default `kebab` → `?sort-by=`, `?page-size=`).
+   Default array_format reads from `config.ui_state_conventions.array_format` (default `csv` → `?tags=a,b,c`).
+
+   Example for a campaign list goal:
+   ```yaml
+   interactive_controls:
+     url_sync: true
+     filters:
+       - name: status
+         values: [active, paused, completed, archived]
+         url_param: status
+         assertion: "rows.status all match selected; URL ?status=active synced; reload preserves"
+     pagination:
+       page_size: 20
+       url_param_page: page
+       ui_pattern: "first-prev-numbered-window-next-last"  # MANDATORY — locked
+       window_radius: 5                                    # numbered window = current ±5
+       show_total_records: true                            # MANDATORY "Showing X-Y of Z"
+       show_total_pages: true                              # MANDATORY "Page N of M"
+       assertion: "page2 first row != page1 first row; total count consistent; URL ?page=2 synced; reload preserves; UI shows << < numbered-window > >> + Showing X-Y of Z + Page N of M"
+     search:
+       url_param: q
+       debounce_ms: 300
+       assertion: "type query → debounce → URL ?q=... synced; rows contain query (case-insensitive)"
+     sort:
+       columns: [created_at, name, status]
+       url_param_field: sort
+       url_param_dir: dir
+       assertion: "click header toggles asc↔desc; URL synced; ORDER BY holds"
+   ```
+
+   Override (rare): if state is genuinely local-only (modal-internal filter, transient drag-sort), declare `url_sync: false` + `url_sync_waive_reason: "<why>"`. Validator at /vg:review phase 2.7 logs soft OD debt for waivers.
+
+   Verifier: `verify-url-state-sync.py` runs at review phase 2.7 — BLOCKs (phase ≥ cutover) or WARNs (grandfather) if list-view goal missing this block.
+
 Output format:
 
 # Test Goals — Phase {PHASE}

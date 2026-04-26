@@ -116,6 +116,75 @@ security_checks:
   # PII fields (if endpoint accepts/returns PII). Encryption + masking policy.
   pii_fields: ["email", "phone", "dob"]
 
+# ─────────────────────────────────────────────────────────────────────
+# v2.8.4 Phase J enrichment — Interactive Controls (URL state)
+# ─────────────────────────────────────────────────────────────────────
+# REQUIRED for goals with surface=ui AND main_steps mention list/table/grid
+# AND any of {filter, sort, paginate, search}. Empty → BLOCK at /vg:review
+# phase 2.7 (verify-url-state-sync.py). Phase 0-13 grandfather: WARN only.
+#
+# Convention default (locked in FOUNDATION §9 + vg.config.md):
+#   - list_view_state_in_url: true        (URL params reflect filter/sort/page state)
+#   - url_param_naming: kebab             (status, sort-by, page-size — config override)
+#   - array_format: csv                   (?tags=a,b,c — alternative: repeat-key)
+#   - debounce_search_ms: 300             (search input debounce default)
+#
+# Override semantics:
+#   url_sync: false → declare local-only state (e.g. modal-internal filter,
+#     transient sort that resets on close). REQUIRES `url_sync_waive_reason`
+#     to log soft debt + survive validator.
+
+interactive_controls:
+  # Master flag — defaults true. Set false ONLY for local/transient state.
+  url_sync: true
+  url_sync_waive_reason: ""             # required when url_sync: false
+
+  # Filters: dropdown / chip / multi-select. Each entry = 1 user-controllable
+  # filter. Validator clicks each value → asserts URL + data subset.
+  filters:
+    - name: status                      # filter id (matches data attr or test id)
+      values: [active, paused, completed, archived]
+      url_param: status                 # default: same as name (apply naming convention)
+      assertion: "rows.status all match selected value; URL ?status={value} synced; reload preserves"
+    # Multi-value example (array filter):
+    # - name: tags
+    #   values: [premium, mobile, video]
+    #   url_param: tags
+    #   array: true                     # → ?tags=premium,mobile (csv) or ?tags=premium&tags=mobile
+    #   assertion: "rows have ALL selected tags; URL contains all values"
+
+  # Pagination: required if list expects > page_size rows.
+  # UI MANDATORY pattern (v2.8.4 Phase J — locked convention):
+  #   << < {N-5} {N-4} … {N} … {N+4} {N+5} > >>
+  # which means: first-page (<<), prev (<), numbered window of current ±5,
+  # next (>), last-page (>>). Plus visible "Showing X-Y of Z records" /
+  # "Page N of M". Plain "prev / next + page-number-display" is BANNED —
+  # it requires too many clicks to reach a known target page.
+  pagination:
+    page_size: 20                       # rows per page (validator inspects total ÷ size)
+    url_param_page: page                # ?page=2
+    url_param_size: pageSize            # ?pageSize=50 (optional — only if user-controllable)
+    ui_pattern: "first-prev-numbered-window-next-last"  # MANDATORY value
+    window_radius: 5                    # numbered buttons = current ±5 (locked default)
+    show_total_records: true            # MANDATORY — "Showing X-Y of Z"
+    show_total_pages: true              # MANDATORY — "Page N of M"
+    assertion: "page2 first_row_id ≠ page1 first_row_id; total count consistent across pages; URL ?page=N synced; reload page=N preserves; UI shows << < numbered-window > >> + Showing X-Y of Z + Page N of M"
+
+  # Search: text input that filters list. Required if list has search box.
+  search:
+    field: name                         # which entity field is searched (or "fulltext")
+    url_param: q                        # ?q=xyz
+    debounce_ms: 300                    # framework debounce — must match config default
+    assertion: "type query → debounce wait → URL ?q={query} synced; result rows all contain query (case-insensitive); empty query clears URL param"
+
+  # Sort: column header click toggles sort. Required if table has sortable columns.
+  sort:
+    columns: [created_at, name, status, updated_at]
+    url_param_field: sort               # ?sort=created_at
+    url_param_dir: dir                  # ?dir=desc
+    default: created_at desc            # initial state when no URL params
+    assertion: "click header toggles asc↔desc; URL ?sort={col}&dir={asc|desc} synced; ORDER BY assertion holds in data; reload preserves"
+
 # Performance budget — Required cho mutation + list endpoints.
 # Read-only single-record GET có thể để trống (default project baseline).
 perf_budget:

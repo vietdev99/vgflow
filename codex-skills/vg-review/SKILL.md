@@ -3106,6 +3106,62 @@ MAJOR → handled in Phase 3 fix loop. MINOR → logged only.
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_5_mobile_visual_checks" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_5_mobile_visual_checks.done"`
 </step>
 
+<step name="phase2_7_url_state_sync" profile="web-fullstack,web-frontend-only">
+## Phase 2.7: URL state sync declaration check (Phase J)
+
+→ `narrate_phase "Phase 2.7 — URL state sync" "Kiểm tra interactive_controls trong TEST-GOALS"`
+
+**Purpose:** validate every list/table/grid view goal in TEST-GOALS.md
+declares `interactive_controls` block (filter/sort/pagination/search +
+URL sync assertion). This is the static-side complement to runtime
+browser probing — declaration must exist before runtime can verify.
+
+**Why:** modern dashboard UX baseline (executor R7) requires list view
+state synced to URL search params. Without declaration, AI executors
+build local-state-only filters and ship apps that lose state on refresh.
+This validator catches the gap at /vg:review time, before user sees it.
+
+**Severity:** config-driven via `vg.config.md → ui_state_conventions.severity_phase_cutover`
+(default 14). Phase number < cutover → WARN (grandfather). Phase ≥ cutover
+→ BLOCK (mandatory). Override with `--allow-no-url-sync` to log soft OD
+debt entry.
+
+```bash
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+"${PYTHON_BIN}" .claude/scripts/validators/verify-url-state-sync.py \
+  --phase "${PHASE_NUMBER}" \
+  > "${PHASE_DIR}/.tmp/url-state-sync.json" 2>&1
+URL_SYNC_RC=$?
+
+if [ "${URL_SYNC_RC}" != "0" ]; then
+  if [[ "${RUN_ARGS:-}" == *"--allow-no-url-sync"* ]]; then
+    "${PYTHON_BIN}" .claude/scripts/vg-orchestrator override \
+      --flag skip-url-state-sync \
+      --reason "URL state sync waived for ${PHASE_NUMBER} via --allow-no-url-sync (soft debt logged)"
+    echo "⚠ URL state sync gate waived via --allow-no-url-sync"
+  else
+    echo "⛔ URL state sync declarations missing — see ${PHASE_DIR}/.tmp/url-state-sync.json"
+    cat "${PHASE_DIR}/.tmp/url-state-sync.json"
+    echo ""
+    echo "Fix options:"
+    echo "  1. Add interactive_controls blocks to TEST-GOALS.md per goal."
+    echo "     Schema: .claude/commands/vg/_shared/templates/TEST-GOAL-enriched-template.md (Phase J section)."
+    echo "  2. If state is genuinely local-only, declare url_sync: false + url_sync_waive_reason."
+    echo "  3. Override (last resort): re-run with --allow-no-url-sync (logs soft OD debt)."
+    exit 2
+  fi
+fi
+```
+
+**Future runtime probe (deferred to v2.9):** once RUNTIME-MAP.json is
+populated by phase 2 browser discovery, a follow-up validator can click
+each declared control via MCP Playwright + snapshot URL pre/post +
+assert reload-survives. Static declaration check is the foundation that
+makes runtime probe meaningful.
+
+Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_7_url_state_sync" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_7_url_state_sync.done"`
+</step>
+
 <step name="phase3_fix_loop">
 ## Phase 3: FIX LOOP (max 3 iterations)
 

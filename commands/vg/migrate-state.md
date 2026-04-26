@@ -29,6 +29,15 @@ Drift is detected per (phase, command) pair:
 - Check artifact evidence (e.g. PLAN.md proves `/vg:blueprint` ran)
 - If evidence present + markers missing → drift candidate
 - If no evidence → skip (don't fabricate markers for commands that never ran)
+
+**Auto-invocation by Stop hook (v2.8.3 hybrid recovery):**
+This script is also invoked automatically by `vg-verify-claim.py` (Stop
+hook) when run-complete BLOCKs purely on `must_touch_markers` AND the
+same run_id has hit drift ≥ 2 times in the session. The hook calls
+`migrate-state.py {phase} --apply` and retries run-complete; on retry
+PASS, the session approves with telemetry event `hook.marker_drift_recovered`.
+Manual invocation remains the canonical path — auto-invoke is a safety
+net for skill-cache restart cycles, not a substitute for AI discipline.
 </objective>
 
 <process>

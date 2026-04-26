@@ -1039,6 +1039,21 @@ The 8 subsections are appended to `FOUNDATION.md` as `## 9. Architecture Lock` a
  - Error handling idiom: {throw + narrow catches | Result<T,E> | neither}
  Cross-model validation: CrossAI 2d-6 will diff code style across AI outputs.
  [y] standard [e] project-specific]"
+
+"9.9 UI state conventions — list view URL synchronization (v2.8.4 Phase J)
+ Áp dụng cho mọi list/table/grid view trong dashboard. Mục tiêu: refresh
+ giữ filter/sort/page, share link giữ state, browser back/forward navigate
+ đúng các state thay đổi. Đây là dashboard UX baseline modern (Linear,
+ Stripe, GitHub, ProductHunt — tất cả default thế).
+ - list_view_state_in_url: {true (default) | false (local-only state, hiếm)}
+ - url_param_naming: {kebab (status, sort-by, page-size) | camel (status, sortBy, pageSize)}
+ - array_format: {csv (?tags=a,b,c) | repeat (?tag=a&tag=b)}
+ - debounce_search_ms: {300 default | adjust per UX}
+ - default_page_size: {20 | adjust}
+ Override per-goal: TEST-GOALS interactive_controls.url_sync: false
+ với url_sync_waive_reason (logged as soft debt).
+ verify-url-state-sync.py validator runs at /vg:review phase 2.7.
+ [y] standard (kebab + csv + 300ms + 20) [e] custom [s] skip nếu project no list views]"
 ```
 
 **Append to draft.foundation_md_content:**
@@ -1076,9 +1091,23 @@ foundation_section_9 = f'''
 
 ### 9.8 Model-portable code style
 {code_style_block}
+
+### 9.9 UI state conventions (v2.8.4 Phase J)
+{ui_state_conventions_block}
 '''
 draft["foundation_md_content"] += foundation_section_9
 ```
+
+The `ui_state_conventions_block` MUST contain the locked values:
+```yaml
+list_view_state_in_url: true              # MANDATORY default — override per-goal only
+url_param_naming: kebab                   # status, sort-by, page-size
+array_format: csv                         # ?tags=a,b,c
+debounce_search_ms: 300
+default_page_size: 20
+```
+These flow into vg.config.md `ui_state_conventions` block + executor R7
++ verify-url-state-sync.py severity matrix.
 
 **Migration:** For projects running `/vg:project --migrate` (extracting FOUNDATION from legacy PROJECT.md), auto-scan codebase to pre-fill §9 where possible (tech_stack from package.json, folder convention from existing dirs, testing baseline from existing test scripts). Mark any unresolved fields with `<NEED_USER_INPUT>` — user must fill before section 9 locks.
 
