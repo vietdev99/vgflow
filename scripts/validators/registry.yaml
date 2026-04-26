@@ -569,3 +569,110 @@ validators:
     runtime_target_ms: 5000
     added_in: pre-v2.5.2
     description: 'Validator: wave-verify-isolated.py'
+
+  # ──── Phase 15 — VG Design Fidelity + UAT Narrative + Filter Test Rigor ──────
+  # All BLOCK severity per CLAUDE.md feedback rule (auto-detectable → no warn-only).
+  # Telemetry events: see SPECS.md §6.
+
+  - id: design-extractor-output
+    path: .claude/scripts/validators/verify-design-extractor-output.py
+    severity: block
+    phases_active: [scope]
+    domain: extractor
+    runtime_target_ms: 3000
+    added_in: v2.9.0-phase-15
+    description: D-01 — every design source has slug-registry entry + outputs exist + structural-json schema valid
+
+  - id: design-ref-required
+    path: .claude/scripts/validators/verify-design-ref-required.py
+    severity: block
+    phases_active: [blueprint]
+    domain: artifact
+    runtime_target_ms: 2000
+    added_in: v2.9.0-phase-15
+    description: D-02 — UI tasks (*.tsx/.vue/.jsx/.svelte) require <design-ref slug='...'/> with valid registry slug
+
+  - id: uimap-schema
+    path: .claude/scripts/validators/verify-uimap-schema.py
+    severity: block
+    phases_active: [blueprint]
+    domain: contract
+    runtime_target_ms: 2000
+    added_in: v2.9.0-phase-15
+    description: D-15 — UI-MAP.md JSON nodes have 5 required fields (tag, classes, children_count_order, props_bound, text_content_static)
+
+  - id: phase-ui-flag
+    path: .claude/scripts/validators/verify-phase-ui-flag.py
+    severity: block
+    phases_active: [scope]
+    domain: contract
+    runtime_target_ms: 1000
+    added_in: v2.9.0-phase-15
+    description: D-12c — CONTEXT frontmatter must have phase_has_ui_changes:true|false; consistent with PLAN file paths
+
+  - id: uimap-injection
+    path: .claude/scripts/validators/verify-uimap-injection.py
+    severity: block
+    phases_active: [build]
+    domain: executor-input
+    runtime_target_ms: 2000
+    added_in: v2.9.0-phase-15
+    description: D-12a — pre-executor prompts contain `## UI-MAP-SUBTREE-FOR-THIS-WAVE` + `## DESIGN-REF` injection sections
+
+  - id: uat-narrative-fields
+    path: .claude/scripts/validators/verify-uat-narrative-fields.py
+    severity: block
+    phases_active: [accept]
+    domain: artifact
+    runtime_target_ms: 1500
+    added_in: v2.9.0-phase-15
+    description: D-05/06/07 — UAT-NARRATIVE.md prompts have 4 fields (entry, navigation, precondition, expected) or 6 for design-ref variant
+
+  - id: uat-strings-no-hardcode
+    path: .claude/scripts/validators/verify-uat-strings-no-hardcode.py
+    severity: block
+    phases_active: [accept]
+    domain: artifact
+    runtime_target_ms: 2000
+    added_in: v2.9.0-phase-15
+    description: D-18 — UAT template/output uses {{uat_*}} keys from narration-strings.yaml; no literal natural-language outside interpolation
+
+  - id: filter-test-coverage
+    path: .claude/scripts/validators/verify-filter-test-coverage.py
+    severity: block
+    phases_active: [test]
+    domain: test
+    runtime_target_ms: 3000
+    added_in: v2.9.0-phase-15
+    description: D-16 — generated filter (≥14) + pagination (≥18) test count per declared interactive control matches matrix
+
+  - id: haiku-spawn-fired
+    path: .claude/scripts/validators/verify-haiku-spawn-fired.py
+    severity: block
+    phases_active: [review]
+    domain: orchestrator
+    runtime_target_ms: 2000
+    added_in: v2.9.0-phase-15
+    description: D-17 — UI-profile review must emit ≥1 review.haiku_scanner_spawned event; phantom-aware (skips runs with empty args + 0 step.marked + abort within 60s)
+
+  # Phase 15 wrapper validator at scripts/ (not validators/) — orchestrates
+  # visual-diff.py + verify-ui-structure.py for holistic drift gate (D-12e).
+  - id: holistic-drift
+    path: .claude/scripts/verify-holistic-drift.py
+    severity: block
+    phases_active: [review]
+    domain: contract
+    runtime_target_ms: 30000
+    added_in: v2.9.0-phase-15
+    description: D-12e — wrapper aggregates visual-diff (pixelmatch) + verify-ui-structure (full-tree AST) per profile threshold (D-08)
+
+  # Phase 15 EXTENDED validator at scripts/ — added --scope owner-wave-id + --phase
+  # threshold-resolver flags. Existing usage preserved backward-compat.
+  - id: ui-structure
+    path: .claude/scripts/verify-ui-structure.py
+    severity: block
+    phases_active: [build, review]
+    domain: contract
+    runtime_target_ms: 3000
+    added_in: extended-v2.9.0-phase-15
+    description: D-03/D-12b — wave-scoped (--scope owner-wave-id=<id>) + holistic AST drift; D-08 profile threshold via --phase
