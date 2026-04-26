@@ -125,21 +125,76 @@ def _looks_like_paste_back(prompt: str) -> bool:
       - "Command: /vg:" (verify-claim "Command:" line)
       - "Fix options:" + "vg-orchestrator override" (verify-claim footer)
       - "Missing evidence:" (verify-claim body marker)
+
+    v2.8.6 (2026-04-26) — extended for IDE-context phantom runs:
+      - `<system-reminder>` (Claude Code system reminder XML wrapping)
+      - `assistant message` / `## Last assistant turn` (transcript echoes)
+      - markdown code-block fence followed by content with /vg:cmd
+        (e.g. PLAN.md or design-note bodies pasted as context)
+      - file-content markers: `--- a/`, `+++ b/`, `@@`,
+        `D:\\Workspace`/`C:\\Users` absolute paths (suggests file dump)
     """
-    markers = (
+    paste_markers = (
         "Stop hook feedback",
         "runtime_contract violations",
         "Missing evidence:",
         "vg-orchestrator override",
         "vg-orchestrator run-abort",
+        # v2.8.6 additions:
+        "<system-reminder>",
+        "</system-reminder>",
+        "Last assistant turn",
+        "--- a/",                   # diff hunk header
+        "+++ b/",                   # diff hunk header
+        # Markdown frontmatter dump in prompt usually means doc context:
+        "user-invocable: true",
+        "argument-hint:",
     )
-    return any(m in prompt for m in markers)
+    if any(m in prompt for m in paste_markers):
+        return True
+
+    # File-system-path heuristic: if prompt has Windows-style absolute
+    # paths AND /vg:cmd, likely an IDE-opened file dump or git output.
+    # Single line `/vg:scope 7.14.3.1` from real user typing won't have
+    # these. Conservative: require BOTH signals to flag.
+    has_abs_path = bool(re.search(
+        r"[A-Z]:[\\/]Workspace|[A-Z]:[\\/]Users",
+        prompt, re.IGNORECASE,
+    ))
+    has_vg_cmd_anywhere = "/vg:" in prompt
+    if has_abs_path and has_vg_cmd_anywhere:
+        # Extra check: real user typing rarely exceeds 2 KB on a slash command.
+        # IDE file dumps + transcripts are typically much larger.
+        if len(prompt) > 2000:
+            return True
+
+    return False
+
+
+def _vg_cmd_at_first_nonempty_line(prompt: str):
+    """Find /vg:command matching a fresh invocation: MUST be the FIRST
+    non-empty line of the prompt. Stricter than v2.5.2.5's "any line"
+    check — closes phantom-run gap when /vg: text appears in body of
+    long IDE-context prompts but isn't what the user is invoking.
+
+    Real user typing pattern: slash command is the message itself, OR
+    appears at the very start before any prose. Embedded /vg: in middle
+    of prose / file dump / system context will NOT match.
+    """
+    for line in prompt.splitlines():
+        stripped = line.lstrip()
+        if not stripped:
+            continue
+        # Found the first non-empty line. Check if it's a /vg:cmd.
+        m = VG_CMD_RE.match(stripped)
+        return m  # None if first line isn't /vg:cmd, match obj if it is
+    return None
 
 
 def _vg_cmd_at_line_start(prompt: str):
-    """Find /vg:command matching a fresh invocation: MUST be first
-    non-whitespace content of a line. Embedded references like
-    `Command: /vg:review 7.14` fail this check.
+    """v2.8.6: alias for _vg_cmd_at_first_nonempty_line (renamed to make
+    the stricter semantic explicit). Old name kept for backward compat
+    with anything that imports this directly.
     """
     for line in prompt.splitlines():
         stripped = line.lstrip()
@@ -166,14 +221,15 @@ def main() -> int:
         log(f"paste-back detected (Stop-hook feedback echo) — skipping run-start")
         approve()
 
-    # v2.5.2.5: require /vg:cmd at START of a line (not embedded in prose).
-    # A fresh user invocation always has /vg:X at column 0 of some line.
-    # Paste-back text ("Command: /vg:review 7.14"), inline references
-    # ("just run /vg:X please"), or quoted examples in docs/prose will NOT
-    # match and are correctly skipped.
-    m = _vg_cmd_at_line_start(prompt)
+    # v2.8.6: require /vg:cmd at the FIRST non-empty line (not just any
+    # line). Stricter than v2.5.2.5 which accepted any line — that
+    # allowed phantom run-starts when /vg:cmd appeared in body of long
+    # IDE-context prompts (PLAN.md text, README excerpts, etc).
+    # A real user invocation has /vg:cmd as the message itself, so
+    # first-non-empty-line check is the natural gate.
+    m = _vg_cmd_at_first_nonempty_line(prompt)
     if not m:
-        log("/vg: pattern not at line start — treating as prose reference, skip")
+        log("/vg: not at first non-empty line — treating as embedded reference, skip")
         approve()
 
     cmd_name = m.group(1)

@@ -35,6 +35,19 @@ def _load_hook(repo_root: Path):
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_vg_repo_root_env():
+    """Restore VG_REPO_ROOT env var after each test to prevent pollution
+    bleed into other test files (e.g. test_tasklist_visibility.py which
+    reads env-derived paths). Harness fix 2026-04-26."""
+    original = os.environ.get("VG_REPO_ROOT")
+    yield
+    if original is None:
+        os.environ.pop("VG_REPO_ROOT", None)
+    else:
+        os.environ["VG_REPO_ROOT"] = original
+
+
 def _setup_repo(tmp_path: Path, *, ctx: dict | None = None) -> Path:
     vg = tmp_path / ".vg"
     vg.mkdir(parents=True)

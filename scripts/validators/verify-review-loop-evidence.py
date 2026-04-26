@@ -92,7 +92,10 @@ def _match_any(path: str, patterns: list[str]) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    # allow_abbrev=False — defense-in-depth against argparse prefix-match
+    # bug (--phase silently mapped to --phase-dir). Harness fix 2026-04-26.
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
+                                 allow_abbrev=False)
     ap.add_argument("--phase-dir", required=True,
                     help="Phase directory containing review-iter-*.json")
     ap.add_argument("--require-diff-paths",

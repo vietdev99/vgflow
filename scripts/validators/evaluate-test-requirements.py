@@ -174,8 +174,14 @@ def _is_e2e_path(path: Path) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--phase-dir", required=True)
+    # allow_abbrev=False prevents argparse prefix-match: --phase silently
+    # mapping to --phase-dir (defense-in-depth, harness fix 2026-04-26).
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
+                                 allow_abbrev=False)
+    ap.add_argument("--phase-dir",
+                    help="Phase directory path (e.g. .vg/phases/7.14.3-...)")
+    ap.add_argument("--phase",
+                    help="phase id (e.g. 7.14.3); resolved via find_phase_dir")
     ap.add_argument("--foundation",
                     default="FOUNDATION.md",
                     help="Path to FOUNDATION.md (searched at repo root)")
@@ -186,7 +192,17 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
-    phase_dir = Path(args.phase_dir)
+    if args.phase_dir:
+        phase_dir = Path(args.phase_dir)
+    elif args.phase:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from _common import find_phase_dir as _find_phase_dir
+        resolved = _find_phase_dir(args.phase)
+        phase_dir = Path(resolved) if resolved else Path(args.phase)
+    else:
+        ap.error("must provide --phase or --phase-dir")
+        return 2  # unreachable
+
     if not phase_dir.is_absolute():
         phase_dir = REPO_ROOT / phase_dir
     if not phase_dir.exists():
