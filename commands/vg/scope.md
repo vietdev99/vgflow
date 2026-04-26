@@ -876,9 +876,18 @@ Run automated checks on the generated CONTEXT.md.
 For every decision D-XX that has **Endpoints:** section, verify at least 1 test scenario references that endpoint. Downstream `blueprint.md` 2b5 parses these test scenarios to generate TEST-GOALS — missing coverage = orphan goals that fail phase-end binding gate.
 Gap -> ⛔ BLOCK: "D-{XX} has endpoints but no test scenario covering them."
 
-**Check B — Design Ref Coverage (WARN):**
+**Check B — Design Ref Coverage (WARN by default; ⛔ BLOCK in production fidelity per D-02):**
 If `config.design_assets` is configured, for every decision with **UI Components:** section, check if a design-ref exists in `${PHASE_DIR}/` or `config.design_assets.output_dir`.
-Gap -> WARN: "D-{XX} has UI components but no design reference found. Consider running /vg:design-extract."
+
+Phase 15 D-02 escalation rule (NEW, 2026-04-27):
+- Resolve fidelity profile via `scripts/lib/threshold-resolver.py --phase ${PHASE_NUMBER}`.
+- If profile is `production` (threshold ≥ 0.95) → missing design-ref is a ⛔ BLOCK
+  (design-ref is the only structural truth a 0.95 threshold can compare against).
+- If profile is `default` (~0.85) → WARN (current behavior preserved).
+- If profile is `prototype` (~0.70) → SKIP (no design lock expected this early).
+
+Gap (default profile) -> WARN: "D-{XX} has UI components but no design reference found. Consider running /vg:design-extract."
+Gap (production profile) -> ⛔ BLOCK: "D-{XX} has UI components but no design reference. Phase fidelity profile=production requires design-ref per D-02. Run /vg:design-extract or relax profile via --fidelity-profile default (logs override-debt as kind=fidelity-profile-relaxed)."
 
 **Check C — Decision Completeness (⛔ BLOCK if gap ratio > 10% — tightened 2026-04-17):**
 Compare SPECS.md in-scope items against CONTEXT.md decisions. Every in-scope item should map to at least 1 decision.
@@ -926,6 +935,48 @@ esac
 Previous inline substring match missed inflections — "QPS throttling" (SPECS) vs "QPS throttle" (decision title). Script now stems both sides (strips -ing/-tion/-ed/-s/...) + applies prefix-tolerance match so "throttl" ↔ "throttle" count as same root. Reduces false-negative unmatched spec items.
 
 Check B and D still WARN (softer signals). Check A and C are structural — block downstream errors.
+
+**Check B' — D-02 design-ref REQUIRED gate (Phase 15, profile-aware):**
+
+Escalates Check B to BLOCK when the resolved fidelity profile is `production`.
+The completeness script today only emits WARN for missing design-refs; this
+inline gate adds the production-grade hard stop without rewriting the
+underlying tool.
+
+```bash
+PROFILE=""
+if [ -f "${REPO_ROOT}/.claude/scripts/lib/threshold-resolver.py" ]; then
+  THRESH_ERR_FILE="${VG_TMP:-${PHASE_DIR}/.vg-tmp}/scope-threshold-resolver.err"
+  mkdir -p "$(dirname "$THRESH_ERR_FILE")" 2>/dev/null
+  ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/lib/threshold-resolver.py" \
+      --phase "${PHASE_NUMBER}" --verbose 2> "$THRESH_ERR_FILE" >/dev/null || true
+  PROFILE=$(grep -oE 'profile=[a-z-]+' "$THRESH_ERR_FILE" | head -1 | cut -d= -f2)
+fi
+
+if [ "$PROFILE" = "production" ]; then
+  # Re-run validator focused on design-ref requirement only
+  if [ -x "${REPO_ROOT}/.claude/scripts/validators/verify-design-ref-required.py" ]; then
+    ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/validators/verify-design-ref-required.py" \
+        --phase "${PHASE_NUMBER}" --profile production \
+        > "${VG_TMP}/d02-design-ref.json" 2>&1 || true
+    DV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/d02-design-ref.json')).get('verdict','SKIP'))" 2>/dev/null)
+    case "$DV" in
+      PASS|WARN) echo "✓ D-02 design-ref required (profile=production): $DV" ;;
+      BLOCK)
+        echo "⛔ D-02 design-ref BLOCK — profile=production but at least one UI decision has no design-ref." >&2
+        echo "   See ${VG_TMP}/d02-design-ref.json for the per-decision breakdown." >&2
+        echo "   Fix: run /vg:design-extract for the missing slugs, OR relax via --fidelity-profile default." >&2
+        if [[ ! "$ARGUMENTS" =~ --allow-missing-design-ref ]]; then
+          exit 1
+        fi
+        ;;
+      *) echo "ℹ D-02 design-ref check: $DV" ;;
+    esac
+  fi
+else
+  echo "ℹ D-02 design-ref gate: skipped (profile=${PROFILE:-default} — Check B WARN-only path)"
+fi
+```
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 3_completeness_validation 2>/dev/null || true
