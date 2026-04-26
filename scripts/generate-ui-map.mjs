@@ -103,6 +103,20 @@ CLI options (override config):
   --router <name>          Router hint: expo-router|next-app|react-router|none
                              (auto-detect nếu bỏ trống)
   --config <path>          Path tới vg.config.md (default: .claude/vg.config.md)
+
+PHASE 15 — wave-scoped extraction (D-12a/b/e + D-14):
+  --owner-wave-id <id>     Filter output tree to subtree owned by wave-id.
+                             Reads <uimap-source> planner UI-MAP if given to
+                             cross-reference owner_wave_id tags + matches
+                             scanned components by file path. Used by
+                             /vg:build post-wave-commit drift gate (T7.3).
+  --owner-task-id <id>     Further filter to a single task's subtree (D-14
+                             Haiku context optimization). Requires
+                             --owner-wave-id when used.
+  --uimap-source <path>    Planner UI-MAP.md to cross-reference owner_*_id
+                             tags (default: ./UI-MAP.md if present).
+  --full-tree              Explicit "no filter" (alias for default behavior;
+                             documents intent in build scripts).
   -h, --help               Show this help
 
 EXAMPLES:
@@ -113,6 +127,12 @@ EXAMPLES:
   # Focus 1 component + cả tổ tiên + cả con
   node generate-ui-map.js --src src --entry src/app.tsx \\
       --focus DealWizard --scope full
+
+  # Phase 15 — wave-scoped subtree for build post-wave drift gate
+  node generate-ui-map.js --src apps/web/src --entry apps/web/src/App.tsx \\
+      --owner-wave-id wave-1 \\
+      --uimap-source .vg/phases/7.14.3/UI-MAP.md \\
+      --format json --output .vg/phases/7.14.3/.wave-1-asbuilt.json
 `
 
 const EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".vue", ".svelte"]
@@ -132,11 +152,117 @@ function parseCli(argv) {
       output: { type: "string" },
       router: { type: "string" },
       config: { type: "string", default: ".claude/vg.config.md" },
+      // Phase 15 D-12a/b/e + D-14 — wave-scoped subtree extraction
+      "owner-wave-id": { type: "string" },
+      "owner-task-id": { type: "string" },
+      "uimap-source": { type: "string" },
+      "full-tree": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
   })
   return values
+}
+
+
+// --- Phase 15 D-12a/b/e + D-14 — wave-scoped subtree filter ---
+//
+// Cross-reference planner UI-MAP.md (which has owner_wave_id / owner_task_id
+// tags per node per D-15 schema) against the as-built tree (scanned from
+// code) by COMPONENT NAME + FILE PATH. Filter as-built tree to nodes whose
+// corresponding planner node is tagged with the target owner-wave-id (and
+// optional owner-task-id).
+//
+// Convention:
+//   - Planner UI-MAP.md JSON code block: nodes have `tag` (component name),
+//     `owner_wave_id`, optional `owner_task_id`, `children`.
+//   - As-built tree: nodes have `name` (component name), `file`, `children`.
+//   - Matching: as-built.name == planner.tag.
+//
+// If a planner node has owner_wave_id matching target, that node + all
+// descendants are kept. If owner_wave_id is absent, the node is kept only if
+// any descendant matches (sparse tagging support).
+function loadPlannerOwnership(uimapPath) {
+  // Returns Map<componentName, {wave, task}> from planner UI-MAP.md JSON block.
+  if (!uimapPath || !fsSync.existsSync(uimapPath)) return new Map()
+  const text = fsSync.readFileSync(uimapPath, "utf8")
+  const match = text.match(/```json\s*\n([\s\S]*?)\n```/)
+  if (!match) return new Map()
+  let data
+  try { data = JSON.parse(match[1]) } catch (_) { return new Map() }
+
+  const ownership = new Map()
+  function walk(node, inheritedWave, inheritedTask) {
+    if (!node || typeof node !== "object") return
+    const wave = node.owner_wave_id || inheritedWave || null
+    const task = node.owner_task_id || inheritedTask || null
+    const name = node.tag || node.name
+    if (name && (wave || task)) {
+      // First-write wins (root tag captures top-level ownership)
+      if (!ownership.has(name)) ownership.set(name, { wave, task })
+    }
+    const children = node.children || []
+    for (const c of children) walk(c, wave, task)
+  }
+  const root = data.root || data
+  walk(root, null, null)
+  return ownership
+}
+
+function filterTreeByOwnership(node, ownership, targetWave, targetTask) {
+  // Returns filtered copy of node, or null if neither node nor any descendant
+  // matches the target ownership.
+  if (!node || typeof node !== "object") return null
+  const meta = ownership.get(node.name) || {}
+  const waveMatch = meta.wave === targetWave
+  const taskMatch = !targetTask || meta.task === targetTask
+  const inScope = waveMatch && taskMatch
+
+  const children = node.children || []
+  const keptChildren = []
+  for (const c of children) {
+    const kc = filterTreeByOwnership(c, ownership, targetWave, targetTask)
+    if (kc) keptChildren.push(kc)
+  }
+  if (!inScope && keptChildren.length === 0) return null
+  return { ...node, children: keptChildren }
+}
+
+function applyPhase15Filter(tree, values) {
+  const targetWave = values["owner-wave-id"]
+  const targetTask = values["owner-task-id"]
+  if (!targetWave) return tree  // no filter requested
+
+  if (targetTask && !targetWave) {
+    console.error("⛔ --owner-task-id requires --owner-wave-id")
+    process.exit(1)
+  }
+
+  // Resolve uimap-source: explicit > ./UI-MAP.md
+  let uimapPath = values["uimap-source"]
+  if (!uimapPath && fsSync.existsSync("UI-MAP.md")) uimapPath = "UI-MAP.md"
+  if (!uimapPath) {
+    console.error(
+      "⛔ --owner-wave-id requires --uimap-source <path> (or UI-MAP.md in cwd) " +
+      "to cross-reference owner_wave_id tags. As-built scan has no ownership metadata."
+    )
+    process.exit(1)
+  }
+  const ownership = loadPlannerOwnership(uimapPath)
+  if (ownership.size === 0) {
+    console.error(`⚠ ${uimapPath} has no owner_wave_id/owner_task_id tags — filter passes through unchanged.`)
+    return tree
+  }
+  const filtered = filterTreeByOwnership(tree, ownership, targetWave, targetTask || null)
+  if (!filtered) {
+    console.error(
+      `⚠ owner-wave-id=${targetWave}` +
+      (targetTask ? ` + owner-task-id=${targetTask}` : "") +
+      ` matches 0 components in scanned tree. Empty subtree returned.`
+    )
+    return { name: "(empty)", children: [] }
+  }
+  return filtered
 }
 
 function loadConfigSection(configPath) {
@@ -969,10 +1095,23 @@ async function main() {
     if (n.children.length > 0) o.children = n.children.map(toJson)
     return o
   }
-  const json = toJson(rootNode)
+  let json = toJson(rootNode)
+
+  // Phase 15 D-12a/b/e + D-14 — wave-scoped subtree filter (operates on JSON output)
+  const format = values.format || "tree"
+  if (values["owner-wave-id"]) {
+    json = applyPhase15Filter(json, values)
+    if (format !== "json") {
+      console.error(
+        "⚠ --owner-wave-id filter applied to JSON output only. ASCII tree " +
+        "remains full (use --format json for filtered output)."
+      )
+    }
+  } else if (values["full-tree"]) {
+    // Explicit no-filter (intent documentation; same as default)
+  }
 
   // Output
-  const format = values.format || "tree"
   let outContent = ""
   if (format === "tree") {
     outContent = ascii
