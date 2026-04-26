@@ -1,5 +1,114 @@
 # Changelog
 
+## v2.10.0 (2026-04-27) — Phase 15 ship: VG Design Fidelity + UAT Narrative + Filter Test Rigor
+
+Minor release shipping the 4 fixes Phase 7.14.3 RTB exposed in the prior
+harness: visual fidelity gates, UAT narrative auto-fire, filter+pagination
+test rigor pack, and Haiku-spawn audit (phantom-aware). 28 commits across
+10 waves (`08b5fd7..2985a47`), +12k lines, 100 acceptance tests passing.
+
+Every D-XX decision in `dev-phases/15-vg-design-fidelity-v1/DECISIONS.md`
+maps to a committed deliverable. Cross-AI reviewed (2 BLOCK + 4 WARN
+caught + fixed in commit `2985a47` before this release).
+
+### Visual fidelity gate (D-01, D-02, D-03, D-08, D-12, D-15)
+
+- 4 JSON Schema draft-07 contracts (`schemas/`): `slug-registry.v1.json`,
+  `structural-json.v1.json`, `ui-map.v1.json` (5-field-per-node lock),
+  `narration-strings.v1.json`.
+- Extractor handlers (`scripts/design-normalize.{py,js}`):
+  HTML cheerio AST + PNG OCR (`.structural.png` marker) + Pencil MCP
+  (`mcp__pencil__*`, encrypted .pen files) + Penboard MCP (`mcp__penboard__*`,
+  .penboard/.flow workspaces). 2 distinct MCP servers — separate config blocks.
+- 8 validators: `verify-design-{extractor-output,ref-required}.py`,
+  `verify-uimap-{schema,injection}.py`, `verify-phase-ui-flag.py`,
+  `verify-ui-structure.py` (extended `--scope owner-wave-id=`),
+  `verify-holistic-drift.py` (D-12e wrapper).
+- Threshold helper (`scripts/lib/threshold-resolver.py`) — D-08 profile
+  resolution: prototype 0.70 / default 0.85 / production 0.95.
+- UI-MAP wave/task ownership tags (`owner_wave_id`, `owner_task_id`)
+  enable subtree filtering via `scripts/extract-subtree-haiku.mjs` (D-14).
+  Build step 8c persists composed prompts to
+  `.vg/phases/<phase>/.build/wave-<N>/executor-prompts/<task>.md` with
+  `## UI-MAP-SUBTREE-FOR-THIS-WAVE` + `## DESIGN-REF` H2 headers so
+  `verify-uimap-injection.py` can audit them post-wave.
+- Skill body wirings: `scope.md` Check B' (D-02 production-grade BLOCK),
+  `blueprint.md` step 2_fidelity_profile_lock + 2b6b D-15 schema check,
+  `build.md` step 8c UI-MAP subtree inject + D-12a injection audit,
+  `review.md` phase2_5_visual_checks §6 (D-12c UI-flag + D-12b wave drift +
+  D-12e holistic drift).
+
+### UAT narrative auto-fire (D-05, D-06, D-07, D-10, D-18)
+
+- Generator: `scripts/build-uat-narrative.py` reads TEST-GOALS frontmatter
+  (4 mandatory fields per goal: entry_url, navigation_steps, precondition,
+  expected_behavior) and renders `${PHASE_DIR}/UAT-NARRATIVE.md` per
+  prompt block.
+- Templates: `commands/vg/_shared/templates/uat-narrative-prompt.md.tmpl`
+  + `uat-narrative-design-ref-block.md.tmpl` (Mustache-lite placeholders).
+- 9 new flat keys in `narration-strings.yaml` (vi+en locales): `uat_entry_label`,
+  `uat_role_label`, `uat_account_label`, `uat_navigation_label`,
+  `uat_precondition_label`, `uat_expected_label`, `uat_region_label`,
+  `uat_screenshot_compare`, `uat_prompt_pfs`.
+- Validators: `verify-uat-narrative-fields.py` (4-field check per prompt
+  block) + `verify-uat-strings-no-hardcode.py` (D-18 strict — no labels
+  outside narration-strings.yaml).
+- Wired into `accept.md` step 4b_uat_narrative_autofire (auto-fires
+  before step 5 interactive UAT).
+
+### Filter + Pagination Test Rigor Pack (D-16)
+
+- Matrix module: `skills/vg-codegen-interactive/filter-test-matrix.mjs`
+  — enumerator + Mustache-lite renderer + helpers:
+  `enumerateFilterFiles`, `enumeratePaginationFiles`, `renderTemplate`.
+- 10 templates @ `commands/vg/_shared/templates/`:
+  `filter-{coverage,stress,state-integrity,edge}.test.tmpl` +
+  `pagination-{navigation,url-sync,envelope,display,stress,edge}.test.tmpl`.
+- Per-control output: 4 filter spec files + 6 pagination spec files
+  containing 13 + 18 source-level `test()` blocks.
+- Validator: `verify-filter-test-coverage.py` counts blocks (not files)
+  whose name contains the control slug AND the kind keyword
+  (filter/pagination); thresholds 13/18.
+- Wired into `test.md` step 5d_codegen — deterministic pure-JS path,
+  zero Sonnet round-trip, byte-for-byte reproducible.
+
+### Haiku-spawn phantom-aware audit (D-17)
+
+- Validator: `verify-haiku-spawn-fired.py` checks events.db for
+  `review.haiku_scanner_spawned` events emitted in `review.md` step 2b-2.
+- Phantom signature detection: ignores runs matching `args:""` + 0
+  step.marked + abort within 60s — the hook-triggered noise pattern
+  diagnosed in `dev-phases/15-vg-design-fidelity-v1/INVESTIGATION-D17.md`.
+  Initial Phase 15 hypothesis (53s abort = scanner failure) was wrong;
+  v2.8.6 hotfix (411a278) had already fixed the entry-pattern bug 4
+  hours after the phantom event — what was missing was *evidence-of-
+  firing*, which the new emit + phantom-aware validator now provide.
+- Telemetry emit moved to BEFORE Agent() call (commit `4edbaa2`) so
+  spawn audit survives even if the Agent crashes mid-spawn.
+
+### Test infrastructure
+
+- `scripts/tests/root_verifiers/test_phase15_design_extractors.py` (3 tests + 1 skip).
+- `scripts/tests/root_verifiers/test_phase15_validators_and_matrix.py` (17 tests
+  including 7 regression tests added for B1/B2 cross-AI findings).
+- `scripts/tests/root_verifiers/test_phase15_acceptance.py` (80 tests across 8
+  acceptance dimensions: schemas, validators, scripts, templates, skill
+  integrations, config, i18n, regression-green).
+- Total: 100 passed, 1 skipped (cheerio AST conditional — runs in consumer).
+
+### Distribution updates (`install.sh`)
+
+- New paths covered: `schemas/*.json`, `scripts/*.mjs`, `scripts/lib/*.py`,
+  `commands/vg/_shared/templates/*`, `skills/vg-codegen-interactive/`.
+
+### Deferred to follow-up (cross-AI WARN/INFO list)
+
+W3 path interpolation hardening (Windows backslash escape risk in
+`${PYTHON_BIN} -c "...open('${VG_TMP}/...')..."` patterns), W4 events.db
+path mismatch (`.vg/events.db` vs `.claude/state/events.db`), I1
+WAVE-DRIFT-HISTORY.md aggregator, I2 phantom timing guarded behavior,
+I3-I5 informational confirmations.
+
 ## v2.9.0 (2026-04-27) — v2.7 Phase A/B/D/E ship + v2.8.6 hotfix bundle
 
 Minor release bundling 4 v2.7 hardening phases (runtime probe, codegen

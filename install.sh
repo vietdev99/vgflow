@@ -40,8 +40,12 @@ mkdir -p "$TARGET/.claude/skills/vg-design-scanner"
 mkdir -p "$TARGET/.claude/skills/vg-design-gap-hunter"
 mkdir -p "$TARGET/.claude/skills/vg-haiku-scanner"
 mkdir -p "$TARGET/.claude/skills/vg-crossai"
+mkdir -p "$TARGET/.claude/skills/vg-codegen-interactive"   # v2.10 Phase 15 — D-16 matrix renderer
 mkdir -p "$TARGET/.claude/scripts"
+mkdir -p "$TARGET/.claude/scripts/lib"                     # v2.10 Phase 15 — threshold-resolver
+mkdir -p "$TARGET/.claude/schemas"                         # v2.10 Phase 15 — JSON Schema draft-07 contracts
 mkdir -p "$TARGET/.claude/templates/vg"
+mkdir -p "$TARGET/.claude/commands/vg/_shared/templates"   # v2.10 Phase 15 — UAT + filter test templates
 
 cp "$SCRIPT_DIR/commands/vg/"*.md "$TARGET/.claude/commands/vg/"
 cp "$SCRIPT_DIR/commands/vg/_shared/"*.md "$TARGET/.claude/commands/vg/_shared/"
@@ -75,6 +79,12 @@ if [ -f "$SCRIPT_DIR/skills/vg-crossai/SKILL.md" ]; then
   cp "$SCRIPT_DIR/skills/vg-crossai/SKILL.md" "$TARGET/.claude/skills/vg-crossai/"
   echo "  → vg-crossai installed (multi-CLI review engine — referenced by _shared/crossai-invoke.md)"
 fi
+# v2.10 Phase 15 D-16 — vg-codegen-interactive skill (matrix renderer + template helper)
+if [ -f "$SCRIPT_DIR/skills/vg-codegen-interactive/SKILL.md" ]; then
+  cp "$SCRIPT_DIR/skills/vg-codegen-interactive/SKILL.md" "$TARGET/.claude/skills/vg-codegen-interactive/"
+  cp "$SCRIPT_DIR/skills/vg-codegen-interactive/"*.mjs "$TARGET/.claude/skills/vg-codegen-interactive/" 2>/dev/null || true
+  echo "  → vg-codegen-interactive installed (D-16 filter+pagination matrix + 10 templates)"
+fi
 
 # All .claude/scripts/*.py and *.js go together — includes universal helpers
 # (filter-steps, design-normalize, pre-executor-check, verify-goal-test-binding,
@@ -85,6 +95,7 @@ if [ -d "$SCRIPT_DIR/scripts" ]; then
   # Flat top-level scripts
   cp "$SCRIPT_DIR/scripts/"*.py "$TARGET/.claude/scripts/" 2>/dev/null || true
   cp "$SCRIPT_DIR/scripts/"*.js "$TARGET/.claude/scripts/" 2>/dev/null || true
+  cp "$SCRIPT_DIR/scripts/"*.mjs "$TARGET/.claude/scripts/" 2>/dev/null || true   # v2.10 Phase 15 — extract-subtree-haiku.mjs, generate-ui-map.mjs
   cp "$SCRIPT_DIR/scripts/"*.sh "$TARGET/.claude/scripts/" 2>/dev/null || true
   cp "$SCRIPT_DIR/scripts/"*.yaml "$TARGET/.claude/scripts/" 2>/dev/null || true
 
@@ -94,7 +105,8 @@ if [ -d "$SCRIPT_DIR/scripts" ]; then
   # vg-orchestrator/ — __main__.py, allow_flag_gate.py, prompt_capture.py,
   #                    lock.py, journal.py, db.py (run-start/abort, HMAC gate)
   # tests/        — regression suite (so CI can run pytest .claude/scripts/tests/)
-  for subdir in validators vg-orchestrator tests; do
+  # lib/          — v2.10 Phase 15 — threshold-resolver.py + future helpers
+  for subdir in validators vg-orchestrator tests lib; do
     if [ -d "$SCRIPT_DIR/scripts/$subdir" ]; then
       mkdir -p "$TARGET/.claude/scripts/$subdir"
       cp -r "$SCRIPT_DIR/scripts/$subdir/"* "$TARGET/.claude/scripts/$subdir/" 2>/dev/null || true
@@ -105,11 +117,28 @@ if [ -d "$SCRIPT_DIR/scripts" ]; then
   chmod +x "$TARGET/.claude/scripts/"*.sh 2>/dev/null || true
   chmod +x "$TARGET/.claude/scripts/validators/"*.py 2>/dev/null || true
   chmod +x "$TARGET/.claude/scripts/vg-orchestrator/"*.py 2>/dev/null || true
+  chmod +x "$TARGET/.claude/scripts/lib/"*.py 2>/dev/null || true
 
   SCRIPT_COUNT=$(ls "$TARGET/.claude/scripts/"*.py "$TARGET/.claude/scripts/"*.sh 2>/dev/null | wc -l | tr -d ' ')
   VALIDATOR_COUNT=$(ls "$TARGET/.claude/scripts/validators/"*.py 2>/dev/null | wc -l | tr -d ' ')
   ORCH_COUNT=$(ls "$TARGET/.claude/scripts/vg-orchestrator/"*.py 2>/dev/null | wc -l | tr -d ' ')
   echo "  → ${SCRIPT_COUNT} top-level scripts + ${VALIDATOR_COUNT} validators + ${ORCH_COUNT} orchestrator modules installed"
+fi
+
+# v2.10 Phase 15 — JSON Schema draft-07 contracts (slug-registry, structural-json,
+# ui-map 5-field-per-node lock, narration-strings UAT keys). Validators read these.
+if [ -d "$SCRIPT_DIR/schemas" ]; then
+  cp "$SCRIPT_DIR/schemas/"*.json "$TARGET/.claude/schemas/" 2>/dev/null || true
+  SCHEMA_COUNT=$(ls "$TARGET/.claude/schemas/"*.json 2>/dev/null | wc -l | tr -d ' ')
+  echo "  → ${SCHEMA_COUNT} JSON Schema contracts in .claude/schemas/"
+fi
+
+# v2.10 Phase 15 — _shared/templates (UAT narrative + filter/pagination test
+# templates consumed by /vg:test step 5d_codegen + /vg:accept step 4b)
+if [ -d "$SCRIPT_DIR/commands/vg/_shared/templates" ]; then
+  cp "$SCRIPT_DIR/commands/vg/_shared/templates/"* "$TARGET/.claude/commands/vg/_shared/templates/" 2>/dev/null || true
+  TPL_COUNT=$(ls "$TARGET/.claude/commands/vg/_shared/templates/" 2>/dev/null | wc -l | tr -d ' ')
+  echo "  → ${TPL_COUNT} shared templates (UAT narrative + filter+pagination rigor pack)"
 fi
 
 # Commit-msg hook template (deployed to .git/hooks/commit-msg by /vg:init)
