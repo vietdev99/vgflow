@@ -415,6 +415,69 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ```
 </step>
 
+<step name="2_fidelity_profile_lock" profile="web-fullstack,web-frontend-only">
+## Sub-step 2: DESIGN FIDELITY PROFILE LOCK (Phase 15 D-08)
+
+**Mục tiêu:** Lock the per-phase visual-fidelity threshold profile BEFORE
+planner writes PLAN. The profile (prototype / default / production) sets
+the SSIM/structural-diff threshold the post-wave drift gate enforces in
+`/vg:review` (D-12b/c/e). Locking at blueprint time prevents executor or
+reviewer from quietly relaxing the bar mid-phase.
+
+Profile defaults (D-08):
+- `prototype`  → 0.70 (early exploration, large layout swings tolerated)
+- `default`    → 0.85 (most product work — Phase 15 default)
+- `production` → 0.95 (visual-spec-grade, near pixel-perfect)
+
+Resolution order (highest precedence first):
+1. `--fidelity-profile <name>` CLI arg
+2. Phase frontmatter `design_fidelity.profile: <name>` in CONTEXT.md
+3. `vg.config.md` → `design_fidelity.default_profile`
+4. Hardcoded fallback: `default` (0.85)
+
+```bash
+# Skip if no design assets in scope (pure backend phase)
+if [ ! -f "${PHASE_DIR}/design-normalized/_INDEX.md" ] \
+   && ! grep -lE "(\.tsx|\.jsx|\.vue|\.svelte)" "${PHASE_DIR}"/PLAN*.md 2>/dev/null | head -1 >/dev/null; then
+  echo "ℹ No design or FE work in phase — skip fidelity profile lock"
+else
+  PROFILE_LOCK_FILE="${PHASE_DIR}/.fidelity-profile.lock"
+
+  if [ -f "$PROFILE_LOCK_FILE" ]; then
+    LOCKED=$(cat "$PROFILE_LOCK_FILE")
+    echo "ℹ Fidelity profile already locked: ${LOCKED} (delete .fidelity-profile.lock to relock)"
+  else
+    # Resolve via threshold-resolver helper (Phase 15 T3.1).
+    # Stdout = numeric threshold (e.g., "0.85"); stderr (with --verbose) =
+    # `source=<src> profile=<name> threshold=<n>`. CLI override travels via
+    # the VG_FIDELITY_PROFILE env var which threshold-resolver reads from
+    # CONTEXT.md / vg.config.md merge — there is no --cli-profile flag.
+    RESOLVED_ERR_FILE="${VG_TMP:-${PHASE_DIR}/.vg-tmp}/threshold-resolver.err"
+    mkdir -p "$(dirname "$RESOLVED_ERR_FILE")" 2>/dev/null
+    THRESHOLD=$(${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/lib/threshold-resolver.py" \
+        --phase "${PHASE_NUMBER}" --verbose 2> "$RESOLVED_ERR_FILE")
+    PROFILE=$(grep -oE 'profile=[a-z-]+' "$RESOLVED_ERR_FILE" | head -1 | cut -d= -f2)
+    SOURCE=$(grep -oE 'source=[a-z._-]+' "$RESOLVED_ERR_FILE"  | head -1 | cut -d= -f2)
+    PROFILE="${PROFILE:-default}"
+    THRESHOLD="${THRESHOLD:-0.85}"
+
+    echo "$PROFILE" > "$PROFILE_LOCK_FILE"
+    echo "✓ Fidelity profile locked: ${PROFILE} (threshold=${THRESHOLD}, source=${SOURCE:-fallback})"
+    echo "  → ${PROFILE_LOCK_FILE}"
+    echo "  /vg:review post-wave drift gate (D-12b/c/e) will use threshold=${THRESHOLD}"
+  fi
+
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2_fidelity_profile_lock" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_fidelity_profile_lock.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2_fidelity_profile_lock 2>/dev/null || true
+fi
+```
+
+**Override path** (DEBT — recorded in override-debt register):
+- `--fidelity-profile prototype` on a phase that should be production-grade
+  is allowed but logged as `kind=fidelity-profile-relaxed` so reviewers see
+  it during /vg:accept.
+</step>
+
 <step name="2a_plan">
 ## Sub-step 2a: PLAN
 
@@ -1813,8 +1876,23 @@ else
       echo "    dạng ASCII + JSON. Mỗi node component ghi: tên, file path đích, class"
       echo "    layout mong muốn, state/props gì quan trọng. Cây phải khả thi (executor"
       echo "    build theo được). Nếu sửa view cũ: điều chỉnh UI-MAP-AS-IS.md.'"
+      echo ""
+      echo "   Phase 15 D-15 + D-12a — schema lock + ownership tags:"
+      echo "    - JSON tree MUST validate against schemas/ui-map.v1.json (5 fields per node:"
+      echo "        tag, classes, children_count_order, props_bound, text_content_static)."
+      echo "    - Each node MUST carry owner_wave_id (and owner_task_id when finer scope is"
+      echo "        useful). Children inherit ownership unless they override; verify-ui-structure"
+      echo "        can then filter to a single wave's subtree (D-12b)."
+      echo "    - extract-subtree-haiku.mjs reads these tags during /vg:build step 8c to inject"
+      echo "        the wave-scoped subtree into the executor prompt — missing tags = no"
+      echo "        deterministic injection, executor falls back to full UI-MAP (cost spike)."
     else
       echo "ℹ UI-MAP.md đã có — skip regeneration. Xoá file này để regenerate."
+      # Phase 15 D-15 schema check on existing UI-MAP.md (deterministic, no AI)
+      if [ -x "${REPO_ROOT}/.claude/scripts/validators/verify-uimap-schema.py" ]; then
+        ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/validators/verify-uimap-schema.py" \
+            --phase "${PHASE_NUMBER}" 2>&1 | tail -5
+      fi
     fi
 
     (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6b_ui_map" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6b_ui_map.done"
