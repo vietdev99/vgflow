@@ -334,9 +334,15 @@ def read_phase_platform(specs_text: str, project_profile: str) -> str:
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--phase-dir", required=True,
+    # allow_abbrev=False prevents argparse prefix-match bug where --phase
+    # silently mapped to --phase-dir (silently broken before harness fix
+    # 2026-04-26).
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
+                                 allow_abbrev=False)
+    ap.add_argument("--phase-dir",
                     help="Phase directory (e.g. .vg/phases/7.14.3-...)")
+    ap.add_argument("--phase",
+                    help="phase id (e.g. 7.14.3); resolved via find_phase_dir")
     ap.add_argument("--config", default=".claude/vg.config.md")
     ap.add_argument("--report-md", default="")
     ap.add_argument("--strict", action="store_true",
@@ -344,7 +350,18 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     started = time.monotonic()
-    phase_dir = Path(args.phase_dir)
+
+    if args.phase_dir:
+        phase_dir = Path(args.phase_dir)
+    elif args.phase:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from _common import find_phase_dir as _find_phase_dir
+        resolved = _find_phase_dir(args.phase)
+        phase_dir = Path(resolved) if resolved else Path(args.phase)
+    else:
+        ap.error("must provide --phase or --phase-dir")
+        return 2
+
     if not phase_dir.is_dir():
         print(json.dumps({
             "validator": "test-goals-platform-essentials",

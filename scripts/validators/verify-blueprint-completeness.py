@@ -519,15 +519,34 @@ def check_empty_loading_error(specs_text: str,
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--phase-dir", required=True)
+    # allow_abbrev=False prevents argparse from treating --phase as a unique
+    # prefix of --phase-dir (silently broken before harness fix 2026-04-26).
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
+                                 allow_abbrev=False)
+    ap.add_argument("--phase-dir", help="explicit phase directory path")
+    ap.add_argument("--phase",
+                    help="phase id (e.g. 7.14.3); resolved via find_phase_dir")
     ap.add_argument("--config", default=".claude/vg.config.md")
     ap.add_argument("--report-md", default="")
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args(argv)
 
     started = time.monotonic()
-    phase_dir = Path(args.phase_dir)
+
+    # Resolve phase_dir from either --phase-dir (legacy) or --phase (preferred,
+    # auto-resolves via _common.find_phase_dir for zero-pad / alias support).
+    if args.phase_dir:
+        phase_dir = Path(args.phase_dir)
+    elif args.phase:
+        # Import here to keep module-level imports unchanged.
+        sys.path.insert(0, str(Path(__file__).parent))
+        from _common import find_phase_dir as _find_phase_dir
+        resolved = _find_phase_dir(args.phase)
+        phase_dir = Path(resolved) if resolved else Path(args.phase)
+    else:
+        ap.error("must provide --phase or --phase-dir")
+        return 2  # unreachable after ap.error()
+
     if not phase_dir.is_dir():
         print(json.dumps({
             "validator": "blueprint-completeness",
