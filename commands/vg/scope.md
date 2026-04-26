@@ -802,6 +802,19 @@ if ! validate_d_xx_namespace "$STAGED" "phase:${PHASE_NUMBER}"; then
   exit 1
 fi
 mv "$STAGED" "${PHASE_DIR}/CONTEXT.md"
+
+# v2.7 Phase E — schema validation post-write (BLOCK on frontmatter drift).
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+"${PYTHON_BIN}" .claude/scripts/validators/verify-artifact-schema.py \
+  --phase "${PHASE_NUMBER}" --artifact context \
+  > "${PHASE_DIR}/.tmp/artifact-schema-context.json" 2>&1
+SCHEMA_RC=$?
+if [ "${SCHEMA_RC}" != "0" ]; then
+  echo "⛔ CONTEXT.md schema violation — see ${PHASE_DIR}/.tmp/artifact-schema-context.json"
+  cat "${PHASE_DIR}/.tmp/artifact-schema-context.json"
+  exit 2
+fi
 ```
 
 The validator tolerates legacy `D-XX` inside fenced code blocks and blockquotes (cho phép example/migration docs). Live decisions outside code fences MUST use `P${PHASE_NUMBER}.D-XX`.

@@ -1505,6 +1505,57 @@ Generate Playwright test files from VERIFIED goals. Assertions come from TEST-GO
 
 Write to `${GENERATED_TESTS_DIR}/{phase}-goal-{group}.spec.ts`
 
+**v2.7 Phase B — interactive_controls codegen branch (NEW, 2026-04-26):**
+
+Before falling into the manual codegen flow below, branch per goal: if the
+goal frontmatter has `interactive_controls.url_sync: true`, delegate codegen
+to the dedicated `vg-codegen-interactive` skill (Sonnet, 1 call per goal).
+The skill emits a deterministic-count Playwright spec that consumes the
+helper library at `apps/web/e2e/helpers/interactive.ts` (projects must
+copy the reference template at
+`.claude/commands/vg/_shared/templates/interactive-helpers.template.ts`
+into their e2e helpers folder; consumer-owned implementation, VG infra
+itself stays project-agnostic).
+
+Pseudo-flow per goal:
+
+```
+if goal.frontmatter.interactive_controls.url_sync == true:
+    # Step 1: prepare inputs
+    goal_id   = goal.id
+    route     = RUNTIME-MAP.json.views[start_view].url   (or goal.route)
+    actor     = goal.frontmatter.actor or "admin"
+    yaml_tmp  = write goal.frontmatter.interactive_controls block to a tmp .yaml
+    out_path  = ${GENERATED_TESTS_DIR}/${goal_id_lower}.url-state.spec.ts
+
+    # Step 2: invoke vg-codegen-interactive (Sonnet, temperature 0)
+    spec_text = run_skill("vg-codegen-interactive", {
+        goal_id, route, actor, interactive_controls_yaml: yaml_tmp,
+        output_path: out_path,
+    })
+
+    # Step 3: validate BEFORE write — up to 3 attempts
+    for attempt in 1..3:
+        write spec_text to a SCRATCH path (not the final out_path)
+        run .claude/scripts/validators/verify-codegen-output.py \
+            --spec-path <scratch> \
+            --goal-id  ${goal_id} \
+            --route    ${route} \
+            --interactive-controls-yaml ${yaml_tmp}
+        if verdict == PASS or verdict == WARN:
+            mv scratch -> out_path
+            break
+        else:
+            re-prompt skill with the validator's evidence diff
+    else:
+        log debt entry (override-debt register), fall through to manual flow
+        for this goal only.
+    continue   # skip manual codegen for this goal
+```
+
+Goals without `interactive_controls.url_sync: true` continue through the
+existing manual codegen flow below (forms, mutations, navigation, etc).
+
 **Pre-codegen Gate — Dynamic ID scan (HARD BLOCK — tightened 2026-04-17):**
 
 Before generating tests, scan RUNTIME-MAP.json goal_sequences for dynamic ID selectors. Dynamic IDs cause flaky tests that rot on next data reset.

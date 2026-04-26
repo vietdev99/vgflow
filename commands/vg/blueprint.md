@@ -1069,6 +1069,19 @@ Plan granularity check:
 ```
 
 ```bash
+# v2.7 Phase E — schema validation post-write (BLOCK on PLAN.md frontmatter drift).
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+"${PYTHON_BIN}" .claude/scripts/validators/verify-artifact-schema.py \
+  --phase "${PHASE_NUMBER}" --artifact plan \
+  > "${PHASE_DIR}/.tmp/artifact-schema-plan.json" 2>&1
+SCHEMA_RC=$?
+if [ "${SCHEMA_RC}" != "0" ]; then
+  echo "⛔ PLAN.md schema violation — see ${PHASE_DIR}/.tmp/artifact-schema-plan.json"
+  cat "${PHASE_DIR}/.tmp/artifact-schema-plan.json"
+  exit 2
+fi
+
 # R7 step marker (v1.14.4+ — enforced via 3_complete gate)
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2a_plan" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2a_plan.done"
@@ -1614,6 +1627,19 @@ After classification, include per-goal surface in blueprint narration:
 ```
 
 ```bash
+# v2.7 Phase E — schema validation post-write (BLOCK on TEST-GOALS.md frontmatter drift).
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+"${PYTHON_BIN}" .claude/scripts/validators/verify-artifact-schema.py \
+  --phase "${PHASE_NUMBER}" --artifact test-goals \
+  > "${PHASE_DIR}/.tmp/artifact-schema-test-goals.json" 2>&1
+SCHEMA_RC=$?
+if [ "${SCHEMA_RC}" != "0" ]; then
+  echo "⛔ TEST-GOALS.md schema violation — see ${PHASE_DIR}/.tmp/artifact-schema-test-goals.json"
+  cat "${PHASE_DIR}/.tmp/artifact-schema-test-goals.json"
+  exit 2
+fi
+
 # R7 step marker (v1.14.4+ — enforced via 3_complete gate)
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b5_test_goals" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b5_test_goals.done"

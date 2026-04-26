@@ -368,6 +368,19 @@ if [ ! -s "${PHASE_DIR}/SPECS.md" ]; then
   exit 1
 fi
 
+# v2.7 Phase E — schema validation post-write (BLOCK on frontmatter drift).
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+"${PYTHON_BIN}" .claude/scripts/validators/verify-artifact-schema.py \
+  --phase "${PHASE_NUMBER}" --artifact specs \
+  > "${PHASE_DIR}/.tmp/artifact-schema-specs.json" 2>&1
+SCHEMA_RC=$?
+if [ "${SCHEMA_RC}" != "0" ]; then
+  echo "⛔ SPECS.md schema violation — see ${PHASE_DIR}/.tmp/artifact-schema-specs.json"
+  cat "${PHASE_DIR}/.tmp/artifact-schema-specs.json"
+  exit 2
+fi
+
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "write_specs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/write_specs.done"
 ```
 </step>

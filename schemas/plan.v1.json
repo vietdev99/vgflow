@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/plan.v1.json",
+  "title": "VG PLAN.md frontmatter (v1)",
+  "description": "Validates the YAML frontmatter of a phase PLAN.md per SPEC-E section 4.3. Body validation (Wave-N H2 sections matching total_waves, Verification + Risks H2, per-task structure) handled by verify-artifact-schema.py.",
+  "type": "object",
+  "required": ["phase", "profile", "goal_summary", "total_waves", "total_tasks", "generated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "phase": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)*(-[a-z0-9-]+)?$"
+    },
+    "profile": {
+      "type": "string",
+      "enum": ["feature", "infra", "hotfix", "bugfix", "migration", "docs"]
+    },
+    "goal_summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "total_waves": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "total_tasks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generated_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    },
+    "platform": {"type": "string"},
+    "phase_name": {"type": "string"},
+    "blueprint_version": {"type": "string"}
+  }
+}

@@ -66,6 +66,11 @@ try:
 except Exception:  # pragma: no cover
     _allow_flag_gate = None  # type: ignore
 
+try:
+    import _orphans as _orphans_mod  # noqa: E402
+except Exception:  # pragma: no cover
+    _orphans_mod = None  # type: ignore
+
 
 def _git_sha() -> str | None:
     import subprocess
@@ -3503,9 +3508,39 @@ def _now_iso() -> str:
     )
 
 
+# ─── Phase D — orphan validator triage (delegated to _orphans module) ───
+
+def cmd_orphans_list(args) -> int:
+    if _orphans_mod is None:
+        print(
+            "⛔ orchestrator: _orphans module unavailable", file=sys.stderr,
+        )
+        return 1
+    return _orphans_mod.orphans_list(args)
+
+
+def cmd_orphans_collect(args) -> int:
+    if _orphans_mod is None:
+        print(
+            "⛔ orchestrator: _orphans module unavailable", file=sys.stderr,
+        )
+        return 1
+    return _orphans_mod.orphans_collect(args)
+
+
+def cmd_orphans_apply(args) -> int:
+    if _orphans_mod is None:
+        print(
+            "⛔ orchestrator: _orphans module unavailable", file=sys.stderr,
+        )
+        return 1
+    return _orphans_mod.orphans_apply(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vg-orchestrator",
-                                description="VG pipeline state machine")
+                                description="VG pipeline state machine",
+                                allow_abbrev=False)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("run-start", help="Register new run")
@@ -3699,6 +3734,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="list: include RETIRED candidates in output",
     )
     s.set_defaults(func=cmd_learn)
+
+    # Harness v2.7 Phase D (2026-04-26): orphan validator triage
+    s = sub.add_parser(
+        "orphans-list",
+        help=("Compute 3-way diff (script vs registry vs dispatch), "
+              "partition into 3 agent slices, write orphan-list.json"),
+        allow_abbrev=False,
+    )
+    s.set_defaults(func=cmd_orphans_list)
+
+    s = sub.add_parser(
+        "orphans-collect",
+        help=("Merge per-agent decision JSONs, validate coverage, "
+              "aggregate stats, write orphan-decisions.json"),
+        allow_abbrev=False,
+    )
+    s.set_defaults(func=cmd_orphans_collect)
+
+    s = sub.add_parser(
+        "orphans-apply",
+        help=("Apply WIRE/RETIRE/MERGE/NEEDS_HUMAN decisions atomically — "
+              "patch registry+dispatch, git-mv retired scripts"),
+        allow_abbrev=False,
+    )
+    s.add_argument("--dry-run", action="store_true",
+                   help="Print apply log without writing any files")
+    s.set_defaults(func=cmd_orphans_apply)
 
     return p
 

@@ -3002,6 +3002,19 @@ git commit -m "build({phase}): {completed}/{total} plans executed"
 ```
 
 ```bash
+# v2.7 Phase E — schema validation post-write (BLOCK on SUMMARY.md frontmatter drift).
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+"${PYTHON_BIN}" .claude/scripts/validators/verify-artifact-schema.py \
+  --phase "${PHASE_NUMBER}" --artifact summary \
+  > "${PHASE_DIR}/.tmp/artifact-schema-summary.json" 2>&1
+SCHEMA_RC=$?
+if [ "${SCHEMA_RC}" != "0" ]; then
+  echo "⛔ SUMMARY.md schema violation — see ${PHASE_DIR}/.tmp/artifact-schema-summary.json"
+  cat "${PHASE_DIR}/.tmp/artifact-schema-summary.json"
+  exit 2
+fi
+
 # v2.2 — step marker for runtime contract
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "9_post_execution" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/9_post_execution.done"

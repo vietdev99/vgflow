@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/context.v1.json",
+  "title": "VG CONTEXT.md frontmatter (v1)",
+  "description": "Validates the YAML frontmatter of a phase CONTEXT.md per SPEC-E section 4.2. Body validation (Decisions / Open questions / Risks H2 sections, D-XX heading format, monotonic decision IDs) handled by verify-artifact-schema.py.",
+  "type": "object",
+  "required": ["phase", "discussed_in", "participants"],
+  "additionalProperties": false,
+  "properties": {
+    "phase": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)*(-[a-z0-9-]+)?$"
+    },
+    "discussed_in": {
+      "type": "string",
+      "description": "ISO date or 'YYYY-MM-DD to YYYY-MM-DD' range",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}( to [0-9]{4}-[0-9]{2}-[0-9]{2})?$"
+    },
+    "participants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"}
+    },
+    "generated": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    },
+    "generated_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    },
+    "source": {"type": "string"},
+    "phase_name": {"type": "string"},
+    "decision_count": {"type": "integer", "minimum": 0}
+  }
+}

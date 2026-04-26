@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/interactive-controls.v1.json",
+  "title": "VG TEST-GOALS interactive_controls block (v1)",
+  "description": "Sub-schema referenced from test-goals.v1.json for the optional interactive_controls block. Permissive — additionalProperties true on inner blocks (filters/sort/pagination/search) since shapes still evolve. Validates only outer-level keys.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "url_sync": {"type": "boolean"},
+    "filters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string"},
+          "url_param": {"type": "string"},
+          "param": {"type": "string"},
+          "assertion": {"type": "string"}
+        }
+      }
+    },
+    "sort": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "pagination": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "search": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

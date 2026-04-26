@@ -3162,6 +3162,115 @@ makes runtime probe meaningful.
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_7_url_state_sync" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_7_url_state_sync.done"`
 </step>
 
+<step name="phase2_8_url_state_runtime" profile="web-fullstack,web-frontend-only">
+## Phase 2.8: URL state runtime probe (v2.7 Phase A)
+
+→ `narrate_phase "Phase 2.8 — URL state runtime probe" "Click từng control + snapshot URL để verify declaration vs implementation"`
+
+**Purpose:** verify that the static `interactive_controls` declarations
+(checked at phase 2.7) match actual application behaviour. AI drives MCP
+Playwright through every declared control, captures URL params before/after
+each interaction, writes the result to
+`${PHASE_DIR}/url-runtime-probe.json`. Validator reads that artifact and
+flags coverage gaps (WARN) or declaration drift (BLOCK).
+
+**Why:** static declarations close ~50% of URL-state bugs; runtime probe
+catches the remaining drift class — declaration says `?status=...` but
+the route handler ships `?state=...`, or the filter pretends to sync but
+no `pushState` actually fires.
+
+**Skip conditions:**
+- No goal in TEST-GOALS.md has `interactive_controls.url_sync: true` → skip silently.
+- `${RUN_ARGS}` contains `--skip-runtime` → run validator with the same flag (logs OD debt).
+- Browser environment unavailable (no MCP Playwright) → invoke validator with `--skip-runtime`.
+
+### 2.8a Drive the probe (AI agent task)
+
+For every goal in `${PHASE_DIR}/TEST-GOALS.md` that declares
+`interactive_controls.url_sync: true`:
+
+1. Determine the goal's route from `${PHASE_DIR}/RUNTIME-MAP.json` (key
+   matching the goal id) or, when the goal frontmatter carries an explicit
+   `route:` field, prefer that.
+2. Authenticate as `goal.actor` (default `admin`) using the standard
+   review-phase auth helper.
+3. Navigate to the route. Wait for the list/table/grid to be visible.
+4. For every entry in the goal's `interactive_controls`:
+   - **filter** — pick the first declared `values[0]`, click the filter
+     control, snapshot URL.
+   - **sort** — apply the first declared column, snapshot URL.
+   - **pagination** — click page 2 (or scroll once for `infinite-scroll`),
+     snapshot URL.
+   - **search** — type a representative query, wait `debounce_ms + 100ms`,
+     snapshot URL.
+5. Append one entry per goal to `url-runtime-probe.json`.
+
+**Artifact schema** (`${PHASE_DIR}/url-runtime-probe.json`):
+
+```json
+{
+  "generated_at": "2026-04-26T10:30:00Z",
+  "goals": [
+    {
+      "goal_id": "G-01",
+      "url": "/admin/campaigns",
+      "controls": [
+        {
+          "kind": "filter",
+          "name": "status",
+          "value": "active",
+          "url_before": "https://app.local:5173/admin/campaigns",
+          "url_after": "https://app.local:5173/admin/campaigns?status=active",
+          "url_params_after": {"status": "active"}
+        }
+      ]
+    }
+  ]
+}
+```
+
+`kind` is one of `filter | sort | pagination | search`. `name` matches the
+declared control name (or normalised — `page` for pagination, `search` for
+search, `sort` for sort). `url_params_after` is the parsed search-param
+dict.
+
+### 2.8b Run validator
+
+```bash
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+EXTRA_FLAGS=""
+if [[ "${RUN_ARGS:-}" == *"--skip-runtime"* ]] || [[ -z "${VG_BROWSER_AVAILABLE:-1}" ]]; then
+  EXTRA_FLAGS="--skip-runtime"
+fi
+
+"${PYTHON_BIN}" .claude/scripts/validators/verify-url-state-runtime.py \
+  --phase "${PHASE_NUMBER}" ${EXTRA_FLAGS} \
+  > "${PHASE_DIR}/.tmp/url-state-runtime.json" 2>&1
+URL_RUNTIME_RC=$?
+
+if [ "${URL_RUNTIME_RC}" != "0" ]; then
+  if [[ "${RUN_ARGS:-}" == *"--allow-runtime-drift"* ]]; then
+    "${PYTHON_BIN}" .claude/scripts/vg-orchestrator override \
+      --flag skip-url-state-runtime \
+      --reason "URL state runtime drift waived for ${PHASE_NUMBER} via --allow-runtime-drift (soft debt logged)"
+    echo "⚠ URL state runtime drift waived via --allow-runtime-drift"
+  else
+    echo "⛔ URL state runtime drift detected — see ${PHASE_DIR}/.tmp/url-state-runtime.json"
+    cat "${PHASE_DIR}/.tmp/url-state-runtime.json"
+    echo ""
+    echo "Fix options:"
+    echo "  1. Implementation drift — fix the route handler / UI so declared url_param actually appears in URL after interaction."
+    echo "  2. Declaration drift — declared url_param is wrong; update TEST-GOALS.md interactive_controls block."
+    echo "  3. Override (last resort): re-run with --allow-runtime-drift (logs soft OD debt)."
+    exit 2
+  fi
+fi
+```
+
+Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_8_url_state_runtime" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_8_url_state_runtime.done"`
+</step>
+
 <step name="phase3_fix_loop">
 ## Phase 3: FIX LOOP (max 3 iterations)
 
