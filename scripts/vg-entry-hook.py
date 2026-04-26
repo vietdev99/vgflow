@@ -41,6 +41,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 CURRENT_RUN = REPO_ROOT / ".vg" / "current-run.json"
+SESSION_CONTEXT = REPO_ROOT / ".vg" / ".session-context.json"
 ORCH = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
 LOG = REPO_ROOT / ".vg" / "hook-entry.log"
 
@@ -69,6 +70,33 @@ def approve(context: str | None = None) -> None:
         }
     print(json.dumps(resp))
     sys.exit(0)
+
+
+def _write_session_context(run_id: str, command: str, phase: str) -> None:
+    """Initialize .vg/.session-context.json for Layer 2 step tracker.
+
+    Schema (consumed by vg-step-tracker.py PostToolUse hook):
+      {
+        "run_id": "...",
+        "command": "vg:build",
+        "phase": "7.14.3",
+        "started_at": "ISO-8601",
+        "current_step": null,           # updated by step-tracker on touch
+        "step_history": [],             # appended on each step transition
+        "telemetry_emitted": []         # dedup guard for hook.step_active events
+      }
+    """
+    SESSION_CONTEXT.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": run_id,
+        "command": command,
+        "phase": phase,
+        "started_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "current_step": None,
+        "step_history": [],
+        "telemetry_emitted": [],
+    }
+    SESSION_CONTEXT.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def already_active(command: str, phase: str) -> bool:
@@ -181,6 +209,16 @@ def main() -> int:
         if r.returncode == 0:
             run_id = r.stdout.strip()
             log(f"registered {command} phase={phase_token} run_id={run_id[:8]}")
+
+            # v2.7 Phase F (Layer 1): seed session-context for step tracking.
+            # PostToolUse Bash hook (vg-step-tracker.py) reads this file +
+            # updates current_step when AI runs `touch .step-markers/N.done`.
+            # Best-effort: never fail run-start on session-context write error.
+            try:
+                _write_session_context(run_id, command, phase_token)
+            except Exception as e:
+                log(f"session-context init failed (non-fatal): {e}")
+
             approve(context=(
                 f"VG orchestrator registered run {command} phase={phase_token} "
                 f"(run_id {run_id[:8]}). Skill-MD will inherit active run."

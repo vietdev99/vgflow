@@ -1,5 +1,75 @@
 # Changelog
 
+## v2.8.5 (2026-04-26) — v2.7 Phase F: Marker tracking hooks layer 1+2
+
+Companion to v2.8.3 hybrid Stop-hook (reactive recovery). Layers 1+2
+catch marker activity **DURING** work instead of after-the-fact at Stop,
+giving observability into step transitions for `/vg:gate-stats` analytics.
+
+### Layer 1 — `vg-entry-hook.py` extension
+
+After successful `run-start`, seed `.vg/.session-context.json`:
+```json
+{
+  "run_id": "...",
+  "command": "vg:build",
+  "phase": "7.14.3",
+  "started_at": "ISO-8601",
+  "current_step": null,
+  "step_history": [],
+  "telemetry_emitted": []
+}
+```
+
+Best-effort write; never fails `run-start` on session-context error.
+
+### Layer 2 — `vg-step-tracker.py` (NEW PostToolUse Bash hook)
+
+Detects 3 marker write patterns:
+- `touch <path>/.step-markers/<step>.{start,done}`
+- `mark_step <phase> <step> [<dir>]`
+- `vg-orchestrator mark-step <namespace> <step>`
+
+Updates session-context:
+- `current_step` ← latest detected step
+- `step_history` ← append `{step, transition, ts}` (dedup'd)
+
+Emits `hook.step_active` telemetry per `(run_id, step, transition)`,
+dedup'd via `telemetry_emitted` set to avoid event flood.
+
+**Always exits 0** — never blocks bash execution. No-op when:
+- Tool is not Bash
+- No active `/vg:*` run (no session-context.json)
+- Bash command doesn't match marker patterns
+
+### Settings.local.json registration
+
+```jsonc
+"PostToolUse": [
+  { "matcher": "Edit|Write|...", "hooks": [...] },   // existing
+  { "matcher": "Bash",
+    "hooks": [{ "command": "python ${CLAUDE_PROJECT_DIR}/.claude/scripts/vg-step-tracker.py" }]
+  }
+]
+```
+
+### Why this matters
+
+v2.8.3 hybrid Stop-hook auto-recovers from marker drift but only **after** the run ends. Phase F lets us:
+- See step transitions live in `.vg/.session-context.json`
+- Query `hook.step_active` events via `/vg:gate-stats` to find skills with
+  high drift (steps the AI consistently misses)
+- Future v2.9 — proactive Stop hook can use step_history to detect drift
+  earlier and route to migrate-state proactively
+
+### Tests
+
+- `test_step_tracker_hook.py` — 12 cases (pattern detection + state updates +
+  dedup behavior)
+- Regression: 42/42 pass (url-state, hybrid, migrate-state, contract-pins, codex-mirror)
+- **Total: 54/54 pass**
+
+
 ## v2.8.4 (2026-04-26) — Phase J: Interactive Controls (URL state + pagination UI)
 
 Closes blind spot in `/vg:review` and `/vg:test` for list/table/grid views.
