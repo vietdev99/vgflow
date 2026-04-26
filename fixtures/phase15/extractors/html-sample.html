@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>VG fixture — sites list</title>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; }
+    .sidebar { width: 240px; background: #f9fafb; }
+    .topbar { height: 56px; border-bottom: 1px solid #e5e7eb; }
+    .table { width: 100%; }
+  </style>
+</head>
+<body>
+  <header class="topbar" role="banner" data-testid="topbar">
+    <h1 class="title">Sites</h1>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" role="navigation">
+      <ul>
+        <li><a href="/sites">Sites</a></li>
+        <li><a href="/zones">Zones</a></li>
+      </ul>
+    </aside>
+    <main class="content">
+      <table class="table" data-testid="sites-table">
+        <thead>
+          <tr><th>Domain</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>example.com</td><td>active</td></tr>
+          <tr><td>foo.test</td><td>paused</td></tr>
+        </tbody>
+      </table>
+    </main>
+  </div>
+  <script>console.log('inline script — should be stripped by normalizer')</script>
+</body>
+</html>

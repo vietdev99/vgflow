@@ -1,0 +1,55 @@
+{
+  "workspace_id": "ws-demo",
+  "flows": [
+    {
+      "id": "flow-auth",
+      "name": "Authentication",
+      "pages": [
+        {
+          "id": "page-login",
+          "name": "Login",
+          "nodes": [
+            {
+              "id": "input-email",
+              "type": "TextInput",
+              "label": "Email",
+              "x": 100,
+              "y": 200,
+              "width": 280,
+              "height": 40,
+              "props": { "placeholder": "you@example.com", "required": true }
+            },
+            {
+              "id": "input-password",
+              "type": "TextInput",
+              "label": "Password",
+              "x": 100,
+              "y": 260,
+              "width": 280,
+              "height": 40,
+              "props": { "type": "password" }
+            },
+            {
+              "id": "button-submit",
+              "type": "Button",
+              "label": "Sign in",
+              "x": 100,
+              "y": 320,
+              "width": 280,
+              "height": 44
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "docs": [
+    { "id": "doc-1", "content": "Login page wiring" }
+  ],
+  "entities": [
+    { "id": "User", "type": "model", "fields": ["id", "email", "passwordHash"] }
+  ],
+  "connections": [
+    { "source": "button-submit", "target": "User", "label": "POST /api/login" }
+  ]
+}

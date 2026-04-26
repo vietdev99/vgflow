@@ -1,0 +1,54 @@
+{
+  "root": {
+    "id": "doc-1",
+    "type": "frame",
+    "x": 0,
+    "y": 0,
+    "width": 1440,
+    "height": 900,
+    "children": [
+      {
+        "id": "header-1",
+        "type": "rect",
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 64,
+        "fill": "#1f2937",
+        "children": [
+          {
+            "id": "logo-text",
+            "type": "text",
+            "x": 24,
+            "y": 20,
+            "fontSize": 18,
+            "fontFamily": "Inter",
+            "text": "VG Demo",
+            "fill": "#ffffff"
+          }
+        ]
+      },
+      {
+        "id": "main-1",
+        "type": "group",
+        "x": 0,
+        "y": 64,
+        "width": 1440,
+        "height": 836,
+        "children": [
+          {
+            "id": "card-1",
+            "type": "rect",
+            "x": 32,
+            "y": 96,
+            "width": 320,
+            "height": 200,
+            "fill": "#ffffff",
+            "stroke": "#e5e7eb",
+            "strokeWidth": 1
+          }
+        ]
+      }
+    ]
+  }
+}
