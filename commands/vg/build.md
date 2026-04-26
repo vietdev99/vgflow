@@ -1292,6 +1292,51 @@ TASK_CALLERS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(j
 DESIGN_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['design_context'])")
 BUILD_CONFIG=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.dumps(json.load(sys.stdin)['build_config']))")
 
+# ─── Phase 15 D-12a + D-14 — UI-MAP wave-scoped subtree injection ────────
+# Pull the ~50-line subtree owned by the current wave (and optionally the
+# current task) out of the planner's UI-MAP.md and inject as a dedicated
+# context block. Deterministic JSON filter via extract-subtree-haiku.mjs —
+# despite the filename, no Haiku sub-agent is spawned (D-14 settled on the
+# pure-JS filter as faster + free + reproducible).
+#
+# Skip when:
+#   - UI-MAP.md missing (backend-only phase or planner skipped 2b6b)
+#   - extract-subtree-haiku.mjs missing (Phase 15 T4.2 not installed)
+UI_MAP_SUBTREE=""
+UI_MAP_SUBTREE_BLOCK=""
+if [ -f "${PHASE_DIR}/UI-MAP.md" ] \
+   && [ -f "${REPO_ROOT}/.claude/scripts/extract-subtree-haiku.mjs" ]; then
+  UIMAP_TMP="${VG_TMP:-${PHASE_DIR}/.vg-tmp}/uimap-subtree-w${N}-t${TASK_NUM}.md"
+  mkdir -p "$(dirname "$UIMAP_TMP")" 2>/dev/null
+  # owner-wave-id convention: planner emits "wave-${N}" (per blueprint 2b6b
+  # planner prompt). owner-task-id convention: "T-${TASK_NUM}".
+  if node "${REPO_ROOT}/.claude/scripts/extract-subtree-haiku.mjs" \
+        --uimap "${PHASE_DIR}/UI-MAP.md" \
+        --owner-wave-id "wave-${N}" \
+        --owner-task-id "T-${TASK_NUM}" \
+        --format markdown \
+        --output "$UIMAP_TMP" 2>/dev/null; then
+    SUBTREE_LINES=$(wc -l < "$UIMAP_TMP" 2>/dev/null || echo 0)
+    if [ "${SUBTREE_LINES:-0}" -gt 1 ]; then
+      UI_MAP_SUBTREE=$(cat "$UIMAP_TMP")
+      UI_MAP_SUBTREE_BLOCK="<ui_map_subtree>
+# Wave-scoped subtree from planner UI-MAP.md (Phase 15 D-12a + D-14).
+# Owner filter: wave-${N} / T-${TASK_NUM}. ~${SUBTREE_LINES} lines.
+# Build the components listed below — names, classes, props, text are the
+# planned target. Reviewer post-wave drift gate (D-12b) compares your code
+# against this subtree.
+${UI_MAP_SUBTREE}
+</ui_map_subtree>"
+      echo "✓ UI-MAP subtree (${SUBTREE_LINES} lines) extracted for wave-${N}/T-${TASK_NUM}"
+    else
+      # Empty subtree — task likely doesn't own UI nodes (e.g., backend task
+      # within a mixed-profile wave). Inject explicit NONE marker so executor
+      # doesn't accidentally invent components.
+      UI_MAP_SUBTREE_BLOCK="<ui_map_subtree>NONE — task has no owned UI subtree (backend / non-FE task in mixed wave)</ui_map_subtree>"
+    fi
+  fi
+fi
+
 # Script auto-builds siblings + callers if missing (runs find-siblings.py + build-caller-graph.py)
 # Graphify used: ${graphify.enabled} from config → sibling/caller enrichment
 
@@ -1302,7 +1347,7 @@ import json, sys
 
 ctx = json.loads('''$CONTEXT_JSON''')
 
-# Per-block soft limits (from rule R4)
+# Per-block soft limits (from rule R4 + Phase 15 D-14 ui_map_subtree)
 BUDGETS = {
     'task_context': 300,
     'contract_context': 500,
@@ -1310,6 +1355,7 @@ BUDGETS = {
     'sibling_context': 400,
     'downstream_callers': 400,
     'design_context': 200,
+    'ui_map_subtree': 80,   # D-14 targets ~50 lines; allow 80 for nested waves
 }
 HARD_TOTAL_MAX = ${CONFIG_BUILD_PROMPT_MAX_LINES:-2500}
 
@@ -1498,6 +1544,8 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
     Interactions: @${DESIGN_OUTPUT_DIR}/refs/${DESIGN_SLUG}.interactions.md
     Rule: layout/components/spacing MUST match screenshot. DOM is structural truth.
     </design_context>
+
+    ${UI_MAP_SUBTREE_BLOCK}
 
     <sibling_context>
     # Resolved by step 4c — top-2 peer modules (signatures only, not full code)
