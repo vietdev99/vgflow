@@ -1509,6 +1509,75 @@ if goal.frontmatter.interactive_controls.url_sync == true:
 Goals without `interactive_controls.url_sync: true` continue through the
 existing manual codegen flow below (forms, mutations, navigation, etc).
 
+**Phase 15 T6.1 — D-16 Filter + Pagination Test Rigor Pack (NEW, 2026-04-27):**
+
+Independent of and ADDITIONAL to the v2.7 Phase B url_sync branch above. If
+the goal frontmatter declares `interactive_controls.filters[]` and/or
+`interactive_controls.pagination`, render the rigor pack via the matrix
+module + 10 templates shipped in `skills/vg-codegen-interactive/`. Output:
+4 spec files per filter control + 6 spec files per pagination control,
+totalling 13 + 18 source-level `test()` blocks per control (matrix
+verified by `verify-filter-test-coverage.py`).
+
+The matrix path is DETERMINISTIC (no Sonnet call) — pure JS substitution
+through `renderTemplate(template_path, vars)`. Cost: $0, latency: <1s,
+re-runnable: byte-for-byte identical output for identical input.
+
+Pseudo-flow per goal (run BEFORE the dynamic-ID gate so generated rigor
+specs are subject to the same pre-codegen safety checks):
+
+```
+ic = goal.frontmatter.interactive_controls or {}
+filters    = ic.get('filters', [])         # array of {name, values, ...}
+pagination = ic.get('pagination', None)    # dict {name, page_size, type, ...}
+include_optional_pagination_edge = ic.get('cursor_pagination', False)
+
+if filters or pagination:
+    OUT_DIR  = ${GENERATED_TESTS_DIR}                # same dir as manual codegen
+    TPL_ROOT = ${REPO_ROOT}/.claude/commands/vg/_shared/templates
+
+    cmd = node --input-type=module -e """
+      import {
+        enumerateFilterFiles, enumeratePaginationFiles, renderTemplate,
+      } from '${REPO_ROOT}/.claude/skills/vg-codegen-interactive/filter-test-matrix.mjs'
+      import fs from 'node:fs/promises'
+
+      const goal = ${json(goal)}
+      const filters = ${json(filters)}
+      const pagination = ${json(pagination or {})}
+      const includeOptional = ${include_optional_pagination_edge}
+
+      const written = []
+      for (const f of filters) {
+        for (const desc of enumerateFilterFiles(goal, f, { templateRoot: '${TPL_ROOT}' })) {
+          const body = await renderTemplate(desc.template_path, desc.vars)
+          await fs.writeFile('${OUT_DIR}/' + desc.slug + '.spec.ts', body, 'utf8')
+          written.push(desc.slug)
+        }
+      }
+      if (pagination && pagination.name) {
+        for (const desc of enumeratePaginationFiles(goal, pagination, { templateRoot: '${TPL_ROOT}', includeOptional })) {
+          const body = await renderTemplate(desc.template_path, desc.vars)
+          await fs.writeFile('${OUT_DIR}/' + desc.slug + '.spec.ts', body, 'utf8')
+          written.push(desc.slug)
+        }
+      }
+      console.log(JSON.stringify({ written }))
+    """
+    result = run(cmd)
+
+    # Validate the rigor pack matches the D-16 matrix
+    run .claude/scripts/validators/verify-filter-test-coverage.py --phase ${PHASE_NUMBER}
+    # PASS expected; BLOCK signals matrix shortfall (template mis-render or
+    # template diverged from the expected count). Operator can override
+    # via --skip-rigor-pack only with debt entry (override-debt register).
+```
+
+The rigor pack files DO NOT collide with manual codegen filenames because
+they use the `<goal>-<control>-{filter|pagination}-<group>` slug pattern
+established by `enumerateFilterFiles` / `enumeratePaginationFiles`. The
+manual codegen path emits `<phase>-goal-<group>.spec.ts` instead.
+
 **Pre-codegen Gate — Dynamic ID scan (HARD BLOCK — tightened 2026-04-17):**
 
 Before generating tests, scan RUNTIME-MAP.json goal_sequences for dynamic ID selectors. Dynamic IDs cause flaky tests that rot on next data reset.
