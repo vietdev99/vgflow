@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.8.0] - 2026-04-26
+
+VG workflow-hardening v2.7 plan — 8 phases shipped covering forward-gap closure from v2.7.0 ship + audit dim-3/4/6/7 HIGH+MEDIUM closure.
+
+### Added
+- **Phase J** (OS-keychain integration) — `verify_human_operator()` HMAC token now stored in OS keychain (Keychain Access macOS, Credential Manager Windows, Secret Service Linux). Migration script + per-OS onboarding doc. File fallback retained for headless CI.
+- **Phase K** (Hardcode refactor) — 34→5 occurrences (-85%). HARDCODE-REGISTER.md + drift gate. `verify-no-hardcoded-paths.py` extended with line-level INTENTIONAL_HARDCODE annotation support.
+- **Phase M** (Hotfix override extension) — 5 new gate_ids auto-resolve via `override_auto_resolve_clean_run`: allow-orthogonal-hotfix, allow-no-bugref, allow-empty-hotfix, allow-empty-bugfix, allow-unresolved-overrides. Resolution events emitted from /vg:review phase1_code_scan.
+- **Phase N** (Manual rule-card breadth) — 110 entries across 12 mid-traffic skills (vg-blueprint, vg-scope, vg-specs, vg-amend, vg-design-extract, vg-design-system, vg-init, vg-project, vg-roadmap, vg-prioritize, vg-haiku-scanner, vg-reflector). 26.5% validator-linked. AUDIT.md dim-4 closure: 13.3% → 35.6%.
+- **Phase O** (Root-verifier test breadth) — 12 verifier tests + bootstrap-loader meta-test. AUDIT.md dim-7 closure: validator coverage in `.claude/scripts/validators/` from 80% → **100%** (51/51).
+- **Phase P** (Skill invariants + manual-card schema validator) — single UNQUARANTINABLE validator covers SKILL.md structural invariants (step numbering, frontmatter, marker presence, sync gate) + RULES-CARDS-MANUAL.md schema (body length, tag enum, validator-link existence, anti-pattern incident reference). Phase L (skill invariant contracts) merged into P.
+- **Phase Q-decay sub-deliverable** (Calibration decay policy) — `registry-calibrate.py --apply-decay` flag with TTY/HMAC + audit emit. Suggestions older than configurable threshold without confirming evidence auto-retire RETIRED-in-place. Phase Q full re-eval calendar-gated, deferred to v2.9.
+- **Phase R** (Cross-platform CI parity + pre-commit drift hook) — CI matrix on ubuntu-latest + macos-latest + windows-latest. UTF-8 subprocess helper. `.githooks/pre-commit` blocks RULES-CARDS drift when SKILL.md changes without re-running `extract-rule-cards.py`. 28 documented test failures closed (21 Linux + 7 Windows-encoding).
+
+### Changed
+- `.claude/scripts/vg-orchestrator/__main__.py` — UNQUARANTINABLE allowlist grew 34 → 35 (verify-skill-invariants added)
+- `.claude/scripts/registry-calibrate.py` — `apply-decay` action added with TTY/HMAC + min-50-char reason gate (matches override-resolve and calibrate apply patterns from v2.7.0)
+- `.claude/commands/vg/_shared/lib/override-debt.sh` — `auto_resolve_clean_run` gate_id table extended with 5 new entries
+- `.claude/scripts/validators/audit-rule-cards.py` — `--check-schema` flag delegates to verify-skill-invariants for schema portion (avoid duplicate parsers)
+- `.claude/vg.config.md` — added 3 new sections: `security_keychain.*`, `validators_skill_invariants.*`, `calibration.decay_after_phases`. Commit-msg pattern widened to accept `feat(harness-vN.M-XX):` style.
+
+### Tests
+- ~1240 cumulative tests passing (38 v2.7 phase tests + 19 v2.6.1 security regression + 1183 carried-forward).
+
+### Migration
+Backward compatible. Existing `.approver-key` files continue working via fallback. Existing 783 auto-extracted rules unchanged. Existing config keys unchanged. Operator runs migration scripts opt-in.
+
 ## [2.7.0] - 2026-04-26
 
 VG workflow-hardening v2.6 plan — 8 phases shipped in atomic commits with goal-backward verification.

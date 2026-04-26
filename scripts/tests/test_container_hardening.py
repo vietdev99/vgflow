@@ -38,6 +38,7 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
     )
 
 
+# INTENTIONAL_HARDCODE: Dockerfile fixture — port literal is part of HEALTHCHECK test data (Phase K1 register §5)
 HARDENED_DOCKERFILE = """\
 FROM node:20-alpine AS builder
 WORKDIR /app

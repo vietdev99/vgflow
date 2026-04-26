@@ -1976,9 +1976,11 @@ def cmd_calibrate(args) -> int:
         result = _sub.run(cmd_args, cwd=str(_REPO_ROOT))
         return result.returncode
 
-    # apply / apply-all branches — local gates BEFORE shelling out so
-    # we emit a single coherent audit story per apply attempt.
-    if args.action in ("apply", "apply-all"):
+    # apply / apply-all / apply-decay branches — local gates BEFORE
+    # shelling out so we emit a single coherent audit story per apply
+    # attempt. apply-decay is Phase Q (v2.7); same gate surface as Phase
+    # F apply (TTY/HMAC + reason >= 50 chars).
+    if args.action in ("apply", "apply-all", "apply-decay"):
         reason = getattr(args, "reason", "") or ""
         if len(reason) < 50:
             print(
@@ -2005,8 +2007,8 @@ def cmd_calibrate(args) -> int:
             return 2
         if not is_human:
             print(
-                "⛔ calibrate apply requires TTY OR signed approver "
-                "token (HMAC). AI subagents cannot self-mutate "
+                f"⛔ calibrate {args.action} requires TTY OR signed "
+                "approver token (HMAC). AI subagents cannot self-mutate "
                 "validator severity.\n"
                 "   To approve as human:\n"
                 "     a) Run from interactive shell (TTY) — auto-approved.\n"
@@ -2047,6 +2049,13 @@ def cmd_calibrate(args) -> int:
                       file=sys.stderr)
                 return 2
             cmd_args += ["--suggestion-id", sid]
+        if args.action == "apply-decay":
+            # Phase Q — pass through optional flags
+            if getattr(args, "dry_run", False):
+                cmd_args.append("--dry-run")
+            decay_n = getattr(args, "decay_after_phases", None)
+            if decay_n is not None:
+                cmd_args += ["--decay-after-phases", str(decay_n)]
         cmd_args += ["--reason", reason]
         # Pass the verified approver downstream (subprocess inherits env)
         env = os.environ.copy()
@@ -2056,13 +2065,26 @@ def cmd_calibrate(args) -> int:
         # token-format mismatch — orchestrator already gated above.
         env.setdefault("VG_ALLOW_FLAGS_LEGACY_RAW", "true")
         result = _sub.run(cmd_args, cwd=str(_REPO_ROOT), env=env)
-        # Audit emission — best-effort, regardless of subprocess outcome
+        # Audit emission — best-effort, regardless of subprocess outcome.
+        # Phase Q: apply-decay emits its own per-suggestion
+        # `calibration.suggestion_decayed` events via registry-calibrate;
+        # this wrapper additionally emits a summary event for
+        # orchestrator-level audit symmetry with apply/apply-all.
+        ok_event = {
+            "apply": "calibrate.applied",
+            "apply-all": "calibrate.applied",
+            "apply-decay": "calibrate.decay_applied",
+        }[args.action]
+        fail_event = {
+            "apply": "calibrate.apply_failed",
+            "apply-all": "calibrate.apply_failed",
+            "apply-decay": "calibrate.decay_failed",
+        }[args.action]
         try:
             db.append_event(
                 run_id="calibrate-apply",
-                event_type=("calibrate.applied"
-                            if result.returncode == 0
-                            else "calibrate.apply_failed"),
+                event_type=(ok_event if result.returncode == 0
+                            else fail_event),
                 phase="",
                 command="calibrate",
                 actor="user",
@@ -2073,6 +2095,7 @@ def cmd_calibrate(args) -> int:
                     "reason": reason[:500],
                     "operator_token": (approver or "tty")[:120],
                     "exit_code": result.returncode,
+                    "dry_run": bool(getattr(args, "dry_run", False)),
                 },
             )
         except Exception:
@@ -2844,6 +2867,15 @@ UNQUARANTINABLE = {
     "verify-allow-flag-audit",            # override flag misuse audit
     "verify-vps-deploy-evidence",         # actual deploy ran (anti "build-only" forge)
     "verify-clean-failure-state",         # recovery state integrity post-crash
+
+    # Harness v2.7 Phase P (2026-04-26): SKILL.md structural invariants +
+    # RULES-CARDS-MANUAL.md schema gate. Single validator, single parser,
+    # single CI gate. AI subagent failing 3x to disable this gate cannot
+    # be allowed — skill drift (step numbering gap, missing markers,
+    # SKILL⇄commands desync) silently breaks the orchestrator's marker-
+    # check loop. Even at initial WARN severity (R11 graceful rollout)
+    # the gate must always fire.
+    "verify-skill-invariants",
 }
 
 
@@ -3565,10 +3597,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument(
         "action",
-        choices=["status", "apply", "apply-all"],
+        choices=["status", "apply", "apply-all", "apply-decay"],
         help=("status: compute + write CALIBRATION-SUGGESTIONS.md; "
               "apply: mutate dispatch-manifest.json for one suggestion; "
-              "apply-all: bulk-apply current suggestions"),
+              "apply-all: bulk-apply current suggestions; "
+              "apply-decay: retire stale suggestions per "
+              "calibration.decay_after_phases (Phase Q, v2.7)"),
     )
     s.add_argument(
         "--suggestion-id", default="",
@@ -3576,11 +3610,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument(
         "--reason", default="",
-        help="Audit text for apply/apply-all (min 50 chars)",
+        help=("Audit text for apply/apply-all/apply-decay "
+              "(min 50 chars)"),
     )
     s.add_argument(
         "--lookback-phases", type=int, default=5,
         help="Decay-policy footer for status output (advisory)",
+    )
+    s.add_argument(
+        "--decay-after-phases", type=int, default=5,
+        help=("Age threshold in phases for apply-decay (default 5, "
+              "mirrors calibration.decay_after_phases config key)"),
+    )
+    s.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="apply-decay only: preview retirements without mutating",
     )
     s.add_argument(
         "--json", action="store_true", default=False,

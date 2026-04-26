@@ -25,6 +25,13 @@ from pathlib import Path
 
 import pytest
 
+from conftest import needs_bash
+
+# Phase R (v2.7): rule_phase_scope tests invoke the inject-rule-cards.sh
+# helper via `bash`. Same Windows-WSL caveat as block_resolver_l2.
+# See PLATFORM-COMPAT.md.
+pytestmark = needs_bash
+
 REPO = Path(__file__).resolve().parents[3]
 VALIDATOR = REPO / ".claude" / "scripts" / "validators" / "verify-rule-phase-scope.py"
 INJECT_SH = REPO / ".claude" / "commands" / "vg" / "_shared" / "lib" / "inject-rule-cards.sh"

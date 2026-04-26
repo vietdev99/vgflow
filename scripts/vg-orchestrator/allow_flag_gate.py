@@ -78,27 +78,246 @@ def _approver_key_path() -> Path:
     return Path.home() / ".vg" / ".approver-key"
 
 
+# v2.7 Phase J: keychain-first storage to close same-user-AI residual risk.
+# Documented limitation in v2.5.2 was that file at ~/.vg/.approver-key is
+# readable by any same-user subprocess (incl. AI subagents). Keychain-backed
+# stores (Keychain Access on macOS, Credential Manager on Windows, Secret
+# Service on Linux) require an OS-level unlock and are not transparently
+# readable by arbitrary subprocesses. File path retained as fallback for
+# headless CI environments where keychain backends are unavailable.
+KEYCHAIN_DEFAULT_SERVICE = "vg-approver"
+KEYCHAIN_USERNAME = "approver"
+KEYCHAIN_DISABLE_ENV = "VG_KEYCHAIN_DISABLED"  # test/CI override
+
+
+def _read_keychain_config() -> dict:
+    """Read security_keychain block from vg.config.md.
+
+    Returns dict with keys: service_name, fallback_to_file, fallback_file_path.
+    Falls back to defaults if config absent or unreadable.
+    """
+    defaults = {
+        "service_name": KEYCHAIN_DEFAULT_SERVICE,
+        "fallback_to_file": True,
+        "fallback_file_path": "~/.vg/.approver-key",
+    }
+    # Anchor: this file lives at .claude/scripts/vg-orchestrator/, so
+    # repo root = parents[3].
+    cfg_path = Path(__file__).resolve().parents[3] / ".claude" / "vg.config.md"
+    try:
+        text = cfg_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return defaults
+
+    in_block = False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("security_keychain:"):
+            in_block = True
+            continue
+        if in_block:
+            if not line.startswith(" ") and not line.startswith("\t"):
+                # Block ended — next top-level key
+                if line.strip():
+                    break
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if ":" not in stripped:
+                continue
+            key, _, val = stripped.partition(":")
+            key = key.strip()
+            # Strip inline comments
+            val = val.split("#", 1)[0].strip().strip('"').strip("'")
+            if key == "service_name" and val:
+                defaults["service_name"] = val
+            elif key == "fallback_to_file":
+                defaults["fallback_to_file"] = val.lower() in (
+                    "1", "true", "yes", "on"
+                )
+            elif key == "fallback_file_path" and val:
+                defaults["fallback_file_path"] = val
+    return defaults
+
+
+def _emit_keychain_event(event_type: str, payload: dict) -> None:
+    """Best-effort audit emission. Never raises (gate is critical-path)."""
+    try:
+        # Local import to avoid hard dep when db module not on path
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import db as _db  # type: ignore
+        _db.append_event(
+            run_id="approver-key-load",
+            event_type=event_type,
+            phase="",
+            command="approver-key",
+            actor="orchestrator",
+            outcome="INFO",
+            payload=payload,
+        )
+    except Exception:
+        pass
+
+
+def _try_keychain_get(service_name: str) -> tuple[Optional[bytes], str]:
+    """Attempt to read the approver key from OS keychain.
+
+    Returns (key_bytes_or_None, reason).
+    Reason codes: ok | keychain_disabled | import_error | backend_error |
+                  not_found | malformed
+    """
+    if os.environ.get(KEYCHAIN_DISABLE_ENV, "").lower() in (
+        "1", "true", "yes", "on"
+    ):
+        return None, "keychain_disabled"
+    try:
+        import keyring  # type: ignore
+        import keyring.errors  # type: ignore
+    except ImportError:
+        return None, "import_error"
+    try:
+        stored = keyring.get_password(service_name, KEYCHAIN_USERNAME)
+    except keyring.errors.KeyringError:
+        return None, "backend_error"
+    except Exception:
+        # Defensive: any unexpected backend failure → fall back gracefully
+        return None, "backend_error"
+    if stored is None:
+        return None, "not_found"
+    # Stored as base64url to round-trip raw bytes through string-only API.
+    # Strict-validate to catch corrupted entries (e.g. partial overwrite,
+    # encoding drift) — Python's urlsafe_b64decode silently strips invalid
+    # characters by default which would let garbage through.
+    try:
+        # Defense-in-depth: reject obviously malformed input before decoding
+        # (Python's urlsafe_b64decode silently drops invalid chars otherwise).
+        import re as _re
+        if not _re.fullmatch(r"[A-Za-z0-9_\-=]*", stored):
+            return None, "malformed"
+        decoded = base64.urlsafe_b64decode(
+            stored + "=" * (-len(stored) % 4)
+        )
+        # HMAC keys are at least 16 bytes; smaller = corruption
+        if len(decoded) < 16:
+            return None, "malformed"
+        return decoded, "ok"
+    except (ValueError, binascii.Error):
+        return None, "malformed"
+
+
+def _try_keychain_set(service_name: str, key: bytes) -> tuple[bool, str]:
+    """Attempt to write the approver key to OS keychain.
+
+    Returns (success, reason).
+    """
+    if os.environ.get(KEYCHAIN_DISABLE_ENV, "").lower() in (
+        "1", "true", "yes", "on"
+    ):
+        return False, "keychain_disabled"
+    try:
+        import keyring  # type: ignore
+        import keyring.errors  # type: ignore
+    except ImportError:
+        return False, "import_error"
+    encoded = _b64url_encode(key)
+    try:
+        keyring.set_password(service_name, KEYCHAIN_USERNAME, encoded)
+        return True, "ok"
+    except keyring.errors.KeyringError:
+        return False, "backend_error"
+    except Exception:
+        return False, "backend_error"
+
+
+def _load_approver_key_keychain_first() -> bytes:
+    """Load (or create) the HMAC signing key — keychain first, file fallback.
+
+    v2.7 Phase J: closes same-user-AI residual risk by preferring OS keychain
+    storage (Keychain Access / Credential Manager / Secret Service). Falls
+    back to ~/.vg/.approver-key when keychain backend is unavailable
+    (headless CI, no Secret Service running, missing `keyring` package, etc.).
+
+    Emits `override.keychain_unavailable_fallback` for diagnostics whenever
+    the file fallback is exercised, so the dashboard can render keychain
+    adoption metrics.
+
+    Backward compat: existing operators with a populated `.approver-key`
+    file continue to work unchanged. A one-shot migration script
+    (`migrate-approver-key-to-keychain.py`) walks them through promotion.
+    """
+    cfg = _read_keychain_config()
+    service_name = cfg["service_name"]
+
+    # 1. Try keychain
+    key, reason = _try_keychain_get(service_name)
+    if key is not None:
+        return key
+
+    # 2. File fallback (if config allows)
+    fallback_enabled = bool(cfg.get("fallback_to_file", True))
+    if fallback_enabled:
+        path = _approver_key_path()
+        if path.exists():
+            _emit_keychain_event(
+                "override.keychain_unavailable_fallback",
+                {
+                    "service_name": service_name,
+                    "keychain_reason": reason,
+                    "fallback_path": str(path),
+                    "outcome": "loaded_from_file",
+                },
+            )
+            return path.read_bytes()
+
+    # 3. Neither populated — generate fresh key.
+    # Prefer keychain for new key; if that fails AND fallback enabled,
+    # write to file. If neither works, raise.
+    fresh = secrets.token_bytes(32)
+    ok, set_reason = _try_keychain_set(service_name, fresh)
+    if ok:
+        return fresh
+
+    if fallback_enabled:
+        path = _approver_key_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(fresh)
+        try:
+            os.chmod(path, 0o600)
+        except (OSError, NotImplementedError, AttributeError):
+            pass
+        _emit_keychain_event(
+            "override.keychain_unavailable_fallback",
+            {
+                "service_name": service_name,
+                "keychain_reason": set_reason,
+                "fallback_path": str(path),
+                "outcome": "created_fresh_in_file",
+            },
+        )
+        return fresh
+
+    raise RuntimeError(
+        f"Cannot load or create approver key: keychain unavailable "
+        f"({set_reason}) and fallback_to_file disabled in config."
+    )
+
+
 def _get_or_create_key() -> bytes:
     """Read the HMAC signing key; create it if missing.
 
-    File is mode 0600 on POSIX so only the user can read it. Windows relies
-    on user-profile dir protection — same-user AI subprocess CAN read it
-    (documented limitation; see module docstring). For hostile environments,
-    use TTY mode only (`allow_flags.strict_mode=true` + no env fallback).
-    """
-    path = _approver_key_path()
-    if path.exists():
-        return path.read_bytes()
+    v2.7 Phase J: delegates to `_load_approver_key_keychain_first()` which
+    prefers OS keychain over the legacy ~/.vg/.approver-key file. Existing
+    callers (sign_approval, verify_approval, vg-auth.py) unchanged.
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = secrets.token_bytes(32)
-    # Write + restrict before anyone else can read
-    path.write_bytes(key)
-    try:
-        os.chmod(path, 0o600)
-    except (OSError, NotImplementedError, AttributeError):
-        pass  # Windows or sandbox — best-effort
-    return key
+    Pre-v2.7 behavior preserved when keychain backend unavailable: file is
+    mode 0600 on POSIX so only the user can read it. Windows relies on
+    user-profile dir protection — same-user AI subprocess CAN read it
+    (documented limitation; see module docstring). For hostile environments
+    where keychain is unavailable AND same-user threat applies, use TTY
+    mode only (`allow_flags.strict_mode=true` + no env fallback).
+    """
+    return _load_approver_key_keychain_first()
 
 
 def _nonce_dir() -> Path:

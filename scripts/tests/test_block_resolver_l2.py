@@ -24,6 +24,14 @@ from pathlib import Path
 
 import pytest
 
+from conftest import needs_bash
+
+# Phase R (v2.7): block-resolver tests shell out to bash with `bash -c`
+# to source the resolver lib. Skip on platforms where bash is broken
+# (Windows boxes with WSL shim but no default distro). On Linux/macOS
+# CI these run as normal. See PLATFORM-COMPAT.md.
+pytestmark = needs_bash
+
 
 RESOLVER = (Path(__file__).resolve().parents[2]
             / "commands" / "vg" / "_shared" / "lib" / "block-resolver.sh")

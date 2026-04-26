@@ -43,12 +43,24 @@ CLI:
   status                          (default — recompute + write)
   apply --suggestion-id S-NNN --reason '<≥50 chars>'
   apply-all --reason '<≥50 chars>'
+  apply-decay [--dry-run] --reason '<≥50 chars>'    (Phase Q, v2.7)
 
 Apply path:
   - Hard-gates `verify_human_operator()` (TTY OR HMAC-signed token).
   - Mutates dispatch-manifest.json: validators[<v>].severity = new value.
-  - Emits `calibrate.applied` audit event so dashboard panels can
-    surface history.
+  - Emits `calibration.applied` (v2.6 Phase F) /
+    `calibration.suggestion_decayed` (v2.7 Phase Q) audit events so
+    dashboard panels can surface history.
+
+Decay (v2.7 Phase Q):
+  - Sidecar state file `.vg/calibration-suggestions-state.json` records
+    {suggestion_id: {first_seen_phase, first_seen_ts}} on each `status`
+    run.
+  - `apply-decay` finds suggestions older than
+    `calibration.decay_after_phases` (default 5) AND no longer crossing
+    threshold (no confirming evidence in current recompute) → marks
+    them RETIRED in CALIBRATION-SUGGESTIONS.md (forensic trail) +
+    emits `calibration.suggestion_decayed` audit event.
 
 Stdlib only: json, subprocess, pathlib, argparse, datetime, hashlib,
 collections, os, sys.
@@ -82,6 +94,9 @@ MANIFEST_FILE = (
     REPO_ROOT / ".claude" / "scripts" / "validators" / "dispatch-manifest.json"
 )
 SUGGESTIONS_FILE = REPO_ROOT / ".vg" / "CALIBRATION-SUGGESTIONS.md"
+SUGGESTIONS_STATE_FILE = (
+    REPO_ROOT / ".vg" / "calibration-suggestions-state.json"
+)
 
 # Thresholds (kept in code, easy to tune later)
 MIN_FIRES = 10
@@ -718,6 +733,8 @@ def _apply_suggestion(
 def cmd_status(args: argparse.Namespace) -> int:
     suggestions = compute_suggestions()
     unq = _load_unquarantinable()
+    # Phase Q: record first-seen state for decay tracking.
+    _update_suggestions_state(suggestions)
     md = render_markdown(
         suggestions,
         n_unquarantinable=len(unq),
@@ -822,6 +839,267 @@ def cmd_apply_all(args: argparse.Namespace) -> int:
     return 0 if not failed else 1
 
 
+# ────────────────── Phase Q (v2.7): decay-policy enforcement ──────────────
+#
+# Decay model:
+#   * `_update_suggestions_state(current_suggestions)` is called from
+#     cmd_status. It records {suggestion_id: {first_seen_phase,
+#     first_seen_ts}} for any newly-seen ids in a sidecar JSON file.
+#     Already-tracked ids keep their original first_seen_phase — we
+#     never re-stamp.
+#   * "Phase counter" = count of distinct `phase` values observed in
+#     events.jsonl. Approximates "how many phases have run since
+#     first_seen". This is stdlib-only and avoids coupling to ROADMAP.md.
+#   * `_compute_decay_candidates()` returns suggestions whose age in
+#     phases ≥ DECAY_LOOKBACK_PHASES_DEFAULT AND that no longer appear
+#     in the freshly-recomputed suggestion list (= no confirming
+#     evidence — telemetry no longer crosses threshold).
+#   * Decay action: append RETIRED block to CALIBRATION-SUGGESTIONS.md
+#     in-place (mirror v2.6 Phase C `RETIRED_BY_CONFLICT` lifecycle —
+#     forensic trail, no deletion) + emit
+#     `calibration.suggestion_decayed` audit event per retired id.
+
+def _current_phase_counter(events: list[dict] | None = None) -> int:
+    """Count distinct phase values in events.jsonl. Used as a coarse
+    'absolute phase counter' for decay age math."""
+    if events is None:
+        events = _load_events(EVENTS_JSONL)
+    phases: set[str] = set()
+    for e in events:
+        p = str(e.get("phase", "")).strip()
+        if p:
+            phases.add(p)
+    return len(phases)
+
+
+def _load_suggestions_state() -> dict[str, dict]:
+    if not SUGGESTIONS_STATE_FILE.exists():
+        return {}
+    try:
+        d = json.loads(SUGGESTIONS_STATE_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_suggestions_state(state: dict[str, dict]) -> None:
+    SUGGESTIONS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SUGGESTIONS_STATE_FILE.write_text(
+        json.dumps(state, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _update_suggestions_state(suggestions: list[dict]) -> dict[str, dict]:
+    """Stamp first_seen_phase + first_seen_ts for any new ids; preserve
+    existing entries. Returns the merged state (also written to disk)."""
+    state = _load_suggestions_state()
+    phase_counter = _current_phase_counter()
+    ts = datetime.now(timezone.utc).isoformat()
+    changed = False
+    for s in suggestions:
+        sid = s.get("id")
+        if not sid or sid in state:
+            continue
+        state[sid] = {
+            "first_seen_phase": phase_counter,
+            "first_seen_ts": ts,
+            "validator": s.get("validator", ""),
+            "kind": s.get("kind", ""),
+            "proposed_severity": s.get("proposed_severity", ""),
+        }
+        changed = True
+    if changed:
+        _save_suggestions_state(state)
+    return state
+
+
+def _compute_decay_candidates(
+    *,
+    decay_after_phases: int = DECAY_LOOKBACK_PHASES_DEFAULT,
+    events: list[dict] | None = None,
+    manifest: dict[str, Any] | None = None,
+    state: dict[str, dict] | None = None,
+) -> list[dict]:
+    """Return list of {suggestion_id, age_phases, retire_reason, validator,
+    proposed_severity} for ids that should decay.
+
+    Eligible iff:
+      * tracked in state (first_seen_phase known)
+      * age_phases ≥ decay_after_phases
+      * NOT present in current fresh suggestion recompute (no confirming
+        evidence — telemetry no longer matches threshold profile)
+    """
+    if events is None:
+        events = _load_events(EVENTS_JSONL)
+    if state is None:
+        state = _load_suggestions_state()
+    fresh = compute_suggestions(events=events, manifest=manifest)
+    fresh_ids = {s["id"] for s in fresh}
+
+    current_phase_counter = _current_phase_counter(events)
+    candidates: list[dict] = []
+    for sid, meta in state.items():
+        if meta.get("retired_at"):
+            continue
+        first_seen = int(meta.get("first_seen_phase", 0))
+        age_phases = max(current_phase_counter - first_seen, 0)
+        if age_phases < decay_after_phases:
+            continue
+        if sid in fresh_ids:
+            # Confirming evidence — validator's firing pattern still
+            # matches the suggestion's BLOCK/WARN profile. Keep active.
+            continue
+        candidates.append({
+            "suggestion_id": sid,
+            "age_phases": age_phases,
+            "retire_reason": (
+                f"decay — no confirming evidence after "
+                f"{decay_after_phases} phases"
+            ),
+            "validator": meta.get("validator", ""),
+            "proposed_severity": meta.get("proposed_severity", ""),
+            "kind": meta.get("kind", ""),
+        })
+    return candidates
+
+
+def _emit_decay_event(
+    *,
+    candidate: dict,
+    operator_token: str,
+) -> None:
+    """Emit calibration.suggestion_decayed audit event. Best-effort —
+    audit must never break decay action."""
+    try:
+        sys.path.insert(
+            0, str(REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator")
+        )
+        import db as _db  # type: ignore
+        _db.append_event(
+            run_id="calibrate-decay",
+            event_type="calibration.suggestion_decayed",
+            phase="",
+            command="registry-calibrate",
+            actor="user",
+            outcome="INFO",
+            payload={
+                "suggestion_id": candidate["suggestion_id"],
+                "age_phases": candidate["age_phases"],
+                "retire_reason": candidate["retire_reason"],
+                "operator_token": operator_token[:120] if operator_token else "",
+                "validator": candidate.get("validator", ""),
+                "proposed_severity": candidate.get("proposed_severity", ""),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        pass
+
+
+def _retire_in_state(
+    state: dict[str, dict],
+    candidates: list[dict],
+    *,
+    operator_token: str,
+) -> None:
+    """Mark RETIRED in state file (forensic trail) — never delete."""
+    ts = datetime.now(timezone.utc).isoformat()
+    for c in candidates:
+        sid = c["suggestion_id"]
+        entry = state.setdefault(sid, {})
+        entry["retired_at"] = ts
+        entry["retire_reason"] = c["retire_reason"]
+        entry["retired_age_phases"] = c["age_phases"]
+        entry["retired_by"] = operator_token[:120] if operator_token else "tty"
+    _save_suggestions_state(state)
+
+
+def _annotate_retired_in_md(candidates: list[dict]) -> None:
+    """Append RETIRED markers to CALIBRATION-SUGGESTIONS.md per
+    decayed id — forensic trail, no deletion. Mirrors v2.6 Phase C
+    RETIRED_BY_CONFLICT lifecycle pattern."""
+    if not candidates:
+        return
+    if not SUGGESTIONS_FILE.exists():
+        return
+    body = SUGGESTIONS_FILE.read_text(encoding="utf-8")
+    ts = datetime.now(timezone.utc).isoformat()
+    block = "\n## Retired (decay)\n\n"
+    block += (
+        "_Suggestions below crossed threshold once but no longer have "
+        "confirming evidence. Kept for forensic trail._\n\n"
+    )
+    for c in candidates:
+        block += (
+            f"- `{c['suggestion_id']}` `{c.get('validator', '')}` — "
+            f"retired_at: `{ts}`, age_phases: `{c['age_phases']}`, "
+            f"retire_reason: \"{c['retire_reason']}\"\n"
+        )
+    block += "\n"
+    SUGGESTIONS_FILE.write_text(body + block, encoding="utf-8")
+
+
+def cmd_apply_decay(args: argparse.Namespace) -> int:
+    """Phase Q (v2.7): apply decay policy to suggestions older than
+    `calibration.decay_after_phases` (default 5) without confirming
+    evidence. TTY/HMAC + --reason ≥50 chars required (matches Phase F
+    apply path)."""
+    rc = _gate_reason(args.reason)
+    if rc is not None:
+        return rc
+    is_human, approver, err = _verify_human()
+    if not is_human:
+        msg = (
+            "⛔ calibrate apply-decay requires TTY session OR signed "
+            "approver token (HMAC). AI subagents cannot self-mutate "
+            "validator severity — would defeat the audit trail.\n"
+            "   To approve as human:\n"
+            "     a) Run from interactive shell (TTY) — auto-approved.\n"
+            "     b) Mint signed token: python3 .claude/scripts/"
+            "vg-auth.py approve --flag calibrate-apply\n"
+            "        Then export VG_HUMAN_OPERATOR=<token>."
+        )
+        if err:
+            msg += f"\n   (caller-auth error: {err})"
+        print(msg, file=sys.stderr)
+        return 2
+
+    # Refresh state from a fresh status pass — ensures any newly-emerged
+    # suggestions are stamped first_seen before we evaluate decay.
+    fresh = compute_suggestions()
+    _update_suggestions_state(fresh)
+
+    candidates = _compute_decay_candidates(
+        decay_after_phases=args.decay_after_phases,
+    )
+    if not candidates:
+        print("✓ No decay candidates — all tracked suggestions either "
+              "younger than threshold or still have confirming evidence.")
+        return 0
+
+    if args.dry_run:
+        print(f"(dry-run) Would retire {len(candidates)} suggestion(s):")
+        for c in candidates:
+            print(
+                f"  {c['suggestion_id']}  {c.get('validator', ''):<48s}  "
+                f"age={c['age_phases']} phases  ({c['retire_reason']})"
+            )
+        return 0
+
+    state = _load_suggestions_state()
+    _retire_in_state(state, candidates, operator_token=approver or "tty")
+    _annotate_retired_in_md(candidates)
+    for c in candidates:
+        _emit_decay_event(candidate=c, operator_token=approver or "tty")
+        print(
+            f"✓ retired {c['suggestion_id']}  {c.get('validator', '')}  "
+            f"(age={c['age_phases']} phases)"
+        )
+    print(f"\nRetired {len(candidates)} suggestion(s) via decay policy.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="registry-calibrate",
@@ -864,6 +1142,28 @@ def build_parser() -> argparse.ArgumentParser:
     s_all.add_argument("--reason", required=True, default="",
                       help="Audit text — min 50 chars")
     s_all.set_defaults(func=cmd_apply_all)
+
+    # Phase Q (v2.7): decay-policy enforcement
+    s_decay = sub.add_parser(
+        "apply-decay",
+        help=("Retire suggestions older than --decay-after-phases that "
+              "no longer have confirming evidence (Phase Q, v2.7)."),
+    )
+    s_decay.add_argument(
+        "--reason", required=True, default="",
+        help="Audit text — min 50 chars",
+    )
+    s_decay.add_argument(
+        "--decay-after-phases", type=int,
+        default=DECAY_LOOKBACK_PHASES_DEFAULT,
+        help=("Age threshold in phases (default 5, mirrors "
+              "calibration.decay_after_phases config key)."),
+    )
+    s_decay.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="Preview decay candidates without retiring them.",
+    )
+    s_decay.set_defaults(func=cmd_apply_decay)
 
     return p
 

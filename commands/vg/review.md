@@ -1342,6 +1342,47 @@ Phase 1 Code Scan:
   i18n key check: {N keys checked, M missing|skipped (disabled)}
   (Reference data for Phase 2 — not a gate)
 ```
+
+### 1d: Override Debt Auto-Resolve (v2.7 Phase M extension)
+
+When phase1_code_scan completes with no scan-driven regression (contract verify
+PASS or WARNING-only, i18n missing-keys treated as non-blocking), the 5
+Phase-M gate_ids on the supported list can auto-resolve any matching prior
+debt entries from earlier phases.
+
+The skip-when-current-phase-also-uses-flag guard mirrors the v2.6.1 accept.md
+pattern: never resolve a gate_id whose flag is being used right now.
+
+```bash
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+if type -t override_auto_resolve_clean_run >/dev/null 2>&1; then
+  RESOLUTION_EVENT_ID="review-clean-${PHASE_NUMBER}-$(date -u +%s)"
+  if [[ ! "${ARGUMENTS}" =~ --allow-orthogonal-hotfix ]]; then
+    override_auto_resolve_clean_run "allow-orthogonal-hotfix" "${PHASE_NUMBER}" \
+      "${RESOLUTION_EVENT_ID}" 2>&1 | sed 's/^/  /'
+  fi
+  if [[ ! "${ARGUMENTS}" =~ --allow-no-bugref ]]; then
+    override_auto_resolve_clean_run "allow-no-bugref" "${PHASE_NUMBER}" \
+      "${RESOLUTION_EVENT_ID}" 2>&1 | sed 's/^/  /'
+  fi
+  if [[ ! "${ARGUMENTS}" =~ --allow-empty-hotfix ]]; then
+    override_auto_resolve_clean_run "allow-empty-hotfix" "${PHASE_NUMBER}" \
+      "${RESOLUTION_EVENT_ID}" 2>&1 | sed 's/^/  /'
+  fi
+  if [[ ! "${ARGUMENTS}" =~ --allow-empty-bugfix ]]; then
+    override_auto_resolve_clean_run "allow-empty-bugfix" "${PHASE_NUMBER}" \
+      "${RESOLUTION_EVENT_ID}" 2>&1 | sed 's/^/  /'
+  fi
+  if [[ ! "${ARGUMENTS}" =~ --allow-unresolved-overrides ]]; then
+    override_auto_resolve_clean_run "allow-unresolved-overrides" "${PHASE_NUMBER}" \
+      "${RESOLUTION_EVENT_ID}" 2>&1 | sed 's/^/  /'
+  fi
+fi
+```
+
+The helper emits one `override.auto_resolved` audit event per gate_id that
+matched at least one OPEN debt entry from a prior phase (R9: gate_id +
+timestamp + git_sha). No-op when there are no matching entries.
 </step>
 
 <step name="phase1_5_ripple_and_god_node">

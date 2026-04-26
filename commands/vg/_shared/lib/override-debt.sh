@@ -137,6 +137,23 @@ PY
 #     REASON encodes "winner=L-WIN" so the schema entry can be filled.
 #
 # Single helper, two consumers — same audit-event-emitted shape across both.
+#
+# v2.7 Phase M (2026-04-26) — supported gate_id table extended from 3 to 8.
+# Resolution events fire from /vg:review phase1_code_scan exit when clean.
+#
+#   gate_id                            → natural resolution event
+#   ─────────────────────────────────────────────────────────────────
+#   review-goal-coverage              → review on same component PASS
+#   bugfix-bugref-required            → subsequent commit has bugref
+#   bugfix-code-delta-required        → subsequent commit non-empty bugfix
+#   allow-orthogonal-hotfix           → next-phase review PASS (no hotfix flag) [NEW]
+#   allow-no-bugref                   → same component sees explicit bugref      [NEW]
+#   allow-empty-hotfix                → subsequent commit non-empty hotfix       [NEW]
+#   allow-empty-bugfix                → subsequent commit non-empty bugfix       [NEW]
+#   allow-unresolved-overrides        → phase exits with 0 overrides             [NEW]
+#
+# Each successful match emits an `override.auto_resolved` audit event
+# (gate_id + ts + git_sha in payload — R9).
 override_auto_resolve_clean_run() {
   # Phase C extension: --target flag. Default to override-debt (back-compat).
   local target="override-debt"
@@ -157,12 +174,16 @@ override_auto_resolve_clean_run() {
   [ -f "$register" ] || return 0
   [ -z "$gate_id" ] && return 0
 
-  ${PYTHON_BIN:-python3} - "$register" "$gate_id" "$current_phase" "$event_id" <<'PY'
+  # v2.7 Phase M: capture matched count via stdout (last line) so caller can
+  # emit `override.auto_resolved` audit event with proper payload (R9).
+  local matched_count
+  matched_count=$(${PYTHON_BIN:-python3} - "$register" "$gate_id" "$current_phase" "$event_id" <<'PY'
 import re, sys
 from pathlib import Path
 register, gate_id, current_phase, event_id = sys.argv[1:5]
 p = Path(register)
-if not p.exists(): sys.exit(0)
+if not p.exists():
+  print(0); sys.exit(0)
 text = p.read_text(encoding='utf-8')
 lines = text.splitlines()
 row_re = re.compile(
@@ -186,7 +207,21 @@ for line in lines:
 p.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
 if matched:
   print(f"override_auto_resolve_clean_run: resolved {matched} prior debt entries for gate={gate_id}", file=sys.stderr)
+print(matched)
 PY
+)
+  matched_count="${matched_count:-0}"
+
+  # v2.7 Phase M (R9): emit `override.auto_resolved` audit event with
+  # gate_id + matched count + resolution event id. Timestamp + git_sha are
+  # injected automatically by emit_telemetry_v2.
+  if [ "${matched_count:-0}" -gt 0 ] && type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    local payload
+    payload="{\"gate_id\":\"${gate_id}\",\"matched\":${matched_count},\"resolution_event_id\":\"${event_id}\",\"current_phase\":\"${current_phase}\"}"
+    emit_telemetry_v2 "override.auto_resolved" "$current_phase" "" "$gate_id" "PASS" "$payload" >/dev/null 2>&1 || true
+  fi
+
+  return 0
 }
 
 

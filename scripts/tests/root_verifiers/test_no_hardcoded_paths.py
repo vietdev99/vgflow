@@ -1,9 +1,10 @@
 """
 Tests for verify-no-hardcoded-paths.py — UNQUARANTINABLE.
 
-Per CLAUDE.md infra rules: SSH always via `ssh vollx` alias, never raw IP.
-VPS paths come from config.environments.<env>.project_path. Catches AI
-copy-paste-leaking literal SSH commands and project paths.
+Per CLAUDE.md infra rules: SSH must use the configured alias from
+environments.sandbox.run_prefix, never raw IP. VPS paths come from
+config.environments.<env>.project_path. Catches AI copy-paste-leaking
+literal SSH commands and project paths.
 
 Covers:
   - Empty repo → PASS
@@ -62,7 +63,7 @@ class TestNoHardcodedPaths:
     def test_ssh_to_raw_public_ip_blocks(self, tmp_path):
         _write(
             tmp_path / "apps/api/scripts/deploy.sh",
-            "ssh root@46.224.11.195 'pm2 reload all'\n",
+            "ssh root@46.224.11.195 'pm2 reload all'\n",  # INTENTIONAL_HARDCODE: detection-test fixture (Phase K1 register §5)
         )
         r = _run([], tmp_path)
         assert r.returncode == 1, \
@@ -88,7 +89,7 @@ class TestNoHardcodedPaths:
     def test_public_ip_url_warns(self, tmp_path):
         _write(
             tmp_path / "apps/web/src/probe.ts",
-            "const probe = 'http://8.8.8.8/';\n",
+            "const probe = 'http://8.8.8.8/';\n",  # INTENTIONAL_HARDCODE: detection-test fixture (Phase K1 register §5)
         )
         r = _run([], tmp_path)
         # URL pattern is WARN severity → rc=0 but verdict=WARN
@@ -99,7 +100,7 @@ class TestNoHardcodedPaths:
     def test_infra_ansible_inventory_allowlisted(self, tmp_path):
         _write(
             tmp_path / "infra/ansible/inventory.yml",
-            "vollx ansible_host=46.224.11.195\n",
+            "vollx ansible_host=46.224.11.195\n",  # INTENTIONAL_HARDCODE: allowlist-coverage fixture (Phase K1 register §5)
         )
         r = _run([], tmp_path)
         assert r.returncode == 0, f"infra/ansible/inventory should be allowlisted, stdout={r.stdout}"
@@ -107,7 +108,7 @@ class TestNoHardcodedPaths:
     def test_vg_workspace_allowlisted(self, tmp_path):
         _write(
             tmp_path / ".vg/scratch/notes.md",
-            "ssh root@46.224.11.195 'echo'\n",
+            "ssh root@46.224.11.195 'echo'\n",  # INTENTIONAL_HARDCODE: allowlist-coverage fixture (Phase K1 register §5)
         )
         r = _run([], tmp_path)
         assert r.returncode == 0, f".vg/ should be allowlisted, stdout={r.stdout}"
@@ -115,7 +116,7 @@ class TestNoHardcodedPaths:
     def test_verbose_flag_recognized(self, tmp_path):
         _write(
             tmp_path / "apps/api/x.sh",
-            "ssh root@8.8.4.4 'x'\n",
+            "ssh root@8.8.4.4 'x'\n",  # INTENTIONAL_HARDCODE: detection-test fixture for --verbose flag (Phase K1 register §5)
         )
         r = _run(["--verbose"], tmp_path)
         # Verbose should not change verdict, just add stderr output

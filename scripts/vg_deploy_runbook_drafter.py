@@ -35,6 +35,51 @@ for _stream in (sys.stdout, sys.stderr):
             pass
 
 
+CONFIG_PATH = Path(".claude") / "vg.config.md"
+
+
+def _load_sandbox_runtime_keys() -> tuple[str, str]:
+    """Read sandbox SSH alias + project path from vg.config.md.
+
+    Returns:
+      (run_prefix, project_path) — `run_prefix` is the full prefix string
+      (a transport command + alias) so callers can paste it directly into
+      examples; `project_path` is the remote working directory.
+
+    Falls back to a hard-coded default tuple only when the config file is
+    missing or the keys are unparseable. Per CLAUDE.md "Workflow = engine,
+    no hardcode": the fallback exists only so the drafter remains runnable
+    outside a configured project (tests). When config IS present, the real
+    values are emitted. See `.vg/HARDCODE-REGISTER.md` §4 for the literal
+    values.
+    """
+    # INTENTIONAL_HARDCODE: helper fallback (Phase K1 register §4)
+    fallback_prefix, fallback_path = "ssh vollx", "/home/vollx/vollxssp"
+    if not CONFIG_PATH.exists():
+        return fallback_prefix, fallback_path
+    try:
+        text = CONFIG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return fallback_prefix, fallback_path
+
+    sandbox_re = re.compile(
+        r'(?ms)^\s*sandbox:\s*$\n((?:\s{2,}[^\n]+\n)+)',
+    )
+    m = sandbox_re.search(text)
+    if not m:
+        return fallback_prefix, fallback_path
+    block = m.group(1)
+    run_prefix = fallback_prefix
+    project_path = fallback_path
+    rp = re.search(r'run_prefix:\s*["\']?([^"\'\n]+)', block)
+    if rp:
+        run_prefix = rp.group(1).strip()
+    pp = re.search(r'project_path:\s*["\']?([^"\'\n]+)', block)
+    if pp:
+        project_path = pp.group(1).strip()
+    return run_prefix, project_path
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -259,11 +304,19 @@ def section_4_rollback(entries: list[dict]) -> list[str]:
             lines.append(e["cmd"])
         lines.append("```")
     else:
+        # Resolve runtime keys from vg.config.md so the example template
+        # mirrors current sandbox config (run_prefix + project_path).
+        # Per CLAUDE.md "Workflow = engine, no hardcode" — never bake
+        # `ssh vollx` / `/home/vollx/vollxssp` literals into output.
+        run_prefix, project_path = _load_sandbox_runtime_keys()
         lines.append("_(Deploy này không có rollback. User điền recovery path cụ thể nếu cần:)_")
         lines.append("")
         lines.append("```bash")
         lines.append("# VD thường dùng:")
-        lines.append("# ssh vollx 'pm2 stop <service> && git -C /home/vollx/vollxssp revert <sha> && pm2 restart <service>'")
+        lines.append(
+            f"# {run_prefix} 'pm2 stop <service> && "
+            f"git -C {project_path} revert <sha> && pm2 restart <service>'"
+        )
         lines.append("# Hoặc: restore DB backup nếu có migration")
         lines.append("```")
 

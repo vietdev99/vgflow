@@ -39,6 +39,52 @@ for _stream in (sys.stdout, sys.stderr):
 
 VG_ROOT = Path(".vg")
 PHASES_DIR = VG_ROOT / "phases"
+CONFIG_PATH = Path(".claude") / "vg.config.md"
+
+
+def _load_sandbox_runtime_keys() -> tuple[str, str]:
+    """Read sandbox SSH alias + project path from vg.config.md.
+
+    Returns:
+      (ssh_alias, project_path)
+
+    Falls back to a hard-coded default tuple only if the config file is
+    missing or keys unparseable — but config is the source of truth. Per
+    CLAUDE.md infra rule "Workflow = engine, no hardcode", this never bakes
+    the literal into output strings. The fallback exists only to keep the
+    aggregator runnable when invoked outside a configured project (tests).
+    See `.vg/HARDCODE-REGISTER.md` §4 for the literal values.
+    """
+    # INTENTIONAL_HARDCODE: docstring example + helper fallback (Phase K1 register §4)
+    fallback_alias, fallback_path = "vollx", "/home/vollx/vollxssp"
+    if not CONFIG_PATH.exists():
+        return fallback_alias, fallback_path
+    try:
+        text = CONFIG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return fallback_alias, fallback_path
+
+    # Best-effort YAML lookup — match `sandbox:` block then `run_prefix` / `project_path`
+    sandbox_re = re.compile(
+        r'(?ms)^\s*sandbox:\s*$\n((?:\s{2,}[^\n]+\n)+)',
+    )
+    m = sandbox_re.search(text)
+    if not m:
+        return fallback_alias, fallback_path
+    block = m.group(1)
+    alias = fallback_alias
+    path = fallback_path
+    rp = re.search(r'run_prefix:\s*["\']?([^"\'\n]+)', block)
+    if rp:
+        # run_prefix is "ssh vollx"; strip leading verb to extract alias
+        rp_val = rp.group(1).strip()
+        rp_parts = rp_val.split()
+        if len(rp_parts) >= 2 and rp_parts[0] == "ssh":
+            alias = rp_parts[1]
+    pp = re.search(r'project_path:\s*["\']?([^"\'\n]+)', block)
+    if pp:
+        path = pp.group(1).strip()
+    return alias, path
 
 # Service inference patterns — heuristic map phase name/SPECS hints → service
 SERVICE_HINTS = [
@@ -617,17 +663,21 @@ def write_deploy_recipes(phases: list[Path]) -> Path:
     out.extend(_block("Rollback", rollback_cmds))
 
     # Generic helpers (always useful)
+    # Note: SSH alias + project path emitted from vg.config.md (environments.sandbox.*).
+    # Read at template-emit time so the generated DEPLOY-RECIPES.md reflects current
+    # config — never hardcode "ssh vollx" or "/home/vollx/vollxssp" in template strings.
+    ssh_alias, project_path = _load_sandbox_runtime_keys()
     out.append("## Generic helpers")
     out.append("")
     out.append("```bash")
     out.append("# Full smoke pack (placeholder — step 18 wires .claude/scripts/vg_smoke_pack.sh):")
     out.append("# bash .claude/scripts/vg_smoke_pack.sh sandbox")
     out.append("")
-    out.append("# PM2 status on vollx:")
-    out.append("ssh vollx 'pm2 jlist | jq -r \".[] | [.name, .pm2_env.status, .pm2_env.restart_time] | @tsv\"'")
+    out.append(f"# PM2 status on {ssh_alias}:")
+    out.append(f"ssh {ssh_alias} 'pm2 jlist | jq -r \".[] | [.name, .pm2_env.status, .pm2_env.restart_time] | @tsv\"'")
     out.append("")
     out.append("# Disk pressure check:")
-    out.append("ssh vollx 'df -h / && du -sh /home/vollx/vollxssp'")
+    out.append(f"ssh {ssh_alias} 'df -h / && du -sh {project_path}'")
     out.append("```")
     out.append("")
 
@@ -778,6 +828,7 @@ def write_smoke_pack(phases: list[Path]) -> Path:
         out.append("")
         out.append("### api")
         out.append("```bash")
+        # INTENTIONAL_HARDCODE: starter-template literals (admin curates DEPLOY-RECIPES — Phase K1 register §4)
         out.append("curl -sf http://localhost:3001/health && echo OK")
         out.append("curl -sf https://api.vollx.com/health && echo OK")
         out.append("```")

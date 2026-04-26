@@ -118,11 +118,17 @@ deploy_log_snapshot() {
     echo "# Captured: $now"
     echo "# Phase: $(basename "$phase_dir")"
     echo ""
-    echo "## SSH target (vollx) — runtime versions"
+    echo "## SSH target — runtime versions"
+
+    # SSH alias resolved from vg.config.md (config.environments.sandbox.run_prefix
+    # is "ssh vollx" by default; strip leading "ssh " to get bare alias).
+    # Allow env-var override for non-default deployments.
+    local ssh_alias="${VG_SSH_ALIAS:-${RUN_PREFIX#ssh }}"
+    ssh_alias="${ssh_alias:-vollx}"   # final fallback if config not loaded
 
     # Try SSH, fail gracefully if target unreachable (local-only run)
     if command -v ssh >/dev/null 2>&1; then
-      ssh -o ConnectTimeout=5 -o BatchMode=yes vollx \
+      ssh -o ConnectTimeout=5 -o BatchMode=yes "$ssh_alias" \
         'node --version 2>/dev/null || echo "node: not installed"; \
          pnpm --version 2>/dev/null || echo "pnpm: not installed"; \
          python3 --version 2>/dev/null || echo "python3: not installed"; \
@@ -130,15 +136,15 @@ deploy_log_snapshot() {
          uname -a; \
          cat /etc/os-release 2>/dev/null | head -3' 2>/dev/null \
         | sed 's/^/  /' \
-        || echo "  (ssh vollx unreachable — skipping SSH snapshot)"
+        || echo "  (ssh $ssh_alias unreachable — skipping SSH snapshot)"
     else
       echo "  (ssh CLI not available — skipping)"
     fi
 
     echo ""
-    echo "## PM2 services (vollx)"
+    echo "## PM2 services ($ssh_alias)"
     if command -v ssh >/dev/null 2>&1; then
-      ssh -o ConnectTimeout=5 -o BatchMode=yes vollx 'pm2 jlist 2>/dev/null' 2>/dev/null \
+      ssh -o ConnectTimeout=5 -o BatchMode=yes "$ssh_alias" 'pm2 jlist 2>/dev/null' 2>/dev/null \
         | python3 -c "
 import json, sys
 try:
@@ -158,9 +164,9 @@ except Exception as e:
     fi
 
     echo ""
-    echo "## Disk (vollx /)"
+    echo "## Disk ($ssh_alias /)"
     if command -v ssh >/dev/null 2>&1; then
-      ssh -o ConnectTimeout=5 -o BatchMode=yes vollx 'df -h / 2>/dev/null' 2>/dev/null \
+      ssh -o ConnectTimeout=5 -o BatchMode=yes "$ssh_alias" 'df -h / 2>/dev/null' 2>/dev/null \
         | sed 's/^/  /' \
         || echo "  (df failed)"
     fi

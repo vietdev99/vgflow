@@ -29,6 +29,16 @@ Usage:
   audit-rule-cards.py --skill vg-build     # all rules from one skill
   audit-rule-cards.py --tag enforce        # only enforce-tagged
   audit-rule-cards.py --suspicious-only    # only flagged ones
+  audit-rule-cards.py --check-schema       # delegate schema portion to
+                                           #   verify-skill-invariants.py
+                                           #   (Phase P, v2.7) — single
+                                           #   parser shared, no dup logic
+
+When --check-schema is set, audit-rule-cards skips its own classification
+heuristics and instead invokes verify-skill-invariants's
+--check-schema-only mode for every skill in scope. Output is the
+combined schema verdict (PASS/WARN/BLOCK). Backward compat: without the
+flag, audit behavior is unchanged.
 """
 from __future__ import annotations
 
@@ -233,6 +243,47 @@ def audit_rule(rule: dict, validators: dict) -> list[str]:
     return issues
 
 
+def _delegate_schema_check(skill_filter: str | None) -> int:
+    """Delegate schema portion to verify-skill-invariants.py (Phase P, v2.7).
+
+    Imports the verifier module by file path (filename has hyphens, can't
+    be regular-imported), runs --check-schema-only over the requested
+    scope, and emits the verifier's evidence directly. Returns the
+    verifier's exit code (0 = PASS/WARN, 1 = BLOCK).
+
+    This avoids duplicating the manual-card parser between two scripts:
+    verify-skill-invariants owns the schema parser, audit-rule-cards
+    owns the classification heuristics. --check-schema bridges them.
+    """
+    import importlib.util as _ilu
+
+    verifier_path = (
+        REPO_ROOT / ".claude" / "scripts" / "validators" / "verify-skill-invariants.py"
+    )
+    if not verifier_path.exists():
+        sys.stderr.write(
+            f"⛔ verify-skill-invariants.py not found at {verifier_path}\n"
+            "   Phase P validator missing — install or run /vg:update\n"
+        )
+        return 2
+
+    spec = _ilu.spec_from_file_location("verify_skill_invariants", verifier_path)
+    mod = _ilu.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+
+    # Build argv for the verifier — schema-only mode, optional --skill
+    argv = ["--check-schema-only", "--json"]
+    if skill_filter:
+        argv += ["--skill", skill_filter]
+    else:
+        argv += ["--all"]
+
+    print(f"audit-rule-cards: delegating schema check → verify-skill-invariants {' '.join(argv)}")
+    print()
+    return mod.main(argv)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--sample", type=int, default=100,
@@ -244,7 +295,15 @@ def main() -> int:
     ap.add_argument("--suspicious-only", action="store_true",
                     help="Only show flagged rules")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--check-schema", action="store_true",
+                    help=("Phase P (v2.7) delegate: skip classification "
+                          "heuristics, run verify-skill-invariants "
+                          "--check-schema-only over the scope. Single "
+                          "parser shared between the two scripts."))
     args = ap.parse_args()
+
+    if args.check_schema:
+        return _delegate_schema_check(args.skill)
 
     rules = collect_rules(args.skill)
     if args.tag:

@@ -16,11 +16,24 @@ configs unportable and creates dual-source-of-truth bugs (config says
 one thing, hardcoded scripts another).
 
 Banned patterns (configurable via vg.config.md `validators.no_hardcoded_paths`):
-  1. ssh root@<IP>             — must use config.environments.<env>.run_prefix
-  2. ssh user@<IP>             — same
-  3. https?://<IP>             — must use config domain or config var
-  4. /home/vollx/vollxssp      — must use config.environments.<env>.project_path
-  5. raw <IP> in shell scripts — except in allowlisted infra files
+  1. ssh root@<IP>                 — must use config.environments.<env>.run_prefix
+  2. ssh user@<IP>                 — same
+  3. https?://<IP>                 — must use config domain or config var
+  4. /home/vollx/vollxssp          — must use config.environments.<env>.project_path
+  5. raw <IP> in shell scripts     — except in allowlisted infra files
+  6. ssh vollx (Phase K4)          — project-specific alias, must read
+                                     environments.sandbox.run_prefix
+  7. /home/vollx/vollxssp literal  — same as (4) but added as explicit
+     (Phase K4)                      regex pattern (non-config detection)
+  8. http://localhost:<port>/health — must read environments.<env>.deploy.health
+     (Phase K4)
+
+Line-level allowlist (Phase K4):
+  Any source line containing the comment marker `# INTENTIONAL_HARDCODE:`
+  (case-insensitive) is fully skipped. The marker may also sit on the
+  IMMEDIATELY PRECEDING line — used by triple-quoted-string fixtures
+  where the literal lives inside the string body. See
+  .vg/HARDCODE-REGISTER.md §3 for the schema.
 
 Allowlist (paths where literal IP / paths are intentional):
   - infra/ansible/inventory*
@@ -73,7 +86,30 @@ PATTERNS: list[tuple[re.Pattern, str, str]] = [
     # Match the IP as a separate group so we can filter loopback/private out
     (re.compile(r"\b(?P<verb>ssh|scp|rsync)\s+[^\s@]*@(?P<ip>\d+\.\d+\.\d+\.\d+)\b"), "ssh-to-raw-ip", "BLOCK"),
     (re.compile(r"https?://(?P<ip>\d+\.\d+\.\d+\.\d+)(?::\d+)?(/|\b)"), "raw-ip-url", "WARN"),
+    # Phase K4: project-specific SSH alias literal — config.environments.sandbox.run_prefix
+    # is "ssh vollx"; consumers should read run_prefix from vg.config.md, not bake "ssh vollx".
+    # Matches `ssh vollx` (followed by space/quote/EOL/path char) but tolerates docs/comments.
+    (re.compile(r"\bssh\s+vollx\b(?!\.)"), "ssh-alias-literal", "WARN"),
+    # Phase K4: project-path literal — config.environments.sandbox.project_path is
+    # "/home/vollx/vollxssp"; baking the literal creates dual-source-of-truth bugs.
+    (re.compile(r"/home/vollx/vollxssp\b"), "project-path-literal", "WARN"),
+    # Phase K4: bare health URL literals in source — should reference config
+    # environments.<env>.deploy.health. Excludes loopback (127.*) since those
+    # are dev defaults, but flags `https?://localhost:<port>/health`-style strings
+    # outside loopback context. Allowlist still covers docs/.md.
+    (re.compile(r"https?://localhost:\d+/health\b"), "health-url-literal", "WARN"),
 ]
+
+# Phase K4: line-level allowlist — any line containing this comment marker
+# is skipped. Used by detection-test fixtures (per register §5) where the
+# literal IP/SSH/path STRING is the test data — removing it defeats the
+# test. Annotated lines in test files exercise the detector deliberately.
+# Accepts the marker inside any of the common comment forms across languages
+# this validator scans (Python `#`, JS/TS/Go/Rust `//`, HTML/Markdown `<!--`).
+INTENTIONAL_HARDCODE_RE = re.compile(
+    r"(?:#|//|<!--)\s*INTENTIONAL_HARDCODE\b",
+    re.IGNORECASE,
+)
 
 # Allowlist patterns (path globs as regex)
 ALLOWLIST_RE = [
@@ -87,6 +123,7 @@ ALLOWLIST_RE = [
     re.compile(r"^apps/web/e2e/"),         # test fixtures
     re.compile(r"\.example$"),              # *.example files (templates)
     re.compile(r"^docs/"),
+    re.compile(r"^infra/docs/"),                      # infra runbooks/setup guides — Phase K1 register §6
     re.compile(r"^README"),
     re.compile(r"^CHANGELOG"),
     re.compile(r"\.git/"),
@@ -140,13 +177,58 @@ def is_allowlisted(rel_path: str, extras: list[re.Pattern]) -> bool:
 
 
 def scan_file(file_path: Path, project_paths: list[str]) -> list[dict]:
-    """Return list of findings: {pattern, line_no, snippet, severity}."""
+    """Return list of findings: {pattern, line_no, snippet, severity}.
+
+    Phase K4: Lines marked with `# INTENTIONAL_HARDCODE:` (inline) are
+    fully skipped. The marker may also sit on the immediately PRECEDING
+    line — useful for triple-quoted string fixtures where an inline
+    comment would land inside the string body. The lookback applies only
+    to the next non-blank line so unrelated comments don't accidentally
+    allowlist downstream code.
+    """
     findings: list[dict] = []
     try:
         text = file_path.read_text(encoding="utf-8", errors="replace")
     except (OSError, UnicodeDecodeError):
         return findings
-    for line_no, line in enumerate(text.splitlines(), 1):
+    raw_lines = text.splitlines()
+    # Pre-compute line-level allowlist: idx (1-based) -> bool
+    annotated: dict[int, bool] = {}
+    pending_marker_for_next = False
+    inside_marker_string = False  # True when marker propagated into a triple-quoted string
+    triple_re = re.compile(r'"""|\'\'\'')
+    for i, ln in enumerate(raw_lines, 1):
+        if INTENTIONAL_HARDCODE_RE.search(ln):
+            annotated[i] = True
+            pending_marker_for_next = True
+            inside_marker_string = False
+            continue
+        if inside_marker_string:
+            # Inside a triple-quoted string that the marker covers; annotate
+            # every line until the closing triple-quote.
+            annotated[i] = True
+            if triple_re.search(ln):
+                inside_marker_string = False
+            continue
+        if pending_marker_for_next and ln.strip():
+            # Apply marker to the next non-blank line. If that line OPENS a
+            # triple-quoted string (e.g., `X = """\\` or `X = '''`), keep
+            # propagating through the string body until the closing triple.
+            annotated[i] = True
+            triples = list(triple_re.finditer(ln))
+            if len(triples) % 2 == 1:
+                # Odd count → string opened but not closed on same line.
+                inside_marker_string = True
+            pending_marker_for_next = False
+        elif not ln.strip():
+            # Blank line preserves pending marker.
+            continue
+        else:
+            pending_marker_for_next = False
+
+    for line_no, line in enumerate(raw_lines, 1):
+        if annotated.get(line_no):
+            continue
         # Skip comments-only lines (best-effort) — patterns in pure comments
         # are usually intentional documentation. Heuristic: leading // or # only.
         stripped = line.strip()

@@ -13,15 +13,98 @@ BLOCK. It:
 
 Block-log summary prints at end of pytest session so ops can see which
 gates fired, how often, and whether any unexpected ones appeared.
+
+Phase R (v2.7) — platform compatibility:
+`BASH_AVAILABLE` detects whether subprocess.run(["bash", ...]) actually
+works in this environment. Windows machines with broken WSL distros
+return False, allowing tests that shell out to bash to skip with a
+clear reason instead of failing on environment noise.
+See PLATFORM-COMPAT.md for the full matrix.
 """
 from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+
+
+# ─── Phase R — bash subprocess availability probe ─────────────────────
+# Tests that invoke `subprocess.run(["bash", ...])` rely on a working
+# bash executable resolved by the OS PATH. Windows installs may surface
+# the WSL `bash.exe` shim (System32) which fails when no default
+# distro is installed, producing rc=1 with a "CreateProcessCommon"
+# stderr blob — NOT a real test failure. Skip such tests on platforms
+# where the probe fails so CI noise stays bounded to genuine issues.
+def _probe_bash() -> tuple[bool, str]:
+    try:
+        r = subprocess.run(
+            ["bash", "-c", "echo OK"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and "OK" in r.stdout:
+            return True, ""
+        return False, f"bash probe rc={r.returncode}, stderr={(r.stderr or '')[:200]!r}"
+    except FileNotFoundError:
+        return False, "bash not found on PATH"
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, f"bash probe failed: {exc}"
+
+
+_BASH_OK, _BASH_REASON = _probe_bash()
+BASH_AVAILABLE: bool = _BASH_OK
+BASH_UNAVAILABLE_REASON: str = _BASH_REASON or "bash subprocess unavailable on this platform"
+
+# Convenience pytest marker — usage:
+#   @needs_bash
+#   def test_x(...): ...
+# or
+#   pytestmark = needs_bash   # at module top
+needs_bash = pytest.mark.skipif(
+    not BASH_AVAILABLE,
+    reason=(
+        "Phase R: bash subprocess unavailable on this platform "
+        f"(probe: {BASH_UNAVAILABLE_REASON}). "
+        "See .claude/scripts/tests/PLATFORM-COMPAT.md."
+    ),
+)
+
+# Convenience platform marker
+on_windows = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Phase R: skipped on Windows — see PLATFORM-COMPAT.md",
+)
+
+
+# ─── Phase R — UTF-8 subprocess helper (defense in depth) ─────────────
+# Windows Python defaults `subprocess.run(text=True)` to the system
+# legacy codec (cp1258 / cp1252 / cp437 depending on locale), which
+# raises UnicodeDecodeError on any byte ≥0x80 in subprocess stdout
+# (validator emoji, narration glyphs, BOMs from PowerShell). The
+# canonical fix is `encoding="utf-8", errors="replace"` on every
+# subprocess.run invocation that captures output.
+#
+# New tests SHOULD use this helper. Existing tests that already pass
+# do so because they (a) don't decode output, (b) explicitly set
+# PYTHONIOENCODING=utf-8 in env, or (c) consume bytes only.
+def run_utf8(args, **kwargs):
+    """Drop-in subprocess.run wrapper with UTF-8 stdout/stderr decoding.
+
+    Use instead of subprocess.run when capturing text output cross-platform.
+    Forces text mode + UTF-8 decoding + replacement for undecodable bytes.
+    """
+    kwargs.setdefault("capture_output", True)
+    kwargs["text"] = True
+    kwargs["encoding"] = "utf-8"
+    kwargs.setdefault("errors", "replace")
+    env = kwargs.get("env") or os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    kwargs["env"] = env
+    return subprocess.run(args, **kwargs)
 
 
 _BLOCK_LOG_DIR = Path(".vg") / "block-log"

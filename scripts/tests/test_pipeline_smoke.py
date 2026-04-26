@@ -30,6 +30,16 @@ from pathlib import Path
 
 import pytest
 
+from conftest import needs_bash
+
+# Phase R (v2.7): pipeline smoke extracts ```bash blocks from skill MD
+# and runs them via subprocess.run(["bash", script_path]). Requires a
+# working bash binary. Windows boxes with the WSL bash.exe shim but no
+# default distro fail with rc=1 + "CreateProcessCommon" stderr — not a
+# real test failure. Linux/macOS CI runs these normally.
+# See PLATFORM-COMPAT.md.
+pytestmark = needs_bash
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ACCEPT_MD = REPO_ROOT / ".claude" / "commands" / "vg" / "accept.md"
 SPECS_MD = REPO_ROOT / ".claude" / "commands" / "vg" / "specs.md"

@@ -27,6 +27,11 @@ sys.path.insert(0, str(REPO_ROOT / ".claude" / "scripts"))
 
 # Import orchestrator's contracts module (treats dir as package)
 orch_dir = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
+# Phase R (v2.7): contracts.py does `from _repo_root import find_repo_root`
+# which only resolves when orch_dir itself (not its parent) is on sys.path.
+# Without this insert, collection fails with ModuleNotFoundError on every
+# platform — pre-existing bug surfaced by `python -m pytest` invocation.
+sys.path.insert(0, str(orch_dir))
 sys.path.insert(0, str(orch_dir.parent))
 from importlib.machinery import SourceFileLoader
 
@@ -43,13 +48,21 @@ BLUEPRINT_MD = REPO_ROOT / ".claude" / "commands" / "vg" / "blueprint.md"
 class TestMustWriteNormalizer:
     def test_string_form_default(self):
         out = contracts_mod.normalize_must_write(["${PHASE_DIR}/PLAN.md"])
-        assert out == [{
+        # Phase R (v2.7): normalizer is allowed to add new defaulted keys
+        # over time (must_be_created_in_run, check_provenance, etc.) without
+        # breaking this test. Assert the contract on the 5 invariants the
+        # forge defense actually depends on; ignore additive surface.
+        assert len(out) == 1
+        entry = out[0]
+        expected_subset = {
             "path": "${PHASE_DIR}/PLAN.md",
             "content_min_bytes": 1,
             "content_required_sections": [],
             "glob_min_count": None,
             "required_unless_flag": None,
-        }]
+        }
+        for k, v in expected_subset.items():
+            assert entry[k] == v, f"normalizer drift on {k}: {entry[k]!r} != {v!r}"
 
     def test_dict_with_glob_min_count(self):
         out = contracts_mod.normalize_must_write([

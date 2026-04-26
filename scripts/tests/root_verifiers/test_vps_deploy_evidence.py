@@ -75,6 +75,7 @@ class TestVpsDeployEvidence:
             encoding="utf-8",
         )
         (pdir / "PLAN.md").write_text(
+            # INTENTIONAL_HARDCODE: deploy-verb fixture for evidence detection (Phase K1 register §5)
             "# Plan\n## Task 1: Install\nssh vollx 'apt install redis'\n"
             "pm2 start ecosystem.config.cjs\n",
             encoding="utf-8",
@@ -112,6 +113,7 @@ class TestVpsDeployEvidence:
             encoding="utf-8",
         )
         (pdir / "PLAN.md").write_text(
+            # INTENTIONAL_HARDCODE: deploy-verb-no-evidence fixture (Phase K1 register §5)
             "# Plan\n## Task 1: Run\nssh vollx 'install pg'; pm2 reload\n",
             encoding="utf-8",
         )
