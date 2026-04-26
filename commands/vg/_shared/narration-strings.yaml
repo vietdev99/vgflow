@@ -128,3 +128,45 @@ graphify_skip_fresh:
 graphify_incremental:
   vi: "Incremental rebuild: {changed_files} files changed, {affected_nodes} nodes affected"
   en: "Incremental rebuild: {changed_files} files changed, {affected_nodes} nodes affected"
+
+# ─── UAT narrative (Phase 15 D-18) ─────────────────────────────────
+# Used by /vg:accept step 4b_build_uat_narrative + UAT-NARRATIVE.md template.
+# verify-uat-strings-no-hardcode.py forward-checks all {{uat_*}} references
+# resolve to keys here. Backward-checks UAT template has no literal text outside
+# {{...}} interpolation. All 9 keys REQUIRED per narration-strings.v1.json schema.
+
+uat_entry_label:
+  vi: "Truy cập"
+  en: "Open"
+
+uat_role_label:
+  vi: "vai trò"
+  en: "role"
+
+uat_account_label:
+  vi: "tài khoản"
+  en: "account"
+
+uat_navigation_label:
+  vi: "Điều hướng"
+  en: "Navigation"
+
+uat_precondition_label:
+  vi: "Tiền điều kiện dữ liệu"
+  en: "Data precondition"
+
+uat_expected_label:
+  vi: "Hành vi mong đợi"
+  en: "Expected behavior"
+
+uat_region_label:
+  vi: "Vùng tập trung"
+  en: "Focus region"
+
+uat_screenshot_compare:
+  vi: "So sánh với screenshot"
+  en: "Compare against screenshot"
+
+uat_prompt_pfs:
+  vi: "Đã thực hiện đúng chưa? [p=pass / f=fail / s=skip]"
+  en: "Was this implemented correctly? [p=pass / f=fail / s=skip]"
