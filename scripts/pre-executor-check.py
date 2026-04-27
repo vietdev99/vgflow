@@ -440,6 +440,29 @@ def main():
     if "not found" in task_context.lower():
         warnings.append(f"Task {args.task_num}: {task_context}")
 
+    # Phase 16 D-01 — compute task body SHA256 + meta sidecar payload.
+    # Best-effort: if scripts/lib/task_hasher.py is missing (older install),
+    # skip silently rather than crash. build.md step 8c writes meta to disk
+    # using this payload (T-1.2).
+    task_meta = None
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "lib"))
+        from task_hasher import stable_meta as _stable_meta  # noqa: E402
+        # Source path: best-effort — find the PLAN file we extracted from.
+        plan_files = sorted(phase_dir.glob(args.plan_file or "*PLAN*.md"))
+        source_path = str(plan_files[0].relative_to(phase_dir.parent.parent.parent)) \
+            if plan_files else "PLAN.md"
+        task_meta = _stable_meta(
+            task_id=args.task_num,
+            phase=str(phase_dir.name).split("-")[0].lstrip("0") or phase_dir.name,
+            wave="unknown",  # build.md step 8c overrides with actual wave-${N}
+            source_path=source_path,
+            source_format="heading",  # T-2.1 will detect xml vs heading; default heading
+            body_text=task_context,
+        )
+    except Exception as e:
+        warnings.append(f"P16 D-01 task_meta: {type(e).__name__}: {e}")
+
     # Extract contract section
     contract_context = extract_contract_section(phase_dir, task_context)
 
@@ -494,6 +517,9 @@ def main():
         "build_config": build_config,
         "warnings": warnings,
         "graphify_used": config.get("graphify.enabled", "false") == "true",
+        # Phase 16 D-01: caller writes <task>.meta.json sidecar from this
+        # payload via build.md step 8c (T-1.2). Null if hasher import failed.
+        "task_meta": task_meta,
     }
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
