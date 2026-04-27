@@ -1370,6 +1370,24 @@ if [ -n "$UI_MAP_SUBTREE_BLOCK" ] || [ -n "$DESIGN_CONTEXT" ]; then
     fi
   } > "$PROMPT_PERSIST"
   echo "✓ Executor prompt persisted → $PROMPT_PERSIST"
+
+  # Phase 16 D-01 — write .meta.json sidecar from CONTEXT_JSON.task_meta.
+  # verify-task-fidelity.py (T-4.3) reads this to recompute hash post-spawn
+  # and detect orchestrator paraphrase / truncation. wave field overridden
+  # here from "unknown" (pre-executor-check.py default) to actual wave-${N}.
+  PROMPT_META_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.meta.json"
+  echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "
+import json, sys
+ctx = json.load(sys.stdin)
+meta = ctx.get('task_meta')
+if not meta:
+    sys.exit(0)  # hasher missing — sidecar skipped, T-4.3 audit will WARN
+meta['wave'] = 'wave-${N}'
+print(json.dumps(meta, indent=2))
+" > "$PROMPT_META_PERSIST" 2>/dev/null || true
+  if [ -s "$PROMPT_META_PERSIST" ]; then
+    echo "✓ P16 D-01 task meta persisted → $PROMPT_META_PERSIST"
+  fi
 fi
 
 # Script auto-builds siblings + callers if missing (runs find-siblings.py + build-caller-graph.py)
