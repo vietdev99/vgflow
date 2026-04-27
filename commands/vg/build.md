@@ -1400,17 +1400,21 @@ import json, sys
 
 ctx = json.loads('''$CONTEXT_JSON''')
 
-# Per-block soft limits (from rule R4 + Phase 15 D-14 ui_map_subtree)
-BUDGETS = {
+# Phase 16 D-04 — read R4 caps from CONTEXT_JSON.applied_caps (set by
+# pre-executor-check.py based on CONTEXT.md frontmatter cross_ai_enriched
+# flag). Falls back to baseline 300/500/200/400/400/200/80 + total 2500
+# when applied_caps absent (older pre-executor-check.py without D-04).
+BUDGETS = ctx.get('applied_caps') or {
     'task_context': 300,
     'contract_context': 500,
     'goals_context': 200,
     'sibling_context': 400,
     'downstream_callers': 400,
     'design_context': 200,
-    'ui_map_subtree': 80,   # D-14 targets ~50 lines; allow 80 for nested waves
+    'ui_map_subtree': 80,
 }
-HARD_TOTAL_MAX = ${CONFIG_BUILD_PROMPT_MAX_LINES:-2500}
+HARD_TOTAL_MAX = ctx.get('hard_total_max') or ${CONFIG_BUILD_PROMPT_MAX_LINES:-2500}
+BUDGET_MODE = ctx.get('budget_mode', 'default')
 
 per_block_lines = {}
 total = 0
@@ -1438,7 +1442,7 @@ if total > HARD_TOTAL_MAX:
     print(f"   Reduce contract sections (chỉ endpoint task touches) hoặc tăng config.build.prompt_max_lines")
     sys.exit(1)
 else:
-    print(f"✓ R4 budget: {total} lines (hard max {HARD_TOTAL_MAX}), per-block ok")
+    print(f"✓ R4 budget [{BUDGET_MODE}]: {total} lines (hard max {HARD_TOTAL_MAX}), per-block ok")
 PY
 R4_RC=$?
 if [ "$R4_RC" != "0" ]; then

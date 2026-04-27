@@ -701,6 +701,49 @@ def main():
     if "not found" in contract_context.lower() and "No endpoints" not in contract_context:
         status = "missing_artifacts"
 
+    # Phase 16 D-04 — R4 budget conditional caps. Read CONTEXT frontmatter
+    # cross_ai_enriched flag; bump per-block + total caps when true. build.md
+    # step 8c R4 enforcement reads `applied_caps` instead of literal BUDGETS.
+    enriched = False
+    ctx_path = phase_dir / "CONTEXT.md"
+    if ctx_path.exists():
+        ctx_text = ctx_path.read_text(encoding="utf-8", errors="ignore")
+        fm_m = re.match(r"^---\s*\n(.*?)\n---\s*\n", ctx_text, re.DOTALL)
+        if fm_m and re.search(r"^\s*cross_ai_enriched\s*:\s*(true|True)\s*$",
+                              fm_m.group(1), re.MULTILINE):
+            enriched = True
+    if enriched:
+        applied_caps = {
+            "task_context": 600,
+            "contract_context": 800,
+            "goals_context": 400,
+            "sibling_context": 400,
+            "downstream_callers": 400,
+            "design_context": 400,
+            "ui_map_subtree": 200,
+        }
+        hard_total_max = 4000
+        budget_mode = "enriched"
+    else:
+        applied_caps = {
+            "task_context": 300,
+            "contract_context": 500,
+            "goals_context": 200,
+            "sibling_context": 400,
+            "downstream_callers": 400,
+            "design_context": 200,
+            "ui_map_subtree": 80,
+        }
+        hard_total_max = 2500
+        budget_mode = "default"
+    if enriched:
+        # Stderr log (build.md echoes the success line; this is for /vg:doctor + audit)
+        print(
+            f"ℹ R4 budget: enriched-mode caps applied (cross_ai_enriched=true) "
+            f"→ task=600, contract=800, total_max=4000",
+            file=sys.stderr,
+        )
+
     result = {
         "status": status,
         "task_context": task_context,
@@ -715,6 +758,10 @@ def main():
         # Phase 16 D-01: caller writes <task>.meta.json sidecar from this
         # payload via build.md step 8c (T-1.2). Null if hasher import failed.
         "task_meta": task_meta,
+        # Phase 16 D-04: build.md step 8c R4 reads these instead of hardcoded.
+        "budget_mode": budget_mode,
+        "applied_caps": applied_caps,
+        "hard_total_max": hard_total_max,
     }
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
