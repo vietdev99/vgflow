@@ -274,12 +274,16 @@ class TestPhase15RegressionGreen:
     def test_phase15_plus_phase17_suite_passes(self):
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
-        # Discover all Phase 15 + Phase 17 per-wave tests dynamically — file
-        # additions in future waves auto-pick up without editing this list.
+        # Discover all Phase 15+ per-wave tests dynamically — file additions
+        # in future waves auto-pick up without editing this list. W-5 (P17
+        # cross-AI WARN): broaden glob from `1[57]` (only P15 + P17) to
+        # `1[5-9]` so future P16 + P18 + P19 are caught automatically.
+        # Update again when phases reach 20+ (or replace with full
+        # `test_phase[1-9]?[0-9]_*.py` wildcard).
         test_files = sorted(
             str(p.relative_to(REPO_ROOT))
             for p in (REPO_ROOT / "scripts" / "tests" / "root_verifiers").glob(
-                "test_phase1[57]_*.py"
+                "test_phase1[5-9]_*.py"
             )
             if p.name != "test_phase15_acceptance.py"
             and p.name != "test_phase17_acceptance.py"

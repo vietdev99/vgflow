@@ -437,6 +437,21 @@ async function _loginViaApi(
     if (!resp.ok()) return false;
     // Persist storage state including any Set-Cookie the server returned.
     await ctx.storageState({ path: storageJsonPath });
+    // W-2 (P17 cross-AI WARN): server may return 200 with empty body / no
+    // Set-Cookie when auth is broken — declare success only if at least one
+    // cookie was captured. Otherwise fall through to UI strategy so the
+    // 24h cache won't lock us into an unusable storage state.
+    try {
+      const stored = JSON.parse(fs.readFileSync(storageJsonPath, 'utf8'));
+      const cookieCount = Array.isArray(stored?.cookies) ? stored.cookies.length : 0;
+      if (cookieCount === 0) {
+        // Remove the empty file so caller / fallback rewrites it.
+        try { fs.unlinkSync(storageJsonPath); } catch { /* nothing to clean */ }
+        return false;
+      }
+    } catch {
+      return false;
+    }
     return true;
   } catch {
     return false;
@@ -533,7 +548,20 @@ export async function loginOnce(role: string, opts?: LoginOnceOptions): Promise<
  */
 export function useAuth(role: string, opts?: { storagePath?: string }): { storageState: string } {
   const storageDir = _resolveStoragePath({ storagePath: opts?.storagePath });
-  return {
-    storageState: path.resolve(storageDir, `${role}.json`),
-  };
+  const stateFile = path.resolve(storageDir, `${role}.json`);
+  // W-1 (P17 cross-AI WARN): warn early if storage state file is missing —
+  // Playwright's ENOENT message points at the path but doesn't explain WHY
+  // (forgot global-setup wiring? VG_SKIP_GLOBAL_SETUP=1 leaked from CI?).
+  // Cheap fs.existsSync at fixture-build time gives the consumer a usable
+  // hint before the first test() body runs.
+  if (!fs.existsSync(stateFile)) {
+    console.warn(
+      `[vg/useAuth] storage state missing for role '${role}' at ${stateFile}\n`
+      + `             Did playwright global-setup run? Check:\n`
+      + `               - playwright.config.ts has globalSetup: require.resolve('./e2e/global-setup')\n`
+      + `               - e2e/global-setup.ts copied (vg:test step 5d-pre auto-installs)\n`
+      + `               - VG_SKIP_GLOBAL_SETUP env var is unset`,
+    );
+  }
+  return { storageState: stateFile };
 }
