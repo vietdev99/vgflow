@@ -1,0 +1,30 @@
+// FIXTURE — pre-Phase 17 spec pattern (BLOCK target after 2 release cycles).
+//
+// This file demonstrates the LEGACY pattern that
+// scripts/validators/verify-test-session-reuse.py (Phase 17 D-06) flags as
+// a stale codegen pattern. Used in test_phase17_acceptance.py to assert the
+// validator emits WARN (and BLOCK in --strict mode) when it sees this shape.
+
+import { test, expect } from '@playwright/test';
+import { loginAs } from '../helpers';
+import {
+  applyFilter, readUrlParams, readVisibleRows, expectAssertion,
+} from '../helpers/interactive';
+
+const ROUTE  = '/admin/sites';
+const ROLE   = 'admin';
+
+test.describe('FIXTURE legacy · sites list filter', () => {
+  // ─── ANTI-PATTERN: per-test login eats wall-clock + spawns fresh browser context ───
+  test.beforeEach(async ({ page }) => {
+    await loginAs(page, ROLE);
+    await page.goto(ROUTE);
+  });
+
+  test('filter status=active syncs to URL + filters rows', async ({ page }) => {
+    await applyFilter(page, 'status', 'active');
+    expect(readUrlParams(page).status).toBe('active');
+    const rows = await readVisibleRows(page);
+    await expectAssertion(rows, 'rows[*].status === param', { param: 'active' });
+  });
+});

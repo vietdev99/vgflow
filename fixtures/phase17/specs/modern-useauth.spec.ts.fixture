@@ -1,0 +1,30 @@
+// FIXTURE — Phase 17 D-03 spec pattern (PASS target).
+//
+// This file demonstrates the modern test session reuse pattern. Login state
+// comes from .auth/<role>.json populated by Playwright globalSetup
+// (commands/vg/_shared/templates/playwright-global-setup.template.ts).
+// Each test merely navigates; no per-test login flow.
+
+import { test, expect } from '@playwright/test';
+import {
+  applyFilter, readUrlParams, readVisibleRows, expectAssertion, useAuth,
+} from '../helpers/interactive';
+
+const ROUTE  = '/admin/sites';
+const ROLE   = 'admin';
+
+test.use(useAuth(ROLE));
+
+test.describe('FIXTURE modern · sites list filter', () => {
+  // No loginAs in beforeEach — storage state already loaded by useAuth.
+  test.beforeEach(async ({ page }) => {
+    await page.goto(ROUTE);
+  });
+
+  test('filter status=active syncs to URL + filters rows', async ({ page }) => {
+    await applyFilter(page, 'status', 'active');
+    expect(readUrlParams(page).status).toBe('active');
+    const rows = await readVisibleRows(page);
+    await expectAssertion(rows, 'rows[*].status === param', { param: 'active' });
+  });
+});
