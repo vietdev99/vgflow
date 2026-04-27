@@ -1988,6 +1988,44 @@ if [ -x "$INJ_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
 fi
 ```
 
+**Phase 16 D-06 — Task fidelity audit (orchestrator paraphrase detection):**
+
+Post-spawn 3-way hash audit. For each (wave × task) pair under
+`.build/wave-${N}/executor-prompts/`, compares:
+  1. PLAN.md task block re-extracted now (current truth)
+  2. .meta.json sidecar (snapshot at spawn time, P16 D-01)
+  3. .md prompt body (what executor actually received)
+
+Detects 2 failure modes:
+- PLAN drift since spawn (rare; mid-build edit → WARN)
+- Body shortfall (orchestrator paraphrase / truncate):
+    ≤10% PASS, 10-30% WARN, >30% BLOCK
+
+Closes the PARAPHRASE leg of the "AI lazy-read blueprint" failure mode
+(P15 W9 closed SPAWN AUDIT, v2.11.0 closed MISSING + TRUNCATION).
+
+```bash
+TF_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-task-fidelity.py"
+WAVE_PROMPT_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
+if [ -x "$TF_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
+  ${PYTHON_BIN} "$TF_VAL" --phase "${PHASE_NUMBER}" \
+      --prompts-dir "$WAVE_PROMPT_DIR" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-fidelity-w${N}.json" 2>&1 || true
+  TFV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-fidelity-w${N}.json" 2>/dev/null)
+  case "$TFV" in
+    PASS|WARN) echo "✓ D-06 task fidelity audit: $TFV" ;;
+    BLOCK)
+      echo "⛔ D-06 task fidelity audit: BLOCK — orchestrator likely paraphrased task body" >&2
+      echo "   See ${VG_TMP}/task-fidelity-w${N}.json for per-task shortfall breakdown" >&2
+      echo "   Override: --skip-task-fidelity-audit (logs override-debt as kind=task-fidelity-audit-skipped)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-task-fidelity-audit ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ D-06 task fidelity audit: $TFV" ;;
+  esac
+fi
+```
+
 **Step 1 — Commit format + SUMMARY verification:**
 Verify commits match pattern `^(feat|fix|refactor|test|chore)\([\d.]+-\d+\): `.
 Verify SUMMARY.md sections exist for each task in wave.
