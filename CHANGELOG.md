@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.12.7 (2026-04-28) — Runtime CSS asset verification
+
+Patch release for a real UI failure class: built pages linking CSS URLs that return source code, HTML, or the wrong MIME type.
+
+- Added `verify-static-assets-runtime.py`, a live probe that opens `VG_TARGET_URL`, discovers `<link rel="stylesheet">`, fetches each stylesheet, and blocks if it is not served as `text/css`.
+- The validator also blocks stylesheet bodies that look like HTML/JS/TS source even when the header claims `text/css`.
+- Wired the validator into `/vg:review`, `/vg:test`, and `/vg:accept`; it auto-skips when no live target URL is available and is unquarantinable when active.
+- Added regression tests for valid CSS, wrong `Content-Type`, source-code body, no-target auto-skip, and orchestrator/registry wiring.
+
 ## v2.12.6 (2026-04-28) — Context capsules + Codex test-goal lane
 
 Feature release for reducing AI lazy-read/context miss risk before build.

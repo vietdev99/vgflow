@@ -2558,6 +2558,7 @@ COMMAND_VALIDATORS = {
                   "secrets-scan", "verify-input-validation",
                   "verify-authz-declared",
                   "accessibility-scan",
+                  "verify-static-assets-runtime",
                   # B9.2 (2026-04-23): i18n coverage — catches missing
                   # locale keys + hardcoded strings before review browser
                   # discovery. Config-driven (allowlist via .vg/).
@@ -2645,6 +2646,7 @@ COMMAND_VALIDATORS = {
                 # X-Frame-Options / CSP at runtime. Same auto-skip
                 # behavior on missing VG_TARGET_URL.
                 "verify-security-headers-runtime",
+                "verify-static-assets-runtime",
                 # Harness v2.6 (2026-04-25): authz negative-paths probe.
                 # Wrong-role → 403 verification per endpoint. Auto-skips
                 # without VG_TARGET_URL or fixtures file.
@@ -2691,6 +2693,7 @@ COMMAND_VALIDATORS = {
                   # (production deploy MUST set it).
                   "verify-cookie-flags-runtime",
                   "verify-security-headers-runtime",
+                  "verify-static-assets-runtime",
                   # Harness v2.6 (2026-04-25): bootstrap rule promotion
                   # behavioral check — promoted Tier-A rule text must
                   # appear in ≥1 captured prompt of next-phase run.
@@ -2907,6 +2910,7 @@ UNQUARANTINABLE = {
     "verify-no-no-verify",                # pre-commit hook bypass (test_no_no_verify covers)
     "verify-security-baseline-project",   # TLS/headers/CORS/lockfile baseline
     "verify-security-headers-runtime",    # runtime CSP/HSTS/X-Frame-Options
+    "verify-static-assets-runtime",       # runtime CSS MIME/body sanity
     "verify-allow-flag-audit",            # override flag misuse audit
     "verify-vps-deploy-evidence",         # actual deploy ran (anti "build-only" forge)
     "verify-clean-failure-state",         # recovery state integrity post-crash
@@ -2936,6 +2940,7 @@ VALIDATOR_EXTRA_ARGS: dict[str, list[tuple[str, str]]] = {
     "verify-executor-context-scope": [("--run-id", "run_id"),
                                       ("--plan-file", "plan_file")],
     "verify-review-loop-evidence":   [("--phase-dir", "phase_dir")],
+    "verify-static-assets-runtime":  [("--target-url", "target_url")],
     # Phase-dir-aware validators that already accept --phase don't need
     # extras here; they resolve phase_dir from --phase internally.
 }

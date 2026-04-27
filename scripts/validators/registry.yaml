@@ -102,6 +102,15 @@ validators:
     added_in: v2.5.2
     description: HSTS/CSP/X-Frame-Options/nosniff required on production endpoints
 
+  - id: static-assets-runtime
+    path: .claude/scripts/validators/verify-static-assets-runtime.py
+    severity: block
+    phases_active: [review, test, accept]
+    domain: ui
+    runtime_target_ms: 5000
+    added_in: v2.12.7
+    description: Linked stylesheet assets must be reachable text/css, not HTML/JS/source code
+
   - id: authz-negative-paths
     path: .claude/scripts/validators/verify-authz-negative-paths.py
     severity: block
