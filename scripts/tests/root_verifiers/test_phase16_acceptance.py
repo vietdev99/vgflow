@@ -274,7 +274,11 @@ class TestPhase16TaskFidelity:
             lines = body.splitlines()
             keep = max(1, int(len(lines) * (1 - body_truncate_pct)))
             body = "\n".join(lines[:keep])
-        (prompt_dir / "1.md").write_text(body, encoding="utf-8")
+        # Phase 16 hot-fix (v2.11.1): build.md step 8c writes *.body.md
+        # (separate from *.uimap.md UI-MAP wrapper). Test now mirrors that
+        # production layout instead of the legacy *.md (which was the
+        # UI-MAP wrapper, never the task body — see cross-AI BLOCKers 1+2).
+        (prompt_dir / "1.body.md").write_text(body, encoding="utf-8")
         (prompt_dir / "1.meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return phase_dir, prompt_dir
 

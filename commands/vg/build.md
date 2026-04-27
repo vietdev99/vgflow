@@ -1344,20 +1344,59 @@ NONE — task has no owned UI subtree (backend / non-FE task in mixed wave).
   fi
 fi
 
-# ─── Phase 15 D-12a — persist composed prompt for verify-uimap-injection ──
-# Validator (verify-uimap-injection.py) audits prepared executor prompts on
-# disk to confirm both ## UI-MAP-SUBTREE-FOR-THIS-WAVE + ## DESIGN-REF
-# headers were injected. Without persisting we can't audit — orchestrator
-# only sees the prompt in-flight via Agent() / Task tool call.
+# ─── Phase 16 hot-fix (v2.11.1) — split persist (BLOCKers 2+3) ────────────
+# Cross-AI consensus rework: previous code wrapped BOTH the prompt body
+# persist AND the meta sidecar persist inside the UI/design conditional.
+# Two failure modes:
+#   (B2) UI tasks: ${TASK_NUM}.md contained UI-MAP wrapper, NOT task body —
+#        verify-task-fidelity.py compared against that wrapper's line count
+#        → false BLOCK on every UI task (test fixture bypassed by writing
+#        body directly to disk).
+#   (B3) Backend tasks (no UI subtree, no design context): step 8c
+#        short-circuited entirely → no meta.json → audit silent PASS →
+#        orchestrator could paraphrase backend task bodies freely.
 #
-# Skip when neither subtree nor design context populated (pure backend task).
+# Now: 3 file shapes, 2 always-on + 1 conditional:
+#   ${TASK_NUM}.body.md  — raw task body (what the executor's <task_context>
+#                          should mirror). Always persisted. Read by
+#                          verify-task-fidelity.py for hash compare.
+#   ${TASK_NUM}.meta.json — D-01 sidecar with source_block_sha256. Always
+#                          persisted. Read by verify-task-fidelity.py.
+#   ${TASK_NUM}.uimap.md  — D-12a UI-MAP+DESIGN-REF wrapper. Only persisted
+#                          for UI tasks. Read by verify-uimap-injection.py.
+
+PROMPT_PERSIST_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
+mkdir -p "$PROMPT_PERSIST_DIR" 2>/dev/null
+PROMPT_BODY_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.body.md"
+PROMPT_META_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.meta.json"
+
+# (1) Body persist — always. Source of truth is $TASK_CONTEXT (the
+# canonical PLAN task body from CONTEXT_JSON, written by
+# pre-executor-check.py extract_task_section_v2 in C1 hot-fix).
+printf '%s\n' "$TASK_CONTEXT" > "$PROMPT_BODY_PERSIST"
+echo "✓ Task body persisted → $PROMPT_BODY_PERSIST"
+
+# (2) Meta sidecar — always. wave field overridden from "unknown"
+# (pre-executor-check.py default) to actual wave-${N}.
+echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "
+import json, sys
+ctx = json.load(sys.stdin)
+meta = ctx.get('task_meta')
+if not meta:
+    sys.exit(0)  # hasher missing — sidecar skipped, T-4.3 audit will WARN
+meta['wave'] = 'wave-${N}'
+print(json.dumps(meta, indent=2))
+" > "$PROMPT_META_PERSIST" 2>/dev/null || true
+if [ -s "$PROMPT_META_PERSIST" ]; then
+  echo "✓ P16 D-01 task meta persisted → $PROMPT_META_PERSIST"
+fi
+
+# (3) UI-MAP wrapper persist — UI tasks only (D-12a injection audit input).
 if [ -n "$UI_MAP_SUBTREE_BLOCK" ] || [ -n "$DESIGN_CONTEXT" ]; then
-  PROMPT_PERSIST_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
-  mkdir -p "$PROMPT_PERSIST_DIR" 2>/dev/null
-  PROMPT_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.md"
+  PROMPT_UIMAP_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.uimap.md"
   {
-    echo "<!-- Wave ${N} / Task ${TASK_NUM} executor prompt audit trail (Phase 15 D-12a). -->"
-    echo "<!-- Auto-written by /vg:build step 8c BEFORE Agent() spawn — verifier reads this. -->"
+    echo "<!-- Wave ${N} / Task ${TASK_NUM} UI-MAP+design-ref wrapper (Phase 15 D-12a). -->"
+    echo "<!-- Read by verify-uimap-injection.py — separate from .body.md (P16 hotfix). -->"
     echo ""
     echo "${UI_MAP_SUBTREE_BLOCK:-## UI-MAP-SUBTREE-FOR-THIS-WAVE\n\nNONE}"
     echo ""
@@ -1368,26 +1407,8 @@ if [ -n "$UI_MAP_SUBTREE_BLOCK" ] || [ -n "$DESIGN_CONTEXT" ]; then
     else
       echo "NONE — task has no <design-ref> attribute (non-UI task)."
     fi
-  } > "$PROMPT_PERSIST"
-  echo "✓ Executor prompt persisted → $PROMPT_PERSIST"
-
-  # Phase 16 D-01 — write .meta.json sidecar from CONTEXT_JSON.task_meta.
-  # verify-task-fidelity.py (T-4.3) reads this to recompute hash post-spawn
-  # and detect orchestrator paraphrase / truncation. wave field overridden
-  # here from "unknown" (pre-executor-check.py default) to actual wave-${N}.
-  PROMPT_META_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.meta.json"
-  echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "
-import json, sys
-ctx = json.load(sys.stdin)
-meta = ctx.get('task_meta')
-if not meta:
-    sys.exit(0)  # hasher missing — sidecar skipped, T-4.3 audit will WARN
-meta['wave'] = 'wave-${N}'
-print(json.dumps(meta, indent=2))
-" > "$PROMPT_META_PERSIST" 2>/dev/null || true
-  if [ -s "$PROMPT_META_PERSIST" ]; then
-    echo "✓ P16 D-01 task meta persisted → $PROMPT_META_PERSIST"
-  fi
+  } > "$PROMPT_UIMAP_PERSIST"
+  echo "✓ UI-MAP+design-ref wrapper persisted → $PROMPT_UIMAP_PERSIST"
 fi
 
 # Script auto-builds siblings + callers if missing (runs find-siblings.py + build-caller-graph.py)

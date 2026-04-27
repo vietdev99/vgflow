@@ -167,14 +167,23 @@ def main() -> None:
             emit_and_exit(out)
 
         for meta_path in meta_files:
-            prompt_path = meta_path.parent / meta_path.name.replace(".meta.json", ".md")
+            # Phase 16 hot-fix (v2.11.1): build.md step 8c now writes the
+            # task body to *.body.md (separate from the *.uimap.md UI-MAP
+            # wrapper). Read body.md as the canonical "what the executor
+            # received" artifact. Backward compat: legacy *.md fallback for
+            # older builds before the split-persist refactor.
+            prompt_path = meta_path.parent / meta_path.name.replace(".meta.json", ".body.md")
             if not prompt_path.exists():
-                out.add(Evidence(
-                    type="missing_file",
-                    message=f"meta.json present but prompt body missing: {prompt_path.name}",
-                    file=str(meta_path),
-                ))
-                continue
+                legacy_path = meta_path.parent / meta_path.name.replace(".meta.json", ".md")
+                if legacy_path.exists():
+                    prompt_path = legacy_path
+                else:
+                    out.add(Evidence(
+                        type="missing_file",
+                        message=f"meta.json present but prompt body missing: {prompt_path.name}",
+                        file=str(meta_path),
+                    ))
+                    continue
 
             audit = _audit_pair(meta_path, prompt_path, phase_dir, hasher, pec)
             if "error" in audit:

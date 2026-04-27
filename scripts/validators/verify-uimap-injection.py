@@ -41,13 +41,29 @@ UI_FILE_RE = re.compile(r"\.(tsx|vue|jsx|svelte)\b", re.IGNORECASE)
 HEADER_UIMAP = "## UI-MAP-SUBTREE-FOR-THIS-WAVE"
 HEADER_DESIGN_REF = "## DESIGN-REF"
 
-# Default search paths under phase dir for prepared prompts
+# Default search paths under phase dir for prepared prompts.
+# Phase 16 hot-fix (v2.11.1): build.md step 8c now writes 3 file shapes per
+# task — body.md (task body), meta.json (D-01 sidecar), uimap.md (UI-MAP
+# wrapper). The first glob (*.uimap.md) catches the new shape; the second
+# (*.md) catches the legacy P15 D-12a single-file shape. SKIP_SUFFIXES
+# prevents body/meta files (which would false-positive _is_ui_prompt but
+# legitimately lack UI-MAP headers) from being audited.
 PROMPT_GLOBS = (
-    ".build/wave-*/executor-prompts/*.md",
+    ".build/wave-*/executor-prompts/*.uimap.md",
+    ".build/wave-*/executor-prompts/*.md",  # legacy P15 D-12a + general fallback
     ".build/wave-*/executor-prompts/*.txt",
     "build-trace/wave-*/executor-input/*.md",
     "build-trace/wave-*/executor-input/*.txt",
 )
+
+# Skip body/meta files (Phase 16 split-persist). Applied to both default
+# glob path and CLI override --prompts-dir path so the audit input is
+# consistent regardless of how the file list was discovered.
+SKIP_SUFFIXES = (".body.md", ".meta.json")
+
+
+def _passes_skip_filter(p: Path) -> bool:
+    return not any(p.name.endswith(s) for s in SKIP_SUFFIXES)
 
 
 def _section_has_content(prompt_text: str, header: str) -> bool:
@@ -97,10 +113,16 @@ def main() -> None:
                 if base.is_file():
                     prompts.append(base)
                 elif base.is_dir():
-                    prompts.extend(p for p in base.glob("*") if p.is_file())
+                    prompts.extend(
+                        p for p in base.glob("*")
+                        if p.is_file() and _passes_skip_filter(p)
+                    )
         else:
             for g in PROMPT_GLOBS:
-                prompts.extend(p for p in phase_dir.glob(g) if p.is_file())
+                prompts.extend(
+                    p for p in phase_dir.glob(g)
+                    if p.is_file() and _passes_skip_filter(p)
+                )
 
         if not prompts:
             # No prompts captured — could mean step 8c hasn't run, or
