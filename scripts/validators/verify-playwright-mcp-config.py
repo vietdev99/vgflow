@@ -335,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quiet", action="store_true", help="Suppress human-readable output.")
     parser.add_argument("--home", help="Override user home directory. Defaults to HOME/USERPROFILE.")
     parser.add_argument("--lock-source", help="Source playwright-lock.sh to copy during --repair.")
+    parser.add_argument("--phase", help=argparse.SUPPRESS)
     parser.add_argument(
         "--allow-custom-profile-dirs",
         action="store_true",
@@ -355,7 +356,20 @@ def main(argv: list[str] | None = None) -> int:
     ok = all(check["ok"] for check in checks)
     changed = any(check["changed"] for check in checks)
 
-    if args.json:
+    if args.phase is not None and not args.json and not args.quiet:
+        print(
+            json.dumps(
+                {
+                    "validator": "verify-playwright-mcp-config",
+                    "verdict": "PASS" if ok else "BLOCK",
+                    "ok": ok,
+                    "changed": changed,
+                    "checks": checks,
+                },
+                indent=2,
+            )
+        )
+    elif args.json:
         print(_json_payload(ok, changed, checks))
     elif not args.quiet:
         for check in checks:
