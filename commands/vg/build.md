@@ -3519,6 +3519,96 @@ PY
   fi
 fi
 
+# ─── L5 design-fidelity-guard — semantic adjudication (P19 D-05) ──────────
+# Spawns a Haiku zero-context with the design PNG + task commit diff to
+# decide whether the code ships the components the PNG shows. Closes the
+# gap where pixel-similar UI happens to miss components entirely.
+#
+# OFF by default (config visual_checks.vision_self_verify.enabled=false).
+# When enabled: BLOCK only on guard verdict BLOCK (FLAG = log debt + continue).
+# Auto-SKIPs cleanly without claude CLI / missing PNG / non-FE commit so
+# unconfigured projects are never blocked by this layer.
+L5_ENABLED=$(vg_config_get visual_checks.vision_self_verify.enabled false 2>/dev/null || echo false)
+if [ "$L5_ENABLED" = "true" ] && [[ ! "$ARGUMENTS" =~ --skip-vision-self-verify ]]; then
+  L5_BLOCKED=""
+  L5_FLAGS=0
+  L5_CHECKS=0
+  L5_MODEL="$(vg_config_get visual_checks.vision_self_verify.model claude-haiku-4-5-20251001 2>/dev/null || echo claude-haiku-4-5-20251001)"
+  L5_TIMEOUT="$(vg_config_get visual_checks.vision_self_verify.timeout_s 30 2>/dev/null || echo 30)"
+  for plan in "${PHASE_DIR}"/PLAN*.md; do
+    [ -f "$plan" ] || continue
+    "${PYTHON_BIN:-python3}" - "$plan" <<'PY' >> "${PHASE_DIR}/.tmp/l5-tasks.tsv" 2>/dev/null
+import re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="ignore").read()
+slug_re = re.compile(r"^[a-z0-9][a-z0-9_-]{1,79}$")
+def emit_for(tid, body):
+    refs = []
+    for raw in re.findall(r"<design-ref>([^<]+)</design-ref>", body):
+        for r in re.split(r"[,\s]+", raw.strip()):
+            r = r.strip()
+            if r and slug_re.match(r):
+                refs.append(r)
+    for slug in refs:
+        print(f"{tid}\t{slug}")
+for m in re.finditer(r'<task\s+id\s*=\s*["\']?(\d+)["\']?\s*>(.*?)</task>', text, re.DOTALL | re.IGNORECASE):
+    emit_for(m.group(1), m.group(2))
+heading_re = re.compile(r'^#{2,3}\s+Task\s+(0?\d+)\b', re.IGNORECASE | re.MULTILINE)
+lines = text.splitlines()
+heads = [(i, m.group(1).lstrip("0") or "0") for i, line in enumerate(lines) for m in [heading_re.match(line)] if m]
+for idx, (line_no, tid) in enumerate(heads):
+    end = heads[idx+1][0] if idx+1 < len(heads) else len(lines)
+    emit_for(tid, "\n".join(lines[line_no:end]))
+PY
+  done
+  if [ -s "${PHASE_DIR}/.tmp/l5-tasks.tsv" ]; then
+    DESIGN_DIR_REL_L5="$(vg_config_get design_assets.output_dir .vg/design-normalized 2>/dev/null || echo .vg/design-normalized)"
+    while IFS=$'\t' read -r task_num slug; do
+      [ -z "$task_num" ] && continue
+      L5_COMMIT_SHA=$("${PYTHON_BIN:-python3}" -c "
+import json, sys
+try:
+    d = json.load(open('${PHASE_DIR}/.build-progress.json', encoding='utf-8'))
+    for c in d.get('tasks_committed', []):
+        if c.get('task') == ${task_num}:
+            print(c.get('commit_sha') or 'HEAD'); sys.exit(0)
+    print('HEAD')
+except Exception:
+    print('HEAD')
+" 2>/dev/null)
+      L5_REPORT="${PHASE_DIR}/.tmp/l5-task-${task_num}-${slug}.json"
+      "${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-vision-self-verify.py \
+        --phase-dir "${PHASE_DIR}" --task-num "${task_num}" --slug "${slug}" \
+        --commit-sha "${L5_COMMIT_SHA}" --design-dir "${DESIGN_DIR_REL_L5}" \
+        --model "${L5_MODEL}" --timeout "${L5_TIMEOUT}" \
+        --output "${L5_REPORT}" >/dev/null 2>&1
+      L5_CHECKS=$((L5_CHECKS + 1))
+      L5_VERDICT=$("${PYTHON_BIN:-python3}" -c "import json; print(json.load(open('${L5_REPORT}')).get('verdict','SKIP'))" 2>/dev/null)
+      case "$L5_VERDICT" in
+        BLOCK) L5_BLOCKED="${L5_BLOCKED} task-${task_num}/${slug}" ;;
+        FLAG)
+          L5_FLAGS=$((L5_FLAGS + 1))
+          if type -t log_override_debt >/dev/null 2>&1; then
+            log_override_debt "design-fidelity-flag" "task-${task_num} slug=${slug}" "medium"
+          fi
+          ;;
+      esac
+    done < "${PHASE_DIR}/.tmp/l5-tasks.tsv"
+    rm -f "${PHASE_DIR}/.tmp/l5-tasks.tsv"
+  fi
+  if [ -n "$L5_BLOCKED" ]; then
+    echo "⛔ L5 design-fidelity guard: BLOCK verdict for:${L5_BLOCKED}"
+    echo "   See per-task report: ${PHASE_DIR}/.tmp/l5-task-*.json"
+    echo "   Override: --skip-vision-self-verify (logs override-debt + rationalization-guard)"
+    if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+      emit_telemetry_v2 "build_l5_vision_guard" "${PHASE_NUMBER}" "build.9" \
+        "vision_self_verify" "BLOCK" "{\"blocked\":\"${L5_BLOCKED}\"}"
+    fi
+    exit 1
+  elif [ "${L5_CHECKS:-0}" -gt 0 ]; then
+    echo "✓ L5 design-fidelity guard: ${L5_CHECKS} check(s) ran (${L5_FLAGS} FLAG, 0 BLOCK)"
+  fi
+fi
+
 # v2.2 — step marker for runtime contract
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "9_post_execution" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/9_post_execution.done"

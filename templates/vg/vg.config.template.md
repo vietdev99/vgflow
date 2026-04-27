@@ -240,6 +240,14 @@ visual_checks:
   # Lower number = stricter. Tune by project: marketing pages 2.0, dense
   # internal tools 5.0–8.0 to absorb dynamic data without false positives.
   design_fidelity_threshold_pct: 5.0
+  # L5 (P19 D-05) — design-fidelity-guard: separate-model semantic adjudication
+  # at /vg:build step 9. Spawns Haiku zero-context with design PNG + commit
+  # diff to catch component-level drift that pixel-similar UI happens to miss.
+  # OFF by default — flip true after dogfood. Requires `claude` CLI on PATH.
+  vision_self_verify:
+    enabled: false
+    model: "claude-haiku-4-5-20251001"
+    timeout_s: 30
 
 # === Performance Budgets ===
 # Generic defaults — adjust per project SLA.

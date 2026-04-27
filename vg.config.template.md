@@ -329,6 +329,11 @@ visual_checks:
   # Compares live UI screenshots against design-extract baseline PNGs per
   # view in RUNTIME-MAP. Drift % > threshold = BLOCK (override --allow-design-drift).
   design_fidelity_threshold_pct: 5.0
+  # L5 (P19 D-05) — design-fidelity-guard. OFF by default; requires `claude` CLI.
+  vision_self_verify:
+    enabled: false
+    model: "claude-haiku-4-5-20251001"
+    timeout_s: 30
 
 # === Performance Budgets (RTB-specific) ===
 perf_budgets:
