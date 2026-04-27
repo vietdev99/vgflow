@@ -1509,6 +1509,64 @@ if goal.frontmatter.interactive_controls.url_sync == true:
 Goals without `interactive_controls.url_sync: true` continue through the
 existing manual codegen flow below (forms, mutations, navigation, etc).
 
+**Phase 17 D-04/D-05 — Test session reuse setup (NEW, 2026-04-27):**
+
+Before any codegen branch runs, ensure the consumer project has:
+1. Playwright global-setup wired (copy template if missing).
+2. Storage state directory exists + .gitignore'd.
+3. Config defaults read from vg.config.test.* and exported as env vars
+   for both global-setup + helpers.
+
+```bash
+# Resolve E2E directory (consumer convention varies)
+E2E_DIR=""
+for candidate in "apps/web/e2e" "e2e" "tests/e2e"; do
+  if [ -d "${REPO_ROOT}/${candidate}" ]; then
+    E2E_DIR="${REPO_ROOT}/${candidate}"
+    break
+  fi
+done
+
+if [ -n "$E2E_DIR" ]; then
+  # Copy global-setup template if missing (idempotent; never overwrite)
+  GS_DST="${E2E_DIR}/global-setup.ts"
+  GS_SRC="${REPO_ROOT}/.claude/commands/vg/_shared/templates/playwright-global-setup.template.ts"
+  if [ ! -f "$GS_DST" ] && [ -f "$GS_SRC" ]; then
+    cp "$GS_SRC" "$GS_DST"
+    echo "✓ P17 D-04: copied global-setup.ts to ${GS_DST}"
+    echo "  → Merge playwright.config.ts per .claude/commands/vg/_shared/templates/playwright-config.partial.ts"
+  fi
+
+  # Read vg.config.test.* and export as env vars for global-setup + helpers
+  STORAGE_PATH=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /storage_state_path:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | tr -d '"')
+  STORAGE_TTL=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /storage_state_ttl_hours:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null)
+  LOGIN_STRATEGY=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /login_strategy:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | tr -d '"')
+  export VG_STORAGE_STATE_PATH="${STORAGE_PATH:-apps/web/e2e/.auth/}"
+  export VG_STORAGE_STATE_TTL_HOURS="${STORAGE_TTL:-24}"
+  export VG_LOGIN_STRATEGY="${LOGIN_STRATEGY:-auto}"
+  echo "ℹ P17 D-05: storage=${VG_STORAGE_STATE_PATH}, ttl=${VG_STORAGE_STATE_TTL_HOURS}h, strategy=${VG_LOGIN_STRATEGY}"
+
+  # Auto-add storage path to .gitignore (idempotent grep guard)
+  GITIGNORE="${REPO_ROOT}/.gitignore"
+  STORAGE_REL="${VG_STORAGE_STATE_PATH%/}"
+  if [ -f "$GITIGNORE" ] && ! grep -qF "${STORAGE_REL}/" "$GITIGNORE"; then
+    {
+      echo ""
+      echo "# Phase 17 D-04 — Playwright auth storage state (auth tokens; do NOT commit)"
+      echo "${STORAGE_REL}/"
+    } >> "$GITIGNORE"
+    echo "✓ P17 D-04: appended ${STORAGE_REL}/ to .gitignore"
+  fi
+
+  # Roles list for global-setup (defaults to all roles in vg.config)
+  ROLES=$(awk '/accounts:/{f=1; next} f && /^[a-z_]/{f=0} f && /^      [a-z_]+:$/{gsub(/[: ]/, "", $1); print $1}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | head -10 | tr '\n' ',' | sed 's/,$//')
+  if [ -n "$ROLES" ]; then
+    export VG_ROLES="$ROLES"
+    echo "ℹ P17 D-04: VG_ROLES=$VG_ROLES (from vg.config.environments.local.accounts)"
+  fi
+fi
+```
+
 **Phase 15 T6.1 — D-16 Filter + Pagination Test Rigor Pack (NEW, 2026-04-27):**
 
 Independent of and ADDITIONAL to the v2.7 Phase B url_sync branch above. If

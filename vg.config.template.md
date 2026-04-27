@@ -821,6 +821,24 @@ visual_regression:
   report_path: ".planning/phases/{phase}/visual-diff.json"
   ignore_regions: []
   auto_promote_on_first_run: true
+
+# ─── Test session reuse (Phase 17 D-05) ────────────────────────────
+# Cache login state per role so /vg:test runs don't re-login per spec file.
+# storage_state_path: relative to project root; created by global-setup.ts.
+# storage_state_ttl_hours: regenerate auth files older than this; 24 = once/day.
+# playwright.workers: parallel test runners; 4 comfortable on dev laptop.
+# playwright.fully_parallel: run files in parallel within workers.
+# playwright.reuse_existing_server: don't restart dev server between runs.
+# login_strategy: auto = try POST /api/login first, fall back to UI form;
+#   api = API only; ui = UI form only.
+test:
+  storage_state_path: "apps/web/e2e/.auth/"
+  storage_state_ttl_hours: 24
+  playwright:
+    workers: 4
+    fully_parallel: true
+    reuse_existing_server: true
+  login_strategy: "auto"
 ---
 
 # ─── Bug Reporting (v1.11.0+) ──────────────────────────────────────
