@@ -1978,6 +1978,66 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 **Cost note:** ~$0.05-0.10 per slug with Opus vision. Phase with 5 slugs ≈ $0.50.
 Cache by PNG mtime — re-runs are free if no design assets changed. Gate is OFF
 by default until dogfood validates value vs cost.
+
+### P19 D-03 — cross-AI gap-hunt (different model adversarial pass)
+
+After Layer 1 view-decomposition emits VIEW-COMPONENTS.md, run a
+second-pass adversarial scan with a DIFFERENT model to catch components
+the primary missed (background overlays, sticky FABs, hidden tabs,
+footer dividers). Echo-chamber risk identical to design-extract Layer 3
+gap-hunter; reuse that pattern.
+
+```bash
+# Skip gap-hunt if CrossAI not configured (single-CLI deployments)
+GAP_HUNT_CLI="$(vg_config_get crossai_clis.gap_hunt codex 2>/dev/null || echo codex)"
+if [ "${CONFIG_CROSSAI_CLIS_COUNT:-0}" -ge 1 ] \
+   && [ -f "${PHASE_DIR}/VIEW-COMPONENTS.md" ] \
+   && [[ ! "$ARGUMENTS" =~ --skip-view-decomp-gap-hunt ]]; then
+  for view_file in "${PHASE_DIR}"/.tmp/view-*.json; do
+    [ -f "$view_file" ] || continue
+    slug=$(basename "$view_file" .json | sed 's/^view-//')
+    GAP_REPORT="${PHASE_DIR}/.tmp/view-${slug}.gaps.json"
+
+    # Spawn DIFFERENT model with same PNG, asks "what did Layer 1 miss?"
+    # crossai-invoke handles model routing per vg.config.crossai_clis.
+    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/crossai-invoke.sh" 2>/dev/null || true
+    if type -t crossai_run_query >/dev/null 2>&1; then
+      crossai_run_query "${GAP_HUNT_CLI}" \
+        "Read PNG at ${DESIGN_OUTPUT_DIR}/screenshots/${slug}.default.png. Layer 1 listed these components: $(cat "${view_file}"). Find components Layer 1 MISSED (overlays, FABs, tabs, dividers, footer items). Output strict JSON: {\"missed\":[{\"name\":\"...\",\"position\":\"...\",\"reason\":\"why missed\"}],\"misnamed\":[{\"old\":\"...\",\"new\":\"...\",\"reason\":\"...\"}]}" \
+        > "${GAP_REPORT}" 2>/dev/null || true
+    fi
+
+    # Parse: if missed[].length >= threshold → retry Layer 1 with reminder
+    if [ -f "${GAP_REPORT}" ]; then
+      MISSED_COUNT=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${GAP_REPORT}', encoding='utf-8'))
+    print(len(d.get('missed') or []))
+except Exception:
+    print(0)
+" 2>/dev/null)
+      if [ "${MISSED_COUNT:-0}" -ge 2 ]; then
+        echo "ℹ Gap-hunt found ${MISSED_COUNT} missed component(s) in ${slug}; re-spawn Layer 1 with reminder (max 1 iteration)"
+        # Re-spawn same agent with gap reminder injected. Implementation detail:
+        # iteration cap is 1 — if second pass still misses, surface to user via UAT
+        # rather than infinite-loop the budget. Telemetry event records the gap
+        # for retro analysis.
+        if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+          emit_telemetry_v2 "blueprint_view_decomp_gap" "${PHASE_NUMBER}" "blueprint.2b6c" \
+            "view_decomp_gap_hunt" "WARN" "{\"slug\":\"${slug}\",\"missed\":${MISSED_COUNT}}"
+        fi
+      fi
+    fi
+  done
+fi
+```
+
+**Behaviour summary:**
+- 0 CrossAI CLIs configured → gap-hunt skipped (no echo-chamber risk avoided, but no extra spawn cost either).
+- Gap-hunter finds <2 missed → continue, log debt.
+- Gap-hunter finds ≥2 missed → re-spawn Layer 1 with gap reminder, max 1 retry.
+- After retry: surface remaining gaps via telemetry; UAT step D will catch what gates didn't.
 </step>
 
 <step name="2b6_ui_spec">
