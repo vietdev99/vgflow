@@ -162,7 +162,8 @@ High-level flow:
 10. Rotate ancestor dir + bump `.claude/VGFLOW-VERSION`.
 11. Sync Codex mirrors directly from the updated release assets.
 12. Verify/repair Claude + Codex Playwright MCP workers (`playwright1`..`playwright5`).
-13. Report counts + restart reminder.
+13. Verify/install Graphify tooling when `graphify.enabled=true`.
+14. Report counts + restart reminder.
 </objective>
 
 <process>
@@ -643,6 +644,27 @@ fi
 ```
 </step>
 
+<step name="8c_ensure_graphify">
+```bash
+echo ""
+echo "Verifying Graphify tooling..."
+GRAPHIFY_HELPER="${REPO_ROOT}/.claude/scripts/ensure-graphify.py"
+if [ "${VGFLOW_SKIP_GRAPHIFY_INSTALL:-false}" = "true" ]; then
+  echo "Graphify verify: SKIP (VGFLOW_SKIP_GRAPHIFY_INSTALL=true)"
+elif [ -f "$GRAPHIFY_HELPER" ]; then
+  if python3 "$GRAPHIFY_HELPER" --target "$REPO_ROOT" --repair; then
+    echo "Graphify verify: PASS (installed/configured or intentionally disabled)"
+  else
+    echo "⚠ Graphify verify failed."
+    echo "   /vg:build can still use grep fallback unless graphify.fallback_to_grep=false."
+    echo "   Manual repair: python3 \"$GRAPHIFY_HELPER\" --target \"$REPO_ROOT\" --repair"
+  fi
+else
+  echo "⚠ Graphify helper missing after update: $GRAPHIFY_HELPER"
+fi
+```
+</step>
+
 <step name="9_report">
 ```bash
 echo ""
@@ -679,6 +701,7 @@ echo "NOTE: Restart Claude Code session to load updated commands/skills."
 - Codex mirrors in `.codex/skills`, `.codex/agents`, and global `~/.codex` are refreshed directly from the updated release assets.
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Playwright MCP workers are verified/repaired after update for both Claude and Codex (`playwright1`..`playwright5`) and stale hardcoded lock scripts are replaced.
+- Graphify tooling is verified/repaired after update when `graphify.enabled=true`; missing package installs `graphifyy[mcp]`, `.mcp.json` is repaired, and `.graphifyignore` / `.gitignore` are maintained.
 - Final report lists updated / new / conflict counts and suggests `/vg:reapply-patches` when relevant.
 - Meta files (VERSION, CHANGELOG.md, README.md, LICENSE, install.sh, sync.sh, vg.config.template.md) never written to `.claude/`.
 </success_criteria>

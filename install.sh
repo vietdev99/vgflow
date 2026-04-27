@@ -424,8 +424,20 @@ echo "  Graphify saves ~50% executor tokens by querying a code knowledge graph"
 echo "  instead of dumping file content. Builds in ~30s, no LLM tokens consumed."
 echo ""
 
+GRAPHIFY_HELPER="$SCRIPT_DIR/scripts/ensure-graphify.py"
+if [ "${VGFLOW_SKIP_GRAPHIFY_INSTALL:-false}" != "true" ] && [ -n "${PYTHON_BIN:-}" ] && [ -f "$GRAPHIFY_HELPER" ]; then
+  if "$PYTHON_BIN" "$GRAPHIFY_HELPER" --target "$TARGET" --repair; then
+    echo "  -> Graphify verified/repaired"
+    VGFLOW_GRAPHIFY_HELPER_DONE=true
+  else
+    echo "  WARNING: Graphify helper failed; falling back to legacy installer path"
+  fi
+fi
+
 if [ "${VGFLOW_SKIP_GRAPHIFY_INSTALL:-false}" = "true" ]; then
   echo "  -> graphify install skipped by VGFLOW_SKIP_GRAPHIFY_INSTALL=true"
+elif [ "${VGFLOW_GRAPHIFY_HELPER_DONE:-false}" = "true" ]; then
+  :
 else
 
 # Detect Python 3.10+

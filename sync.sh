@@ -274,6 +274,32 @@ else
 fi
 echo ""
 
+echo "2d. Ensure Graphify"
+GRAPHIFY_HELPER="$SCRIPT_DIR/scripts/ensure-graphify.py"
+if [ "${VGFLOW_SKIP_GRAPHIFY_INSTALL:-false}" = "true" ]; then
+  echo "  skipped by VGFLOW_SKIP_GRAPHIFY_INSTALL=true"
+elif [ -z "$PYTHON_BIN" ]; then
+  note "MISSING python: cannot verify/install Graphify"
+  MISSING=$((MISSING + 1))
+elif [ -f "$GRAPHIFY_HELPER" ]; then
+  if [ "$MODE_CHECK" = "true" ]; then
+    if ! "$PYTHON_BIN" "$GRAPHIFY_HELPER" --target "$TARGET_ROOT" --quiet >/dev/null 2>&1; then
+      note "UPDATED: graphify-install:${TARGET_ROOT}"
+      CHANGED=$((CHANGED + 1))
+    fi
+  else
+    if "$PYTHON_BIN" "$GRAPHIFY_HELPER" --target "$TARGET_ROOT" --repair --quiet; then
+      echo "  OK: graphify installed/configured or intentionally disabled"
+    else
+      note "FAILED: Graphify setup; run $PYTHON_BIN $GRAPHIFY_HELPER --target $TARGET_ROOT --repair"
+    fi
+  fi
+else
+  note "MISSING source helper: scripts/ensure-graphify.py"
+  MISSING=$((MISSING + 1))
+fi
+echo ""
+
 echo "3. Deploy Codex workflow to target project"
 sync_codex_skills_exact "$TARGET_ROOT/.codex" "codex-skill"
 sync_codex_agents "$TARGET_ROOT/.codex"

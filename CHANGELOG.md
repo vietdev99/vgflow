@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.12.5 (2026-04-28) — Graphify install/update verification
+
+Patch release for Graphify environment bootstrap.
+
+- Added `ensure-graphify.py` as the shared installer/updater check for Graphify.
+- `install.sh`, `sync.sh`, and `/vg:update` now verify/repair Graphify when `graphify.enabled=true`.
+- Missing Graphify installs `graphifyy[mcp]`; project `.mcp.json`, `.graphifyignore`, and `.gitignore` are repaired without forcing an initial graph build.
+- Added regression tests for helper behavior and install/sync/update wiring.
+
 ## v2.12.4 (2026-04-28) — Build Graphify refresh enforcement
 
 Patch release for stale/missing Graphify build context.

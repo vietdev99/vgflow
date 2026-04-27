@@ -13,7 +13,7 @@ VGFlow là một **pipeline AI config-driven** mạnh mẽ — thiết kế chuy
 
 Zero hardcode stack — mọi giá trị derive từ `vg.config.md`. Portable 100% qua mọi project, mọi ngôn ngữ, mọi deployment (VPS / Docker / Kubernetes / serverless).
 
-**Phiên bản:** 2.12.4 · **License:** MIT
+**Phiên bản:** 2.12.5 · **License:** MIT
 
 ---
 

@@ -65,6 +65,14 @@ def test_update_command_repairs_playwright_mcp_workers():
     assert "Claude + Codex" in text
 
 
+def test_update_command_repairs_graphify_tooling():
+    text = UPDATE_MD.read_text(encoding="utf-8")
+    assert '<step name="8c_ensure_graphify">' in text
+    assert "ensure-graphify.py" in text
+    assert '--target "$REPO_ROOT" --repair' in text
+    assert "graphifyy[mcp]" in text
+
+
 # ---- Task C1: compare_versions -----------------------------------------------
 
 def test_compare_equal():
