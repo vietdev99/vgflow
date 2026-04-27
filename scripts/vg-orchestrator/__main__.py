@@ -2760,7 +2760,18 @@ COMMAND_VALIDATORS = {
                   # WARN when an accepted rule has fired in 3+ distinct
                   # phases without an explicit phase_pattern (silent
                   # global drift risk). Hygiene only — never BLOCK.
-                  "verify-rule-phase-scope"],
+                  "verify-rule-phase-scope",
+                  # Phase 16 hot-fix v2.11.1 (cross-AI consensus BLOCKer 5):
+                  # task-schema classifies xml/heading/mixed PLAN tasks +
+                  # XML acceptance frontmatter requirement. Mode-aware
+                  # (legacy WARN-only by default).
+                  "verify-task-schema",
+                  # Phase 16 hot-fix v2.11.1: crossai-output enforces
+                  # structured-edits contract on cross-AI enrichment diff
+                  # (long prose escape via <context-refs>, cross_ai_enriched
+                  # frontmatter flag). Validator self-skips when no
+                  # PLAN/CONTEXT diff vs --diff-base.
+                  "verify-crossai-output"],
     # Add scope command — was missing from orchestrator dispatch (only
     # COMMAND_VALIDATORS keys hit dispatcher; vg:scope previously had
     # "phase-exists, context-structure" hardcoded but no human-language
@@ -2769,7 +2780,11 @@ COMMAND_VALIDATORS = {
                  # Harness v2.6 (2026-04-25): scope rounds emit user-facing
                  # prose. Validator scores text on sentence ratio, examples,
                  # preamble, EN-term gloss. Schema-dump answers fail.
-                 "verify-human-language-response"],
+                 "verify-human-language-response",
+                 # Phase 16 hot-fix v2.11.1 (cross-AI consensus BLOCKer 5):
+                 # crossai-output for scope when --crossai enrichment ran.
+                 # Self-skips when no diff (no enrichment).
+                 "verify-crossai-output"],
 }
 
 
