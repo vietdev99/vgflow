@@ -293,3 +293,245 @@ export async function expectAssertion(
 
   throw new Error(`unsupported assertion: ${expr}`);
 }
+
+// =============================================================================
+// AUTH SESSION REUSE — Phase 17 D-01 / D-02
+// =============================================================================
+//
+// `loginOnce` populates Playwright `storageState` JSON for a role once per run
+// (or once per TTL window) so generated specs avoid the per-test login tax.
+// `useAuth(role)` returns a `test.use()` fixture override that points at the
+// stored file. Pair with `playwright-global-setup.template.ts` so login fires
+// before any spec runs.
+//
+// Config (read from VG env or vg.config.md):
+//   VG_STORAGE_STATE_PATH     — directory, default 'apps/web/e2e/.auth/'
+//   VG_STORAGE_STATE_TTL_HOURS — integer, default 24
+//   VG_LOGIN_STRATEGY         — auto | api | ui (default auto)
+//   VG_BASE_URL               — fallback to vg.config.environments.local.base_url
+//
+// Storage layout:
+//   <storagePath>/<role>.json       — Playwright storageState shape
+//   <storagePath>/<role>.meta.json  — { role, created_at, config_hash, ttl_hours }
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as crypto from 'node:crypto';
+import { request as plRequest, chromium } from '@playwright/test';
+
+export interface LoginOnceOptions {
+  storagePath?: string;
+  strategy?: 'auto' | 'api' | 'ui';
+  baseUrl?: string;
+  ttlHours?: number;
+}
+
+interface RoleAccount {
+  email: string;
+  password: string;
+}
+
+interface AuthMeta {
+  role: string;
+  created_at: string;
+  config_hash: string;
+  ttl_hours: number;
+}
+
+function _resolveStoragePath(opts?: LoginOnceOptions): string {
+  return (
+    opts?.storagePath
+    || process.env.VG_STORAGE_STATE_PATH
+    || 'apps/web/e2e/.auth/'
+  );
+}
+
+function _resolveTtlHours(opts?: LoginOnceOptions): number {
+  if (opts?.ttlHours != null) return opts.ttlHours;
+  const env = process.env.VG_STORAGE_STATE_TTL_HOURS;
+  return env ? Number(env) || 24 : 24;
+}
+
+function _resolveStrategy(opts?: LoginOnceOptions): 'auto' | 'api' | 'ui' {
+  return (opts?.strategy || (process.env.VG_LOGIN_STRATEGY as 'auto' | 'api' | 'ui') || 'auto');
+}
+
+function _resolveBaseUrl(opts?: LoginOnceOptions): string {
+  return (opts?.baseUrl || process.env.VG_BASE_URL || 'http://localhost:5173');
+}
+
+// Tiny YAML reader — same shape as scripts/build-uat-narrative.py inline parser.
+// Reads only the `environments.local.accounts.<role>` block we care about.
+function _readVgConfigAccount(role: string, configPath: string): RoleAccount | null {
+  if (!fs.existsSync(configPath)) return null;
+  const text = fs.readFileSync(configPath, 'utf8');
+  // Locate accounts block under environments.local.accounts:
+  const accountsRe = /environments:\s*\n[\s\S]*?local:\s*\n[\s\S]*?accounts:\s*\n([\s\S]*?)(?=\n\S|\n*$)/m;
+  const m = accountsRe.exec(text);
+  if (!m) return null;
+  const block = m[1];
+  // Match indented role:\n  email: ...\n  password: ...
+  const roleRe = new RegExp(
+    `\\s+${role}:\\s*\\n\\s+email:\\s*['\"]?([^'\"\\n]+)['\"]?\\s*\\n\\s+password:\\s*['\"]?([^'\"\\n]+)['\"]?`,
+  );
+  const rm = roleRe.exec(block);
+  if (!rm) return null;
+  return { email: rm[1].trim(), password: rm[2].trim() };
+}
+
+function _findVgConfig(): string {
+  const candidates = [
+    process.env.VG_CONFIG_PATH,
+    'vg.config.md',
+    '.claude/vg.config.md',
+    path.resolve(process.cwd(), '..', 'vg.config.md'),
+  ].filter((p): p is string => Boolean(p));
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'vg.config.md';
+}
+
+function _configHash(account: RoleAccount): string {
+  return crypto
+    .createHash('sha256')
+    .update(`${account.email}::${account.password}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function _readMeta(metaPath: string): AuthMeta | null {
+  if (!fs.existsSync(metaPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(metaPath, 'utf8')) as AuthMeta;
+  } catch {
+    return null;
+  }
+}
+
+function _isFresh(meta: AuthMeta | null, configHash: string, ttlHours: number): boolean {
+  if (!meta) return false;
+  if (meta.config_hash !== configHash) return false;
+  const created = Date.parse(meta.created_at);
+  if (Number.isNaN(created)) return false;
+  const ageHours = (Date.now() - created) / 3_600_000;
+  return ageHours < ttlHours;
+}
+
+function _writeMeta(metaPath: string, meta: AuthMeta): void {
+  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+}
+
+async function _loginViaApi(
+  baseUrl: string,
+  account: RoleAccount,
+  storageJsonPath: string,
+): Promise<boolean> {
+  const ctx = await plRequest.newContext({ baseURL: baseUrl });
+  try {
+    const resp = await ctx.post('/api/login', {
+      data: { email: account.email, password: account.password },
+    });
+    if (!resp.ok()) return false;
+    // Persist storage state including any Set-Cookie the server returned.
+    await ctx.storageState({ path: storageJsonPath });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await ctx.dispose();
+  }
+}
+
+async function _loginViaUi(
+  baseUrl: string,
+  account: RoleAccount,
+  storageJsonPath: string,
+): Promise<void> {
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ baseURL: baseUrl });
+  const page = await ctx.newPage();
+  try {
+    await page.goto('/login');
+    await page.fill('[data-testid="email"], [name="email"]', account.email);
+    await page.fill('[data-testid="password"], [name="password"]', account.password);
+    await page.click('[data-testid="submit-login"], button[type="submit"]');
+    await page.waitForURL((url) => !/\/login/.test(url.toString()), { timeout: 10_000 });
+    await ctx.storageState({ path: storageJsonPath });
+  } finally {
+    await ctx.close();
+    await browser.close();
+  }
+}
+
+/**
+ * Login a role once and persist its storageState. Idempotent within TTL.
+ * Returns the absolute path to the persisted .json so callers can pass it
+ * to test.use({ storageState }).
+ *
+ * Strategy:
+ *   - auto (default) — try POST /api/login; fall back to UI form on failure
+ *   - api            — POST /api/login only; throw on failure
+ *   - ui             — UI form only
+ */
+export async function loginOnce(role: string, opts?: LoginOnceOptions): Promise<string> {
+  const storageDir = path.resolve(_resolveStoragePath(opts));
+  fs.mkdirSync(storageDir, { recursive: true });
+
+  const storageJsonPath = path.join(storageDir, `${role}.json`);
+  const metaPath = path.join(storageDir, `${role}.meta.json`);
+
+  const configPath = _findVgConfig();
+  const account = _readVgConfigAccount(role, configPath);
+  if (!account) {
+    throw new Error(
+      `loginOnce: role '${role}' not found in ${configPath} `
+      + `under environments.local.accounts. Add credentials before calling.`,
+    );
+  }
+
+  const cfgHash = _configHash(account);
+  const ttlHours = _resolveTtlHours(opts);
+
+  if (_isFresh(_readMeta(metaPath), cfgHash, ttlHours) && fs.existsSync(storageJsonPath)) {
+    return storageJsonPath;
+  }
+
+  const baseUrl = _resolveBaseUrl(opts);
+  const strategy = _resolveStrategy(opts);
+
+  if (strategy === 'api') {
+    const ok = await _loginViaApi(baseUrl, account, storageJsonPath);
+    if (!ok) throw new Error(`loginOnce: api strategy failed for role '${role}'`);
+  } else if (strategy === 'ui') {
+    await _loginViaUi(baseUrl, account, storageJsonPath);
+  } else {
+    // auto — try API, fall back to UI
+    const apiOk = await _loginViaApi(baseUrl, account, storageJsonPath);
+    if (!apiOk) {
+      await _loginViaUi(baseUrl, account, storageJsonPath);
+    }
+  }
+
+  _writeMeta(metaPath, {
+    role,
+    created_at: new Date().toISOString(),
+    config_hash: cfgHash,
+    ttl_hours: ttlHours,
+  });
+
+  return storageJsonPath;
+}
+
+/**
+ * Decorator returning the Playwright fixture override:
+ *   test.use(useAuth('admin'));
+ * Resolves the .auth/<role>.json path WITHOUT performing login (assume
+ * globalSetup already ran loginOnce for this role).
+ */
+export function useAuth(role: string, opts?: { storagePath?: string }): { storageState: string } {
+  const storageDir = _resolveStoragePath({ storagePath: opts?.storagePath });
+  return {
+    storageState: path.resolve(storageDir, `${role}.json`),
+  };
+}
