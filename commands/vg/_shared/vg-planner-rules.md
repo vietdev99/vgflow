@@ -73,8 +73,45 @@ profile: {config.profile}
 | `<edits-collection>` | If DB task | Task touches DB collection | Tracks schema impact |
 | `<contract-ref>` | If API task | Contract exists for this endpoint | Line range in API-CONTRACTS.md |
 | `<goals-covered>` | ALWAYS | Every task maps to goals | G-XX IDs from TEST-GOALS.md |
-| `<design-ref>` | If FE task | Design asset exists for this page/component | Slug from design-normalized/ |
+| `<design-ref>` | **MANDATORY for FE tasks** | See Rule 8 below | Slug from manifest.json |
 | `<estimated-loc>` | ALWAYS | Rough LOC delta | Max 250 per task — split if larger |
+
+### Rule 8 — design-ref mandate (L-002 lesson)
+
+A task is an **FE task** if its `<file-path>` matches ANY of these patterns:
+
+- `apps/admin/**`, `apps/merchant/**`, `apps/vendor/**`, `apps/web/**`
+- `packages/ui/src/components/**`, `packages/ui/src/theme/**`
+- File extension `.tsx`, `.jsx`, `.vue`, `.svelte`
+
+For every FE task, you MUST emit ONE of these forms:
+
+```xml
+<!-- Form A — design asset available (preferred): -->
+<design-ref>{slug}</design-ref>
+<!-- where {slug} ∈ phase design/manifest.json screens[].slug array -->
+
+<!-- Form B — design asset NOT available (must be explicit, never silent): -->
+<design-ref>no-asset:{reason}</design-ref>
+<!-- e.g. <design-ref>no-asset:setup-wizard-step3-not-in-pencil-extract</design-ref> -->
+```
+
+**Why mandatory (L-002 lesson):** A real-world Phase 1 build rewrote the
+admin HomePage with generic Tailwind classes (`flex min-h-screen
+items-center justify-center`) without consulting the 20 design PNGs that
+already existed in the phase's design folder, or the UI-SPEC.md /
+UI-MAP.md derived from them. The shipped UI was a single centered card;
+the design called for a full Sidebar + TopBar + content shell. The
+planner schema previously had `<design-ref>` as "If FE task" — the soft
+phrasing let the gap slip through silently. Making it mandatory + adding
+explicit-no-asset (Form B) closes that loophole and forces the gap into
+review-visible debt.
+
+**Validation:** if a phase has `design/manifest.json`, the validator
+(verify-design-ref-coverage) BLOCKs the build when any FE task either
+omits `<design-ref>` entirely OR cites a slug not present in
+`manifest.json[screens][].slug`. Form B's `no-asset:{reason}` is allowed
+but logged to override-debt for review.
 
 ### Wave grouping rules
 

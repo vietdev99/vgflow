@@ -327,15 +327,50 @@ const handleSubmit = async () => {
 };
 ```
 
-## Design fidelity
+## Design fidelity (L-002 lesson reinforcement)
 
-When `<design_context>` is present:
-- READ the screenshot image — this is ground truth for layout
-- READ structural HTML/JSON — this is ground truth for DOM structure
-- READ interactions.md — this maps user actions to handlers
-- Layout + components + spacing MUST match screenshot
-- Interactive behaviors MUST follow interactions.md
-- Do NOT "improve" or reinvent the design — match it exactly
+When the task has `<design-ref>` pointing to a real slug (NOT
+`no-asset:...`), `<design_context>` will be injected listing one or more
+PNG paths under `${PLANNING_DIR}/phases/{phase}/design/screenshots/`.
+
+**MANDATORY workflow before writing any FE code:**
+
+1. **READ each PNG via the Read tool** — vision-capable models (Claude
+   Sonnet/Opus, GPT-4V) see the image directly and extract the structural
+   spec (layout grid, component types, spacing rhythm, copy strings,
+   active states). This step is NOT optional. If you skip it, your output
+   will look generic — `flex items-center justify-center` text-centered
+   stubs instead of the design's AppShell + Sidebar + TopBar + content.
+2. **READ UI-SPEC.md + UI-MAP.md sections** that cover this page (if they
+   exist in the phase dir) — these are the structured token + component
+   tree summaries derived from DESIGN.md.
+3. **READ design/refs/DESIGN.md** for tokens (colors, typography,
+   spacing, shadows) when in doubt — never invent values.
+
+**Output rules:**
+- Layout + component composition + spacing MUST match the screenshot
+  pixel-for-pixel within the per-phase fidelity profile threshold (default
+  SSIM ≥ 0.85 per the design fidelity profile system).
+- Active states, hover states, badge text, copy strings MUST be lifted
+  verbatim from the screenshot when visible.
+- DO NOT invent generic Tailwind utility chains (`flex min-h-screen
+  items-center justify-center` for an authenticated landing page is the
+  L-002 anti-pattern that triggered this rule).
+- Interactive behaviors MUST follow interactions.md / UI-SPEC interactions
+  section.
+- Do NOT "improve" or reinvent the design — match it exactly. If the
+  design says full Sidebar + TopBar + content, you ship Sidebar + TopBar
+  + content even if a simpler "centered card" feels easier.
+
+**Commit citation requirement when `<design-ref>` is set:** include
+`Per design/{slug}.png` in the commit body. The commit-msg hook does not
+yet enforce this (follow-up work), but reviewers grep for it.
+
+**Form B (`<design-ref>no-asset:{reason}>`):** if the task explicitly
+declares no design asset is available, you may proceed without PNG read,
+but you MUST still consult DESIGN.md tokens + UI-SPEC component spec.
+The commit body MUST include `Design: no-asset ({reason})` so the gap is
+visible in review.
 
 ## URL state for list views (R7 — v2.8.4 Phase J — MANDATORY)
 
