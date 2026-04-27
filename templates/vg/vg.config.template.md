@@ -249,6 +249,18 @@ visual_checks:
     model: "claude-haiku-4-5-20251001"
     timeout_s: 30
 
+# === Design Asset Pipeline ===
+design_assets:
+  # paths/output_dir/handlers — already documented above.
+  # P19 D-02 — view-decomposition: spawns vision-capable Opus per slug,
+  # produces VIEW-COMPONENTS.md (canonical per-slug component list). UI-SPEC
+  # step 2b6 + L5 design-fidelity-guard consume it. Cost ~$0.05-0.10/slug
+  # Opus vision; cache by PNG mtime so re-runs are free.
+  view_decomposition:
+    enabled: false
+    model: "claude-opus-4-7"
+    min_components_per_slug: 3
+
 # === Performance Budgets ===
 # Generic defaults — adjust per project SLA.
 perf_budgets:

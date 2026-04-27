@@ -335,6 +335,13 @@ visual_checks:
     model: "claude-haiku-4-5-20251001"
     timeout_s: 30
 
+# P19 D-02 — view-decomposition: vision-Read PNG → per-slug component list.
+# OFF by default; ~$0.05-0.10/slug Opus vision (cached by PNG mtime).
+design_assets_view_decomposition:
+  enabled: false
+  model: "claude-opus-4-7"
+  min_components_per_slug: 3
+
 # === Performance Budgets (RTB-specific) ===
 perf_budgets:
   rtb_bid_response_ms: 50
