@@ -103,6 +103,200 @@ def parse_config(config_path: Path) -> dict:
     return config
 
 
+def extract_task_section_v2(phase_dir: Path, task_num, plan_file: str = None) -> dict:
+    """Phase 16 D-02 — return structured task block.
+
+    Returns dict:
+      {
+        "body": str,          # markdown body without frontmatter or XML wrapper
+        "format": "xml" | "heading",
+        "frontmatter": dict | None,  # parsed YAML frontmatter (XML format only)
+        "raw_block": str,     # entire block as found in PLAN.md (incl wrapper)
+      }
+
+    Detection priority:
+      1. Scan PLAN files for `<task id="N">...</task>` matching task_num → xml
+      2. Else fallback to existing heading regex `## Task N:` → heading
+
+    Backward compat: extract_task_section() (the original str-returning fn)
+    stays untouched. Callers wanting the rich shape opt in to v2.
+    """
+    task_id_str = str(task_num)
+
+    # Format 1: XML wrapper
+    plan_files = sorted(phase_dir.glob(plan_file or "*PLAN*.md"))
+    for pf in plan_files:
+        text = pf.read_text(encoding="utf-8", errors="ignore")
+        # Match <task id="N">...</task> (non-greedy)
+        xml_re = re.compile(
+            rf'<task\s+id\s*=\s*["\']?{re.escape(task_id_str)}["\']?\s*>(.*?)</task>',
+            re.DOTALL | re.IGNORECASE,
+        )
+        m = xml_re.search(text)
+        if m:
+            inner = m.group(1)
+            # Detect frontmatter --- ... --- block at top of inner
+            frontmatter = None
+            body = inner.strip()
+            fm_re = re.compile(r"^\s*---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
+            fm_m = fm_re.match(body)
+            if fm_m:
+                fm_text = fm_m.group(1)
+                frontmatter = _parse_yaml_frontmatter(fm_text)
+                body = fm_m.group(2).strip()
+            return {
+                "body": body,
+                "format": "xml",
+                "frontmatter": frontmatter,
+                "raw_block": m.group(0),
+            }
+
+    # Format 2: heading-based (legacy) — delegate to v1 then wrap.
+    body_str = extract_task_section(phase_dir, task_num if isinstance(task_num, int) else int(task_id_str), plan_file)
+    return {
+        "body": body_str,
+        "format": "heading",
+        "frontmatter": None,
+        "raw_block": body_str,
+    }
+
+
+def _parse_yaml_frontmatter(text: str) -> dict:
+    """Lightweight YAML reader — same shape as build-uat-narrative.py /
+    interactive-helpers.template.ts inline parsers.
+
+    Supports the subset we need for D-02 frontmatter:
+      - scalar `key: value`
+      - list `key:\n  - item1\n  - item2`
+      - inline list `key: [a, b, c]`
+      - integer + string + boolean coercion
+    """
+    out: dict = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+        m = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$', stripped)
+        if not m:
+            i += 1
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if val == "":
+            # Possibly a multi-line list under this key
+            items = []
+            j = i + 1
+            while j < len(lines):
+                child = lines[j]
+                if child.strip() == "" or child.strip().startswith("#"):
+                    j += 1
+                    continue
+                m2 = re.match(r'^\s*-\s*(.*)$', child)
+                if not m2:
+                    break
+                item = m2.group(1).strip()
+                # Strip surrounding quotes
+                if (item.startswith('"') and item.endswith('"')) or \
+                   (item.startswith("'") and item.endswith("'")):
+                    item = item[1:-1]
+                items.append(item)
+                j += 1
+            out[key] = items
+            i = j
+            continue
+        # Inline list
+        if val.startswith("[") and val.endswith("]"):
+            inner = val[1:-1].strip()
+            if not inner:
+                out[key] = []
+            else:
+                out[key] = [
+                    s.strip().strip('"').strip("'") for s in inner.split(",")
+                ]
+            i += 1
+            continue
+        # Scalar value (coerce common types)
+        if val.lower() == "true":
+            out[key] = True
+        elif val.lower() == "false":
+            out[key] = False
+        elif re.match(r'^-?\d+$', val):
+            out[key] = int(val)
+        else:
+            # Strip surrounding quotes
+            if (val.startswith('"') and val.endswith('"')) or \
+               (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+            out[key] = val
+        i += 1
+    return out
+
+
+def extract_all_tasks(plan_path: Path) -> list[dict]:
+    """Phase 16 D-02 — enumerate ALL tasks in a PLAN file as v2 dicts.
+
+    Used by vg_completeness_check.py Check E (T-3.1) for body-cap iteration
+    + verify-task-schema.py (T-2.2) for format classification.
+    """
+    if not plan_path.exists():
+        return []
+    text = plan_path.read_text(encoding="utf-8", errors="ignore")
+    out = []
+
+    # Pass 1: XML-format tasks
+    xml_re = re.compile(
+        r'<task\s+id\s*=\s*["\']?(\d+|[A-Za-z][A-Za-z0-9_-]*)["\']?\s*>(.*?)</task>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    xml_ids = set()
+    for m in xml_re.finditer(text):
+        tid = m.group(1)
+        xml_ids.add(tid)
+        inner = m.group(2)
+        frontmatter = None
+        body = inner.strip()
+        fm_m = re.match(r"^\s*---\s*\n(.*?)\n---\s*\n(.*)$", body, re.DOTALL)
+        if fm_m:
+            frontmatter = _parse_yaml_frontmatter(fm_m.group(1))
+            body = fm_m.group(2).strip()
+        out.append({
+            "id": tid,
+            "body": body,
+            "format": "xml",
+            "frontmatter": frontmatter,
+            "raw_block": m.group(0),
+        })
+
+    # Pass 2: heading-format tasks (skip ids already found in XML)
+    heading_re = re.compile(
+        r'^#{2,3}\s+Task\s+(0?\d+)\b[:\s\-—]([^\n]*)$',
+        re.IGNORECASE | re.MULTILINE,
+    )
+    lines = text.splitlines()
+    headings = []
+    for i, line in enumerate(lines):
+        m = heading_re.match(line)
+        if m:
+            headings.append((i, m.group(1).lstrip("0") or "0"))
+    for idx, (line_no, tid) in enumerate(headings):
+        if tid in xml_ids:
+            continue
+        end_line = headings[idx + 1][0] if idx + 1 < len(headings) else len(lines)
+        body = "\n".join(lines[line_no:end_line]).strip()
+        out.append({
+            "id": tid,
+            "body": body,
+            "format": "heading",
+            "frontmatter": None,
+            "raw_block": body,
+        })
+
+    return out
+
+
 def extract_task_section(phase_dir: Path, task_num: int, plan_file: str = None) -> str:
     """Extract task N section from PLAN*.md.
 
@@ -440,25 +634,26 @@ def main():
     if "not found" in task_context.lower():
         warnings.append(f"Task {args.task_num}: {task_context}")
 
-    # Phase 16 D-01 — compute task body SHA256 + meta sidecar payload.
+    # Phase 16 D-01 + D-02 — compute task body SHA256 + meta sidecar payload.
+    # Use extract_task_section_v2 to detect xml vs heading format and pass
+    # the body BEFORE wrapper/frontmatter to the hasher (so format swap
+    # doesn't change the hash for the same actual content).
     # Best-effort: if scripts/lib/task_hasher.py is missing (older install),
-    # skip silently rather than crash. build.md step 8c writes meta to disk
-    # using this payload (T-1.2).
+    # skip silently rather than crash.
     task_meta = None
     try:
         sys.path.insert(0, str(Path(__file__).parent / "lib"))
         from task_hasher import stable_meta as _stable_meta  # noqa: E402
-        # Source path: best-effort — find the PLAN file we extracted from.
+        v2 = extract_task_section_v2(phase_dir, args.task_num, args.plan_file)
         plan_files = sorted(phase_dir.glob(args.plan_file or "*PLAN*.md"))
-        source_path = str(plan_files[0].relative_to(phase_dir.parent.parent.parent)) \
-            if plan_files else "PLAN.md"
+        source_path = plan_files[0].name if plan_files else "PLAN.md"
         task_meta = _stable_meta(
             task_id=args.task_num,
             phase=str(phase_dir.name).split("-")[0].lstrip("0") or phase_dir.name,
             wave="unknown",  # build.md step 8c overrides with actual wave-${N}
             source_path=source_path,
-            source_format="heading",  # T-2.1 will detect xml vs heading; default heading
-            body_text=task_context,
+            source_format=v2["format"],
+            body_text=v2["body"],
         )
     except Exception as e:
         warnings.append(f"P16 D-01 task_meta: {type(e).__name__}: {e}")
