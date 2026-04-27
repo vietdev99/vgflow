@@ -1078,6 +1078,43 @@ Read and follow `.claude/commands/vg/_shared/crossai-invoke.md`.
   If "Note" -> append to CONTEXT.md ## Deferred Ideas section.
   If "Ignore" -> log in DISCUSSION-LOG.md as "CrossAI finding ignored: {reason}".
 
+**Phase 16 D-05 — cross-AI output contract gate (hot-fix v2.11.1):**
+
+When `--crossai` arg drove enrichment (CrossAI suggested CONTEXT.md edits
+that the user accepted), the resulting diff must follow the structured-
+edits contract documented in `commands/vg/_shared/crossai-invoke.md`:
+no > 30-line prose blocks inlined into a task body without `<context-refs>`
+ID; `cross_ai_enriched: true` flag set in CONTEXT.md frontmatter so
+downstream R4 budget caps (Phase 16 D-04) bump correctly.
+
+Cross-AI consensus BLOCKer 5 part 2 (Codex GPT-5.5 + Claude Opus 4.7):
+this validator was registered for scope but never invoked from this
+skill body — registry tagging is documentation, not orchestration.
+
+```bash
+if [[ "${ARGUMENTS:-}" =~ --crossai ]]; then
+  CO_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crossai-output.py"
+  if [ -x "$CO_VAL" ]; then
+    ${PYTHON_BIN:-python3} "$CO_VAL" --phase "${PHASE_NUMBER}" \
+        > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/crossai-output.json" 2>&1 || true
+    CO_V=$(${PYTHON_BIN:-python3} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+          "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/crossai-output.json" 2>/dev/null)
+    case "$CO_V" in
+      PASS|WARN) echo "✓ P16 crossai-output: $CO_V" ;;
+      BLOCK)
+        echo "⛔ P16 crossai-output: BLOCK — see ${VG_TMP}/crossai-output.json" >&2
+        echo "   Cross-AI inlined > 30 prose lines into a task body without adding" >&2
+        echo "   <context-refs> ID, OR cross_ai_enriched flag missing in CONTEXT.md" >&2
+        echo "   frontmatter (silent R4 cap truncation risk)." >&2
+        echo "   Override: --skip-crossai-output (logs override-debt)" >&2
+        if [[ ! "${ARGUMENTS:-}" =~ --skip-crossai-output ]]; then exit 1; fi
+        ;;
+      *) echo "ℹ P16 crossai-output: $CO_V" ;;
+    esac
+  fi
+fi
+```
+
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 4_crossai_review 2>/dev/null || true
 ```
