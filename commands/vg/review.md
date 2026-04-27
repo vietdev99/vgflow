@@ -1,7 +1,7 @@
 ---
 name: vg:review
 description: Post-build review — code scan + browser discovery + fix loop + goal comparison → RUNTIME-MAP
-argument-hint: "<phase> [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--full-scan]"
+argument-hint: "<phase> [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--full-scan] [--allow-no-crud-surface]"
 allowed-tools:
   - Read
   - Write
@@ -266,6 +266,7 @@ Flags:
 - `--retry-failed` — skip Phase 1 + Phase 2 navigator, re-scan ONLY views mapped to failed/blocked goals in GOAL-COVERAGE-MATRIX.md. Requires: GOAL-COVERAGE-MATRIX.md + RUNTIME-MAP.json already exist. Use when: review already ran but goals < 100%, code was fixed, need targeted re-scan without full re-discovery.
 - `--full-scan` — disable sidebar suppression. Haiku agents see full page (sidebar/header/footer) in every snapshot. Use when: app has non-standard layout, geometry detection fails, or debugging suppression issues.
 - `--with-probes` — enable mutation probe variations (edit/boundary/repeat) in step 2b-3 step 9. Adds 1 Haiku per mutation goal. Default OFF — let /vg:test handle variations via Playwright codegen (deterministic, cheaper).
+- `--allow-no-crud-surface` — last-resort waiver for legacy phases missing CRUD-SURFACES.md. Logs debt via validator output; do not use for new CRUD work.
 
 **Phase profile detection (P5, v1.9.2) — FIRST ACTION before any blanket check:**
 
@@ -3285,6 +3286,31 @@ declares `interactive_controls` block (filter/sort/pagination/search +
 URL sync assertion). This is the static-side complement to runtime
 browser probing — declaration must exist before runtime can verify.
 
+**CRUD surface precheck (v2.12):** before URL-state checks, validate
+`${PHASE_DIR}/CRUD-SURFACES.md`. Review compares runtime observations against
+the resource/platform contract first, then uses `interactive_controls` as the
+web-list extension pack. Missing CRUD contract means the reviewer has no
+authoritative list of expected headings, filters, columns, states, row actions,
+delete confirmations, or security/abuse expectations.
+
+```bash
+CRUD_FLAGS=""
+[[ "${ARGUMENTS:-}" =~ --allow-no-crud-surface ]] && CRUD_FLAGS="--allow-missing"
+CRUD_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crud-surface-contract.py"
+if [ -x "$CRUD_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp"
+  "${PYTHON_BIN:-python3}" "$CRUD_VAL" --phase "${PHASE_NUMBER}" \
+    --config "${REPO_ROOT}/.claude/vg.config.md" ${CRUD_FLAGS} \
+    > "${PHASE_DIR}/.tmp/crud-surface-review.json" 2>&1
+  CRUD_RC=$?
+  if [ "$CRUD_RC" != "0" ]; then
+    echo "⛔ CRUD surface contract missing/incomplete — see ${PHASE_DIR}/.tmp/crud-surface-review.json"
+    echo "   Fix blueprint artifact CRUD-SURFACES.md or rerun /vg:blueprint."
+    exit 2
+  fi
+fi
+```
+
 **Why:** modern dashboard UX baseline (executor R7) requires list view
 state synced to URL search params. Without declaration, AI executors
 build local-state-only filters and ship apps that lose state on refresh.
@@ -3372,7 +3398,11 @@ For every goal in `${PHASE_DIR}/TEST-GOALS.md` that declares
      snapshot URL.
    - **search** — type a representative query, wait `debounce_ms + 100ms`,
      snapshot URL.
-5. Append one entry per goal to `url-runtime-probe.json`.
+5. Also compare the observed route against `${PHASE_DIR}/CRUD-SURFACES.md`
+   `platforms.web.list`: heading/description presence, declared table columns,
+   row actions, empty/loading/error/unauthorized states where reachable, and
+   delete confirmation if a delete action is declared.
+6. Append one entry per goal to `url-runtime-probe.json`.
 
 **Artifact schema** (`${PHASE_DIR}/url-runtime-probe.json`):
 

@@ -37,7 +37,7 @@ High-level flow:
 8. Walk extracted tree, 3-way merge each file against `.claude/vgflow-ancestor/v{installed}/`.
 9. Clean merges → apply; conflicts → `.claude/vgflow-patches/{rel}.conflict` + manifest entry.
 10. Rotate ancestor dir + bump `.claude/VGFLOW-VERSION`.
-11. Sync codex/gemini mirrors via `vgflow/sync.sh` if present.
+11. Sync Codex mirrors directly from the updated release assets.
 12. Report counts + restart reminder.
 </objective>
 
@@ -258,7 +258,14 @@ while IFS= read -r upstream_file; do
 
   # Map upstream path -> install path under .claude/
   case "$REL" in
-    commands/*|skills/*|scripts/*|templates/*|codex-skills/*|gemini-skills/*)
+    codex-skills/*|gemini-skills/*|templates/codex/*|templates/codex-agents/*)
+      # Codex/Gemini mirrors are not Claude install files. They are deployed
+      # in step 8 so /vg:update works for standard installs that do not carry
+      # a checked-out vgflow/sync.sh beside the project.
+      SKIPPED=$((SKIPPED + 1))
+      continue
+      ;;
+    commands/*|skills/*|scripts/*|schemas/*|templates/vg/*)
       TARGET_REL=".claude/${REL}"
       ;;
     *)
@@ -305,7 +312,7 @@ PatchesManifest(Path(os.environ['MANIFEST'])).add(os.environ['REL'], 'conflict')
 "
     CONFLICTS=$((CONFLICTS + 1))
   fi
-done < <(find "$EXTRACTED" -type f \( -name "*.md" -o -name "*.py" -o -name "*.yaml" -o -name "*.yml" -o -name "*.sh" -o -name "*.json" \))
+done < <(find "$EXTRACTED" -type f)
 
 echo ""
 echo "Merge pass done: updated=${UPDATED} new=${NEW_FILES} conflicts=${CONFLICTS} skipped_meta=${SKIPPED}"
@@ -363,15 +370,129 @@ echo "VGFLOW-VERSION = ${LATEST}"
 ```
 </step>
 
+<step name="7b_repair_hooks">
+```bash
+# Re-install/repair Claude Code hooks after scripts are merged. This matters
+# because UserPromptSubmit seeds run-start, Stop verifies runtime_contract, and
+# PostToolUse Bash step tracking writes hook.step_active telemetry into
+# .vg/events.db. Without this, updates can silently leave stale hook wiring.
+echo ""
+echo "Repairing Claude enforcement hooks..."
+HOOK_INSTALL="${REPO_ROOT}/.claude/scripts/vg-hooks-install.py"
+HOOK_SELFTEST="${REPO_ROOT}/.claude/scripts/vg-hooks-selftest.py"
+if [ -f "$HOOK_INSTALL" ]; then
+  if python3 "$HOOK_INSTALL"; then
+    echo "Claude hooks: installed/repaired"
+    if [ -f "$HOOK_SELFTEST" ]; then
+      if python3 "$HOOK_SELFTEST" >/dev/null 2>&1; then
+        echo "Claude hooks: self-test PASS"
+      else
+        echo "⚠ Claude hooks: self-test failed; run python3 \"$HOOK_SELFTEST\""
+      fi
+    fi
+  else
+    echo "⚠ Claude hooks: install failed; run python3 \"$HOOK_INSTALL\""
+  fi
+else
+  echo "⚠ Claude hooks: installer missing after update"
+fi
+```
+</step>
+
 <step name="8_sync_codex">
 ```bash
-# If project has a vgflow/sync.sh (codex + gemini mirror sync), run it
-if [ -f "${REPO_ROOT}/vgflow/sync.sh" ]; then
-  echo ""
-  echo "Running vgflow/sync.sh --no-source ..."
-  ( cd "$REPO_ROOT" && bash vgflow/sync.sh --no-source 2>&1 | tail -20 ) || echo "(sync.sh returned non-zero, continuing)"
-else
-  echo "(vgflow/sync.sh not present — skipping codex/gemini mirror sync)"
+# Standard installs do NOT include vgflow/sync.sh. Deploy Codex mirrors
+# directly from the rotated release ancestor so Claude and Codex update
+# together without clobbering user-merged .claude files.
+echo ""
+echo "Syncing Codex mirror from updated release assets..."
+
+CODEX_SOURCE="${NEW_ANCESTOR}"
+CODEX_SKILLS_UPDATED=0
+CODEX_AGENTS_UPDATED=0
+
+if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
+  mkdir -p "${REPO_ROOT}/.codex/skills"
+  while IFS= read -r skill_dir; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    skill="$(basename "$skill_dir")"
+    rm -rf "${REPO_ROOT}/.codex/skills/${skill}"
+    mkdir -p "${REPO_ROOT}/.codex/skills/${skill}"
+    cp -R "$skill_dir"/. "${REPO_ROOT}/.codex/skills/${skill}/"
+    CODEX_SKILLS_UPDATED=$((CODEX_SKILLS_UPDATED + 1))
+  done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+fi
+
+if [ -d "${CODEX_SOURCE}/templates/codex-agents" ]; then
+  mkdir -p "${REPO_ROOT}/.codex/agents"
+  cp "${CODEX_SOURCE}/templates/codex-agents/"*.toml "${REPO_ROOT}/.codex/agents/" 2>/dev/null || true
+  CODEX_AGENTS_UPDATED=$(ls "${REPO_ROOT}/.codex/agents/"*.toml 2>/dev/null | wc -l | tr -d ' ')
+fi
+
+if [ -d "${CODEX_SOURCE}/templates/codex" ]; then
+  mkdir -p "${REPO_ROOT}/.codex"
+  cp "${CODEX_SOURCE}/templates/codex/"* "${REPO_ROOT}/.codex/" 2>/dev/null || true
+fi
+
+codex_config_path() {
+  local path="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+register_codex_agent() {
+  local config="$1"
+  local name="$2"
+  local desc="$3"
+  local config_file
+  config_file="$(codex_config_path "$HOME/.codex/agents/${name}.toml")"
+  if ! grep -q "^\[agents\.${name}\]" "$config" 2>/dev/null; then
+    cat >> "$config" <<EOF
+
+[agents.${name}]
+description = "${desc}"
+config_file = "${config_file}"
+EOF
+  fi
+}
+
+if [ -d "$HOME/.codex" ]; then
+  mkdir -p "$HOME/.codex/skills" "$HOME/.codex/agents"
+  if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
+    while IFS= read -r skill_dir; do
+      [ -f "$skill_dir/SKILL.md" ] || continue
+      skill="$(basename "$skill_dir")"
+      rm -rf "$HOME/.codex/skills/${skill}"
+      mkdir -p "$HOME/.codex/skills/${skill}"
+      cp -R "$skill_dir"/. "$HOME/.codex/skills/${skill}/"
+    done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
+  if [ -d "${CODEX_SOURCE}/templates/codex-agents" ]; then
+    cp "${CODEX_SOURCE}/templates/codex-agents/"*.toml "$HOME/.codex/agents/" 2>/dev/null || true
+  fi
+  CODEX_CONFIG="$HOME/.codex/config.toml"
+  touch "$CODEX_CONFIG"
+  register_codex_agent "$CODEX_CONFIG" "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+  register_codex_agent "$CODEX_CONFIG" "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
+  register_codex_agent "$CODEX_CONFIG" "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+fi
+
+echo "Codex mirror: skills=${CODEX_SKILLS_UPDATED} agents=${CODEX_AGENTS_UPDATED}"
+
+if [ -f "${REPO_ROOT}/.claude/scripts/verify-codex-mirror-equivalence.py" ]; then
+  VERIFY_OUT="${PATCHES_DIR}/codex-mirror-verify.json"
+  if REPO_ROOT="${REPO_ROOT}" python3 "${REPO_ROOT}/.claude/scripts/verify-codex-mirror-equivalence.py" --json > "$VERIFY_OUT"; then
+    echo "Codex mirror verify: PASS"
+  else
+    echo "⚠ Codex mirror verify: DRIFT — see ${VERIFY_OUT}"
+    echo "   If conflicts were parked, resolve them with /vg:reapply-patches then run /vg:sync --verify."
+    if [ "${CONFLICTS}" -eq 0 ]; then
+      exit 1
+    fi
+  fi
 fi
 ```
 </step>
@@ -408,7 +529,9 @@ echo "NOTE: Restart Claude Code session to load updated commands/skills."
 - Clean merges applied silently; conflicts parked to `.claude/vgflow-patches/{rel}.conflict` with manifest entry.
 - Major-version bump blocked unless `--accept-breaking` is passed AND migration doc displayed.
 - `.claude/VGFLOW-VERSION` bumped to `${LATEST}`; old `vgflow-ancestor/v{INSTALLED}` removed; new `vgflow-ancestor/v{LATEST}` populated.
-- `vgflow/sync.sh --no-source` invoked if present.
+- Claude Code hooks are installed/repaired after update (`UserPromptSubmit`, `Stop`, `PostToolUse` edit warning, `PostToolUse` Bash step tracker).
+- Codex mirrors in `.codex/skills`, `.codex/agents`, and global `~/.codex` are refreshed directly from the updated release assets.
+- Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Final report lists updated / new / conflict counts and suggests `/vg:reapply-patches` when relevant.
 - Meta files (VERSION, CHANGELOG.md, README.md, LICENSE, install.sh, sync.sh, vg.config.template.md) never written to `.claude/`.
 </success_criteria>

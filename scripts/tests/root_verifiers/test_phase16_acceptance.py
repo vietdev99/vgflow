@@ -130,6 +130,30 @@ class TestPhase16BuildWire:
             "build.md R4 must read CONTEXT_JSON.applied_caps (D-04)"
         )
 
+    def test_executor_prompt_materializes_blueprint_context(self, build_md):
+        assert "PROMPT_FULL_PERSIST" in build_md, (
+            "build.md must persist full executor prompt evidence before spawn"
+        )
+        assert '${TASK_CONTEXT}' in build_md
+        assert '${GOALS_CONTEXT}' in build_md
+        assert '${UI_SPEC_CONTEXT}' in build_md
+        assert '${DESIGN_CONTEXT}' in build_md
+        assert '${WAVE_CONTEXT}' in build_md
+
+        stale_pointers = [
+            '@${TASKS_DIR}/task-${TASK_NUM}.md',
+            '@${PHASE_DIR}/TEST-GOALS.md',
+            '@${PHASE_DIR}/UI-SPEC.md',
+            '@${PHASE_DIR}/wave-${N}-context.md',
+            '@.claude/commands/vg/_shared/vg-executor-rules.md',
+            '@${DESIGN_OUTPUT_DIR}',
+        ]
+        for pointer in stale_pointers:
+            assert pointer not in build_md, (
+                "executor prompt must receive resolved literal context, "
+                f"not lazy-read pointer {pointer}"
+            )
+
 
 # ─── 5. Schema gate behavior (D-02) ──────────────────────────────────────
 
@@ -279,6 +303,10 @@ class TestPhase16TaskFidelity:
         # production layout instead of the legacy *.md (which was the
         # UI-MAP wrapper, never the task body — see cross-AI BLOCKers 1+2).
         (prompt_dir / "1.body.md").write_text(body, encoding="utf-8")
+        (prompt_dir / "1.prompt.md").write_text(
+            f"<task_context>\n{body}\n</task_context>\n",
+            encoding="utf-8",
+        )
         (prompt_dir / "1.meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return phase_dir, prompt_dir
 
@@ -308,6 +336,34 @@ class TestPhase16TaskFidelity:
                            ["--phase", "16", "--prompts-dir", str(pd)], tmp_path)
         assert r.returncode == 1
         assert _verdict(r.stdout) == "BLOCK"
+
+    def test_missing_full_prompt_blocks(self, tmp_path):
+        _, pd = self._seed_pair(tmp_path, body_truncate_pct=0.0)
+        (pd / "1.prompt.md").unlink()
+        r = _run_validator(VALIDATORS / "verify-task-fidelity.py",
+                           ["--phase", "16", "--prompts-dir", str(pd)], tmp_path)
+        assert r.returncode == 1
+        out = json.loads(r.stdout)
+        assert out["verdict"] == "BLOCK"
+        assert any(
+            e.get("type") == "missing_file"
+            and "full executor prompt" in e.get("message", "")
+            for e in out.get("evidence", [])
+        )
+
+    def test_full_prompt_without_task_body_blocks(self, tmp_path):
+        _, pd = self._seed_pair(tmp_path, body_truncate_pct=0.0)
+        (pd / "1.prompt.md").write_text(
+            "<task_context>\n@.vg/phases/16-fix/PLAN.md#task-1\n</task_context>\n",
+            encoding="utf-8",
+        )
+        r = _run_validator(VALIDATORS / "verify-task-fidelity.py",
+                           ["--phase", "16", "--prompts-dir", str(pd)], tmp_path)
+        assert r.returncode == 1
+        out = json.loads(r.stdout)
+        assert out["verdict"] == "BLOCK"
+        types = [e.get("type") for e in out.get("evidence", [])]
+        assert "full_prompt_missing_task_body" in types
 
 
 # ─── 9. Phase 16 hot-fix v2.11.1 — production-path regression tests ──────
@@ -353,6 +409,10 @@ class TestPhase16HotfixParaphraseGate:
         prompt_dir = phase_dir / ".build" / "wave-1" / "executor-prompts"
         prompt_dir.mkdir(parents=True)
         (prompt_dir / "1.body.md").write_text(paraphrased, encoding="utf-8")
+        (prompt_dir / "1.prompt.md").write_text(
+            f"<task_context>\n{paraphrased}\n</task_context>\n",
+            encoding="utf-8",
+        )
         (prompt_dir / "1.meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return phase_dir, prompt_dir
 

@@ -1,32 +1,61 @@
 #!/usr/bin/env python3
-"""verify-codex-mirror-equivalence.py — N10 fix from build-vs-blueprint audit.
+"""Verify functional equivalence between VG command sources and Codex skills.
 
-Hashes the post-adapter content of each `.codex/skills/vg-<name>/SKILL.md`
-mirror against the post-frontmatter content of its source
-`.claude/commands/vg/<name>.md`, after stripping codex-specific
-adornments. Exits non-zero if any pair drifts.
+The Codex mirror prepends a Codex adapter block, so line-by-line diffs are
+noisy. This verifier compares only the workflow body:
 
-Why: the regular `sync.sh --check` line-level diff reports thousands of
-"differing" lines because the Codex adapter block prepends ~80 lines to
-every mirror. Real functional drift is invisible inside that noise.
-This verifier ignores the offset and compares only what executors run.
+  source repo mode:
+    commands/vg/<name>.md                -> codex-skills/vg-<name>/SKILL.md
+    skills/<name>/SKILL.md               -> codex-skills/<name>/SKILL.md
+
+  installed project mode:
+    .claude/commands/vg/<name>.md        -> .codex/skills/vg-<name>/SKILL.md
+    .claude/skills/<name>/SKILL.md       -> .codex/skills/<name>/SKILL.md
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-COMMANDS_DIR = REPO_ROOT / ".claude" / "commands" / "vg"
-MIRRORS_DIR = REPO_ROOT / ".codex" / "skills"
-
-ADAPTER_CLOSE = re.compile(r"</codex_skill_adapter>\s*\n")
+ADAPTER_CLOSE = re.compile(r"</codex_skill_adapter>\s*\n", re.S)
 
 
-def strip_source_frontmatter(text: str) -> str:
+def _has_source_repo_layout(root: Path) -> bool:
+    return (root / "commands" / "vg").is_dir() and (root / "codex-skills").is_dir()
+
+
+def _has_installed_layout(root: Path) -> bool:
+    return (
+        (root / ".claude" / "commands" / "vg").is_dir()
+        and (root / ".codex" / "skills").is_dir()
+    )
+
+
+def resolve_repo_root() -> Path:
+    env = os.environ.get("REPO_ROOT")
+    if env:
+        return Path(env).resolve()
+
+    candidates = [Path.cwd().resolve()]
+    script = Path(__file__).resolve()
+    candidates.extend([script.parent, *script.parents])
+
+    for candidate in candidates:
+        if _has_source_repo_layout(candidate) or _has_installed_layout(candidate):
+            return candidate
+
+    return Path.cwd().resolve()
+
+
+REPO_ROOT = resolve_repo_root()
+
+
+def strip_frontmatter(text: str) -> str:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return text
@@ -39,7 +68,7 @@ def strip_source_frontmatter(text: str) -> str:
 def strip_mirror_adapter(text: str) -> str:
     match = ADAPTER_CLOSE.search(text)
     if not match:
-        return text
+        return strip_frontmatter(text)
     return text[match.end() :].lstrip("\n")
 
 
@@ -52,18 +81,75 @@ def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def find_pairs() -> list[tuple[Path, Path, str]]:
+def _source_repo_pairs(root: Path) -> list[tuple[Path, Path, str]]:
     pairs: list[tuple[Path, Path, str]] = []
-    if not COMMANDS_DIR.exists() or not MIRRORS_DIR.exists():
-        return pairs
-    for src in sorted(COMMANDS_DIR.glob("*.md")):
-        if src.name.startswith("_"):
+    commands_dir = root / "commands" / "vg"
+    mirrors_dir = root / "codex-skills"
+
+    for src in sorted(commands_dir.glob("*.md")):
+        name = src.stem
+        if name.startswith("_") or name.endswith("-insert"):
             continue
-        skill_name = "vg-" + src.stem
-        mirror = MIRRORS_DIR / skill_name / "SKILL.md"
+        skill_name = f"vg-{name}"
+        mirror = mirrors_dir / skill_name / "SKILL.md"
         if mirror.exists():
             pairs.append((src, mirror, skill_name))
+
+    for skill_name in _support_skill_names(root / "skills"):
+        src = root / "skills" / skill_name / "SKILL.md"
+        mirror = mirrors_dir / skill_name / "SKILL.md"
+        if src.exists() and mirror.exists():
+            pairs.append((src, mirror, skill_name))
+
     return pairs
+
+
+def _installed_pairs(root: Path) -> list[tuple[Path, Path, str]]:
+    pairs: list[tuple[Path, Path, str]] = []
+    commands_dir = root / ".claude" / "commands" / "vg"
+    mirrors_dir = root / ".codex" / "skills"
+
+    for src in sorted(commands_dir.glob("*.md")):
+        name = src.stem
+        if name.startswith("_") or name.endswith("-insert"):
+            continue
+        skill_name = f"vg-{name}"
+        mirror = mirrors_dir / skill_name / "SKILL.md"
+        if mirror.exists():
+            pairs.append((src, mirror, skill_name))
+
+    for skill_name in _support_skill_names(root / ".claude" / "skills"):
+        src = root / ".claude" / "skills" / skill_name / "SKILL.md"
+        mirror = mirrors_dir / skill_name / "SKILL.md"
+        if src.exists() and mirror.exists():
+            pairs.append((src, mirror, skill_name))
+
+    return pairs
+
+
+def _support_skill_names(skills_dir: Path) -> list[str]:
+    if not skills_dir.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in skills_dir.iterdir()
+        if path.is_dir() and (path / "SKILL.md").is_file()
+    )
+
+
+def find_pairs() -> list[tuple[Path, Path, str]]:
+    if _has_source_repo_layout(REPO_ROOT):
+        return _source_repo_pairs(REPO_ROOT)
+    if _has_installed_layout(REPO_ROOT):
+        return _installed_pairs(REPO_ROOT)
+    return []
+
+
+def _rel(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def main(argv: list[str]) -> int:
@@ -72,24 +158,29 @@ def main(argv: list[str]) -> int:
 
     pairs = find_pairs()
     if not pairs:
-        print("No (source, mirror) pairs found. Check repo layout.", file=sys.stderr)
+        print(
+            f"No source/mirror pairs found under {REPO_ROOT}. Check repo layout.",
+            file=sys.stderr,
+        )
         return 2
 
     drift: list[dict[str, object]] = []
     for src, mirror, skill in pairs:
-        src_text = normalize(strip_source_frontmatter(src.read_text(encoding="utf-8")))
+        src_text = normalize(strip_frontmatter(src.read_text(encoding="utf-8")))
         mir_text = normalize(strip_mirror_adapter(mirror.read_text(encoding="utf-8")))
         src_hash = sha256(src_text)
         mir_hash = sha256(mir_text)
+
         if verbose:
             tag = "OK " if src_hash == mir_hash else "DIFF"
-            print(f"  [{tag}] {skill}  src={src_hash[:12]} mirror={mir_hash[:12]}")
+            print(f"  [{tag}] {skill} src={src_hash[:12]} mirror={mir_hash[:12]}")
+
         if src_hash != mir_hash:
             drift.append(
                 {
                     "skill": skill,
-                    "source": str(src.relative_to(REPO_ROOT)),
-                    "mirror": str(mirror.relative_to(REPO_ROOT)),
+                    "source": _rel(src),
+                    "mirror": _rel(mirror),
                     "src_sha256": src_hash,
                     "mirror_sha256": mir_hash,
                     "src_bytes": len(src_text),
@@ -99,11 +190,14 @@ def main(argv: list[str]) -> int:
             )
 
     if json_out:
-        import json as _json
-
         print(
-            _json.dumps(
-                {"checked": len(pairs), "drift_count": len(drift), "drift": drift},
+            json.dumps(
+                {
+                    "repo_root": str(REPO_ROOT),
+                    "checked": len(pairs),
+                    "drift_count": len(drift),
+                    "drift": drift,
+                },
                 indent=2,
             )
         )
@@ -111,18 +205,25 @@ def main(argv: list[str]) -> int:
 
     print(f"Checked {len(pairs)} skill mirror pair(s).")
     if not drift:
-        print("✓ All mirrors functionally equivalent to source.")
+        print("OK: all mirrors functionally equivalent to source.")
         return 0
 
-    print(f"✗ {len(drift)} mirror(s) drift — functional content differs from source:")
+    print(f"DRIFT: {len(drift)} mirror(s) functionally differ from source:")
     for entry in drift:
         delta = entry["delta_bytes"]
         sign = "+" if delta >= 0 else ""
-        print(f"  ✗ {entry['skill']}")
-        print(f"      source : {entry['source']} ({entry['src_bytes']}B sha={str(entry['src_sha256'])[:12]})")
-        print(f"      mirror : {entry['mirror']} ({entry['mirror_bytes']}B sha={str(entry['mirror_sha256'])[:12]}) Δ={sign}{delta}B")
+        print(f"  - {entry['skill']}")
+        print(
+            f"    source: {entry['source']} "
+            f"({entry['src_bytes']}B sha={str(entry['src_sha256'])[:12]})"
+        )
+        print(
+            f"    mirror: {entry['mirror']} "
+            f"({entry['mirror_bytes']}B sha={str(entry['mirror_sha256'])[:12]}) "
+            f"delta={sign}{delta}B"
+        )
     print()
-    print("Fix: re-run /vg:sync to regenerate mirrors from source, then re-run /vg:sync --verify.")
+    print("Fix: run `bash scripts/generate-codex-skills.sh --force` and re-run this verifier.")
     return 1
 
 

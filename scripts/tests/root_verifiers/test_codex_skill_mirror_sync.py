@@ -26,8 +26,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT_REAL = Path(__file__).resolve().parents[4]
-VALIDATOR = REPO_ROOT_REAL / ".claude" / "scripts" / "validators" / \
+REPO_ROOT_REAL = Path(__file__).resolve().parents[3]
+VALIDATOR = REPO_ROOT_REAL / "scripts" / "validators" / \
     "verify-codex-skill-mirror-sync.py"
 
 

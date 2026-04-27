@@ -63,7 +63,7 @@ runtime_contract:
 ---
 
 <rules>
-1. **All pipeline artifacts required** — SPECS → CONTEXT → PLAN → API-CONTRACTS → TEST-GOALS → SUMMARY → RUNTIME-MAP → GOAL-COVERAGE-MATRIX → SANDBOX-TEST. Missing = BLOCK.
+1. **All pipeline artifacts required** — SPECS → CONTEXT → PLAN → API-CONTRACTS → TEST-GOALS → SUMMARY → RUNTIME-MAP → GOAL-COVERAGE-MATRIX → SANDBOX-TEST. CRUD-SURFACES is required when the phase touches CRUD/resource behavior. Missing = BLOCK.
 2. **Step markers mandatory** — every profile-applicable step from /vg:build, /vg:review, /vg:test MUST have its `.step-markers/{step}.done` file. Missing = BLOCK (AI skipped silently).
 3. **SANDBOX-TEST verdict gate** — must be `PASSED` or `GAPS_FOUND`. `FAILED` → BLOCK with redirect.
 4. **UAT is data-driven** — checklist items are GENERATED from VG artifacts (`P{phase}.D-XX` from CONTEXT, `F-XX` from FOUNDATION if cited in any phase artifact, G-XX from TEST-GOALS, HIGH callers from RIPPLE-ANALYSIS, design-refs from PLAN). No hardcoded checks. Bare `D-XX` treated as legacy — displayed with "(legacy)" suffix.
@@ -220,6 +220,19 @@ if [ -n "$MISSING" ]; then
   echo "⛔ Missing required artifacts:$MISSING"
   echo "   Run prior pipeline steps first (/vg:build, /vg:review, /vg:test)"
   exit 1
+fi
+
+CRUD_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-crud-surface-contract.py"
+if [ -x "$CRUD_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp"
+  "${PYTHON_BIN:-python3}" "$CRUD_VAL" --phase "${PHASE_NUMBER}" \
+    --config "${REPO_ROOT:-.}/.claude/vg.config.md" \
+    > "${PHASE_DIR}/.tmp/crud-surface-accept.json" 2>&1
+  CRUD_RC=$?
+  if [ "$CRUD_RC" != "0" ]; then
+    echo "⛔ CRUD-SURFACES.md contract invalid — see ${PHASE_DIR}/.tmp/crud-surface-accept.json"
+    exit 2
+  fi
 fi
 
 # Harness v2.6.1 (2026-04-26): rule-cards drift gate. WARN if any
@@ -754,6 +767,53 @@ for m in re.finditer(r'^##?\s*(G-\d+)[:\s-]+([^\n]+)', goals_text, re.MULTILINE)
 PY
 ```
 
+### Section B.1: CRUD surfaces (from CRUD-SURFACES.md)
+
+Parse each resource contract into UAT rows. These are the human-facing
+checkpoints for list/read/create/update/delete surfaces: headings,
+descriptions, filters, search, sort, paging, table columns/actions, form
+validation, duplicate-submit guard, delete confirmation, object/field auth,
+CSRF/XSS posture, rate limit, abuse guards, audit log, and performance budget.
+
+```bash
+${PYTHON_BIN} - <<PY > "${VG_TMP}/uat-crud-surfaces.txt"
+import json
+import re
+from pathlib import Path
+
+path = Path("${PHASE_DIR}/CRUD-SURFACES.md")
+if not path.exists():
+    raise SystemExit(0)
+text = path.read_text(encoding="utf-8", errors="replace")
+m = re.search(r"```(?:json|crud-surface)\s*(\{.*?\})\s*```", text, re.DOTALL)
+raw = m.group(1) if m else text.strip()
+try:
+    data = json.loads(raw)
+except Exception as exc:
+    print(f"INVALID\tparse-error\t{exc}")
+    raise SystemExit(0)
+
+for resource in data.get("resources", []):
+    if not isinstance(resource, dict):
+        continue
+    name = resource.get("name", "<unnamed>")
+    ops = ",".join(resource.get("operations", []))
+    platforms = resource.get("platforms", {}) if isinstance(resource.get("platforms"), dict) else {}
+    overlays = ",".join(sorted(platforms.keys()))
+    checkpoints = []
+    if "web" in platforms:
+        checkpoints.extend(["web:list/form/delete", "web:url-state", "web:a11y-states"])
+    if "mobile" in platforms:
+        checkpoints.extend(["mobile:deep-link", "mobile:tap-target", "mobile:offline/network"])
+    if "backend" in platforms:
+        checkpoints.extend(["backend:query-contract", "backend:authz/csrf", "backend:abuse/perf"])
+    base = resource.get("base", {}) if isinstance(resource.get("base"), dict) else {}
+    if base:
+        checkpoints.extend(["base:business-flow", "base:security", "base:delete-policy"])
+    print(f"{name}\t{ops}\t{overlays}\t{', '.join(dict.fromkeys(checkpoints))}")
+PY
+```
+
 ### Section C: Ripple acknowledgment (from RIPPLE-ANALYSIS.md or .ripple.json)
 
 If ripple data exists, HIGH-severity callers need explicit acknowledgment.
@@ -893,6 +953,7 @@ UAT Checklist for Phase {PHASE_NUMBER}:
   Section A — Decisions (CONTEXT P{phase}.D-XX): {count} items
   Section A.1 — Foundation cites (F-XX):    {count} items (0 = none cited)
   Section B — Goals (TEST-GOALS G-XX):      {count} items
+  Section B.1 — CRUD surfaces:              {count} resource rows
   Section C — Ripple callers (HIGH):        {count} callers need acknowledgment
   Section D — Design refs:                  {count} refs + {mobile_count} simulator shots
   Section E — Deliverables (summary):       {count} tasks
@@ -1692,7 +1753,16 @@ Empty if no F-XX references found in phase artifacts.
 
 Totals: {passed}P / {failed}F / {skipped}S  (+ {N} pre-known gaps not gated)
 
-## B.1 UNREACHABLE Triage (from UNREACHABLE-TRIAGE.md)
+## B.1 CRUD Surfaces (CRUD-SURFACES.md)
+
+| Resource | Operations | Platform overlays | UAT Result | Note |
+|----------|------------|-------------------|------------|------|
+| Campaign | list,create,update,delete | web,backend | PASS / FAIL / SKIP | verify heading/filter/table/form/delete/security contract |
+| ... | ... | ... | ... | ... |
+
+Totals: {passed}P / {failed}F / {skipped}S
+
+## B.2 UNREACHABLE Triage (from UNREACHABLE-TRIAGE.md)
 
 Surfaced only when `/vg:review` produced triage. Each entry shows verdict + resolution path.
 
@@ -1821,7 +1891,7 @@ rm -f "${PHASE_DIR}"/.god-nodes.json
 rm -rf "${PHASE_DIR}"/.wave-context
 rm -rf "${PHASE_DIR}"/.wave-tasks
 
-# Keep: SPECS, CONTEXT, PLAN*, API-CONTRACTS, TEST-GOALS, SUMMARY*,
+# Keep: SPECS, CONTEXT, PLAN*, API-CONTRACTS, TEST-GOALS, CRUD-SURFACES, SUMMARY*,
 #       RUNTIME-MAP.json, GOAL-COVERAGE-MATRIX.md, SANDBOX-TEST.md,
 #       RIPPLE-ANALYSIS.md, UAT.md, .step-markers/
 ```
@@ -1997,7 +2067,7 @@ Covers goal: accept phase ${PHASE_NUMBER}"
 Display:
 ```
 Phase {PHASE_NUMBER} ACCEPTED ✓
-Artifacts preserved: SPECS, CONTEXT, PLAN, API-CONTRACTS, TEST-GOALS, SUMMARY,
+Artifacts preserved: SPECS, CONTEXT, PLAN, API-CONTRACTS, TEST-GOALS, CRUD-SURFACES, SUMMARY,
                      RUNTIME-MAP, GOAL-COVERAGE-MATRIX, SANDBOX-TEST, RIPPLE-ANALYSIS, UAT,
                      DEPLOY-RUNBOOK (v1.14.0+)
 Updated aggregators (v1.14.0+): CROSS-PHASE-DEPS, DEPLOY-LESSONS, ENV-CATALOG,

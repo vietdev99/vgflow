@@ -56,7 +56,8 @@ def _load_pec():
     return mod
 
 
-def _audit_pair(meta_path: Path, prompt_path: Path, phase_dir: Path,
+def _audit_pair(meta_path: Path, prompt_path: Path, full_prompt_path: Path,
+                phase_dir: Path,
                 hasher, pec) -> dict:
     """Return dict with 3-way comparison facts for one (wave, task) pair."""
     try:
@@ -68,6 +69,14 @@ def _audit_pair(meta_path: Path, prompt_path: Path, phase_dir: Path,
         prompt_text = prompt_path.read_text(encoding="utf-8")
     except Exception as e:
         return {"error": f"prompt.md unreadable: {e}", "task_id": meta.get("task_id_str")}
+
+    try:
+        full_prompt_text = full_prompt_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return {
+            "error": f"full prompt unreadable: {e}",
+            "task_id": meta.get("task_id_str"),
+        }
 
     task_id = meta.get("task_id")
     if task_id is None:
@@ -98,6 +107,7 @@ def _audit_pair(meta_path: Path, prompt_path: Path, phase_dir: Path,
     # in the evidence message.
     prompt_sha, _prompt_canonical_lines, _ = hasher.task_block_sha256(prompt_text)
     content_drift = bool(expected_sha) and prompt_sha != expected_sha
+    full_prompt_contains_body = prompt_text.strip() in full_prompt_text
 
     # Body line count from persisted prompt (raw, no normalize — caller wants
     # to see what executor SAW, not what was canonical)
@@ -124,6 +134,8 @@ def _audit_pair(meta_path: Path, prompt_path: Path, phase_dir: Path,
         "prompt_sha": prompt_sha,
         "prompt_lines": prompt_lines,
         "content_drift": content_drift,
+        "full_prompt_contains_body": full_prompt_contains_body,
+        "full_prompt_path": str(full_prompt_path),
         "shortfall_pct": shortfall_pct,
         "plan_drift": plan_drift,
         "plan_extract_error": plan_extract_error,
@@ -198,8 +210,25 @@ def main() -> None:
                         file=str(meta_path),
                     ))
                     continue
+            full_prompt_path = meta_path.parent / meta_path.name.replace(".meta.json", ".prompt.md")
+            if not full_prompt_path.exists():
+                out.add(Evidence(
+                    type="missing_file",
+                    message=(
+                        "meta.json present but full executor prompt missing: "
+                        f"{full_prompt_path.name}"
+                    ),
+                    file=str(meta_path),
+                    fix_hint=(
+                        "Build step 8c must persist ${TASK_NUM}.prompt.md before "
+                        "Agent spawn. This file proves the executor received "
+                        "literal task context, not only a pointer."
+                    ),
+                ))
+                continue
 
-            audit = _audit_pair(meta_path, prompt_path, phase_dir, hasher, pec)
+            audit = _audit_pair(meta_path, prompt_path, full_prompt_path,
+                                phase_dir, hasher, pec)
             if "error" in audit:
                 out.add(Evidence(type="malformed_content",
                                  message=audit["error"], file=str(meta_path)))
@@ -285,6 +314,25 @@ def main() -> None:
                             "Override: --skip-task-fidelity-audit (logs override-debt)."
                         ),
                     ))
+
+            if not audit["full_prompt_contains_body"]:
+                out.add(Evidence(
+                    type="full_prompt_missing_task_body",
+                    message=(
+                        f"Task {tid} ({wave}): full executor prompt does not "
+                        "contain the verbatim task body. Executor may have "
+                        "received only @file/path guidance or a paraphrased "
+                        "summary, which reopens the lazy-read blueprint miss."
+                    ),
+                    file=audit["full_prompt_path"],
+                    expected="literal body from *.body.md appears inside *.prompt.md",
+                    actual="literal body not found",
+                    fix_hint=(
+                        "Materialize TASK_CONTEXT directly inside the Agent "
+                        "prompt and persist the same prompt text to *.prompt.md "
+                        "before spawn. Do not rely on child agents reading @file."
+                    ),
+                ))
 
         if not out.evidence:
             out.evidence.append(Evidence(

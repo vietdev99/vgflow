@@ -6,89 +6,139 @@ metadata:
 ---
 
 <codex_skill_adapter>
-## Codex ⇆ Claude Code tool mapping
+## Codex runtime notes
 
-This skill was originally designed for Claude Code. When running in Codex CLI, translate tool calls using the table + patterns below.
+This skill body is generated from VGFlow's canonical source. Claude Code and
+Codex use the same workflow contracts, but their orchestration primitives differ.
 
-### Tool mapping table
+### Tool mapping
 
-| Claude tool | Codex equivalent | Notes |
+| Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
-| AskUserQuestion | request_user_input (free-form text, or number-prefix choices) | For multi-select, format as "1. Option / 2. Option" and parse reply |
-| Task (agent spawn) | `codex exec --model <model> "<prompt>"` subprocess | Foreground: `codex exec ... > /tmp/out.txt`. Parallel: launch N subprocesses + `wait`. See "Agent spawn" below |
-| TaskCreate/TaskUpdate/TodoWrite | N/A — use inline markdown headers + status narration | Codex does not have a persistent task tail UI. Write `## ━━━ Phase X: step ━━━` in stdout instead |
-| Monitor | Bash loop with `echo` + `sleep 3` polling | Codex streams stdout directly, no separate monitor channel |
-| ScheduleWakeup | N/A — Codex is one-shot; user must re-invoke | Skill must tolerate single-execution model; no sleeping |
-| WebFetch | `curl -sfL <url>` or `gh api <path>` | For GitHub URLs prefer `gh` for auth handling |
-| mcp__playwright{1-5}__* | See "Playwright MCP" below | Playwright MCP tools ARE available in Codex's main orchestrator |
-| mcp__graphify__* | `python -c "from graphify import ..."` inline | Graphify CLI/module works identically in Codex |
-| mcp__context7__*, mcp__exa__*, mcp__firecrawl__* | Skip or fall back to WebFetch | Only available via SDK; not bundled in Codex CLI |
-| Bash/Read/Write/Edit/Glob/Grep | Same — Codex supports these natively | No adapter needed |
+| AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it. |
+| Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
+| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
+| Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
-### Agent spawn (Task → codex exec)
+<codex_runtime_contract>
+### Provider/runtime parity contract
 
-Claude Code spawns isolated agents via `Task(subagent_type=..., prompt=...)`. Codex equivalent:
+This generated skill must preserve the source command's artifacts, gates,
+telemetry events, and step ordering on both Claude and Codex. Do not remove,
+skip, or weaken a source workflow step because a Claude-only primitive appears
+in the body below.
+
+#### Provider mapping
+
+| Source pattern | Claude path | Codex path |
+|---|---|---|
+| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `commands/vg/_shared/lib/codex-spawn.sh --tier planner` |
+| Build executor Agent | Use the source executor `Agent(...)` call | Use `codex-spawn.sh --tier executor --sandbox workspace-write` with explicit file ownership and expected artifact output |
+| Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured `codex exec`/Gemini/Claude commands from `.claude/vg.config.md`; fail if required CLI output is missing or unparsable |
+| Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
+| Reflection / learning | Use `vg-reflector` workflow | Use the Codex `vg-reflector` adapter or `codex-spawn.sh --tier scanner`; candidates still require the same user gate |
+
+### Codex hook parity
+
+Claude Code has a project-local hook substrate; Codex skills do not receive
+Claude `UserPromptSubmit`, `Stop`, or `PostToolUse` hooks automatically.
+Therefore Codex must execute the lifecycle explicitly through the same
+orchestrator that writes `.vg/events.db`:
+
+| Claude hook | What it does on Claude | Codex obligation |
+|---|---|---|
+| `UserPromptSubmit` -> `vg-entry-hook.py` | Pre-seeds `vg-orchestrator run-start` and `.vg/.session-context.json` before the skill loads | Treat the command body's explicit `vg-orchestrator run-start` as mandatory; if missing or failing, BLOCK before doing work |
+| `Stop` -> `vg-verify-claim.py` | Runs `vg-orchestrator run-complete` and blocks false done claims | Run the command body's terminal `vg-orchestrator run-complete` before claiming completion; if it returns non-zero, fix evidence and retry |
+| `PostToolUse` edit -> `vg-edit-warn.py` | Warns that command/skill edits require session reload | After editing VG workflow files on Codex, tell the user the current session may still use cached skill text |
+| `PostToolUse` Bash -> `vg-step-tracker.py` | Tracks marker commands and emits `hook.step_active` telemetry | Do not rely on the hook; call explicit `vg-orchestrator mark-step` lines in the skill and preserve marker/telemetry events |
+
+Codex hook parity is evidence-based: `.vg/events.db`, step markers,
+`must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
+run is not complete just because the model says it is complete.
+
+### Codex spawn precedence
+
+When the source workflow below says `Agent(...)` or "spawn", Codex MUST
+apply this table instead of treating the Claude syntax as executable:
+
+| Source spawn site | Codex action | Tier/model env | Sandbox | Required evidence |
+|---|---|---|---|---|
+| `/vg:build` wave executor, `model="${MODEL_EXECUTOR}"` | Write one prompt file per task, run `codex-spawn.sh --tier executor`; parallelize independent tasks with background processes and `wait`, serialize dependency groups | `VG_CODEX_MODEL_EXECUTOR`; leave unset to use Codex config default. Set this to the user's strongest coding model when they want Sonnet-class build quality. | `workspace-write` | child output, stdout/stderr logs, changed files, verification commands, task-fidelity prompt evidence |
+| `/vg:blueprint`, `/vg:scope`, planner/checker agents | Run `codex-spawn.sh --tier planner` or inline in the main orchestrator if the step needs interactive user answers | `VG_CODEX_MODEL_PLANNER` | `workspace-write` for artifact-writing planners, `read-only` for pure checks | requested artifacts or JSON verdict |
+| `/vg:review` navigator/scanner, `Agent(model="haiku")` | Do NOT blindly spawn `codex exec` for Playwright/Maestro work. Main Codex orchestrator owns MCP/browser/device actions. Use `codex-spawn.sh --tier scanner --sandbox read-only` only for non-MCP classification over captured snapshots/artifacts. | `VG_CODEX_MODEL_SCANNER`; set this to a cheap/fast model for review map/scanner work | `read-only` unless explicitly generating scan files from supplied evidence | same `scan-*.json`, `RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md`, and `review.haiku_scanner_spawned` telemetry event semantics |
+| `/vg:review` fix agents and `/vg:test` codegen agents | Use `codex-spawn.sh --tier executor` because they edit code/tests | `VG_CODEX_MODEL_EXECUTOR` or explicit `--model` if the command selected a configured fix model | `workspace-write` | changed files, tests run, unresolved risks |
+| Rationalization guard, reflector, gap hunters | Use `codex-spawn.sh --tier scanner` for read-only classification, or `--tier adversarial` for independent challenge/review | `VG_CODEX_MODEL_SCANNER` or `VG_CODEX_MODEL_ADVERSARIAL` | `read-only` by default | compact JSON/markdown verdict; fail closed on empty/unparseable output |
+
+If a source sentence says "MUST spawn Haiku" and the step needs MCP/browser
+tools, Codex interprets that as "MUST run the scanner protocol and emit the
+same artifacts/events"; it does not require a child process unless child MCP
+access was smoke-tested in the current environment.
+
+#### Non-negotiable guarantees
+
+- Never skip source workflow gates, validators, telemetry events, or must-write artifacts.
+- If Codex cannot emulate a Claude primitive safely, BLOCK instead of silently degrading.
+- UI/UX, security, and business-flow checks remain artifact/gate driven: follow the source command's DESIGN/UI-MAP/TEST-GOALS/security validator requirements exactly.
+- A slower Codex inline path is acceptable; a weaker path that omits evidence is not.
+</codex_runtime_contract>
+
+### Model tier mapping
+
+Model mapping is tier-based, not vendor-name-based.
+
+VGFlow keeps tier names in `.claude/vg.config.md`; Codex subprocesses use
+the user's Codex config model by default. Pin a tier only after smoke-testing
+that model in the target account, via `VG_CODEX_MODEL_PLANNER`,
+`VG_CODEX_MODEL_EXECUTOR`, `VG_CODEX_MODEL_SCANNER`, or
+`VG_CODEX_MODEL_ADVERSARIAL`:
+
+| VG tier | Claude-style role | Codex default | Fallback |
+|---|---|---|---|
+| planner | Opus-class planning/reasoning | Codex config default | Set `VG_CODEX_MODEL_PLANNER` only after smoke-testing |
+| executor | Sonnet-class coding/review | Codex config default | Set `VG_CODEX_MODEL_EXECUTOR` only after smoke-testing |
+| scanner | Haiku-class scan/classify | Codex config default | Set `VG_CODEX_MODEL_SCANNER` only after smoke-testing |
+| adversarial | independent reviewer | Codex config default | Set `VG_CODEX_MODEL_ADVERSARIAL` only after smoke-testing |
+
+### Spawn helper
+
+For subprocess-based children, use:
 
 ```bash
-# Single agent, foreground (wait for completion + read output)
-codex exec --model gpt-5 "<full isolated prompt>" > /tmp/agent-result.txt 2>&1
-RESULT=$(cat /tmp/agent-result.txt)
-
-# Multiple agents, parallel (Claude's pattern of 1 message with N Task calls)
-codex exec --model gpt-5 "<prompt 1>" > /tmp/agent-1.txt 2>&1 &
-PID1=$!
-codex exec --model gpt-5 "<prompt 2>" > /tmp/agent-2.txt 2>&1 &
-PID2=$!
-wait $PID1 $PID2
-R1=$(cat /tmp/agent-1.txt); R2=$(cat /tmp/agent-2.txt)
+bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
+  --tier executor \
+  --prompt-file "$PROMPT_FILE" \
+  --out "$OUT_FILE" \
+  --timeout 900 \
+  --sandbox workspace-write
 ```
 
-**Critical constraints when spawning:**
-- Subagent inherits working directory + env vars, but **no MCP server access** (Codex exec spawns fresh CLI instance without `--mcp` wired). Subagent CANNOT call `mcp__playwright*__`, `mcp__graphify__`, etc.
-- Model mapping for this project: `models.planner` opus → `gpt-5`, `models.executor` sonnet → `gpt-4o`, `models.scanner` haiku → `gpt-4o-mini` (or project-configured equivalent). Check `.claude/vg.config.md` `models` section for actual values and adapt.
-- Timeout: wrap in `timeout 600s codex exec ...` to prevent hung subagents.
-- Return schema: if skill expects structured JSON back, prompt subagent with "Return ONLY a single JSON object with keys: {...}". Parse with `jq` or `python -c "import json,sys; ..."`.
+The helper wraps `codex exec`, writes the final message to `--out`, captures
+stdout/stderr beside it, and fails loudly on timeout or empty output.
 
-### Playwright MCP — orchestrator-only rule
+### Known Codex caveats to design around
 
-Playwright MCP tools (`mcp__playwright1__browser_navigate`, `_snapshot`, `_click`, etc.) ARE available to the main Codex orchestrator (same MCP servers as Claude Code). **BUT subagents spawned via `codex exec` do NOT inherit MCP access** — they are fresh CLI instances.
+- Do not trust inline model selection for native subagents unless verified in the current Codex version; use TOML-pinned agents or `codex exec --model`.
+- Do not combine structured `--output-schema` with MCP-heavy runs until the target Codex version is smoke-tested. Prefer plain text + post-parse for MCP flows.
+- Recursive `codex exec` runs inherit sandbox constraints. Use the least sandbox that still allows the child to write expected artifacts.
 
-Implication for skills using Haiku scanner pattern (scanner spawns → uses Playwright):
-- **Claude model:** spawn haiku agent with prompt → agent calls `mcp__playwright__` tools directly
-- **Codex model:** TWO options:
-  1. **Orchestrator-driven:** main orchestrator calls Playwright tools + passes snapshots/results to subagent as text → subagent returns instructions/analysis only (no tool calls). Slower but preserves parallelism benefit.
-  2. **Single-agent:** orchestrator runs scanner workflow inline (no spawn). Simpler but no parallelism; suitable for 1-2 view scans but slow for 14+ views.
+### Support-skill MCP pattern
 
-Default: **single-agent inline** unless skill explicitly documents the orchestrator-driven pattern for that step.
-
-### Persistence probe (Layer 4) — execution model
-
-For review/test skills that verify mutation persistence:
-- Main orchestrator holds Playwright session (claimed via lock manager)
-- Pre-snapshot + submit + refresh + re-read all run in orchestrator Playwright calls (not spawned)
-- If skill delegates analysis to subagent, orchestrator must capture snapshots + pass text to subagent; subagent returns verdict JSON `{persisted: bool, pre: ..., post: ...}`
-
-### Lock manager (Playwright)
-
-Same as Claude:
-```bash
-SESSION_ID="codex-${skill}-${phase}-$$"
-PLAYWRIGHT_SERVER=$(bash "${HOME}/.claude/playwright-locks/playwright-lock.sh" claim "$SESSION_ID")
-trap "bash '${HOME}/.claude/playwright-locks/playwright-lock.sh' release \"$SESSION_ID\" 2>/dev/null" EXIT INT TERM
-```
-
-Pool name in Codex: `codex` (separate from Claude's `claude` pool). Lock manager handles both without collision.
+Pattern A: INLINE ORCHESTRATOR. For MCP-heavy support skills such as
+`vg-haiku-scanner`, Codex keeps Playwright/Maestro actions in the main
+orchestrator and only delegates read-only classification after snapshots are
+captured. This preserves MCP access and avoids false confidence from a child
+process that cannot see browser tools.
 
 ## Invocation
 
-This skill is invoked by mentioning `$vg-accept`. Treat all user text after `$vg-accept` as arguments.
-
-If argument-hint in source frontmatter is not empty and user provides no args, ask once via request_user_input before proceeding.
+Invoke this skill as `$vg-accept`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
 
+
 <rules>
-1. **All pipeline artifacts required** — SPECS → CONTEXT → PLAN → API-CONTRACTS → TEST-GOALS → SUMMARY → RUNTIME-MAP → GOAL-COVERAGE-MATRIX → SANDBOX-TEST. Missing = BLOCK.
+1. **All pipeline artifacts required** — SPECS → CONTEXT → PLAN → API-CONTRACTS → TEST-GOALS → SUMMARY → RUNTIME-MAP → GOAL-COVERAGE-MATRIX → SANDBOX-TEST. CRUD-SURFACES is required when the phase touches CRUD/resource behavior. Missing = BLOCK.
 2. **Step markers mandatory** — every profile-applicable step from /vg:build, /vg:review, /vg:test MUST have its `.step-markers/{step}.done` file. Missing = BLOCK (AI skipped silently).
 3. **SANDBOX-TEST verdict gate** — must be `PASSED` or `GAPS_FOUND`. `FAILED` → BLOCK with redirect.
 4. **UAT is data-driven** — checklist items are GENERATED from VG artifacts (`P{phase}.D-XX` from CONTEXT, `F-XX` from FOUNDATION if cited in any phase artifact, G-XX from TEST-GOALS, HIGH callers from RIPPLE-ANALYSIS, design-refs from PLAN). No hardcoded checks. Bare `D-XX` treated as legacy — displayed with "(legacy)" suffix.
@@ -245,6 +295,19 @@ if [ -n "$MISSING" ]; then
   echo "⛔ Missing required artifacts:$MISSING"
   echo "   Run prior pipeline steps first (/vg:build, /vg:review, /vg:test)"
   exit 1
+fi
+
+CRUD_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-crud-surface-contract.py"
+if [ -x "$CRUD_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp"
+  "${PYTHON_BIN:-python3}" "$CRUD_VAL" --phase "${PHASE_NUMBER}" \
+    --config "${REPO_ROOT:-.}/.claude/vg.config.md" \
+    > "${PHASE_DIR}/.tmp/crud-surface-accept.json" 2>&1
+  CRUD_RC=$?
+  if [ "$CRUD_RC" != "0" ]; then
+    echo "⛔ CRUD-SURFACES.md contract invalid — see ${PHASE_DIR}/.tmp/crud-surface-accept.json"
+    exit 2
+  fi
 fi
 
 # Harness v2.6.1 (2026-04-26): rule-cards drift gate. WARN if any
@@ -779,6 +842,53 @@ for m in re.finditer(r'^##?\s*(G-\d+)[:\s-]+([^\n]+)', goals_text, re.MULTILINE)
 PY
 ```
 
+### Section B.1: CRUD surfaces (from CRUD-SURFACES.md)
+
+Parse each resource contract into UAT rows. These are the human-facing
+checkpoints for list/read/create/update/delete surfaces: headings,
+descriptions, filters, search, sort, paging, table columns/actions, form
+validation, duplicate-submit guard, delete confirmation, object/field auth,
+CSRF/XSS posture, rate limit, abuse guards, audit log, and performance budget.
+
+```bash
+${PYTHON_BIN} - <<PY > "${VG_TMP}/uat-crud-surfaces.txt"
+import json
+import re
+from pathlib import Path
+
+path = Path("${PHASE_DIR}/CRUD-SURFACES.md")
+if not path.exists():
+    raise SystemExit(0)
+text = path.read_text(encoding="utf-8", errors="replace")
+m = re.search(r"```(?:json|crud-surface)\s*(\{.*?\})\s*```", text, re.DOTALL)
+raw = m.group(1) if m else text.strip()
+try:
+    data = json.loads(raw)
+except Exception as exc:
+    print(f"INVALID\tparse-error\t{exc}")
+    raise SystemExit(0)
+
+for resource in data.get("resources", []):
+    if not isinstance(resource, dict):
+        continue
+    name = resource.get("name", "<unnamed>")
+    ops = ",".join(resource.get("operations", []))
+    platforms = resource.get("platforms", {}) if isinstance(resource.get("platforms"), dict) else {}
+    overlays = ",".join(sorted(platforms.keys()))
+    checkpoints = []
+    if "web" in platforms:
+        checkpoints.extend(["web:list/form/delete", "web:url-state", "web:a11y-states"])
+    if "mobile" in platforms:
+        checkpoints.extend(["mobile:deep-link", "mobile:tap-target", "mobile:offline/network"])
+    if "backend" in platforms:
+        checkpoints.extend(["backend:query-contract", "backend:authz/csrf", "backend:abuse/perf"])
+    base = resource.get("base", {}) if isinstance(resource.get("base"), dict) else {}
+    if base:
+        checkpoints.extend(["base:business-flow", "base:security", "base:delete-policy"])
+    print(f"{name}\t{ops}\t{overlays}\t{', '.join(dict.fromkeys(checkpoints))}")
+PY
+```
+
 ### Section C: Ripple acknowledgment (from RIPPLE-ANALYSIS.md or .ripple.json)
 
 If ripple data exists, HIGH-severity callers need explicit acknowledgment.
@@ -918,6 +1028,7 @@ UAT Checklist for Phase {PHASE_NUMBER}:
   Section A — Decisions (CONTEXT P{phase}.D-XX): {count} items
   Section A.1 — Foundation cites (F-XX):    {count} items (0 = none cited)
   Section B — Goals (TEST-GOALS G-XX):      {count} items
+  Section B.1 — CRUD surfaces:              {count} resource rows
   Section C — Ripple callers (HIGH):        {count} callers need acknowledgment
   Section D — Design refs:                  {count} refs + {mobile_count} simulator shots
   Section E — Deliverables (summary):       {count} tasks
@@ -928,6 +1039,74 @@ Proceed with UAT? (y/n/abort)
 ```
 
 If user aborts → stop, write UAT.md with status `ABORTED`.
+</step>
+
+<step name="4b_uat_narrative_autofire">
+**Phase 15 D-10 — Auto-generate UAT-NARRATIVE.md before interactive UAT (NEW, 2026-04-27).**
+
+Before stepping into the interactive checklist, render the per-prompt UAT
+narrative document so the human tester opens it side-by-side with their
+browser. The narrative is built from 4 frontmatter fields per goal
+(`entry_url`, `navigation_steps`, `precondition`, `expected_behavior`)
+plus design-ref blocks where present (D-10 spec). Strings come ONLY from
+narration-strings.yaml — no hardcoded labels (D-18 strict enforcement).
+
+The generator (`scripts/build-uat-narrative.py`) is deterministic, takes
+no Sonnet round-trip, and idempotently overwrites `UAT-NARRATIVE.md`
+each run so re-acceptance always reflects the latest TEST-GOALS state.
+A sibling `UAT-NARRATIVE-OVERRIDES.md` (if present) is appended verbatim
+at the end so manual prose can survive regeneration.
+
+```bash
+NARRATIVE_OUT="${PHASE_DIR}/UAT-NARRATIVE.md"
+NARRATIVE_GEN="${REPO_ROOT}/.claude/scripts/build-uat-narrative.py"
+
+if [ ! -f "$NARRATIVE_GEN" ]; then
+  echo "⚠ build-uat-narrative.py missing — skipping narrative auto-fire (Phase 15 T5.1 not installed)" >&2
+else
+  ${PYTHON_BIN} "$NARRATIVE_GEN" \
+      --phase-dir "${PHASE_DIR}" \
+      --vg-config "${REPO_ROOT}/vg.config.md" \
+      --output    "$NARRATIVE_OUT" \
+      || {
+        echo "⛔ UAT narrative generation failed — see stderr above." >&2
+        echo "   Inspect TEST-GOALS frontmatter for missing entry_url / navigation_steps / precondition / expected_behavior." >&2
+        exit 1
+      }
+  echo "✓ UAT-NARRATIVE.md written → ${NARRATIVE_OUT}"
+fi
+
+# D-05/06/07 — verify the 4 mandatory fields per prompt
+${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/validators/verify-uat-narrative-fields.py" \
+    --phase "${PHASE_NUMBER}" \
+    > "${VG_TMP}/uat-narrative-fields.json" 2>&1
+NARR_VERDICT=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/uat-narrative-fields.json')).get('verdict','BLOCK'))" 2>/dev/null)
+case "$NARR_VERDICT" in
+  PASS|WARN) echo "✓ UAT narrative fields validator: $NARR_VERDICT" ;;
+  *) echo "⛔ UAT narrative fields validator: $NARR_VERDICT — see ${VG_TMP}/uat-narrative-fields.json" >&2; exit 1 ;;
+esac
+
+# D-18 — verify no hardcoded UAT strings leaked into the rendered narrative
+${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/validators/verify-uat-strings-no-hardcode.py" \
+    --phase "${PHASE_NUMBER}" \
+    --narrative "$NARRATIVE_OUT" \
+    > "${VG_TMP}/uat-strings.json" 2>&1
+STR_VERDICT=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/uat-strings.json')).get('verdict','BLOCK'))" 2>/dev/null)
+case "$STR_VERDICT" in
+  PASS|WARN) echo "✓ UAT strings hardcode scan: $STR_VERDICT" ;;
+  *) echo "⛔ UAT strings hardcode scan: $STR_VERDICT — narrative contains literal labels not from narration-strings.yaml. See ${VG_TMP}/uat-strings.json" >&2; exit 1 ;;
+esac
+
+echo ""
+echo "▸ UAT-NARRATIVE.md ready. Open it side-by-side with your browser:"
+echo "    ${NARRATIVE_OUT}"
+echo ""
+```
+
+The interactive UAT in step 5 references this document — testers walk each
+prompt with the narrative open in another window. The narrative does NOT
+replace the interactive checklist; it provides the WHY/HOW context that
+used to live only in tester memory.
 </step>
 
 <step name="5_interactive_uat">
@@ -1649,7 +1828,16 @@ Empty if no F-XX references found in phase artifacts.
 
 Totals: {passed}P / {failed}F / {skipped}S  (+ {N} pre-known gaps not gated)
 
-## B.1 UNREACHABLE Triage (from UNREACHABLE-TRIAGE.md)
+## B.1 CRUD Surfaces (CRUD-SURFACES.md)
+
+| Resource | Operations | Platform overlays | UAT Result | Note |
+|----------|------------|-------------------|------------|------|
+| Campaign | list,create,update,delete | web,backend | PASS / FAIL / SKIP | verify heading/filter/table/form/delete/security contract |
+| ... | ... | ... | ... | ... |
+
+Totals: {passed}P / {failed}F / {skipped}S
+
+## B.2 UNREACHABLE Triage (from UNREACHABLE-TRIAGE.md)
 
 Surfaced only when `/vg:review` produced triage. Each entry shows verdict + resolution path.
 
@@ -1778,7 +1966,7 @@ rm -f "${PHASE_DIR}"/.god-nodes.json
 rm -rf "${PHASE_DIR}"/.wave-context
 rm -rf "${PHASE_DIR}"/.wave-tasks
 
-# Keep: SPECS, CONTEXT, PLAN*, API-CONTRACTS, TEST-GOALS, SUMMARY*,
+# Keep: SPECS, CONTEXT, PLAN*, API-CONTRACTS, TEST-GOALS, CRUD-SURFACES, SUMMARY*,
 #       RUNTIME-MAP.json, GOAL-COVERAGE-MATRIX.md, SANDBOX-TEST.md,
 #       RIPPLE-ANALYSIS.md, UAT.md, .step-markers/
 ```
@@ -1954,7 +2142,7 @@ Covers goal: accept phase ${PHASE_NUMBER}"
 Display:
 ```
 Phase {PHASE_NUMBER} ACCEPTED ✓
-Artifacts preserved: SPECS, CONTEXT, PLAN, API-CONTRACTS, TEST-GOALS, SUMMARY,
+Artifacts preserved: SPECS, CONTEXT, PLAN, API-CONTRACTS, TEST-GOALS, CRUD-SURFACES, SUMMARY,
                      RUNTIME-MAP, GOAL-COVERAGE-MATRIX, SANDBOX-TEST, RIPPLE-ANALYSIS, UAT,
                      DEPLOY-RUNBOOK (v1.14.0+)
 Updated aggregators (v1.14.0+): CROSS-PHASE-DEPS, DEPLOY-LESSONS, ENV-CATALOG,

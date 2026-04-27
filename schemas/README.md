@@ -11,6 +11,7 @@ artifacts produced per phase. Spec source: `.vg/workflow-hardening-v2.7/SPEC-E.m
 | `context.v1.json` | `${PHASE_DIR}/CONTEXT.md` frontmatter | `/vg:scope` `2_artifact_generation` |
 | `plan.v1.json` | `${PHASE_DIR}/PLAN.md` frontmatter | `/vg:blueprint` `2a_plan` |
 | `test-goals.v1.json` | `${PHASE_DIR}/TEST-GOALS.md` frontmatter | `/vg:blueprint` `2b5_test_goals` |
+| `crud-surface.v1.json` | `${PHASE_DIR}/CRUD-SURFACES.md` fenced JSON body | `/vg:blueprint` `2b5_test_goals` |
 | `summary.v1.json` | `${PHASE_DIR}/SUMMARY.md` frontmatter | `/vg:build` `9_post_execution` |
 | `uat.v1.json` | `${PHASE_DIR}/UAT.md` frontmatter (legacy `${phase}-UAT.md` also accepted) | `/vg:accept` `6_write_uat_md` |
 | `interactive-controls.v1.json` | sub-schema referenced from `test-goals.v1.json` for the `interactive_controls` block | n/a |

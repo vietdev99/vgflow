@@ -56,7 +56,7 @@ All modes produce output conforming to this schema:
     <session_dir>{path to crossai/ folder if session-based, "none" if stateless}</session_dir>
   </meta>
   <results>
-    <cli source="codex" model="gpt-5.4">
+    <cli source="codex" model="configured">
       <verdict>pass|flag|block</verdict>
       <score>{1-10}</score>
       <findings>
@@ -111,9 +111,9 @@ Verified CLI commands for spawning each agent. Tested 2026-04-10 (codex 0.118.0,
 
 ### Individual CLI Commands
 
-**Codex (GPT 5.4):**
+**Codex (configured model):**
 ```bash
-codex exec -m gpt-5.4 "$(cat {context_file})" > {output_path} 2>&1 &
+codex exec "$(cat {context_file})" > {output_path} 2>&1 &
 ```
 
 **Gemini (Pro High 3.1):**
@@ -135,7 +135,7 @@ OUTPUT_DIR="/tmp/vg-crossai-${PHASE}-${MODE}"
 mkdir -p "$OUTPUT_DIR"
 
 # Spawn all 3 CLIs in parallel
-codex exec -m gpt-5.4 "$(cat $CONTEXT_FILE)" > "$OUTPUT_DIR/codex.out" 2>&1 &
+codex exec "$(cat $CONTEXT_FILE)" > "$OUTPUT_DIR/codex.out" 2>&1 &
 PID_CODEX=$!
 
 cat "$CONTEXT_FILE" | gemini -m gemini-2.5-pro -p "$PROMPT" --yolo > "$OUTPUT_DIR/gemini.out" 2>&1 &

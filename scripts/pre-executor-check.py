@@ -18,6 +18,7 @@ Output: stdout JSON
     "task_context": "...",
     "contract_context": "...",
     "goals_context": "...",
+    "crud_surface_context": "...",
     "sibling_context": "...",
     "downstream_callers": "...",
     "design_context": "...",
@@ -455,6 +456,63 @@ def extract_goals_context(phase_dir: Path, task_text: str) -> str:
     return "\n\n".join(sections) if sections else f"Goals {goal_ids} not found"
 
 
+def extract_crud_surface_context(
+    phase_dir: Path,
+    task_text: str,
+    goals_context: str,
+    contract_context: str,
+) -> str:
+    """Extract the relevant CRUD-SURFACES.md resource contract for this task.
+
+    The file is resource-level, not task-level. Keep executor context tight by
+    returning only resources whose name appears in task/goal/contract text. If
+    there is exactly one resource, include it as the safe default.
+    """
+    path = phase_dir / "CRUD-SURFACES.md"
+    if not path.exists():
+        return "CRUD-SURFACES.md not found"
+
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    m = re.search(r"```(?:json|crud-surface)\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    body = m.group(1) if m else raw.strip()
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        return f"CRUD-SURFACES.md invalid JSON: {exc.msg} at line {exc.lineno}"
+
+    resources = data.get("resources")
+    if not isinstance(resources, list):
+        return "CRUD-SURFACES.md has no resources[] array"
+    if not resources:
+        reason = data.get("no_crud_reason") or "resources[] empty"
+        return f"NONE - {reason}"
+
+    combined = f"{task_text}\n{goals_context}\n{contract_context}".lower()
+    matched: list[dict] = []
+    for resource in resources:
+        if not isinstance(resource, dict):
+            continue
+        name = str(resource.get("name") or "").strip()
+        if name and name.lower() in combined:
+            matched.append(resource)
+
+    if not matched and len(resources) == 1 and isinstance(resources[0], dict):
+        matched = [resources[0]]
+
+    if not matched:
+        names = ", ".join(
+            str(r.get("name")) for r in resources if isinstance(r, dict) and r.get("name")
+        )
+        return f"CRUD-SURFACES.md present; no resource matched this task. Resources: {names or 'none'}"
+
+    compact = {
+        "version": data.get("version", "1"),
+        "source": "CRUD-SURFACES.md",
+        "resources": matched,
+    }
+    return json.dumps(compact, indent=2, ensure_ascii=False)
+
+
 def ensure_siblings(phase_dir: Path, task_num: int, config: dict, repo_root: Path) -> str:
     """Ensure sibling context exists, build if missing."""
     wave_ctx = phase_dir / ".wave-context"
@@ -667,6 +725,11 @@ def main():
     # Extract goals
     goals_context = extract_goals_context(phase_dir, task_context)
 
+    # Extract resource-level CRUD contract
+    crud_surface_context = extract_crud_surface_context(
+        phase_dir, task_context, goals_context, contract_context
+    )
+
     # Ensure siblings (builds if missing)
     sibling_context = ensure_siblings(phase_dir, args.task_num, config, repo_root)
 
@@ -720,6 +783,7 @@ def main():
             "task_context": 600,
             "contract_context": 800,
             "goals_context": 400,
+            "crud_surface_context": 500,
             "sibling_context": 400,
             "downstream_callers": 400,
             "design_context": 400,
@@ -732,6 +796,7 @@ def main():
             "task_context": 300,
             "contract_context": 500,
             "goals_context": 200,
+            "crud_surface_context": 300,
             "sibling_context": 400,
             "downstream_callers": 400,
             "design_context": 200,
@@ -752,6 +817,7 @@ def main():
         "task_context": task_context,
         "contract_context": contract_context,
         "goals_context": goals_context,
+        "crud_surface_context": crud_surface_context,
         "sibling_context": sibling_context,
         "downstream_callers": downstream_callers,
         "design_context": design_context,

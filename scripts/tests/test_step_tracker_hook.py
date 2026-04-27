@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-HOOK_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "vg-step-tracker.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+HOOK_SCRIPT = REPO_ROOT / "scripts" / "vg-step-tracker.py"
 
 
 def _load_hook(repo_root: Path):

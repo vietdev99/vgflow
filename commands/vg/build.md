@@ -99,7 +99,7 @@ Why: those tools persist items in Claude Code's status tail across sessions. Wav
 1. **Blueprint required** — phase must have PLAN*.md AND API-CONTRACTS.md before build. Missing = BLOCK.
 2. **Contract injection + runtime verification** — every executor agent receives relevant contract sections as context. At run-complete, orchestrator dispatches `verify-contract-runtime` validator: for each `## METHOD /path` endpoint declared in API-CONTRACTS.md, static presence check across framework patterns (fastify / express / nest / hono); missing routes → BLOCK. Catches phantom endpoints at wave-commit boundary instead of surfacing at review/test 1+ hour later (OHOK A2, v2.4).
 3. **Orchestrator coordinates, not executes** — discover plans, group waves, spawn agents, collect results.
-4. **Context budget per agent ~2000 lines** — each executor gets 7 context blocks (task/contract/goals/design/sibling/wave/execution). Modern Claude 200k comfortable; starving context causes drift. See step 8c for per-block line budgets.
+4. **Context budget per agent ~2000 lines** — each executor gets scoped context blocks (task/API contract/CRUD surface/goals/design/sibling/wave/execution). Modern Claude 200k comfortable; starving context causes drift. See step 8c for per-block line budgets.
 5. **Wave execution** — sequential between waves, parallel within.
 6. **Flags are opt-in** — only active when literal token appears in $ARGUMENTS.
 7. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as its FINAL action, run:
@@ -1287,6 +1287,7 @@ CONTEXT_JSON=$(${PYTHON_BIN} .claude/scripts/pre-executor-check.py \
 TASK_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['task_context'])")
 CONTRACT_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['contract_context'])")
 GOALS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['goals_context'])")
+CRUD_SURFACE_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin).get('crud_surface_context','CRUD-SURFACES.md not found'))")
 TASK_SIBLINGS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['sibling_context'])")
 TASK_CALLERS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['downstream_callers'])")
 DESIGN_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['design_context'])")
@@ -1369,6 +1370,7 @@ PROMPT_PERSIST_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
 mkdir -p "$PROMPT_PERSIST_DIR" 2>/dev/null
 PROMPT_BODY_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.body.md"
 PROMPT_META_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.meta.json"
+PROMPT_FULL_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.prompt.md"
 
 # (1) Body persist — always. Source of truth is $TASK_CONTEXT (the
 # canonical PLAN task body from CONTEXT_JSON, written by
@@ -1429,6 +1431,7 @@ BUDGETS = ctx.get('applied_caps') or {
     'task_context': 300,
     'contract_context': 500,
     'goals_context': 200,
+    'crud_surface_context': 300,
     'sibling_context': 400,
     'downstream_callers': 400,
     'design_context': 200,
@@ -1559,6 +1562,76 @@ PY
 elif [ "$CTX_INJECT_MODE" = "full" ] && [ -f "${PHASE_DIR}/CONTEXT.md" ]; then
   DECISION_CONTEXT="$(cat "${PHASE_DIR}/CONTEXT.md")"
 fi
+
+# Materialize critical prompt blocks literally. Do not rely on @file expansion
+# inside child Agent/Task prompts; that is exactly where lazy-read drift starts.
+VG_EXECUTOR_RULES=""
+[ -f ".claude/commands/vg/_shared/vg-executor-rules.md" ] && \
+  VG_EXECUTOR_RULES="$(cat .claude/commands/vg/_shared/vg-executor-rules.md)"
+
+UI_SPEC_CONTEXT="NONE - UI-SPEC.md unavailable or not relevant for this task."
+[ -f "${PHASE_DIR}/UI-SPEC.md" ] && \
+  UI_SPEC_CONTEXT="$(sed -n '1,260p' "${PHASE_DIR}/UI-SPEC.md")"
+
+WAVE_CONTEXT="NONE - wave context unavailable."
+[ -f "${PHASE_DIR}/wave-${N}-context.md" ] && \
+  WAVE_CONTEXT="$(cat "${PHASE_DIR}/wave-${N}-context.md")"
+
+# Persist the full executor prompt evidence before spawn. D-06 task-fidelity
+# validator verifies that this full prompt contains TASK_CONTEXT verbatim, not
+# just a pointer to a task file or a paraphrased summary.
+{
+  echo "<vg_executor_rules>"
+  printf '%s\n' "$VG_EXECUTOR_RULES"
+  echo "</vg_executor_rules>"
+  echo ""
+  echo "<bootstrap_rules>"
+  printf '%s\n' "$BOOTSTRAP_RULES_BLOCK"
+  echo "</bootstrap_rules>"
+  echo ""
+  echo "<decision_context>"
+  printf '%s\n' "$DECISION_CONTEXT"
+  echo "</decision_context>"
+  echo ""
+  echo "<task_context>"
+  printf '%s\n' "$TASK_CONTEXT"
+  echo "</task_context>"
+  echo ""
+  echo "<contract_context>"
+  printf '%s\n' "$CONTRACT_CONTEXT"
+  echo "</contract_context>"
+  echo ""
+  echo "<crud_surface_context>"
+  printf '%s\n' "$CRUD_SURFACE_CONTEXT"
+  echo "</crud_surface_context>"
+  echo ""
+  echo "<ui_spec_context>"
+  printf '%s\n' "$UI_SPEC_CONTEXT"
+  echo "</ui_spec_context>"
+  echo ""
+  echo "<goals_context>"
+  printf '%s\n' "$GOALS_CONTEXT"
+  echo "</goals_context>"
+  echo ""
+  echo "<design_context>"
+  printf '%s\n' "$DESIGN_CONTEXT"
+  echo "</design_context>"
+  echo ""
+  printf '%s\n' "$UI_MAP_SUBTREE_BLOCK"
+  echo ""
+  echo "<sibling_context>"
+  printf '%s\n' "$TASK_SIBLINGS"
+  echo "</sibling_context>"
+  echo ""
+  echo "<downstream_callers>"
+  printf '%s\n' "$TASK_CALLERS"
+  echo "</downstream_callers>"
+  echo ""
+  echo "<wave_context>"
+  printf '%s\n' "$WAVE_CONTEXT"
+  echo "</wave_context>"
+} > "$PROMPT_FULL_PERSIST"
+echo "✓ Full executor prompt persisted -> $PROMPT_FULL_PERSIST"
 ```
 
 **Spawn executor agent (one per plan task):**
@@ -1566,7 +1639,7 @@ fi
 Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
   prompt: |
     <vg_executor_rules>
-    @.claude/commands/vg/_shared/vg-executor-rules.md
+    ${VG_EXECUTOR_RULES}
     </vg_executor_rules>
 
     <bootstrap_rules>
@@ -1590,7 +1663,7 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
     </decision_context>
 
     <task_context>
-    @${TASKS_DIR}/task-${TASK_NUM}.md  (~100-300 lines)
+    ${TASK_CONTEXT}
     </task_context>
 
     <contract_context>
@@ -1602,25 +1675,24 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
     Import types from: ${config.contract_format.generated_types_path}
     </contract_context>
 
+    <crud_surface_context>
+    Resource-level CRUD contract slice from CRUD-SURFACES.md. This is the
+    source of truth for platform-specific list/form/delete/API behavior.
+    Follow the overlay matching this task's platform; do not apply web table
+    rules to mobile screens or backend-only endpoints.
+    ${CRUD_SURFACE_CONTEXT}
+    </crud_surface_context>
+
     <ui_spec_context>
-    # Only if UI-SPEC.md exists (FE tasks) — layout/spacing/component tokens
-    @${PHASE_DIR}/UI-SPEC.md  (relevant sections, ~200 lines)
+    ${UI_SPEC_CONTEXT}
     </ui_spec_context>
 
     <goals_context>
-    Task implements: ${TASK_GOALS}  (from task's <goals-covered>)
-    Success criteria + mutation evidence:
-    @${PHASE_DIR}/TEST-GOALS.md (goals listed above only, ~200 lines)
+    ${GOALS_CONTEXT}
     </goals_context>
 
     <design_context>
-    # ONLY if task has <design-ref> attribute. Paths resolved from step 4b.
-    Visual reference (AI VISION — nhìn pixel trực tiếp):
-    @${DESIGN_OUTPUT_DIR}/screenshots/${DESIGN_SLUG}.default.png
-    @${DESIGN_OUTPUT_DIR}/screenshots/${DESIGN_SLUG}.${STATE}.png  (per state relevant)
-    Structural DOM: @${DESIGN_OUTPUT_DIR}/refs/${DESIGN_SLUG}.structural.html
-    Interactions: @${DESIGN_OUTPUT_DIR}/refs/${DESIGN_SLUG}.interactions.md
-    Rule: layout/components/spacing MUST match screenshot. DOM is structural truth.
+    ${DESIGN_CONTEXT}
     </design_context>
 
     ${UI_MAP_SUBTREE_BLOCK}
@@ -1649,7 +1721,7 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
 
     <wave_context>
     Other tasks running in THIS WAVE — field names + endpoints MUST align:
-    @${PHASE_DIR}/wave-${N}-context.md (~300 lines)
+    ${WAVE_CONTEXT}
     </wave_context>
 
     <!-- execution_context: VG-native (self-contained in vg-executor-rules.md above) -->

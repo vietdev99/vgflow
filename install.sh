@@ -5,7 +5,7 @@
 # Installs:
 #   - Claude Code commands (.claude/commands/vg/)
 #   - Claude Code skills (.claude/skills/api-contract/)
-#   - Codex CLI skill (.codex/skills/vg-review/)
+#   - Codex CLI skills + agents (.codex/skills/, .codex/agents/)
 #   - Gemini CLI (CrossAI role only — no vg-* skills installed)
 #   - Playwright lock manager (~/.claude/playwright-locks/)
 #   - vg-ext helper script (project root)
@@ -35,6 +35,7 @@ echo ""
 # ============================================================
 echo "[1/6] Claude Code commands + skills + scripts + templates..."
 mkdir -p "$TARGET/.claude/commands/vg/_shared"
+mkdir -p "$TARGET/.claude/skills"
 mkdir -p "$TARGET/.claude/skills/api-contract"
 mkdir -p "$TARGET/.claude/skills/vg-design-scanner"
 mkdir -p "$TARGET/.claude/skills/vg-design-gap-hunter"
@@ -64,27 +65,20 @@ if [ -d "$SCRIPT_DIR/commands/vg/_shared/lib/test-runners" ]; then
   chmod +x "$TARGET/.claude/commands/vg/_shared/lib/test-runners/"*.sh 2>/dev/null || true
 fi
 
-# Skills: api-contract + design scanner/hunter + haiku-scanner (review) + crossai (multi-CLI engine)
-cp "$SCRIPT_DIR/skills/api-contract/SKILL.md" "$TARGET/.claude/skills/api-contract/"
-if [ -f "$SCRIPT_DIR/skills/vg-design-scanner/SKILL.md" ]; then
-  cp "$SCRIPT_DIR/skills/vg-design-scanner/SKILL.md" "$TARGET/.claude/skills/vg-design-scanner/"
-  cp "$SCRIPT_DIR/skills/vg-design-gap-hunter/SKILL.md" "$TARGET/.claude/skills/vg-design-gap-hunter/"
-  echo "  → design-extract skills installed (Haiku scanner + gap hunter)"
+# Skills: install every canonical helper skill, including support assets.
+# sync.sh already deploys the full skills/ tree; install.sh must match it so a
+# fresh install is not weaker than a maintainer sync.
+CLAUDE_SKILL_DEPLOYED=0
+if [ -d "$SCRIPT_DIR/skills" ]; then
+  while IFS= read -r skill_dir; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    skill="$(basename "$skill_dir")"
+    mkdir -p "$TARGET/.claude/skills/$skill"
+    cp -R "$skill_dir"/. "$TARGET/.claude/skills/$skill/"
+    CLAUDE_SKILL_DEPLOYED=$((CLAUDE_SKILL_DEPLOYED + 1))
+  done < <(find "$SCRIPT_DIR/skills" -mindepth 1 -maxdepth 1 -type d | sort)
 fi
-if [ -f "$SCRIPT_DIR/skills/vg-haiku-scanner/SKILL.md" ]; then
-  cp "$SCRIPT_DIR/skills/vg-haiku-scanner/SKILL.md" "$TARGET/.claude/skills/vg-haiku-scanner/"
-  echo "  → vg-haiku-scanner installed (used by /vg:review view scan)"
-fi
-if [ -f "$SCRIPT_DIR/skills/vg-crossai/SKILL.md" ]; then
-  cp "$SCRIPT_DIR/skills/vg-crossai/SKILL.md" "$TARGET/.claude/skills/vg-crossai/"
-  echo "  → vg-crossai installed (multi-CLI review engine — referenced by _shared/crossai-invoke.md)"
-fi
-# v2.10 Phase 15 D-16 — vg-codegen-interactive skill (matrix renderer + template helper)
-if [ -f "$SCRIPT_DIR/skills/vg-codegen-interactive/SKILL.md" ]; then
-  cp "$SCRIPT_DIR/skills/vg-codegen-interactive/SKILL.md" "$TARGET/.claude/skills/vg-codegen-interactive/"
-  cp "$SCRIPT_DIR/skills/vg-codegen-interactive/"*.mjs "$TARGET/.claude/skills/vg-codegen-interactive/" 2>/dev/null || true
-  echo "  → vg-codegen-interactive installed (D-16 filter+pagination matrix + 10 templates)"
-fi
+echo "  -> ${CLAUDE_SKILL_DEPLOYED} Claude skills installed (full helper surface)"
 
 # All .claude/scripts/*.py and *.js go together — includes universal helpers
 # (filter-steps, design-normalize, pre-executor-check, verify-goal-test-binding,
@@ -118,6 +112,8 @@ if [ -d "$SCRIPT_DIR/scripts" ]; then
   chmod +x "$TARGET/.claude/scripts/validators/"*.py 2>/dev/null || true
   chmod +x "$TARGET/.claude/scripts/vg-orchestrator/"*.py 2>/dev/null || true
   chmod +x "$TARGET/.claude/scripts/lib/"*.py 2>/dev/null || true
+  find "$TARGET/.claude/scripts" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+  find "$TARGET/.claude/scripts" -type f -name '*.pyc' -delete 2>/dev/null || true
 
   SCRIPT_COUNT=$(ls "$TARGET/.claude/scripts/"*.py "$TARGET/.claude/scripts/"*.sh 2>/dev/null | wc -l | tr -d ' ')
   VALIDATOR_COUNT=$(ls "$TARGET/.claude/scripts/validators/"*.py 2>/dev/null | wc -l | tr -d ' ')
@@ -155,47 +151,91 @@ if [ -f "$SCRIPT_DIR/templates/vg/claude-md-executor-rules.md" ]; then
   echo "     cat .claude/templates/vg/claude-md-executor-rules.md >> CLAUDE.md"
 fi
 
+if [ -f "$SCRIPT_DIR/VGFLOW-VERSION" ]; then
+  cp "$SCRIPT_DIR/VGFLOW-VERSION" "$TARGET/.claude/VGFLOW-VERSION"
+  echo "  -> .claude/VGFLOW-VERSION"
+fi
+
 # ============================================================
-# 2. Codex CLI skill
+# 2. Codex CLI skills + agents
 # ============================================================
-echo "[2/6] Codex CLI skills (verification subset — review onwards)..."
-# v1.11.3: Codex chỉ chạy phần verification (post-build). Không phải tất cả 36 skills.
-# Codex tốt cho: review/test/accept (E2E browser), regression sweep, diagnostics.
-# Generation-heavy commands (scope/blueprint/build) belong to Claude/main IDE.
-#
-# Subset deployed to .codex/skills/:
-CODEX_SKILLS=(
-  vg-review       # post-build code scan + browser discovery
-  vg-test         # goal verification + codegen
-  vg-accept       # human UAT
-  vg-regression   # full regression sweep
-  vg-next         # auto-advance pipeline
-  vg-progress     # status dashboard
-  vg-bug-report   # auto-report workflow bugs
-  vg-doctor       # health/integrity dispatcher
-  vg-health       # project health
-  vg-integrity    # artifact manifest verify
-  vg-recover      # stuck phase recovery
-  vg-update       # pull latest
-  vg-reapply-patches  # post-update conflict resolve
-)
+echo "[2/6] Codex CLI skills + agents (full VGFlow parity)..."
+
+mkdir -p "$TARGET/.codex/skills" "$TARGET/.codex/agents"
 
 SKILL_DEPLOYED=0
-for skill in "${CODEX_SKILLS[@]}"; do
-  src="$SCRIPT_DIR/codex-skills/$skill/SKILL.md"
-  if [ -f "$src" ]; then
+if [ -d "$SCRIPT_DIR/codex-skills" ]; then
+  while IFS= read -r skill_dir; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    skill="$(basename "$skill_dir")"
+    rm -rf "$TARGET/.codex/skills/$skill"
     mkdir -p "$TARGET/.codex/skills/$skill"
-    cp "$src" "$TARGET/.codex/skills/$skill/"
+    cp -R "$skill_dir"/. "$TARGET/.codex/skills/$skill/"
     SKILL_DEPLOYED=$((SKILL_DEPLOYED + 1))
-  fi
-done
+  done < <(find "$SCRIPT_DIR/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+fi
 
-echo "  → ${SKILL_DEPLOYED}/${#CODEX_SKILLS[@]} codex skills installed (verification subset)"
+AGENT_DEPLOYED=0
+if [ -d "$SCRIPT_DIR/templates/codex-agents" ]; then
+  cp "$SCRIPT_DIR/templates/codex-agents/"*.toml "$TARGET/.codex/agents/" 2>/dev/null || true
+  AGENT_DEPLOYED=$(ls "$TARGET/.codex/agents/"*.toml 2>/dev/null | wc -l | tr -d ' ')
+fi
+
+if [ -d "$SCRIPT_DIR/templates/codex" ]; then
+  cp "$SCRIPT_DIR/templates/codex/"* "$TARGET/.codex/" 2>/dev/null || true
+fi
+
+echo "  -> ${SKILL_DEPLOYED} Codex skills installed (full pipeline)"
+echo "  -> ${AGENT_DEPLOYED} Codex agent template(s) installed"
+
+if [ -d "$HOME/.codex" ]; then
+  mkdir -p "$HOME/.codex/skills" "$HOME/.codex/agents"
+  if [ -d "$SCRIPT_DIR/codex-skills" ]; then
+    while IFS= read -r skill_dir; do
+      [ -f "$skill_dir/SKILL.md" ] || continue
+      skill="$(basename "$skill_dir")"
+      rm -rf "$HOME/.codex/skills/$skill"
+      mkdir -p "$HOME/.codex/skills/$skill"
+      cp -R "$skill_dir"/. "$HOME/.codex/skills/$skill/"
+    done < <(find "$SCRIPT_DIR/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
+  if [ -d "$SCRIPT_DIR/templates/codex-agents" ]; then
+    cp "$SCRIPT_DIR/templates/codex-agents/"*.toml "$HOME/.codex/agents/" 2>/dev/null || true
+  fi
+  CODEX_CONFIG="$HOME/.codex/config.toml"
+  touch "$CODEX_CONFIG"
+  codex_config_path() {
+    local path="$1"
+    if command -v cygpath >/dev/null 2>&1; then
+      cygpath -m "$path"
+    else
+      printf '%s\n' "$path"
+    fi
+  }
+  register_codex_agent() {
+    local name="$1"
+    local desc="$2"
+    local config_file
+    config_file="$(codex_config_path "$HOME/.codex/agents/${name}.toml")"
+    if ! grep -q "^\[agents\.${name}\]" "$CODEX_CONFIG" 2>/dev/null; then
+      cat >> "$CODEX_CONFIG" <<EOF
+
+[agents.${name}]
+description = "${desc}"
+config_file = "${config_file}"
+EOF
+    fi
+  }
+  register_codex_agent "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+  register_codex_agent "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
+  register_codex_agent "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+  echo "  -> global ~/.codex skills/agents refreshed"
+fi
+
 if command -v codex &>/dev/null; then
-  echo "  Codex CLI detected. Available: \$vg-review, \$vg-test, \$vg-accept, \$vg-regression, \$vg-next, \$vg-progress, ..."
-  echo "  Note: scope/blueprint/build use Claude (heavier reasoning)."
+  echo "  Codex CLI detected. Available examples: \$vg-project, \$vg-scope, \$vg-blueprint, \$vg-build, \$vg-review, \$vg-test, \$vg-accept"
 else
-  echo "  → codex CLI not found — skills installed inactive until codex installed"
+  echo "  -> codex CLI not found; skills are installed but inactive until Codex is installed"
 fi
 
 # ============================================================
@@ -228,7 +268,7 @@ echo ""
 echo "  Auto-configuring Playwright MCP for detected CLIs..."
 
 # Use Python3 for safe JSON merge (jq may not be on Windows).
-PYTHON_BIN=$(command -v python3 || command -v python)
+PYTHON_BIN=$(command -v python3 || command -v python || true)
 if [ -z "$PYTHON_BIN" ]; then
   echo "  ⚠ Python not found — skipping auto-config. Install Python 3 and re-run this step."
   echo "  Manual snippet:"
@@ -334,12 +374,14 @@ if [ -f "$TARGET/.claude/scripts/vg-hooks-install.py" ]; then
   ( cd "$TARGET" && python .claude/scripts/vg-hooks-install.py ) && {
     echo "  → Stop hook: verify runtime_contract side-effects"
     echo "  → PostToolUse hook: warn on VG skill edit (reload required)"
+    echo "  → UserPromptSubmit hook: pre-seed vg-orchestrator run-start"
+    echo "  → PostToolUse Bash hook: track step markers into events.db"
 
     # Self-test — prove the hooks actually execute (not just installed)
     if [ -f "$TARGET/.claude/scripts/vg-hooks-selftest.py" ]; then
       echo "  Running hook self-test..."
       if ( cd "$TARGET" && python .claude/scripts/vg-hooks-selftest.py >/dev/null 2>&1 ); then
-        echo "  ✓ Hook self-test: 4/4 passed (hooks confirmed functional)"
+        echo "  ✓ Hook self-test passed (hooks confirmed functional)"
       else
         echo "  ⚠ Hook self-test failed. Re-run: cd $TARGET && python .claude/scripts/vg-hooks-selftest.py"
       fi
@@ -348,6 +390,8 @@ if [ -f "$TARGET/.claude/scripts/vg-hooks-install.py" ]; then
 else
   echo "  → vg-hooks-install.py not copied — skipping (check scripts step)"
 fi
+find "$TARGET/.claude/scripts" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+find "$TARGET/.claude/scripts" -type f -name '*.pyc' -delete 2>/dev/null || true
 
 # ============================================================
 # 6. Config template
@@ -367,6 +411,10 @@ echo "[7/7] Graphify (optional, recommended)..."
 echo "  Graphify saves ~50% executor tokens by querying a code knowledge graph"
 echo "  instead of dumping file content. Builds in ~30s, no LLM tokens consumed."
 echo ""
+
+if [ "${VGFLOW_SKIP_GRAPHIFY_INSTALL:-false}" = "true" ]; then
+  echo "  -> graphify install skipped by VGFLOW_SKIP_GRAPHIFY_INSTALL=true"
+else
 
 # Detect Python 3.10+
 PY=""
@@ -507,6 +555,8 @@ MCPPY
   fi
 fi
 
+fi
+
 # ============================================================
 # Summary
 # ============================================================
@@ -515,7 +565,7 @@ echo "════════════════════════�
 echo "VGFlow installed successfully!"
 echo "═══════════════════════════════════════════════════"
 echo ""
-echo "Claude Code (11 commands + 4 shared + 1 skill):"
+echo "Claude Code (full VG commands + helper skills):"
 echo "  .claude/commands/vg/specs.md          /vg:specs"
 echo "  .claude/commands/vg/scope.md          /vg:scope"
 echo "  .claude/commands/vg/blueprint.md      /vg:blueprint"
@@ -528,9 +578,9 @@ echo "  .claude/commands/vg/phase.md          /vg:phase"
 echo "  .claude/commands/vg/next.md           /vg:next"
 echo "  .claude/commands/vg/init.md           /vg:init"
 echo ""
-echo "Codex CLI (4 skills — project-scoped in .codex/skills/):"
-echo "  \$vg-review <phase>   \$vg-test <phase>"
-echo "  \$vg-next [phase]     \$vg-accept <phase>"
+echo "Codex CLI (full skills + agents):"
+echo "  \$vg-project   \$vg-scope   \$vg-blueprint   \$vg-build"
+echo "  \$vg-review    \$vg-test    \$vg-accept      \$vg-next"
 echo ""
 echo "Gemini CLI (CrossAI role only — no vg-* skills):"
 echo "  Used via crossai-invoke.md for third-opinion review."
@@ -552,8 +602,8 @@ echo "       mobile.deploy.cloud_fallback_for_ios=true for EAS/Codemagic."
 echo "     → Install Maestro (universal: brew/curl/scoop) before /vg:review"
 echo "       for mobile phases. Android SDK platform-tools (adb) works on any OS."
 echo "     → See vgflow/README.md '## Mobile profiles (V1)' for the full matrix."
-echo "  3. Open Codex → \$vg-next  or  \$vg-review <phase>"
-echo "  (Gemini CLI used only for CrossAI review — no direct workflow)"
+echo "  3. Open Codex -> \$vg-next  or  \$vg-phase <phase>"
+echo "  (Gemini CLI used only for CrossAI review; no direct workflow)"
 
 # === v1.11.0 R5 Bug Reporting consent (opt-out default) ===
 if [ -f "$TARGET/.claude/commands/vg/_shared/lib/bug-reporter.sh" ]; then
@@ -580,8 +630,13 @@ if [ -f "$TARGET/.claude/commands/vg/_shared/lib/bug-reporter.sh" ]; then
   echo ""
   echo "Opt-out anytime: cd $TARGET && /vg:bug-report --disable-all"
   echo ""
-  printf "Enable bug reporting? [Y/n] (default: Y): "
-  read -r BR_CONSENT < /dev/tty 2>/dev/null || BR_CONSENT="Y"
+  if [ -t 0 ] && [ -r /dev/tty ]; then
+    printf "Enable bug reporting? [Y/n] (default: Y): "
+    read -r BR_CONSENT < /dev/tty || BR_CONSENT="Y"
+  else
+    echo "No interactive TTY detected; using bug reporting default: enabled."
+    BR_CONSENT="Y"
+  fi
   BR_CONSENT="${BR_CONSENT:-Y}"
 
   case "$BR_CONSENT" in

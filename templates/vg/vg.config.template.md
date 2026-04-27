@@ -368,6 +368,32 @@ test_strategy:
   auto_threshold: 0.80
   haiku_threshold: 0.50
 
+# === CRUD Surface Contract (v2.12+) ===
+# Blueprint writes CRUD-SURFACES.md as the parent contract for resource list,
+# read, create, update, delete behavior. Existing paging/list/security
+# descriptions become extension packs under this contract.
+crud_surface_contract:
+  enabled: true
+  schema_version: "1"
+  missing_contract: "block"          # block | warn; block for new feature phases
+  require_for_profiles: ["web-fullstack", "web-frontend-only", "web-backend-only", "mobile-app", "mobile-fullstack"]
+  extension_packs:
+    interactive_controls: true       # TEST-GOALS web filter/search/sort/paging URL-state details
+    security_checks: true            # CSRF/XSS/object-auth/rate-limit/mass-assignment details
+    performance_budget: true         # list p95 + mutation p95 budget references
+  web:
+    require_url_state_for_lists: true
+    require_table_headers: true
+    require_loading_empty_error: true
+  mobile:
+    require_deep_link_state: true
+    require_tap_target_min_px: 44
+    require_offline_network_state: true
+  backend:
+    require_filter_sort_allowlist: true
+    require_idempotency_for_mutations: true
+    require_audit_log_for_delete: true
+
 # === Contract Format (for API-CONTRACTS.md generation + compile check) ===
 # Controls what code block format blueprint 2b outputs
 contract_format:
@@ -671,20 +697,20 @@ session:
 # Override per-phase by adding `phase_profile: <name>` at top of SPECS.md.
 phase_profiles:
   feature:
-    required_artifacts: [SPECS.md, CONTEXT.md, PLAN.md, API-CONTRACTS.md, TEST-GOALS.md, SUMMARY.md]
+    required_artifacts: [SPECS.md, CONTEXT.md, PLAN.md, API-CONTRACTS.md, TEST-GOALS.md, CRUD-SURFACES.md, SUMMARY.md]
     skip_artifacts: []
     review_mode: "full"                       # browser discover + surface routing
     test_mode: "full"                         # per-surface runners
     goal_coverage: "TEST-GOALS"
   infra:
     required_artifacts: [SPECS.md, PLAN.md, SUMMARY.md]
-    skip_artifacts: [TEST-GOALS.md, API-CONTRACTS.md, CONTEXT.md, RUNTIME-MAP.json]
+    skip_artifacts: [TEST-GOALS.md, CRUD-SURFACES.md, API-CONTRACTS.md, CONTEXT.md, RUNTIME-MAP.json]
     review_mode: "infra-smoke"                # parse success_criteria bash → run each → READY/FAILED
     test_mode: "infra-smoke"                  # same as review
     goal_coverage: "SPECS.success_criteria"   # implicit goals S-01..S-NN from checklist
   hotfix:
     required_artifacts: [SPECS.md, PLAN.md, SUMMARY.md]
-    skip_artifacts: [TEST-GOALS.md, API-CONTRACTS.md, CONTEXT.md]
+    skip_artifacts: [TEST-GOALS.md, CRUD-SURFACES.md, API-CONTRACTS.md, CONTEXT.md]
     inherits_from: "parent_phase"             # read parent_phase TEST-GOALS if exists
     review_mode: "delta"                      # focus on delta changes + parent goals re-verify
     test_mode: "parent-goals-regression"
@@ -697,13 +723,13 @@ phase_profiles:
     goal_coverage: "SPECS.fixes_bug"
   migration:
     required_artifacts: [SPECS.md, PLAN.md, SUMMARY.md, ROLLBACK.md]
-    skip_artifacts: [API-CONTRACTS.md, TEST-GOALS.md, RUNTIME-MAP.json]
+    skip_artifacts: [API-CONTRACTS.md, TEST-GOALS.md, CRUD-SURFACES.md, RUNTIME-MAP.json]
     review_mode: "schema-verify"
     test_mode: "schema-roundtrip"
     goal_coverage: "SPECS.migration_plan"
   docs:
     required_artifacts: [SPECS.md]
-    skip_artifacts: [CONTEXT.md, PLAN.md, API-CONTRACTS.md, TEST-GOALS.md, RUNTIME-MAP.json, SUMMARY.md]
+    skip_artifacts: [CONTEXT.md, PLAN.md, API-CONTRACTS.md, TEST-GOALS.md, CRUD-SURFACES.md, RUNTIME-MAP.json, SUMMARY.md]
     review_mode: "link-check"
     test_mode: "markdown-lint"
     goal_coverage: "SPECS.doc_targets"

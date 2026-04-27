@@ -67,7 +67,24 @@ HOOK_ENTRY = {
                     ),
                 }
             ]
-        }
+        },
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": (
+                        'python '
+                        '"${CLAUDE_PROJECT_DIR}/.claude/scripts/vg-step-tracker.py"'
+                    ),
+                    "comment": (
+                        "VG step tracker. Watches Bash marker/orchestrator calls, "
+                        "updates .vg/.session-context.json, and emits "
+                        "hook.step_active telemetry into events.db."
+                    ),
+                }
+            ],
+        },
     ],
     "UserPromptSubmit": [
         {
@@ -107,6 +124,7 @@ def merge_hooks(existing: dict, new_hooks: dict) -> tuple[dict, list[str]]:
     # Match any VG-owned hook script name; allows adding more hooks later.
     VG_SCRIPTS = (
         "vg-verify-claim", "vg-edit-warn", "vg-hooks-selftest", "vg-entry-hook",
+        "vg-step-tracker",
     )
 
     for event, new_matchers in new_hooks.items():

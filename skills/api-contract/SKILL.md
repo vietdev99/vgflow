@@ -98,14 +98,14 @@ Source: {BE Zod schemas | FE HTML forms | AI draft from CONTEXT}
    ```bash
    # Check BE route exists
    grep -r "(get|post|put|delete|patch).*'${ENDPOINT}'" "$API_ROUTES" --include="*.ts" --include="*.js"
-   
+
    # Check Zod schema has all response fields
    # For each field in contract response:
    grep -r "${FIELD_NAME}" "$SCHEMA_FILE"
-   
+
    # Check FE calls this endpoint
    grep -r "${ENDPOINT}" "$WEB_PAGES" --include="*.tsx" --include="*.jsx" --include="*.ts"
-   
+
    # Check FE reads correct response fields
    # For each field in contract response:
    grep -r "\.${FIELD_NAME}\b\|data\.${FIELD_NAME}\|response\.${FIELD_NAME}" "$WEB_PAGES"
@@ -125,10 +125,10 @@ Source: {BE Zod schemas | FE HTML forms | AI draft from CONTEXT}
    ```bash
    # Curl the endpoint
    RESPONSE=$(run_on_target "curl -sf '${BASE_URL}${ENDPOINT}'" 2>/dev/null)
-   
+
    # Extract actual response keys
    echo "$RESPONSE" | jq -r 'if type == "object" then keys[] else .[0] | keys[] end' > ${VG_TMP}/actual_keys
-   
+
    # Compare with contract
    diff <(echo "$EXPECTED_KEYS" | sort) <(sort ${VG_TMP}/actual_keys)
    ```

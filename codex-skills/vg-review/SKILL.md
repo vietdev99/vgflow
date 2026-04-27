@@ -6,85 +6,135 @@ metadata:
 ---
 
 <codex_skill_adapter>
-## Codex ⇆ Claude Code tool mapping
+## Codex runtime notes
 
-This skill was originally designed for Claude Code. When running in Codex CLI, translate tool calls using the table + patterns below.
+This skill body is generated from VGFlow's canonical source. Claude Code and
+Codex use the same workflow contracts, but their orchestration primitives differ.
 
-### Tool mapping table
+### Tool mapping
 
-| Claude tool | Codex equivalent | Notes |
+| Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
-| AskUserQuestion | request_user_input (free-form text, or number-prefix choices) | For multi-select, format as "1. Option / 2. Option" and parse reply |
-| Task (agent spawn) | `codex exec --model <model> "<prompt>"` subprocess | Foreground: `codex exec ... > /tmp/out.txt`. Parallel: launch N subprocesses + `wait`. See "Agent spawn" below |
-| TaskCreate/TaskUpdate/TodoWrite | N/A — use inline markdown headers + status narration | Codex does not have a persistent task tail UI. Write `## ━━━ Phase X: step ━━━` in stdout instead |
-| Monitor | Bash loop with `echo` + `sleep 3` polling | Codex streams stdout directly, no separate monitor channel |
-| ScheduleWakeup | N/A — Codex is one-shot; user must re-invoke | Skill must tolerate single-execution model; no sleeping |
-| WebFetch | `curl -sfL <url>` or `gh api <path>` | For GitHub URLs prefer `gh` for auth handling |
-| mcp__playwright{1-5}__* | See "Playwright MCP" below | Playwright MCP tools ARE available in Codex's main orchestrator |
-| mcp__graphify__* | `python -c "from graphify import ..."` inline | Graphify CLI/module works identically in Codex |
-| mcp__context7__*, mcp__exa__*, mcp__firecrawl__* | Skip or fall back to WebFetch | Only available via SDK; not bundled in Codex CLI |
-| Bash/Read/Write/Edit/Glob/Grep | Same — Codex supports these natively | No adapter needed |
+| AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it. |
+| Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
+| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
+| Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
-### Agent spawn (Task → codex exec)
+<codex_runtime_contract>
+### Provider/runtime parity contract
 
-Claude Code spawns isolated agents via `Task(subagent_type=..., prompt=...)`. Codex equivalent:
+This generated skill must preserve the source command's artifacts, gates,
+telemetry events, and step ordering on both Claude and Codex. Do not remove,
+skip, or weaken a source workflow step because a Claude-only primitive appears
+in the body below.
+
+#### Provider mapping
+
+| Source pattern | Claude path | Codex path |
+|---|---|---|
+| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `commands/vg/_shared/lib/codex-spawn.sh --tier planner` |
+| Build executor Agent | Use the source executor `Agent(...)` call | Use `codex-spawn.sh --tier executor --sandbox workspace-write` with explicit file ownership and expected artifact output |
+| Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured `codex exec`/Gemini/Claude commands from `.claude/vg.config.md`; fail if required CLI output is missing or unparsable |
+| Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
+| Reflection / learning | Use `vg-reflector` workflow | Use the Codex `vg-reflector` adapter or `codex-spawn.sh --tier scanner`; candidates still require the same user gate |
+
+### Codex hook parity
+
+Claude Code has a project-local hook substrate; Codex skills do not receive
+Claude `UserPromptSubmit`, `Stop`, or `PostToolUse` hooks automatically.
+Therefore Codex must execute the lifecycle explicitly through the same
+orchestrator that writes `.vg/events.db`:
+
+| Claude hook | What it does on Claude | Codex obligation |
+|---|---|---|
+| `UserPromptSubmit` -> `vg-entry-hook.py` | Pre-seeds `vg-orchestrator run-start` and `.vg/.session-context.json` before the skill loads | Treat the command body's explicit `vg-orchestrator run-start` as mandatory; if missing or failing, BLOCK before doing work |
+| `Stop` -> `vg-verify-claim.py` | Runs `vg-orchestrator run-complete` and blocks false done claims | Run the command body's terminal `vg-orchestrator run-complete` before claiming completion; if it returns non-zero, fix evidence and retry |
+| `PostToolUse` edit -> `vg-edit-warn.py` | Warns that command/skill edits require session reload | After editing VG workflow files on Codex, tell the user the current session may still use cached skill text |
+| `PostToolUse` Bash -> `vg-step-tracker.py` | Tracks marker commands and emits `hook.step_active` telemetry | Do not rely on the hook; call explicit `vg-orchestrator mark-step` lines in the skill and preserve marker/telemetry events |
+
+Codex hook parity is evidence-based: `.vg/events.db`, step markers,
+`must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
+run is not complete just because the model says it is complete.
+
+### Codex spawn precedence
+
+When the source workflow below says `Agent(...)` or "spawn", Codex MUST
+apply this table instead of treating the Claude syntax as executable:
+
+| Source spawn site | Codex action | Tier/model env | Sandbox | Required evidence |
+|---|---|---|---|---|
+| `/vg:build` wave executor, `model="${MODEL_EXECUTOR}"` | Write one prompt file per task, run `codex-spawn.sh --tier executor`; parallelize independent tasks with background processes and `wait`, serialize dependency groups | `VG_CODEX_MODEL_EXECUTOR`; leave unset to use Codex config default. Set this to the user's strongest coding model when they want Sonnet-class build quality. | `workspace-write` | child output, stdout/stderr logs, changed files, verification commands, task-fidelity prompt evidence |
+| `/vg:blueprint`, `/vg:scope`, planner/checker agents | Run `codex-spawn.sh --tier planner` or inline in the main orchestrator if the step needs interactive user answers | `VG_CODEX_MODEL_PLANNER` | `workspace-write` for artifact-writing planners, `read-only` for pure checks | requested artifacts or JSON verdict |
+| `/vg:review` navigator/scanner, `Agent(model="haiku")` | Do NOT blindly spawn `codex exec` for Playwright/Maestro work. Main Codex orchestrator owns MCP/browser/device actions. Use `codex-spawn.sh --tier scanner --sandbox read-only` only for non-MCP classification over captured snapshots/artifacts. | `VG_CODEX_MODEL_SCANNER`; set this to a cheap/fast model for review map/scanner work | `read-only` unless explicitly generating scan files from supplied evidence | same `scan-*.json`, `RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md`, and `review.haiku_scanner_spawned` telemetry event semantics |
+| `/vg:review` fix agents and `/vg:test` codegen agents | Use `codex-spawn.sh --tier executor` because they edit code/tests | `VG_CODEX_MODEL_EXECUTOR` or explicit `--model` if the command selected a configured fix model | `workspace-write` | changed files, tests run, unresolved risks |
+| Rationalization guard, reflector, gap hunters | Use `codex-spawn.sh --tier scanner` for read-only classification, or `--tier adversarial` for independent challenge/review | `VG_CODEX_MODEL_SCANNER` or `VG_CODEX_MODEL_ADVERSARIAL` | `read-only` by default | compact JSON/markdown verdict; fail closed on empty/unparseable output |
+
+If a source sentence says "MUST spawn Haiku" and the step needs MCP/browser
+tools, Codex interprets that as "MUST run the scanner protocol and emit the
+same artifacts/events"; it does not require a child process unless child MCP
+access was smoke-tested in the current environment.
+
+#### Non-negotiable guarantees
+
+- Never skip source workflow gates, validators, telemetry events, or must-write artifacts.
+- If Codex cannot emulate a Claude primitive safely, BLOCK instead of silently degrading.
+- UI/UX, security, and business-flow checks remain artifact/gate driven: follow the source command's DESIGN/UI-MAP/TEST-GOALS/security validator requirements exactly.
+- A slower Codex inline path is acceptable; a weaker path that omits evidence is not.
+</codex_runtime_contract>
+
+### Model tier mapping
+
+Model mapping is tier-based, not vendor-name-based.
+
+VGFlow keeps tier names in `.claude/vg.config.md`; Codex subprocesses use
+the user's Codex config model by default. Pin a tier only after smoke-testing
+that model in the target account, via `VG_CODEX_MODEL_PLANNER`,
+`VG_CODEX_MODEL_EXECUTOR`, `VG_CODEX_MODEL_SCANNER`, or
+`VG_CODEX_MODEL_ADVERSARIAL`:
+
+| VG tier | Claude-style role | Codex default | Fallback |
+|---|---|---|---|
+| planner | Opus-class planning/reasoning | Codex config default | Set `VG_CODEX_MODEL_PLANNER` only after smoke-testing |
+| executor | Sonnet-class coding/review | Codex config default | Set `VG_CODEX_MODEL_EXECUTOR` only after smoke-testing |
+| scanner | Haiku-class scan/classify | Codex config default | Set `VG_CODEX_MODEL_SCANNER` only after smoke-testing |
+| adversarial | independent reviewer | Codex config default | Set `VG_CODEX_MODEL_ADVERSARIAL` only after smoke-testing |
+
+### Spawn helper
+
+For subprocess-based children, use:
 
 ```bash
-# Single agent, foreground (wait for completion + read output)
-codex exec --model gpt-5 "<full isolated prompt>" > /tmp/agent-result.txt 2>&1
-RESULT=$(cat /tmp/agent-result.txt)
-
-# Multiple agents, parallel (Claude's pattern of 1 message with N Task calls)
-codex exec --model gpt-5 "<prompt 1>" > /tmp/agent-1.txt 2>&1 &
-PID1=$!
-codex exec --model gpt-5 "<prompt 2>" > /tmp/agent-2.txt 2>&1 &
-PID2=$!
-wait $PID1 $PID2
-R1=$(cat /tmp/agent-1.txt); R2=$(cat /tmp/agent-2.txt)
+bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
+  --tier executor \
+  --prompt-file "$PROMPT_FILE" \
+  --out "$OUT_FILE" \
+  --timeout 900 \
+  --sandbox workspace-write
 ```
 
-**Critical constraints when spawning:**
-- Subagent inherits working directory + env vars, but **no MCP server access** (Codex exec spawns fresh CLI instance without `--mcp` wired). Subagent CANNOT call `mcp__playwright*__`, `mcp__graphify__`, etc.
-- Model mapping for this project: `models.planner` opus → `gpt-5`, `models.executor` sonnet → `gpt-4o`, `models.scanner` haiku → `gpt-4o-mini` (or project-configured equivalent). Check `.claude/vg.config.md` `models` section for actual values and adapt.
-- Timeout: wrap in `timeout 600s codex exec ...` to prevent hung subagents.
-- Return schema: if skill expects structured JSON back, prompt subagent with "Return ONLY a single JSON object with keys: {...}". Parse with `jq` or `python -c "import json,sys; ..."`.
+The helper wraps `codex exec`, writes the final message to `--out`, captures
+stdout/stderr beside it, and fails loudly on timeout or empty output.
 
-### Playwright MCP — orchestrator-only rule
+### Known Codex caveats to design around
 
-Playwright MCP tools (`mcp__playwright1__browser_navigate`, `_snapshot`, `_click`, etc.) ARE available to the main Codex orchestrator (same MCP servers as Claude Code). **BUT subagents spawned via `codex exec` do NOT inherit MCP access** — they are fresh CLI instances.
+- Do not trust inline model selection for native subagents unless verified in the current Codex version; use TOML-pinned agents or `codex exec --model`.
+- Do not combine structured `--output-schema` with MCP-heavy runs until the target Codex version is smoke-tested. Prefer plain text + post-parse for MCP flows.
+- Recursive `codex exec` runs inherit sandbox constraints. Use the least sandbox that still allows the child to write expected artifacts.
 
-Implication for skills using Haiku scanner pattern (scanner spawns → uses Playwright):
-- **Claude model:** spawn haiku agent with prompt → agent calls `mcp__playwright__` tools directly
-- **Codex model:** TWO options:
-  1. **Orchestrator-driven:** main orchestrator calls Playwright tools + passes snapshots/results to subagent as text → subagent returns instructions/analysis only (no tool calls). Slower but preserves parallelism benefit.
-  2. **Single-agent:** orchestrator runs scanner workflow inline (no spawn). Simpler but no parallelism; suitable for 1-2 view scans but slow for 14+ views.
+### Support-skill MCP pattern
 
-Default: **single-agent inline** unless skill explicitly documents the orchestrator-driven pattern for that step.
-
-### Persistence probe (Layer 4) — execution model
-
-For review/test skills that verify mutation persistence:
-- Main orchestrator holds Playwright session (claimed via lock manager)
-- Pre-snapshot + submit + refresh + re-read all run in orchestrator Playwright calls (not spawned)
-- If skill delegates analysis to subagent, orchestrator must capture snapshots + pass text to subagent; subagent returns verdict JSON `{persisted: bool, pre: ..., post: ...}`
-
-### Lock manager (Playwright)
-
-Same as Claude:
-```bash
-SESSION_ID="codex-${skill}-${phase}-$$"
-PLAYWRIGHT_SERVER=$(bash "${HOME}/.claude/playwright-locks/playwright-lock.sh" claim "$SESSION_ID")
-trap "bash '${HOME}/.claude/playwright-locks/playwright-lock.sh' release \"$SESSION_ID\" 2>/dev/null" EXIT INT TERM
-```
-
-Pool name in Codex: `codex` (separate from Claude's `claude` pool). Lock manager handles both without collision.
+Pattern A: INLINE ORCHESTRATOR. For MCP-heavy support skills such as
+`vg-haiku-scanner`, Codex keeps Playwright/Maestro actions in the main
+orchestrator and only delegates read-only classification after snapshots are
+captured. This preserves MCP access and avoids false confidence from a child
+process that cannot see browser tools.
 
 ## Invocation
 
-This skill is invoked by mentioning `$vg-review`. Treat all user text after `$vg-review` as arguments.
-
-If argument-hint in source frontmatter is not empty and user provides no args, ask once via request_user_input before proceeding.
+Invoke this skill as `$vg-review`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
+
 
 
 <NARRATION_POLICY>
@@ -243,6 +293,7 @@ Flags:
 - `--retry-failed` — skip Phase 1 + Phase 2 navigator, re-scan ONLY views mapped to failed/blocked goals in GOAL-COVERAGE-MATRIX.md. Requires: GOAL-COVERAGE-MATRIX.md + RUNTIME-MAP.json already exist. Use when: review already ran but goals < 100%, code was fixed, need targeted re-scan without full re-discovery.
 - `--full-scan` — disable sidebar suppression. Haiku agents see full page (sidebar/header/footer) in every snapshot. Use when: app has non-standard layout, geometry detection fails, or debugging suppression issues.
 - `--with-probes` — enable mutation probe variations (edit/boundary/repeat) in step 2b-3 step 9. Adds 1 Haiku per mutation goal. Default OFF — let /vg:test handle variations via Playwright codegen (deterministic, cheaper).
+- `--allow-no-crud-surface` — last-resort waiver for legacy phases missing CRUD-SURFACES.md. Logs debt via validator output; do not use for new CRUD work.
 
 **Phase profile detection (P5, v1.9.2) — FIRST ACTION before any blanket check:**
 
@@ -2378,6 +2429,26 @@ For each view in view_assignments:
     IDX=$((IDX + 1))
     briefing_for_view "{view.url}" "{role}" "$IDX" "$TOTAL"
 
+    # ─── Phase 15 D-17 telemetry (BEFORE spawn, not after) ──────────────
+    # Emit `review.haiku_scanner_spawned` IMMEDIATELY before Agent() so the
+    # event survives Agent failure / run abort. Validator
+    # verify-haiku-spawn-fired.py (Phase 15 T3.11) reads this in events.db
+    # to confirm step 2b-2 actually fired for UI-profile phases. Without
+    # this, a non-deterministic spawn failure could leave the validator
+    # unable to distinguish "spawn never attempted" from "spawn attempted
+    # but Agent crashed". Order matters: emit BEFORE Agent call.
+    #
+    # Parallel mode: emit per-spawn in a serial bash loop, THEN batch all
+    # Agent() calls in one tool_use block. Sequential mode: emit
+    # immediately before each Agent() call individually.
+    Bash:
+      ${PYTHON_BIN} .claude/scripts/vg-orchestrator emit-event \
+        "review.haiku_scanner_spawned" \
+        --step "2b-2" --actor "orchestrator" --outcome "INFO" \
+        --payload "$(printf '{"view":"%s","role":"%s","idx":%d,"total":%d,"spawn_mode":"%s"}' \
+          "{view.url}" "{role}" "$IDX" "$TOTAL" "$SPAWN_MODE")" \
+        2>/dev/null || true
+
     Agent(
       model="haiku",
       description="[{IDX}/{TOTAL}] {ROLE}@{view.url} — verify {N} goals: {G-XX,G-YY,...}"
@@ -2632,6 +2703,38 @@ Elements: {N} interactive ({visited}/{total} visited)
 ```
 
 **JSON is the source of truth.** Markdown is derived. Downstream steps (test, codegen) read JSON.
+
+**Phase 15 D-17 — phantom-aware Haiku spawn audit (NEW, 2026-04-27):**
+
+Confirm the `review.haiku_scanner_spawned` event emitted by step 2b-2 is
+actually present in events.db for every (view × role) we expected to scan.
+The validator (`verify-haiku-spawn-fired.py`) is phantom-aware: it ignores
+events from runs whose signature matches `args:""` + 0 step.marked + abort
+within 60s (the D-17 hook-triggered noise pattern), so manual `/vg:learn`
+invocations don't show up as false positives.
+
+```bash
+PHANTOM_VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-haiku-spawn-fired.py"
+if [ -x "$PHANTOM_VALIDATOR" ] && [ -f "${REPO_ROOT}/.claude/state/events.db" ]; then
+  ${PYTHON_BIN} "$PHANTOM_VALIDATOR" --phase "${PHASE_NUMBER}" \
+      > "${VG_TMP}/haiku-spawn-audit.json" 2>&1 || true
+  HSV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/haiku-spawn-audit.json')).get('verdict','SKIP'))" 2>/dev/null)
+  case "$HSV" in
+    PASS) echo "✓ D-17 Haiku-spawn audit: PASS — telemetry confirms scanner fired per view/role" ;;
+    WARN) echo "⚠ D-17 Haiku-spawn audit: WARN — see ${VG_TMP}/haiku-spawn-audit.json (informational only)" ;;
+    BLOCK)
+      echo "⛔ D-17 Haiku-spawn audit: BLOCK — expected scanner spawns missing from events.db." >&2
+      echo "   Inspect ${VG_TMP}/haiku-spawn-audit.json for the per-(view,role) breakdown." >&2
+      echo "   Common cause: orchestrator ran briefing_for_view but Agent() spawn was skipped." >&2
+      echo "   Override: --skip-haiku-audit (logs override-debt as kind=haiku-spawn-audit-skipped)." >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-haiku-audit ]]; then
+        exit 1
+      fi
+      ;;
+    SKIP|*) echo "ℹ D-17 Haiku-spawn audit: ${HSV} — likely no UI-profile views in this phase" ;;
+  esac
+fi
+```
 </step>
 
 <step name="phase2_exploration_limits" profile="web-fullstack,web-frontend-only">
@@ -3001,6 +3104,100 @@ Phase 2.5 Visual Integrity:
   MAJOR: {N} → Phase 3 fix loop | MINOR: {N} → logged
 ```
 
+### 6. Phase 15 D-12 — Wave-scoped + Holistic Drift Gates (NEW, 2026-04-27)
+
+After the legacy visual checks (font/overflow/responsive/z-index), run the
+Phase 15 visual-fidelity gates. Threshold comes from `.fidelity-profile.lock`
+written by `/vg:blueprint` step 2_fidelity_profile_lock (D-08).
+
+**6a. D-12c — UI flag presence (cheap precondition, runs first):**
+
+```bash
+if [ -x "${REPO_ROOT}/.claude/scripts/validators/verify-phase-ui-flag.py" ]; then
+  ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/validators/verify-phase-ui-flag.py" \
+      --phase "${PHASE_NUMBER}" > "${VG_TMP}/ui-flag.json" 2>&1
+  UIF=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/ui-flag.json')).get('verdict','SKIP'))" 2>/dev/null)
+  case "$UIF" in
+    PASS|WARN) echo "✓ D-12c UI-flag check: $UIF" ;;
+    BLOCK) echo "⛔ D-12c UI-flag check: BLOCK — phase declared UI work but UI-MAP.md/design assets missing" >&2; exit 1 ;;
+    *) echo "ℹ D-12c UI-flag check: $UIF — phase has no UI declaration" ;;
+  esac
+fi
+```
+
+**6b. D-12b — Wave-scoped structural drift (per wave that has owned UI subtree):**
+
+```bash
+if [ -f "${PHASE_DIR}/UI-MAP.md" ] \
+   && [ -x "${REPO_ROOT}/.claude/scripts/verify-ui-structure.py" ]; then
+  THRESHOLD=$(${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/lib/threshold-resolver.py" \
+      --phase "${PHASE_NUMBER}" 2>/dev/null || echo "0.85")
+
+  # Discover waves with owned subtrees by inspecting planner UI-MAP for owner_wave_id values.
+  WAVES=$(${PYTHON_BIN} -c "
+import json, re
+text = open('${PHASE_DIR}/UI-MAP.md', encoding='utf-8').read()
+m = re.search(r'\`\`\`json\s*\n([\s\S]*?)\n\`\`\`', text)
+if not m:
+    raise SystemExit
+data = json.loads(m.group(1))
+seen = set()
+def walk(n):
+    if isinstance(n, dict):
+        if n.get('owner_wave_id'):
+            seen.add(n['owner_wave_id'])
+        for c in n.get('children', []) or []:
+            walk(c)
+walk(data.get('root', data))
+print(' '.join(sorted(seen)))
+" 2>/dev/null)
+
+  WAVE_BLOCK=0
+  for WAVE_ID in $WAVES; do
+    ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/verify-ui-structure.py" \
+        --phase "${PHASE_NUMBER}" \
+        --scope "owner-wave-id=${WAVE_ID}" \
+        --threshold "${THRESHOLD}" \
+        > "${VG_TMP}/drift-${WAVE_ID}.json" 2>&1 || true
+    V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/drift-${WAVE_ID}.json')).get('verdict','SKIP'))" 2>/dev/null)
+    case "$V" in
+      PASS|WARN) echo "✓ D-12b drift ${WAVE_ID}: $V (threshold=${THRESHOLD})" ;;
+      BLOCK)
+        echo "⛔ D-12b drift ${WAVE_ID}: BLOCK — see ${VG_TMP}/drift-${WAVE_ID}.json" >&2
+        WAVE_BLOCK=1
+        ;;
+      *) echo "ℹ D-12b drift ${WAVE_ID}: $V" ;;
+    esac
+  done
+  if [ "$WAVE_BLOCK" = "1" ] && [[ ! "$ARGUMENTS" =~ --allow-wave-drift ]]; then
+    echo "  Override: --allow-wave-drift (logs override-debt as kind=wave-drift-relaxed)" >&2
+    exit 1
+  fi
+fi
+```
+
+**6c. D-12e — Holistic phase-wide drift (runs once at phase end):**
+
+```bash
+if [ -x "${REPO_ROOT}/.claude/scripts/verify-holistic-drift.py" ] \
+   && [ -f "${PHASE_DIR}/UI-MAP.md" ]; then
+  ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/verify-holistic-drift.py" \
+      --phase "${PHASE_NUMBER}" \
+      > "${VG_TMP}/holistic-drift.json" 2>&1 || true
+  HV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/holistic-drift.json')).get('verdict','SKIP'))" 2>/dev/null)
+  case "$HV" in
+    PASS|WARN) echo "✓ D-12e holistic drift: $HV" ;;
+    BLOCK)
+      echo "⛔ D-12e holistic drift: BLOCK — see ${VG_TMP}/holistic-drift.json" >&2
+      echo "  Wave gates passed but phase-wide composition drifted (e.g., layout fight between waves)." >&2
+      echo "  Override: --allow-holistic-drift" >&2
+      if [[ ! "$ARGUMENTS" =~ --allow-holistic-drift ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ D-12e holistic drift: $HV" ;;
+  esac
+fi
+```
+
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_5_visual_checks" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_5_visual_checks.done"`
 </step>
 
@@ -3116,6 +3313,31 @@ declares `interactive_controls` block (filter/sort/pagination/search +
 URL sync assertion). This is the static-side complement to runtime
 browser probing — declaration must exist before runtime can verify.
 
+**CRUD surface precheck (v2.12):** before URL-state checks, validate
+`${PHASE_DIR}/CRUD-SURFACES.md`. Review compares runtime observations against
+the resource/platform contract first, then uses `interactive_controls` as the
+web-list extension pack. Missing CRUD contract means the reviewer has no
+authoritative list of expected headings, filters, columns, states, row actions,
+delete confirmations, or security/abuse expectations.
+
+```bash
+CRUD_FLAGS=""
+[[ "${ARGUMENTS:-}" =~ --allow-no-crud-surface ]] && CRUD_FLAGS="--allow-missing"
+CRUD_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crud-surface-contract.py"
+if [ -x "$CRUD_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp"
+  "${PYTHON_BIN:-python3}" "$CRUD_VAL" --phase "${PHASE_NUMBER}" \
+    --config "${REPO_ROOT}/.claude/vg.config.md" ${CRUD_FLAGS} \
+    > "${PHASE_DIR}/.tmp/crud-surface-review.json" 2>&1
+  CRUD_RC=$?
+  if [ "$CRUD_RC" != "0" ]; then
+    echo "⛔ CRUD surface contract missing/incomplete — see ${PHASE_DIR}/.tmp/crud-surface-review.json"
+    echo "   Fix blueprint artifact CRUD-SURFACES.md or rerun /vg:blueprint."
+    exit 2
+  fi
+fi
+```
+
 **Why:** modern dashboard UX baseline (executor R7) requires list view
 state synced to URL search params. Without declaration, AI executors
 build local-state-only filters and ship apps that lose state on refresh.
@@ -3203,7 +3425,11 @@ For every goal in `${PHASE_DIR}/TEST-GOALS.md` that declares
      snapshot URL.
    - **search** — type a representative query, wait `debounce_ms + 100ms`,
      snapshot URL.
-5. Append one entry per goal to `url-runtime-probe.json`.
+5. Also compare the observed route against `${PHASE_DIR}/CRUD-SURFACES.md`
+   `platforms.web.list`: heading/description presence, declared table columns,
+   row actions, empty/loading/error/unauthorized states where reachable, and
+   delete confirmation if a delete action is declared.
+6. Append one entry per goal to `url-runtime-probe.json`.
 
 **Artifact schema** (`${PHASE_DIR}/url-runtime-probe.json`):
 

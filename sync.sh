@@ -1,166 +1,304 @@
-#!/bin/bash
-# VGFlow Sync — keep source (.claude/commands/vg/) + mirror (vgflow/) + installations in sync
+#!/usr/bin/env bash
+# VGFlow sync - deploy this repository's canonical workflow files.
 #
-# Workflow này có 2 hướng:
-#   1. SOURCE → MIRROR: edit tại .claude/commands/vg/ (source of truth trong dev repo)
-#      → mirror sang vgflow/commands/vg/ để distribute
-#   2. MIRROR → INSTALLATIONS: deploy vgflow/ tới các project install
-#      + global ~/.codex/skills/ (cho Codex CLI dùng mọi project)
+# This repository is the source of truth. Sync is intentionally one-way:
+#   vgflow-repo/{commands,skills,scripts,codex-skills,templates}
+#     -> $DEV_ROOT/.claude and $DEV_ROOT/.codex
+#     -> ~/.codex (unless --no-global)
 #
 # Usage:
-#   ./sync.sh              # full sync (source → mirror → installations)
-#   ./sync.sh --check      # dry-run, chỉ report gaps
-#   ./sync.sh --no-source  # skip source→mirror (dùng khi edit trực tiếp vgflow/)
-#   ./sync.sh --no-global  # skip ~/.codex/ deploy
+#   ./sync.sh              # apply sync to current repo, plus global Codex
+#   DEV_ROOT=/project ./sync.sh
+#   ./sync.sh --check      # dry-run, exits 1 if drift exists
+#   ./sync.sh --verify     # run functional Codex mirror equivalence check
+#   ./sync.sh --no-global  # skip ~/.codex deploy
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# REPO_ROOT resolution:
-#   1. DEV_ROOT env override (sibling layout: vgflow-repo ≠ inside project)
-#   2. Fallback: parent of SCRIPT_DIR (nested layout: vgflow-repo/ inside project)
-REPO_ROOT="${DEV_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+TARGET_ROOT="${DEV_ROOT:-$SCRIPT_DIR}"
+BASH_BIN="${BASH:-bash}"
+if [ -n "${BASH:-}" ]; then
+  # Windows can resolve `find` to C:\Windows\System32\find.exe when Git Bash
+  # is launched non-login from PowerShell/Codex. Prefer the active Bash toolchain
+  # so sync_tree uses POSIX find/sort/diff/cp/rm consistently.
+  export PATH="$(dirname "$BASH"):$PATH"
+fi
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
 
 MODE_CHECK=false
-SKIP_SOURCE=false
 SKIP_GLOBAL=false
+VERIFY_ONLY=false
+DEPRECATED_NO_SOURCE=false
 
 for arg in "$@"; do
   case "$arg" in
-    --check)    MODE_CHECK=true ;;
-    --no-source) SKIP_SOURCE=true ;;
+    --check) MODE_CHECK=true ;;
+    --verify) VERIFY_ONLY=true ;;
     --no-global) SKIP_GLOBAL=true ;;
+    --no-source) DEPRECATED_NO_SOURCE=true ;;
     -h|--help)
-      head -20 "$0" | tail -19 | sed 's/^# \?//'
-      exit 0 ;;
+      sed -n '1,18p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg" >&2
+      exit 2
+      ;;
   esac
 done
+
+if [ "$VERIFY_ONLY" = "true" ]; then
+  if [ -z "$PYTHON_BIN" ]; then
+    echo "ERROR: python3 or python is required for --verify" >&2
+    exit 127
+  fi
+  "$PYTHON_BIN" "$SCRIPT_DIR/scripts/verify-codex-mirror-equivalence.py"
+  exit $?
+fi
 
 SUMMARY=()
 CHANGED=0
 MISSING=0
 
-# Helper: compare 2 files, report status
+note() {
+  SUMMARY+=("$1")
+}
+
 compare() {
-  local src="$1" dst="$2" label="$3"
+  local src="$1"
+  local dst="$2"
+  local label="$3"
+
   if [ ! -f "$src" ]; then
-    SUMMARY+=("  ✗ SRC MISSING: $label ($src)")
+    note "MISSING source: $label ($src)"
     MISSING=$((MISSING + 1))
     return
   fi
+
   if [ ! -f "$dst" ]; then
-    SUMMARY+=("  + NEW: $label → $dst")
+    note "NEW: $label -> $dst"
     CHANGED=$((CHANGED + 1))
-    [ "$MODE_CHECK" = "false" ] && mkdir -p "$(dirname "$dst")" && cp "$src" "$dst"
+    if [ "$MODE_CHECK" = "false" ]; then
+      mkdir -p "$(dirname "$dst")"
+      cp "$src" "$dst"
+    fi
     return
   fi
+
   if ! diff -q "$src" "$dst" >/dev/null 2>&1; then
-    SUMMARY+=("  ~ UPDATED: $label")
+    note "UPDATED: $label"
     CHANGED=$((CHANGED + 1))
-    [ "$MODE_CHECK" = "false" ] && cp "$src" "$dst"
+    if [ "$MODE_CHECK" = "false" ]; then
+      cp "$src" "$dst"
+    fi
   fi
 }
 
-# Discover files in a dir pair
-sync_dir() {
-  local src_dir="$1" dst_dir="$2" pattern="${3:-*}" label="$4"
+sync_tree() {
+  local src_dir="$1"
+  local dst_dir="$2"
+  local label="$3"
+
   [ -d "$src_dir" ] || return
+
   while IFS= read -r src_file; do
-    rel="${src_file#$src_dir/}"
-    compare "$src_file" "$dst_dir/$rel" "$label: $rel"
-  done < <(find "$src_dir" -name "$pattern" -type f 2>/dev/null)
+    local rel="${src_file#$src_dir/}"
+    compare "$src_file" "$dst_dir/$rel" "$label:$rel"
+  done < <(find "$src_dir" -type f \
+    ! -path '*/__pycache__/*' \
+    ! -name '*.pyc' 2>/dev/null | sort)
 }
 
-# ============================================================
-# 1. SOURCE → MIRROR (.claude/commands/vg/ → vgflow/commands/vg/)
-# ============================================================
-if [ "$SKIP_SOURCE" = "false" ] && [ -d "$REPO_ROOT/.claude/commands/vg" ]; then
-  echo "━━━ 1. Source → Mirror (.claude/ → vgflow/) ━━━"
-  sync_dir "$REPO_ROOT/.claude/commands/vg" "$SCRIPT_DIR/commands/vg" "*.md" "commands/vg"
-  # Also sync non-markdown support files (yaml string tables, etc.)
-  sync_dir "$REPO_ROOT/.claude/commands/vg/_shared" "$SCRIPT_DIR/commands/vg/_shared" "*.yaml" "_shared-yaml"
-  sync_dir "$REPO_ROOT/.claude/commands/vg/_shared" "$SCRIPT_DIR/commands/vg/_shared" "*.yml" "_shared-yml"
-  # v1.9.2 FIX: sync runnable bash helpers (lib/*.sh + lib/test-runners/*.sh)
-  # Previously missed — caused /vg:doctor + test-runners to silently degrade when distributed via vgflow/.
-  sync_dir "$REPO_ROOT/.claude/commands/vg/_shared/lib" "$SCRIPT_DIR/commands/vg/_shared/lib" "*.sh" "_shared-lib-sh"
-  sync_dir "$REPO_ROOT/.claude/commands/vg/_shared/lib" "$SCRIPT_DIR/commands/vg/_shared/lib" "*.md" "_shared-lib-md"
-  sync_dir "$REPO_ROOT/.claude/commands/vg/_shared/lib/test-runners" "$SCRIPT_DIR/commands/vg/_shared/lib/test-runners" "*.sh" "test-runners"
+sync_codex_agents() {
+  local dst_root="$1"
+  [ -d "$SCRIPT_DIR/templates/codex-agents" ] || return
+  sync_tree "$SCRIPT_DIR/templates/codex-agents" "$dst_root/agents" "codex-agent"
+}
 
-  # Shared Claude skills that VG workflow depends on
-  for skill in api-contract vg-design-scanner vg-design-gap-hunter vg-haiku-scanner vg-crossai vg-reflector; do
-    sync_dir "$REPO_ROOT/.claude/skills/$skill" "$SCRIPT_DIR/skills/$skill" "*" "skill:$skill"
-  done
+sync_codex_skills_exact() {
+  local dst_root="$1"
+  local label="$2"
+  [ -d "$SCRIPT_DIR/codex-skills" ] || return
+  mkdir -p "$dst_root/skills"
 
-  # Scripts + templates
-  sync_dir "$REPO_ROOT/.claude/scripts" "$SCRIPT_DIR/scripts" "*.py" "scripts"
-  # OHOK v2 — also sync *.sh helpers (rationalization-guard.sh extracted from .md)
-  sync_dir "$REPO_ROOT/.claude/scripts" "$SCRIPT_DIR/scripts" "*.sh" "scripts-sh"
-  sync_dir "$REPO_ROOT/.claude/scripts/validators" "$SCRIPT_DIR/scripts/validators" "*.py" "validators"
-  sync_dir "$REPO_ROOT/.claude/scripts/vg-orchestrator" "$SCRIPT_DIR/scripts/vg-orchestrator" "*.py" "orchestrator"
-  sync_dir "$REPO_ROOT/.claude/templates/vg" "$SCRIPT_DIR/templates/vg" "*" "templates"
+  while IFS= read -r skill_dir; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    local skill
+    skill="$(basename "$skill_dir")"
+    local dst_dir="$dst_root/skills/$skill"
+    if [ "$MODE_CHECK" = "false" ]; then
+      rm -rf "$dst_dir"
+    fi
+    sync_tree "$skill_dir" "$dst_dir" "$label:$skill"
+  done < <(find "$SCRIPT_DIR/codex-skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+}
 
-  echo ""
-fi
-
-# ============================================================
-# 1b. REGENERATE CODEX SKILLS FROM CLAUDE SOURCE
-# ============================================================
-# v2.3+ fix: codex-skills were drifting (400+ lines behind review.md). Now
-# regenerated automatically every sync so Codex runs get the same skill body
-# as Claude. The generator strips <NARRATION_POLICY> and prepends the fixed
-# <codex_skill_adapter> prelude — everything else is identical.
-if [ "$SKIP_SOURCE" = "false" ] && [ -x "$SCRIPT_DIR/scripts/generate-codex-skills.sh" ]; then
-  echo "━━━ 1b. Regenerate Codex skills from Claude source ━━━"
-  if [ "$MODE_CHECK" = "true" ]; then
-    # Dry-run: list what would change by diffing timestamps. Generator
-    # handles --force internally; in check mode we just report.
-    echo "(check mode — skipping regen, run without --check to apply)"
+codex_config_path() {
+  local path="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$path"
   else
-    DEV_ROOT="$REPO_ROOT" bash "$SCRIPT_DIR/scripts/generate-codex-skills.sh" --force 2>&1 | tail -3
-    # Add explicit marker to SUMMARY so operator knows codex was touched
-    SUMMARY+=("REGENERATED: codex-skills (41 skills from Claude source)")
+    printf '%s\n' "$path"
   fi
-  echo ""
-fi
+}
 
-# ============================================================
-# 2. MIRROR → CURRENT PROJECT (.claude/, .codex/ in repo being worked on)
-# ============================================================
-# Re-sync mirror back to .claude — ensures round-trip consistency
-# (most useful when user edits vgflow/ directly)
-echo "━━━ 2. Mirror → Current project (.codex/ in $REPO_ROOT) ━━━"
-for skill in $(ls "$SCRIPT_DIR/codex-skills" 2>/dev/null); do
-  src="$SCRIPT_DIR/codex-skills/$skill/SKILL.md"
-  dst="$REPO_ROOT/.codex/skills/$skill/SKILL.md"
-  compare "$src" "$dst" "codex-skill:$skill"
-done
+register_global_codex_agents() {
+  local config="$HOME/.codex/config.toml"
+  touch "$config"
+
+  register_one() {
+    local name="$1"
+    local desc="$2"
+    local config_file
+    config_file="$(codex_config_path "$HOME/.codex/agents/${name}.toml")"
+    if ! grep -q "^\[agents\.${name}\]" "$config" 2>/dev/null; then
+      cat >> "$config" <<EOF
+
+[agents.${name}]
+description = "${desc}"
+config_file = "${config_file}"
+EOF
+      note "REGISTERED global Codex agent: $name"
+      CHANGED=$((CHANGED + 1))
+    fi
+  }
+
+  register_one "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+  register_one "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
+  register_one "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+}
+
+echo "VGFlow sync"
+echo "  source: $SCRIPT_DIR"
+echo "  target: $TARGET_ROOT"
 echo ""
 
-# ============================================================
-# 3. MIRROR → GLOBAL CODEX (~/.codex/skills/)
-# ============================================================
-if [ "$SKIP_GLOBAL" = "false" ] && [ -d "$HOME/.codex" ]; then
-  echo "━━━ 3. Mirror → Global Codex (~/.codex/skills/) ━━━"
-  for skill in $(ls "$SCRIPT_DIR/codex-skills" 2>/dev/null); do
-    src="$SCRIPT_DIR/codex-skills/$skill/SKILL.md"
-    dst="$HOME/.codex/skills/$skill/SKILL.md"
-    compare "$src" "$dst" "global-codex:$skill"
-  done
+if [ "$DEPRECATED_NO_SOURCE" = "true" ]; then
+  note "INFO: --no-source is deprecated and ignored; vgflow-repo is now canonical"
+fi
+
+if [ "$MODE_CHECK" = "false" ]; then
+  echo "1. Regenerate Codex skills"
+  "$BASH_BIN" "$SCRIPT_DIR/scripts/generate-codex-skills.sh" --force >/tmp/vgflow-codex-generate.log
+  tail -5 /tmp/vgflow-codex-generate.log
+  chmod +x "$SCRIPT_DIR/scripts/generate-codex-skills.sh" 2>/dev/null || true
+  chmod +x "$SCRIPT_DIR/commands/vg/_shared/lib/"*.sh 2>/dev/null || true
+  echo ""
+else
+  echo "1. Check mode: skip regeneration; run without --check to refresh codex-skills"
   echo ""
 fi
 
-# ============================================================
-# Report
-# ============================================================
-echo "━━━ Summary ━━━"
-if [ ${#SUMMARY[@]} -eq 0 ]; then
-  echo "✓ All in sync. Nothing to do."
+echo "2. Deploy Claude workflow to target project"
+sync_tree "$SCRIPT_DIR/commands/vg" "$TARGET_ROOT/.claude/commands/vg" "claude-command"
+sync_tree "$SCRIPT_DIR/skills" "$TARGET_ROOT/.claude/skills" "claude-skill"
+sync_tree "$SCRIPT_DIR/scripts" "$TARGET_ROOT/.claude/scripts" "claude-script"
+sync_tree "$SCRIPT_DIR/schemas" "$TARGET_ROOT/.claude/schemas" "claude-schema"
+sync_tree "$SCRIPT_DIR/templates/vg" "$TARGET_ROOT/.claude/templates/vg" "claude-template"
+compare "$SCRIPT_DIR/VGFLOW-VERSION" "$TARGET_ROOT/.claude/VGFLOW-VERSION" "claude-version"
+if [ "$MODE_CHECK" = "false" ]; then
+  chmod +x "$TARGET_ROOT/.claude/commands/vg/_shared/lib/"*.sh 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/commands/vg/_shared/lib/test-runners/"*.sh 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/scripts/"*.py 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/scripts/"*.sh 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/scripts/validators/"*.py 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/scripts/vg-orchestrator/"*.py 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/scripts/lib/"*.py 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/templates/vg/commit-msg" 2>/dev/null || true
+  find "$TARGET_ROOT/.claude/scripts" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+  find "$TARGET_ROOT/.claude/scripts" -type f -name '*.pyc' -delete 2>/dev/null || true
+fi
+echo ""
+
+echo "2b. Ensure Claude enforcement hooks"
+if [ -z "$PYTHON_BIN" ]; then
+  note "MISSING python: cannot verify/install Claude hooks"
+  MISSING=$((MISSING + 1))
+elif [ -f "$TARGET_ROOT/.claude/scripts/vg-hooks-install.py" ]; then
+  if [ "$MODE_CHECK" = "true" ]; then
+    if ! ( cd "$TARGET_ROOT" && "$PYTHON_BIN" .claude/scripts/vg-hooks-install.py --check >/dev/null 2>&1 ); then
+      note "UPDATED: claude-hooks:.claude/settings.local.json"
+      CHANGED=$((CHANGED + 1))
+    fi
+  else
+    if ( cd "$TARGET_ROOT" && "$PYTHON_BIN" .claude/scripts/vg-hooks-install.py >/tmp/vgflow-hooks-install.log 2>&1 ); then
+      echo "  OK: hooks installed/repaired in .claude/settings.local.json"
+      if [ -f "$TARGET_ROOT/.claude/scripts/vg-hooks-selftest.py" ]; then
+        if ( cd "$TARGET_ROOT" && "$PYTHON_BIN" .claude/scripts/vg-hooks-selftest.py >/tmp/vgflow-hooks-selftest.log 2>&1 ); then
+          echo "  OK: hook self-test passed"
+        else
+          echo "  WARN: hook self-test failed; run: cd \"$TARGET_ROOT\" && $PYTHON_BIN .claude/scripts/vg-hooks-selftest.py"
+        fi
+      fi
+    else
+      note "FAILED: claude-hooks install; run cd $TARGET_ROOT && $PYTHON_BIN .claude/scripts/vg-hooks-install.py"
+    fi
+  fi
 else
-  printf '%s\n' "${SUMMARY[@]}"
+  note "MISSING target hook installer: .claude/scripts/vg-hooks-install.py"
+  MISSING=$((MISSING + 1))
+fi
+if [ "$MODE_CHECK" = "false" ]; then
+  find "$TARGET_ROOT/.claude/scripts" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+  find "$TARGET_ROOT/.claude/scripts" -type f -name '*.pyc' -delete 2>/dev/null || true
+fi
+echo ""
+
+echo "3. Deploy Codex workflow to target project"
+sync_codex_skills_exact "$TARGET_ROOT/.codex" "codex-skill"
+sync_codex_agents "$TARGET_ROOT/.codex"
+sync_tree "$SCRIPT_DIR/templates/codex" "$TARGET_ROOT/.codex" "codex-template"
+echo ""
+
+if [ "$SKIP_GLOBAL" = "false" ] && [ -d "$HOME/.codex" ]; then
+  echo "4. Deploy global Codex skills/agents"
+  sync_codex_skills_exact "$HOME/.codex" "global-codex-skill"
+  sync_codex_agents "$HOME/.codex"
+  if [ "$MODE_CHECK" = "false" ]; then
+    register_global_codex_agents
+  fi
   echo ""
-  echo "Changed: $CHANGED · Missing src: $MISSING"
+else
+  echo "4. Global Codex deploy skipped"
+  echo ""
+fi
+
+echo "5. Functional Codex mirror check"
+if [ -z "$PYTHON_BIN" ]; then
+  echo "ERROR: python3 or python is required for functional mirror check" >&2
+  exit 127
+fi
+VERIFY_JSON="$(mktemp)"
+if "$PYTHON_BIN" "$SCRIPT_DIR/scripts/verify-codex-mirror-equivalence.py" --json >"$VERIFY_JSON"; then
+  CHECKED="$("$PYTHON_BIN" - "$VERIFY_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    print(json.load(fh)["checked"])
+PY
+)"
+  echo "  OK: ${CHECKED} source/mirror pairs equivalent"
+else
+  cat "$VERIFY_JSON"
+  exit 1
+fi
+rm -f "$VERIFY_JSON"
+echo ""
+
+echo "Summary"
+if [ "${#SUMMARY[@]}" -eq 0 ]; then
+  echo "  All in sync."
+else
+  printf '  %s\n' "${SUMMARY[@]}"
+  echo ""
+  echo "  Changed: $CHANGED"
+  echo "  Missing sources: $MISSING"
 fi
 
 if [ "$MODE_CHECK" = "true" ]; then
   echo ""
-  echo "(dry-run — no files modified. Re-run without --check to apply.)"
+  echo "Dry run only. Re-run without --check to apply."
   [ "$CHANGED" -gt 0 ] && exit 1 || exit 0
 fi

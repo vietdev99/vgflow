@@ -1,7 +1,7 @@
 ---
 name: vg:blueprint
 description: Plan + API contracts + verify + CrossAI review — 4 sub-steps before build
-argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--from=<substep>] [--override-reason=<text>] [--allow-missing-persistence] [--allow-missing-org] [--allow-crossai-inconclusive] [--apply-amendments] [--skip-amendment-check]"
+argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--from=<substep>] [--override-reason=<text>] [--allow-missing-persistence] [--allow-missing-org] [--allow-crossai-inconclusive] [--skip-crud-surface-contract] [--apply-amendments] [--skip-amendment-check]"
 allowed-tools:
   - Read
   - Write
@@ -22,6 +22,9 @@ runtime_contract:
     - "${PHASE_DIR}/PLAN.md"
     - "${PHASE_DIR}/API-CONTRACTS.md"
     - "${PHASE_DIR}/TEST-GOALS.md"
+    - path: "${PHASE_DIR}/CRUD-SURFACES.md"
+      content_min_bytes: 120
+      required_unless_flag: "--crossai-only"
     # v2.5 anti-forge (2026-04-23): CrossAI XML result files REQUIRED
     # unless explicit --skip-crossai flag. Previously AI could touch
     # 2d_crossai_review.done marker without actually invoking CLIs
@@ -74,6 +77,7 @@ runtime_contract:
     - "--allow-missing-persistence"
     - "--allow-missing-org"
     - "--allow-crossai-inconclusive"
+    - "--skip-crud-surface-contract"
     - "--skip-crossai"
     - "--override-reason"
 ---
@@ -287,6 +291,7 @@ Create tasks for each sub-step in this command:
 TaskCreate: "2a. Plan — GSD planner"           (activeForm: "Creating plans...")
 TaskCreate: "2b. Contracts — API contracts"     (activeForm: "Generating API contracts...")
 TaskCreate: "2b5. Test goals — generate goals"   (activeForm: "Generating TEST-GOALS...")
+TaskCreate: "2b5. CRUD surfaces — resource contract" (activeForm: "Generating CRUD-SURFACES...")
 TaskCreate: "2b7. Flow detect — FLOW-SPEC"      (activeForm: "Detecting business flows...")
 TaskCreate: "2c. Verify 1 — grep diff"          (activeForm: "Verifying contracts (grep)...")
 TaskCreate: "2d. CrossAI review"               (activeForm: "Running CrossAI review...")
@@ -1394,11 +1399,15 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## Sub-step 2b5: TEST GOALS
 
 Generate TEST-GOALS.md from CONTEXT.md decisions + API-CONTRACTS.md endpoints.
+Also generate CRUD-SURFACES.md from the same inputs plus PLAN*.md. TEST-GOALS
+defines what must be verified; CRUD-SURFACES defines the resource/platform
+contract that build/review/test/accept must follow.
 
 **Agent context (~300 lines):**
 - CONTEXT.md decisions (`P{phase}.D-01` through `P{phase}.D-XX`, or legacy `D-01..D-XX`) (~100 lines)
 - API-CONTRACTS.md endpoints + fields (~100 lines)
 - Output format template (~100 lines)
+- CRUD-SURFACES template: `commands/vg/_shared/templates/CRUD-SURFACES-template.md`
 
 **Agent prompt:**
 ```
@@ -1491,6 +1500,37 @@ RULES:
 
    Verifier: `verify-url-state-sync.py` runs at review phase 2.7 — BLOCKs (phase ≥ cutover) or WARNs (grandfather) if list-view goal missing this block.
 
+8. **CRUD-SURFACES.md (MANDATORY resource contract):**
+   After writing TEST-GOALS.md, write `${PHASE_DIR}/CRUD-SURFACES.md` using
+   `commands/vg/_shared/templates/CRUD-SURFACES-template.md`.
+
+   Required structure:
+   - Top-level JSON fenced block with `version: "1"` and `resources[]`.
+   - Each resource has `operations`, `base`, and `platforms`.
+   - `base` covers cross-platform roles, business_flow, security, abuse, and performance.
+   - `platforms.web` covers web list/form/delete behavior: heading, description,
+     filter/search/sort/pagination URL state, table columns/actions, loading/empty/error
+     states, form validation, duplicate-submit guard, and delete confirmation.
+   - `platforms.mobile` covers mobile-specific behavior: deep link state,
+     pull-to-refresh or load-more/infinite-scroll, 44px tap target, keyboard
+     avoidance, native picker behavior, offline/network states, and confirm sheet.
+   - `platforms.backend` covers API behavior: pagination max size, filter/sort
+     allowlist, stable default sort, invalid query errors, object authz, field
+     allowlist/mass-assignment guard, idempotency, rate-limit, and audit log.
+
+   If the phase truly has no CRUD/resource behavior, still write:
+   ```json
+   {
+     "version": "1",
+     "generated_from": ["CONTEXT.md", "API-CONTRACTS.md", "TEST-GOALS.md", "PLAN.md"],
+     "no_crud_reason": "Phase only changes infrastructure/docs/tooling; no user resource CRUD surface",
+     "resources": []
+   }
+   ```
+
+   Do not apply web table rules to mobile screens. Use `base + platform overlay`
+   so each phase profile gets only the checks that fit that platform.
+
 Output format:
 
 # Test Goals — Phase {PHASE}
@@ -1537,7 +1577,7 @@ Total: {N} goals ({critical} critical, {important} important, {nice} nice-to-hav
 Coverage: {covered}/{total} decisions → {percentage}%
 ```
 
-Write `${PHASE_DIR}/TEST-GOALS.md`.
+Write `${PHASE_DIR}/TEST-GOALS.md` and `${PHASE_DIR}/CRUD-SURFACES.md`.
 
 ### Rule 3b gate: Persistence check coverage (v1.14.4+)
 
@@ -2596,9 +2636,31 @@ if [ -x "$TG_VAL" ]; then
     *) echo "ℹ test-goals-platform-essentials: $TG_V" ;;
   esac
 fi
+
+# Gate C: CRUD surface contract (base + platform overlays)
+CRUD_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crud-surface-contract.py"
+if [ -x "$CRUD_VAL" ]; then
+  CRUD_TMP="${VG_TMP:-${PHASE_DIR}/.vg-tmp}"
+  mkdir -p "$CRUD_TMP"
+  ${PYTHON_BIN} "$CRUD_VAL" --phase "${PHASE_NUMBER}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      > "${CRUD_TMP}/crud-surface-contract.json" 2>&1 || true
+  CRUD_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${CRUD_TMP}/crud-surface-contract.json" 2>/dev/null)
+  case "$CRUD_V" in
+    PASS|WARN) echo "✓ crud-surface-contract: $CRUD_V" ;;
+    BLOCK)
+      echo "⛔ crud-surface-contract: BLOCK — see ${CRUD_TMP}/crud-surface-contract.json" >&2
+      echo "   CRUD/resource behavior requires CRUD-SURFACES.md with base + platform overlays." >&2
+      echo "   Override: --skip-crud-surface-contract (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-crud-surface-contract ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ crud-surface-contract: $CRUD_V" ;;
+  esac
+fi
 ```
 
-### 2d-3c: Phase 16 task schema + cross-AI output gates (hot-fix v2.11.1)
+### 2d-3d: Phase 16 task schema + cross-AI output gates (hot-fix v2.11.1)
 
 Phase 16 hot-fix wires two validators that were registered/documented but
 never invoked from this skill body (cross-AI consensus BLOCKer 5).
@@ -3064,7 +3126,7 @@ git add "${PHASE_DIR}/PLAN"*.md \
         "${PHASE_DIR}/TEST-GOALS.md" \
         "${PHASE_DIR}/crossai/"
 # Optional artifacts — only present when the relevant generator fired this phase.
-for opt in UI-SPEC.md UI-MAP.md UI-MAP-AS-IS.md FLOW-SPEC.md; do
+for opt in CRUD-SURFACES.md UI-SPEC.md UI-MAP.md UI-MAP-AS-IS.md FLOW-SPEC.md; do
   [ -f "${PHASE_DIR}/${opt}" ] && git add "${PHASE_DIR}/${opt}"
 done
 git commit -m "blueprint({phase}): plans + contracts + goals — CrossAI {verdict}"

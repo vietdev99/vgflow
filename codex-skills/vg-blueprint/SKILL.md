@@ -6,85 +6,135 @@ metadata:
 ---
 
 <codex_skill_adapter>
-## Codex ⇆ Claude Code tool mapping
+## Codex runtime notes
 
-This skill was originally designed for Claude Code. When running in Codex CLI, translate tool calls using the table + patterns below.
+This skill body is generated from VGFlow's canonical source. Claude Code and
+Codex use the same workflow contracts, but their orchestration primitives differ.
 
-### Tool mapping table
+### Tool mapping
 
-| Claude tool | Codex equivalent | Notes |
+| Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
-| AskUserQuestion | request_user_input (free-form text, or number-prefix choices) | For multi-select, format as "1. Option / 2. Option" and parse reply |
-| Task (agent spawn) | `codex exec --model <model> "<prompt>"` subprocess | Foreground: `codex exec ... > /tmp/out.txt`. Parallel: launch N subprocesses + `wait`. See "Agent spawn" below |
-| TaskCreate/TaskUpdate/TodoWrite | N/A — use inline markdown headers + status narration | Codex does not have a persistent task tail UI. Write `## ━━━ Phase X: step ━━━` in stdout instead |
-| Monitor | Bash loop with `echo` + `sleep 3` polling | Codex streams stdout directly, no separate monitor channel |
-| ScheduleWakeup | N/A — Codex is one-shot; user must re-invoke | Skill must tolerate single-execution model; no sleeping |
-| WebFetch | `curl -sfL <url>` or `gh api <path>` | For GitHub URLs prefer `gh` for auth handling |
-| mcp__playwright{1-5}__* | See "Playwright MCP" below | Playwright MCP tools ARE available in Codex's main orchestrator |
-| mcp__graphify__* | `python -c "from graphify import ..."` inline | Graphify CLI/module works identically in Codex |
-| mcp__context7__*, mcp__exa__*, mcp__firecrawl__* | Skip or fall back to WebFetch | Only available via SDK; not bundled in Codex CLI |
-| Bash/Read/Write/Edit/Glob/Grep | Same — Codex supports these natively | No adapter needed |
+| AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it. |
+| Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
+| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
+| Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
-### Agent spawn (Task → codex exec)
+<codex_runtime_contract>
+### Provider/runtime parity contract
 
-Claude Code spawns isolated agents via `Task(subagent_type=..., prompt=...)`. Codex equivalent:
+This generated skill must preserve the source command's artifacts, gates,
+telemetry events, and step ordering on both Claude and Codex. Do not remove,
+skip, or weaken a source workflow step because a Claude-only primitive appears
+in the body below.
+
+#### Provider mapping
+
+| Source pattern | Claude path | Codex path |
+|---|---|---|
+| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `commands/vg/_shared/lib/codex-spawn.sh --tier planner` |
+| Build executor Agent | Use the source executor `Agent(...)` call | Use `codex-spawn.sh --tier executor --sandbox workspace-write` with explicit file ownership and expected artifact output |
+| Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured `codex exec`/Gemini/Claude commands from `.claude/vg.config.md`; fail if required CLI output is missing or unparsable |
+| Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
+| Reflection / learning | Use `vg-reflector` workflow | Use the Codex `vg-reflector` adapter or `codex-spawn.sh --tier scanner`; candidates still require the same user gate |
+
+### Codex hook parity
+
+Claude Code has a project-local hook substrate; Codex skills do not receive
+Claude `UserPromptSubmit`, `Stop`, or `PostToolUse` hooks automatically.
+Therefore Codex must execute the lifecycle explicitly through the same
+orchestrator that writes `.vg/events.db`:
+
+| Claude hook | What it does on Claude | Codex obligation |
+|---|---|---|
+| `UserPromptSubmit` -> `vg-entry-hook.py` | Pre-seeds `vg-orchestrator run-start` and `.vg/.session-context.json` before the skill loads | Treat the command body's explicit `vg-orchestrator run-start` as mandatory; if missing or failing, BLOCK before doing work |
+| `Stop` -> `vg-verify-claim.py` | Runs `vg-orchestrator run-complete` and blocks false done claims | Run the command body's terminal `vg-orchestrator run-complete` before claiming completion; if it returns non-zero, fix evidence and retry |
+| `PostToolUse` edit -> `vg-edit-warn.py` | Warns that command/skill edits require session reload | After editing VG workflow files on Codex, tell the user the current session may still use cached skill text |
+| `PostToolUse` Bash -> `vg-step-tracker.py` | Tracks marker commands and emits `hook.step_active` telemetry | Do not rely on the hook; call explicit `vg-orchestrator mark-step` lines in the skill and preserve marker/telemetry events |
+
+Codex hook parity is evidence-based: `.vg/events.db`, step markers,
+`must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
+run is not complete just because the model says it is complete.
+
+### Codex spawn precedence
+
+When the source workflow below says `Agent(...)` or "spawn", Codex MUST
+apply this table instead of treating the Claude syntax as executable:
+
+| Source spawn site | Codex action | Tier/model env | Sandbox | Required evidence |
+|---|---|---|---|---|
+| `/vg:build` wave executor, `model="${MODEL_EXECUTOR}"` | Write one prompt file per task, run `codex-spawn.sh --tier executor`; parallelize independent tasks with background processes and `wait`, serialize dependency groups | `VG_CODEX_MODEL_EXECUTOR`; leave unset to use Codex config default. Set this to the user's strongest coding model when they want Sonnet-class build quality. | `workspace-write` | child output, stdout/stderr logs, changed files, verification commands, task-fidelity prompt evidence |
+| `/vg:blueprint`, `/vg:scope`, planner/checker agents | Run `codex-spawn.sh --tier planner` or inline in the main orchestrator if the step needs interactive user answers | `VG_CODEX_MODEL_PLANNER` | `workspace-write` for artifact-writing planners, `read-only` for pure checks | requested artifacts or JSON verdict |
+| `/vg:review` navigator/scanner, `Agent(model="haiku")` | Do NOT blindly spawn `codex exec` for Playwright/Maestro work. Main Codex orchestrator owns MCP/browser/device actions. Use `codex-spawn.sh --tier scanner --sandbox read-only` only for non-MCP classification over captured snapshots/artifacts. | `VG_CODEX_MODEL_SCANNER`; set this to a cheap/fast model for review map/scanner work | `read-only` unless explicitly generating scan files from supplied evidence | same `scan-*.json`, `RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md`, and `review.haiku_scanner_spawned` telemetry event semantics |
+| `/vg:review` fix agents and `/vg:test` codegen agents | Use `codex-spawn.sh --tier executor` because they edit code/tests | `VG_CODEX_MODEL_EXECUTOR` or explicit `--model` if the command selected a configured fix model | `workspace-write` | changed files, tests run, unresolved risks |
+| Rationalization guard, reflector, gap hunters | Use `codex-spawn.sh --tier scanner` for read-only classification, or `--tier adversarial` for independent challenge/review | `VG_CODEX_MODEL_SCANNER` or `VG_CODEX_MODEL_ADVERSARIAL` | `read-only` by default | compact JSON/markdown verdict; fail closed on empty/unparseable output |
+
+If a source sentence says "MUST spawn Haiku" and the step needs MCP/browser
+tools, Codex interprets that as "MUST run the scanner protocol and emit the
+same artifacts/events"; it does not require a child process unless child MCP
+access was smoke-tested in the current environment.
+
+#### Non-negotiable guarantees
+
+- Never skip source workflow gates, validators, telemetry events, or must-write artifacts.
+- If Codex cannot emulate a Claude primitive safely, BLOCK instead of silently degrading.
+- UI/UX, security, and business-flow checks remain artifact/gate driven: follow the source command's DESIGN/UI-MAP/TEST-GOALS/security validator requirements exactly.
+- A slower Codex inline path is acceptable; a weaker path that omits evidence is not.
+</codex_runtime_contract>
+
+### Model tier mapping
+
+Model mapping is tier-based, not vendor-name-based.
+
+VGFlow keeps tier names in `.claude/vg.config.md`; Codex subprocesses use
+the user's Codex config model by default. Pin a tier only after smoke-testing
+that model in the target account, via `VG_CODEX_MODEL_PLANNER`,
+`VG_CODEX_MODEL_EXECUTOR`, `VG_CODEX_MODEL_SCANNER`, or
+`VG_CODEX_MODEL_ADVERSARIAL`:
+
+| VG tier | Claude-style role | Codex default | Fallback |
+|---|---|---|---|
+| planner | Opus-class planning/reasoning | Codex config default | Set `VG_CODEX_MODEL_PLANNER` only after smoke-testing |
+| executor | Sonnet-class coding/review | Codex config default | Set `VG_CODEX_MODEL_EXECUTOR` only after smoke-testing |
+| scanner | Haiku-class scan/classify | Codex config default | Set `VG_CODEX_MODEL_SCANNER` only after smoke-testing |
+| adversarial | independent reviewer | Codex config default | Set `VG_CODEX_MODEL_ADVERSARIAL` only after smoke-testing |
+
+### Spawn helper
+
+For subprocess-based children, use:
 
 ```bash
-# Single agent, foreground (wait for completion + read output)
-codex exec --model gpt-5 "<full isolated prompt>" > /tmp/agent-result.txt 2>&1
-RESULT=$(cat /tmp/agent-result.txt)
-
-# Multiple agents, parallel (Claude's pattern of 1 message with N Task calls)
-codex exec --model gpt-5 "<prompt 1>" > /tmp/agent-1.txt 2>&1 &
-PID1=$!
-codex exec --model gpt-5 "<prompt 2>" > /tmp/agent-2.txt 2>&1 &
-PID2=$!
-wait $PID1 $PID2
-R1=$(cat /tmp/agent-1.txt); R2=$(cat /tmp/agent-2.txt)
+bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
+  --tier executor \
+  --prompt-file "$PROMPT_FILE" \
+  --out "$OUT_FILE" \
+  --timeout 900 \
+  --sandbox workspace-write
 ```
 
-**Critical constraints when spawning:**
-- Subagent inherits working directory + env vars, but **no MCP server access** (Codex exec spawns fresh CLI instance without `--mcp` wired). Subagent CANNOT call `mcp__playwright*__`, `mcp__graphify__`, etc.
-- Model mapping for this project: `models.planner` opus → `gpt-5`, `models.executor` sonnet → `gpt-4o`, `models.scanner` haiku → `gpt-4o-mini` (or project-configured equivalent). Check `.claude/vg.config.md` `models` section for actual values and adapt.
-- Timeout: wrap in `timeout 600s codex exec ...` to prevent hung subagents.
-- Return schema: if skill expects structured JSON back, prompt subagent with "Return ONLY a single JSON object with keys: {...}". Parse with `jq` or `python -c "import json,sys; ..."`.
+The helper wraps `codex exec`, writes the final message to `--out`, captures
+stdout/stderr beside it, and fails loudly on timeout or empty output.
 
-### Playwright MCP — orchestrator-only rule
+### Known Codex caveats to design around
 
-Playwright MCP tools (`mcp__playwright1__browser_navigate`, `_snapshot`, `_click`, etc.) ARE available to the main Codex orchestrator (same MCP servers as Claude Code). **BUT subagents spawned via `codex exec` do NOT inherit MCP access** — they are fresh CLI instances.
+- Do not trust inline model selection for native subagents unless verified in the current Codex version; use TOML-pinned agents or `codex exec --model`.
+- Do not combine structured `--output-schema` with MCP-heavy runs until the target Codex version is smoke-tested. Prefer plain text + post-parse for MCP flows.
+- Recursive `codex exec` runs inherit sandbox constraints. Use the least sandbox that still allows the child to write expected artifacts.
 
-Implication for skills using Haiku scanner pattern (scanner spawns → uses Playwright):
-- **Claude model:** spawn haiku agent with prompt → agent calls `mcp__playwright__` tools directly
-- **Codex model:** TWO options:
-  1. **Orchestrator-driven:** main orchestrator calls Playwright tools + passes snapshots/results to subagent as text → subagent returns instructions/analysis only (no tool calls). Slower but preserves parallelism benefit.
-  2. **Single-agent:** orchestrator runs scanner workflow inline (no spawn). Simpler but no parallelism; suitable for 1-2 view scans but slow for 14+ views.
+### Support-skill MCP pattern
 
-Default: **single-agent inline** unless skill explicitly documents the orchestrator-driven pattern for that step.
-
-### Persistence probe (Layer 4) — execution model
-
-For review/test skills that verify mutation persistence:
-- Main orchestrator holds Playwright session (claimed via lock manager)
-- Pre-snapshot + submit + refresh + re-read all run in orchestrator Playwright calls (not spawned)
-- If skill delegates analysis to subagent, orchestrator must capture snapshots + pass text to subagent; subagent returns verdict JSON `{persisted: bool, pre: ..., post: ...}`
-
-### Lock manager (Playwright)
-
-Same as Claude:
-```bash
-SESSION_ID="codex-${skill}-${phase}-$$"
-PLAYWRIGHT_SERVER=$(bash "${HOME}/.claude/playwright-locks/playwright-lock.sh" claim "$SESSION_ID")
-trap "bash '${HOME}/.claude/playwright-locks/playwright-lock.sh' release \"$SESSION_ID\" 2>/dev/null" EXIT INT TERM
-```
-
-Pool name in Codex: `codex` (separate from Claude's `claude` pool). Lock manager handles both without collision.
+Pattern A: INLINE ORCHESTRATOR. For MCP-heavy support skills such as
+`vg-haiku-scanner`, Codex keeps Playwright/Maestro actions in the main
+orchestrator and only delegates read-only classification after snapshots are
+captured. This preserves MCP access and avoids false confidence from a child
+process that cannot see browser tools.
 
 ## Invocation
 
-This skill is invoked by mentioning `$vg-blueprint`. Treat all user text after `$vg-blueprint` as arguments.
-
-If argument-hint in source frontmatter is not empty and user provides no args, ask once via request_user_input before proceeding.
+Invoke this skill as `$vg-blueprint`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
+
 
 
 <rules>
@@ -296,6 +346,7 @@ Create tasks for each sub-step in this command:
 TaskCreate: "2a. Plan — GSD planner"           (activeForm: "Creating plans...")
 TaskCreate: "2b. Contracts — API contracts"     (activeForm: "Generating API contracts...")
 TaskCreate: "2b5. Test goals — generate goals"   (activeForm: "Generating TEST-GOALS...")
+TaskCreate: "2b5. CRUD surfaces — resource contract" (activeForm: "Generating CRUD-SURFACES...")
 TaskCreate: "2b7. Flow detect — FLOW-SPEC"      (activeForm: "Detecting business flows...")
 TaskCreate: "2c. Verify 1 — grep diff"          (activeForm: "Verifying contracts (grep)...")
 TaskCreate: "2d. CrossAI review"               (activeForm: "Running CrossAI review...")
@@ -422,6 +473,69 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2_verify_prerequisites" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_verify_prerequisites.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2_verify_prerequisites 2>/dev/null || true
 ```
+</step>
+
+<step name="2_fidelity_profile_lock" profile="web-fullstack,web-frontend-only">
+## Sub-step 2: DESIGN FIDELITY PROFILE LOCK (Phase 15 D-08)
+
+**Mục tiêu:** Lock the per-phase visual-fidelity threshold profile BEFORE
+planner writes PLAN. The profile (prototype / default / production) sets
+the SSIM/structural-diff threshold the post-wave drift gate enforces in
+`/vg:review` (D-12b/c/e). Locking at blueprint time prevents executor or
+reviewer from quietly relaxing the bar mid-phase.
+
+Profile defaults (D-08):
+- `prototype`  → 0.70 (early exploration, large layout swings tolerated)
+- `default`    → 0.85 (most product work — Phase 15 default)
+- `production` → 0.95 (visual-spec-grade, near pixel-perfect)
+
+Resolution order (highest precedence first):
+1. `--fidelity-profile <name>` CLI arg
+2. Phase frontmatter `design_fidelity.profile: <name>` in CONTEXT.md
+3. `vg.config.md` → `design_fidelity.default_profile`
+4. Hardcoded fallback: `default` (0.85)
+
+```bash
+# Skip if no design assets in scope (pure backend phase)
+if [ ! -f "${PHASE_DIR}/design-normalized/_INDEX.md" ] \
+   && ! grep -lE "(\.tsx|\.jsx|\.vue|\.svelte)" "${PHASE_DIR}"/PLAN*.md 2>/dev/null | head -1 >/dev/null; then
+  echo "ℹ No design or FE work in phase — skip fidelity profile lock"
+else
+  PROFILE_LOCK_FILE="${PHASE_DIR}/.fidelity-profile.lock"
+
+  if [ -f "$PROFILE_LOCK_FILE" ]; then
+    LOCKED=$(cat "$PROFILE_LOCK_FILE")
+    echo "ℹ Fidelity profile already locked: ${LOCKED} (delete .fidelity-profile.lock to relock)"
+  else
+    # Resolve via threshold-resolver helper (Phase 15 T3.1).
+    # Stdout = numeric threshold (e.g., "0.85"); stderr (with --verbose) =
+    # `source=<src> profile=<name> threshold=<n>`. CLI override travels via
+    # the VG_FIDELITY_PROFILE env var which threshold-resolver reads from
+    # CONTEXT.md / vg.config.md merge — there is no --cli-profile flag.
+    RESOLVED_ERR_FILE="${VG_TMP:-${PHASE_DIR}/.vg-tmp}/threshold-resolver.err"
+    mkdir -p "$(dirname "$RESOLVED_ERR_FILE")" 2>/dev/null
+    THRESHOLD=$(${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/lib/threshold-resolver.py" \
+        --phase "${PHASE_NUMBER}" --verbose 2> "$RESOLVED_ERR_FILE")
+    PROFILE=$(grep -oE 'profile=[a-z-]+' "$RESOLVED_ERR_FILE" | head -1 | cut -d= -f2)
+    SOURCE=$(grep -oE 'source=[a-z._-]+' "$RESOLVED_ERR_FILE"  | head -1 | cut -d= -f2)
+    PROFILE="${PROFILE:-default}"
+    THRESHOLD="${THRESHOLD:-0.85}"
+
+    echo "$PROFILE" > "$PROFILE_LOCK_FILE"
+    echo "✓ Fidelity profile locked: ${PROFILE} (threshold=${THRESHOLD}, source=${SOURCE:-fallback})"
+    echo "  → ${PROFILE_LOCK_FILE}"
+    echo "  /vg:review post-wave drift gate (D-12b/c/e) will use threshold=${THRESHOLD}"
+  fi
+
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2_fidelity_profile_lock" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_fidelity_profile_lock.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2_fidelity_profile_lock 2>/dev/null || true
+fi
+```
+
+**Override path** (DEBT — recorded in override-debt register):
+- `--fidelity-profile prototype` on a phase that should be production-grade
+  is allowed but logged as `kind=fidelity-profile-relaxed` so reviewers see
+  it during /vg:accept.
 </step>
 
 <step name="2a_plan">
@@ -1340,11 +1454,15 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## Sub-step 2b5: TEST GOALS
 
 Generate TEST-GOALS.md from CONTEXT.md decisions + API-CONTRACTS.md endpoints.
+Also generate CRUD-SURFACES.md from the same inputs plus PLAN*.md. TEST-GOALS
+defines what must be verified; CRUD-SURFACES defines the resource/platform
+contract that build/review/test/accept must follow.
 
 **Agent context (~300 lines):**
 - CONTEXT.md decisions (`P{phase}.D-01` through `P{phase}.D-XX`, or legacy `D-01..D-XX`) (~100 lines)
 - API-CONTRACTS.md endpoints + fields (~100 lines)
 - Output format template (~100 lines)
+- CRUD-SURFACES template: `commands/vg/_shared/templates/CRUD-SURFACES-template.md`
 
 **Agent prompt:**
 ```
@@ -1437,6 +1555,37 @@ RULES:
 
    Verifier: `verify-url-state-sync.py` runs at review phase 2.7 — BLOCKs (phase ≥ cutover) or WARNs (grandfather) if list-view goal missing this block.
 
+8. **CRUD-SURFACES.md (MANDATORY resource contract):**
+   After writing TEST-GOALS.md, write `${PHASE_DIR}/CRUD-SURFACES.md` using
+   `commands/vg/_shared/templates/CRUD-SURFACES-template.md`.
+
+   Required structure:
+   - Top-level JSON fenced block with `version: "1"` and `resources[]`.
+   - Each resource has `operations`, `base`, and `platforms`.
+   - `base` covers cross-platform roles, business_flow, security, abuse, and performance.
+   - `platforms.web` covers web list/form/delete behavior: heading, description,
+     filter/search/sort/pagination URL state, table columns/actions, loading/empty/error
+     states, form validation, duplicate-submit guard, and delete confirmation.
+   - `platforms.mobile` covers mobile-specific behavior: deep link state,
+     pull-to-refresh or load-more/infinite-scroll, 44px tap target, keyboard
+     avoidance, native picker behavior, offline/network states, and confirm sheet.
+   - `platforms.backend` covers API behavior: pagination max size, filter/sort
+     allowlist, stable default sort, invalid query errors, object authz, field
+     allowlist/mass-assignment guard, idempotency, rate-limit, and audit log.
+
+   If the phase truly has no CRUD/resource behavior, still write:
+   ```json
+   {
+     "version": "1",
+     "generated_from": ["CONTEXT.md", "API-CONTRACTS.md", "TEST-GOALS.md", "PLAN.md"],
+     "no_crud_reason": "Phase only changes infrastructure/docs/tooling; no user resource CRUD surface",
+     "resources": []
+   }
+   ```
+
+   Do not apply web table rules to mobile screens. Use `base + platform overlay`
+   so each phase profile gets only the checks that fit that platform.
+
 Output format:
 
 # Test Goals — Phase {PHASE}
@@ -1483,7 +1632,7 @@ Total: {N} goals ({critical} critical, {important} important, {nice} nice-to-hav
 Coverage: {covered}/{total} decisions → {percentage}%
 ```
 
-Write `${PHASE_DIR}/TEST-GOALS.md`.
+Write `${PHASE_DIR}/TEST-GOALS.md` and `${PHASE_DIR}/CRUD-SURFACES.md`.
 
 ### Rule 3b gate: Persistence check coverage (v1.14.4+)
 
@@ -1822,8 +1971,23 @@ else
       echo "    dạng ASCII + JSON. Mỗi node component ghi: tên, file path đích, class"
       echo "    layout mong muốn, state/props gì quan trọng. Cây phải khả thi (executor"
       echo "    build theo được). Nếu sửa view cũ: điều chỉnh UI-MAP-AS-IS.md.'"
+      echo ""
+      echo "   Phase 15 D-15 + D-12a — schema lock + ownership tags:"
+      echo "    - JSON tree MUST validate against schemas/ui-map.v1.json (5 fields per node:"
+      echo "        tag, classes, children_count_order, props_bound, text_content_static)."
+      echo "    - Each node MUST carry owner_wave_id (and owner_task_id when finer scope is"
+      echo "        useful). Children inherit ownership unless they override; verify-ui-structure"
+      echo "        can then filter to a single wave's subtree (D-12b)."
+      echo "    - extract-subtree-haiku.mjs reads these tags during /vg:build step 8c to inject"
+      echo "        the wave-scoped subtree into the executor prompt — missing tags = no"
+      echo "        deterministic injection, executor falls back to full UI-MAP (cost spike)."
     else
       echo "ℹ UI-MAP.md đã có — skip regeneration. Xoá file này để regenerate."
+      # Phase 15 D-15 schema check on existing UI-MAP.md (deterministic, no AI)
+      if [ -x "${REPO_ROOT}/.claude/scripts/validators/verify-uimap-schema.py" ]; then
+        ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/validators/verify-uimap-schema.py" \
+            --phase "${PHASE_NUMBER}" 2>&1 | tail -5
+      fi
     fi
 
     (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6b_ui_map" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6b_ui_map.done"
@@ -2470,6 +2634,149 @@ goals_miss_pct=$(( GOAL_TOTAL > 0 ? GOAL_MISS * 100 / GOAL_TOTAL : 0 ))
 endpoints_miss_pct=$(( EP_TOTAL > 0 ? EP_MISS * 100 / EP_TOTAL : 0 ))
 ```
 
+### 2d-3b: Deep blueprint completeness gates (Phase 17 polish — orphan validators wired)
+
+Two Python validators historically existed (commits per Phase 7.14.3
+retrospective: "AI lazy-read blueprint markdown rules → skip filter row +
+pagination + state-machine guards → bugs runtime") but were ORPHANED —
+not registered, not wired. Phase 17 polish wires them here so blueprint
+quality is machine-checked, not just bash grep coverage.
+
+These run AFTER the 2d-3 bash cross-checks pass surface-level (decisions/
+goals/endpoints exist) — they then check DEPTH (does each endpoint have
+auth_path + happy + 4xx + 401 goal coverage; does every list-view goal
+declare interactive_controls; do mutation goals declare 4-layer
+persistence check; etc.).
+
+```bash
+# Gate A: blueprint-completeness (C1 GOAL↔PLAN coverage; C2 ENDPOINT↔GOAL
+#         coverage incl auth_path/happy/4xx/401)
+BC_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-blueprint-completeness.py"
+if [ -x "$BC_VAL" ]; then
+  ${PYTHON_BIN} "$BC_VAL" --phase "${PHASE_NUMBER}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/blueprint-completeness.json" 2>&1 || true
+  BC_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/blueprint-completeness.json" 2>/dev/null)
+  case "$BC_V" in
+    PASS|WARN) echo "✓ blueprint-completeness: $BC_V" ;;
+    BLOCK)
+      echo "⛔ blueprint-completeness: BLOCK — see ${VG_TMP}/blueprint-completeness.json" >&2
+      echo "   GOAL↔PLAN or ENDPOINT↔GOAL coverage gaps detected." >&2
+      echo "   Override: --skip-blueprint-completeness (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-blueprint-completeness ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ blueprint-completeness: $BC_V" ;;
+  esac
+fi
+
+# Gate B: test-goals-platform-essentials (filter row + pagination + column
+#         visibility persistence + mutation 4-layer + state-machine guards)
+TG_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-test-goals-platform-essentials.py"
+if [ -x "$TG_VAL" ]; then
+  ${PYTHON_BIN} "$TG_VAL" --phase "${PHASE_NUMBER}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/test-goals-platform-essentials.json" 2>&1 || true
+  TG_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/test-goals-platform-essentials.json" 2>/dev/null)
+  case "$TG_V" in
+    PASS|WARN) echo "✓ test-goals-platform-essentials: $TG_V" ;;
+    BLOCK)
+      echo "⛔ test-goals-platform-essentials: BLOCK — see ${VG_TMP}/test-goals-platform-essentials.json" >&2
+      echo "   Phase 7.14.3 retrospective gaps detected (filter row / pagination /" >&2
+      echo "   column visibility persistence / mutation 4-layer / state-machine guard)." >&2
+      echo "   Override: --skip-platform-essentials (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-platform-essentials ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ test-goals-platform-essentials: $TG_V" ;;
+  esac
+fi
+
+# Gate C: CRUD surface contract (base + platform overlays)
+CRUD_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crud-surface-contract.py"
+if [ -x "$CRUD_VAL" ]; then
+  CRUD_TMP="${VG_TMP:-${PHASE_DIR}/.vg-tmp}"
+  mkdir -p "$CRUD_TMP"
+  ${PYTHON_BIN} "$CRUD_VAL" --phase "${PHASE_NUMBER}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      > "${CRUD_TMP}/crud-surface-contract.json" 2>&1 || true
+  CRUD_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${CRUD_TMP}/crud-surface-contract.json" 2>/dev/null)
+  case "$CRUD_V" in
+    PASS|WARN) echo "✓ crud-surface-contract: $CRUD_V" ;;
+    BLOCK)
+      echo "⛔ crud-surface-contract: BLOCK — see ${CRUD_TMP}/crud-surface-contract.json" >&2
+      echo "   CRUD/resource behavior requires CRUD-SURFACES.md with base + platform overlays." >&2
+      echo "   Override: --skip-crud-surface-contract (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-crud-surface-contract ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ crud-surface-contract: $CRUD_V" ;;
+  esac
+fi
+```
+
+### 2d-3d: Phase 16 task schema + cross-AI output gates (hot-fix v2.11.1)
+
+Phase 16 hot-fix wires two validators that were registered/documented but
+never invoked from this skill body (cross-AI consensus BLOCKer 5).
+
+**Gate C: verify-task-schema.py** — classify PLAN tasks as xml/heading/mixed.
+Mode resolves from `vg.config.task_schema` (default: `legacy` → WARN-only
+on heading format; `structured` → BLOCK heading; `both` → WARN both). XML
+tasks REQUIRE frontmatter `acceptance: [...]` array (BLOCK if missing).
+
+**Gate D: verify-crossai-output.py** — diff-based audit of cross-AI
+enrichment (only fires when `--crossai` flag in arguments — gates the
+output of /vg:blueprint --crossai or /vg:scope --crossai run that just
+happened). Catches: long prose inlined into task body without context-refs
+escape, and missing `cross_ai_enriched: true` flag in CONTEXT.md
+frontmatter (which would silently disable Phase 16 D-04 R4 cap bumps).
+
+```bash
+# Gate C: task-schema (always runs; mode-aware)
+TS_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-task-schema.py"
+if [ -x "$TS_VAL" ]; then
+  ${PYTHON_BIN} "$TS_VAL" --phase "${PHASE_NUMBER}" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-schema.json" 2>&1 || true
+  TS_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-schema.json" 2>/dev/null)
+  case "$TS_V" in
+    PASS|WARN) echo "✓ P16 task-schema: $TS_V" ;;
+    BLOCK)
+      echo "⛔ P16 task-schema: BLOCK — see ${VG_TMP}/task-schema.json" >&2
+      echo "   Mode=structured rejects heading-format tasks, OR XML task missing" >&2
+      echo "   frontmatter 'acceptance:' array. Migrate or add acceptance criteria." >&2
+      echo "   Override: --skip-task-schema (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-task-schema ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ P16 task-schema: $TS_V" ;;
+  esac
+fi
+
+# Gate D: crossai-output (gated on --crossai flag — only audits diff if a
+# cross-AI enrichment actually ran)
+if [[ "$ARGUMENTS" =~ --crossai ]]; then
+  CO_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crossai-output.py"
+  if [ -x "$CO_VAL" ]; then
+    ${PYTHON_BIN} "$CO_VAL" --phase "${PHASE_NUMBER}" \
+        > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/crossai-output.json" 2>&1 || true
+    CO_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+          "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/crossai-output.json" 2>/dev/null)
+    case "$CO_V" in
+      PASS|WARN) echo "✓ P16 crossai-output: $CO_V" ;;
+      BLOCK)
+        echo "⛔ P16 crossai-output: BLOCK — see ${VG_TMP}/crossai-output.json" >&2
+        echo "   Cross-AI inlined > 30 prose lines into a task body without adding" >&2
+        echo "   <context-refs> ID. Move long prose to CONTEXT decision block." >&2
+        echo "   Override: --skip-crossai-output (logs override-debt)" >&2
+        if [[ ! "$ARGUMENTS" =~ --skip-crossai-output ]]; then exit 1; fi
+        ;;
+      *) echo "ℹ P16 crossai-output: $CO_V" ;;
+    esac
+  fi
+fi
+```
+
 ### 2d-4: Gate decision
 
 ```
@@ -2874,7 +3181,7 @@ git add "${PHASE_DIR}/PLAN"*.md \
         "${PHASE_DIR}/TEST-GOALS.md" \
         "${PHASE_DIR}/crossai/"
 # Optional artifacts — only present when the relevant generator fired this phase.
-for opt in UI-SPEC.md UI-MAP.md UI-MAP-AS-IS.md FLOW-SPEC.md; do
+for opt in CRUD-SURFACES.md UI-SPEC.md UI-MAP.md UI-MAP-AS-IS.md FLOW-SPEC.md; do
   [ -f "${PHASE_DIR}/${opt}" ] && git add "${PHASE_DIR}/${opt}"
 done
 git commit -m "blueprint({phase}): plans + contracts + goals — CrossAI {verdict}"

@@ -243,15 +243,17 @@ def invoke_codex(brief_text: str, output_path: Path) -> int:
     """Codex CLI — same pattern as prior CrossAI rounds."""
     import shutil
     codex_bin = shutil.which("codex") or "codex"
+    codex_model = os.environ.get("VG_CODEX_MODEL_ADVERSARIAL")
     # Pass brief via stdin to avoid Windows CreateProcess argv limit (~32KB)
     cmd = [
         codex_bin, "exec",
         "--config", "approval_policy=never",
         "--config", "sandbox_mode=read-only",
         "--skip-git-repo-check",
-        "--model", "gpt-5.4",
         "-",
     ]
+    if codex_model:
+        cmd[-1:-1] = ["--model", codex_model]
     try:
         r = subprocess.run(
             cmd, input=brief_text, capture_output=True,

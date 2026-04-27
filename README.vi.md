@@ -13,7 +13,7 @@ VGFlow là một **pipeline AI config-driven** mạnh mẽ — thiết kế chuy
 
 Zero hardcode stack — mọi giá trị derive từ `vg.config.md`. Portable 100% qua mọi project, mọi ngôn ngữ, mọi deployment (VPS / Docker / Kubernetes / serverless).
 
-**Phiên bản:** 1.9.3 · **License:** MIT
+**Phiên bản:** 2.12.0 · **License:** MIT
 
 ---
 
@@ -135,7 +135,7 @@ git clone https://github.com/vietdev99/vgflow.git /tmp/vgflow
 bash /tmp/vgflow/install.sh /đường/dẫn/project
 ```
 
-Script installer sẽ copy commands, skills, scripts, templates, và sinh `.claude/vg.config.md` từ template. Codex + Gemini CLI skills deploy vào `.codex/skills/` và `~/.codex/skills/` (global) nếu detect được.
+Script installer sẽ copy commands, skills, scripts, templates, và sinh `.claude/vg.config.md` từ template. Codex parity được cài như full VG skills cộng agent templates trong `.codex/skills/`, `.codex/agents/`, và tuỳ chọn global `~/.codex/`; Gemini vẫn dùng cho CrossAI review support.
 
 ## Cập nhật cho install có sẵn
 

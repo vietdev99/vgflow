@@ -116,7 +116,7 @@ disputed_items: {N}
 # Test Spec: Phase {X} — {Name}
 
 ## Session Setup
-## Goal Coverage Matrix  
+## Goal Coverage Matrix
 ## PAGE: {name}
   ### Wide-View Checklist
   ### Components (by depth)

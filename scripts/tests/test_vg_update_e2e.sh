@@ -4,8 +4,9 @@
 # on conflict (intentional, for shell scripts that key off exit code), and
 # command substitution would trigger set -e exit.
 
-REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-VG_UPDATE="${REPO_ROOT}/.claude/scripts/vg_update.py"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+VG_UPDATE="${REPO_ROOT}/scripts/vg_update.py"
+[ -f "$VG_UPDATE" ] || VG_UPDATE="${REPO_ROOT}/.claude/scripts/vg_update.py"
 
 [ -f "$VG_UPDATE" ] || { echo "FAIL: vg_update.py missing at $VG_UPDATE"; exit 2; }
 

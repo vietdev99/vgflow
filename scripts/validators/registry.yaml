@@ -26,6 +26,15 @@ validators:
     added_in: v2.5.2
     description: SHA256 parity between Claude source + codex mirrors (local+global+vgflow-repo)
 
+  - id: codex-runtime-adapter
+    path: .claude/scripts/validators/verify-codex-runtime-adapter.py
+    severity: block
+    phases_active: [preflight, release]
+    domain: sync
+    runtime_target_ms: 2000
+    added_in: v2.11.1
+    description: Codex mirrors with Agent/Playwright/Maestro/CrossAI source behavior must carry adaptive runtime contract
+
   # ──── Phase J — Contract coverage ────
   - id: command-contract-coverage
     path: .claude/scripts/validators/verify-command-contract-coverage.py
@@ -701,6 +710,15 @@ validators:
     runtime_target_ms: 2000
     added_in: pre-existed; wired-in v2.11.0-phase-17-polish
     description: META-GATE — every G-XX in TEST-GOALS has ≥1 PLAN task tag (C1); every endpoint in API-CONTRACTS has ≥1 goal with auth_path + happy + 4xx + 401 (C2). BLOCKs blueprint commit when coverage gaps detected (Phase 7.14.3 root cause).
+  - id: crud-surface-contract
+    path: .claude/scripts/validators/verify-crud-surface-contract.py
+    severity: block
+    phases_active: [blueprint, build, review, test, accept]
+    domain: artifact
+    runtime_target_ms: 2000
+    added_in: v2.12.0
+    description: Platform-aware CRUD resource contract gate. CRUD-SURFACES.md must define list/form/delete/API behavior plus security, abuse, performance, and platform overlays before build/review/test/accept can rely on it.
+
   - id: test-goals-platform-essentials
     path: .claude/scripts/validators/verify-test-goals-platform-essentials.py
     severity: block

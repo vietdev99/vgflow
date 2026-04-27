@@ -16,6 +16,43 @@ from vg_update import (
 )
 
 _HAS_GIT = shutil.which("git") is not None
+REPO_ROOT = Path(__file__).resolve().parents[2]
+UPDATE_MD = REPO_ROOT / "commands" / "vg" / "update.md"
+
+
+def test_update_command_syncs_codex_without_vgflow_sync_sh():
+    text = UPDATE_MD.read_text(encoding="utf-8")
+    assert "Syncing Codex mirror from updated release assets" in text
+    assert 'CODEX_SOURCE="${NEW_ANCESTOR}"' in text
+    assert '${REPO_ROOT}/.codex/skills' in text
+    assert '$HOME/.codex/skills' in text
+    assert "verify-codex-mirror-equivalence.py" in text
+    assert 'rm -rf "${REPO_ROOT}/.codex/skills/${skill}"' in text
+    assert 'rm -rf "$HOME/.codex/skills/${skill}"' in text
+    assert "vgflow/sync.sh not present" not in text
+
+
+def test_update_command_keeps_codex_assets_out_of_claude_tree():
+    text = UPDATE_MD.read_text(encoding="utf-8")
+    assert "codex-skills/*|gemini-skills/*|templates/codex/*|templates/codex-agents/*)" in text
+    assert "commands/*|skills/*|scripts/*|schemas/*|templates/vg/*)" in text
+    assert "commands/*|skills/*|scripts/*|templates/*|codex-skills/*" not in text
+
+
+def test_update_command_merges_all_known_file_types():
+    text = UPDATE_MD.read_text(encoding="utf-8")
+    assert 'done < <(find "$EXTRACTED" -type f)' in text
+    assert '-name "*.md" -o -name "*.py"' not in text
+
+
+def test_update_command_repairs_enforcement_hooks():
+    text = UPDATE_MD.read_text(encoding="utf-8")
+    assert '<step name="7b_repair_hooks">' in text
+    assert "vg-hooks-install.py" in text
+    assert "vg-hooks-selftest.py" in text
+    assert "UserPromptSubmit" in text
+    assert "PostToolUse" in text
+    assert ".vg/events.db" in text
 
 
 # ---- Task C1: compare_versions -----------------------------------------------

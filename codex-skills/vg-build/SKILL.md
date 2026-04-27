@@ -6,85 +6,135 @@ metadata:
 ---
 
 <codex_skill_adapter>
-## Codex ⇆ Claude Code tool mapping
+## Codex runtime notes
 
-This skill was originally designed for Claude Code. When running in Codex CLI, translate tool calls using the table + patterns below.
+This skill body is generated from VGFlow's canonical source. Claude Code and
+Codex use the same workflow contracts, but their orchestration primitives differ.
 
-### Tool mapping table
+### Tool mapping
 
-| Claude tool | Codex equivalent | Notes |
+| Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
-| AskUserQuestion | request_user_input (free-form text, or number-prefix choices) | For multi-select, format as "1. Option / 2. Option" and parse reply |
-| Task (agent spawn) | `codex exec --model <model> "<prompt>"` subprocess | Foreground: `codex exec ... > /tmp/out.txt`. Parallel: launch N subprocesses + `wait`. See "Agent spawn" below |
-| TaskCreate/TaskUpdate/TodoWrite | N/A — use inline markdown headers + status narration | Codex does not have a persistent task tail UI. Write `## ━━━ Phase X: step ━━━` in stdout instead |
-| Monitor | Bash loop with `echo` + `sleep 3` polling | Codex streams stdout directly, no separate monitor channel |
-| ScheduleWakeup | N/A — Codex is one-shot; user must re-invoke | Skill must tolerate single-execution model; no sleeping |
-| WebFetch | `curl -sfL <url>` or `gh api <path>` | For GitHub URLs prefer `gh` for auth handling |
-| mcp__playwright{1-5}__* | See "Playwright MCP" below | Playwright MCP tools ARE available in Codex's main orchestrator |
-| mcp__graphify__* | `python -c "from graphify import ..."` inline | Graphify CLI/module works identically in Codex |
-| mcp__context7__*, mcp__exa__*, mcp__firecrawl__* | Skip or fall back to WebFetch | Only available via SDK; not bundled in Codex CLI |
-| Bash/Read/Write/Edit/Glob/Grep | Same — Codex supports these natively | No adapter needed |
+| AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it. |
+| Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
+| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
+| Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
-### Agent spawn (Task → codex exec)
+<codex_runtime_contract>
+### Provider/runtime parity contract
 
-Claude Code spawns isolated agents via `Task(subagent_type=..., prompt=...)`. Codex equivalent:
+This generated skill must preserve the source command's artifacts, gates,
+telemetry events, and step ordering on both Claude and Codex. Do not remove,
+skip, or weaken a source workflow step because a Claude-only primitive appears
+in the body below.
+
+#### Provider mapping
+
+| Source pattern | Claude path | Codex path |
+|---|---|---|
+| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `commands/vg/_shared/lib/codex-spawn.sh --tier planner` |
+| Build executor Agent | Use the source executor `Agent(...)` call | Use `codex-spawn.sh --tier executor --sandbox workspace-write` with explicit file ownership and expected artifact output |
+| Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured `codex exec`/Gemini/Claude commands from `.claude/vg.config.md`; fail if required CLI output is missing or unparsable |
+| Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
+| Reflection / learning | Use `vg-reflector` workflow | Use the Codex `vg-reflector` adapter or `codex-spawn.sh --tier scanner`; candidates still require the same user gate |
+
+### Codex hook parity
+
+Claude Code has a project-local hook substrate; Codex skills do not receive
+Claude `UserPromptSubmit`, `Stop`, or `PostToolUse` hooks automatically.
+Therefore Codex must execute the lifecycle explicitly through the same
+orchestrator that writes `.vg/events.db`:
+
+| Claude hook | What it does on Claude | Codex obligation |
+|---|---|---|
+| `UserPromptSubmit` -> `vg-entry-hook.py` | Pre-seeds `vg-orchestrator run-start` and `.vg/.session-context.json` before the skill loads | Treat the command body's explicit `vg-orchestrator run-start` as mandatory; if missing or failing, BLOCK before doing work |
+| `Stop` -> `vg-verify-claim.py` | Runs `vg-orchestrator run-complete` and blocks false done claims | Run the command body's terminal `vg-orchestrator run-complete` before claiming completion; if it returns non-zero, fix evidence and retry |
+| `PostToolUse` edit -> `vg-edit-warn.py` | Warns that command/skill edits require session reload | After editing VG workflow files on Codex, tell the user the current session may still use cached skill text |
+| `PostToolUse` Bash -> `vg-step-tracker.py` | Tracks marker commands and emits `hook.step_active` telemetry | Do not rely on the hook; call explicit `vg-orchestrator mark-step` lines in the skill and preserve marker/telemetry events |
+
+Codex hook parity is evidence-based: `.vg/events.db`, step markers,
+`must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
+run is not complete just because the model says it is complete.
+
+### Codex spawn precedence
+
+When the source workflow below says `Agent(...)` or "spawn", Codex MUST
+apply this table instead of treating the Claude syntax as executable:
+
+| Source spawn site | Codex action | Tier/model env | Sandbox | Required evidence |
+|---|---|---|---|---|
+| `/vg:build` wave executor, `model="${MODEL_EXECUTOR}"` | Write one prompt file per task, run `codex-spawn.sh --tier executor`; parallelize independent tasks with background processes and `wait`, serialize dependency groups | `VG_CODEX_MODEL_EXECUTOR`; leave unset to use Codex config default. Set this to the user's strongest coding model when they want Sonnet-class build quality. | `workspace-write` | child output, stdout/stderr logs, changed files, verification commands, task-fidelity prompt evidence |
+| `/vg:blueprint`, `/vg:scope`, planner/checker agents | Run `codex-spawn.sh --tier planner` or inline in the main orchestrator if the step needs interactive user answers | `VG_CODEX_MODEL_PLANNER` | `workspace-write` for artifact-writing planners, `read-only` for pure checks | requested artifacts or JSON verdict |
+| `/vg:review` navigator/scanner, `Agent(model="haiku")` | Do NOT blindly spawn `codex exec` for Playwright/Maestro work. Main Codex orchestrator owns MCP/browser/device actions. Use `codex-spawn.sh --tier scanner --sandbox read-only` only for non-MCP classification over captured snapshots/artifacts. | `VG_CODEX_MODEL_SCANNER`; set this to a cheap/fast model for review map/scanner work | `read-only` unless explicitly generating scan files from supplied evidence | same `scan-*.json`, `RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md`, and `review.haiku_scanner_spawned` telemetry event semantics |
+| `/vg:review` fix agents and `/vg:test` codegen agents | Use `codex-spawn.sh --tier executor` because they edit code/tests | `VG_CODEX_MODEL_EXECUTOR` or explicit `--model` if the command selected a configured fix model | `workspace-write` | changed files, tests run, unresolved risks |
+| Rationalization guard, reflector, gap hunters | Use `codex-spawn.sh --tier scanner` for read-only classification, or `--tier adversarial` for independent challenge/review | `VG_CODEX_MODEL_SCANNER` or `VG_CODEX_MODEL_ADVERSARIAL` | `read-only` by default | compact JSON/markdown verdict; fail closed on empty/unparseable output |
+
+If a source sentence says "MUST spawn Haiku" and the step needs MCP/browser
+tools, Codex interprets that as "MUST run the scanner protocol and emit the
+same artifacts/events"; it does not require a child process unless child MCP
+access was smoke-tested in the current environment.
+
+#### Non-negotiable guarantees
+
+- Never skip source workflow gates, validators, telemetry events, or must-write artifacts.
+- If Codex cannot emulate a Claude primitive safely, BLOCK instead of silently degrading.
+- UI/UX, security, and business-flow checks remain artifact/gate driven: follow the source command's DESIGN/UI-MAP/TEST-GOALS/security validator requirements exactly.
+- A slower Codex inline path is acceptable; a weaker path that omits evidence is not.
+</codex_runtime_contract>
+
+### Model tier mapping
+
+Model mapping is tier-based, not vendor-name-based.
+
+VGFlow keeps tier names in `.claude/vg.config.md`; Codex subprocesses use
+the user's Codex config model by default. Pin a tier only after smoke-testing
+that model in the target account, via `VG_CODEX_MODEL_PLANNER`,
+`VG_CODEX_MODEL_EXECUTOR`, `VG_CODEX_MODEL_SCANNER`, or
+`VG_CODEX_MODEL_ADVERSARIAL`:
+
+| VG tier | Claude-style role | Codex default | Fallback |
+|---|---|---|---|
+| planner | Opus-class planning/reasoning | Codex config default | Set `VG_CODEX_MODEL_PLANNER` only after smoke-testing |
+| executor | Sonnet-class coding/review | Codex config default | Set `VG_CODEX_MODEL_EXECUTOR` only after smoke-testing |
+| scanner | Haiku-class scan/classify | Codex config default | Set `VG_CODEX_MODEL_SCANNER` only after smoke-testing |
+| adversarial | independent reviewer | Codex config default | Set `VG_CODEX_MODEL_ADVERSARIAL` only after smoke-testing |
+
+### Spawn helper
+
+For subprocess-based children, use:
 
 ```bash
-# Single agent, foreground (wait for completion + read output)
-codex exec --model gpt-5 "<full isolated prompt>" > /tmp/agent-result.txt 2>&1
-RESULT=$(cat /tmp/agent-result.txt)
-
-# Multiple agents, parallel (Claude's pattern of 1 message with N Task calls)
-codex exec --model gpt-5 "<prompt 1>" > /tmp/agent-1.txt 2>&1 &
-PID1=$!
-codex exec --model gpt-5 "<prompt 2>" > /tmp/agent-2.txt 2>&1 &
-PID2=$!
-wait $PID1 $PID2
-R1=$(cat /tmp/agent-1.txt); R2=$(cat /tmp/agent-2.txt)
+bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
+  --tier executor \
+  --prompt-file "$PROMPT_FILE" \
+  --out "$OUT_FILE" \
+  --timeout 900 \
+  --sandbox workspace-write
 ```
 
-**Critical constraints when spawning:**
-- Subagent inherits working directory + env vars, but **no MCP server access** (Codex exec spawns fresh CLI instance without `--mcp` wired). Subagent CANNOT call `mcp__playwright*__`, `mcp__graphify__`, etc.
-- Model mapping for this project: `models.planner` opus → `gpt-5`, `models.executor` sonnet → `gpt-4o`, `models.scanner` haiku → `gpt-4o-mini` (or project-configured equivalent). Check `.claude/vg.config.md` `models` section for actual values and adapt.
-- Timeout: wrap in `timeout 600s codex exec ...` to prevent hung subagents.
-- Return schema: if skill expects structured JSON back, prompt subagent with "Return ONLY a single JSON object with keys: {...}". Parse with `jq` or `python -c "import json,sys; ..."`.
+The helper wraps `codex exec`, writes the final message to `--out`, captures
+stdout/stderr beside it, and fails loudly on timeout or empty output.
 
-### Playwright MCP — orchestrator-only rule
+### Known Codex caveats to design around
 
-Playwright MCP tools (`mcp__playwright1__browser_navigate`, `_snapshot`, `_click`, etc.) ARE available to the main Codex orchestrator (same MCP servers as Claude Code). **BUT subagents spawned via `codex exec` do NOT inherit MCP access** — they are fresh CLI instances.
+- Do not trust inline model selection for native subagents unless verified in the current Codex version; use TOML-pinned agents or `codex exec --model`.
+- Do not combine structured `--output-schema` with MCP-heavy runs until the target Codex version is smoke-tested. Prefer plain text + post-parse for MCP flows.
+- Recursive `codex exec` runs inherit sandbox constraints. Use the least sandbox that still allows the child to write expected artifacts.
 
-Implication for skills using Haiku scanner pattern (scanner spawns → uses Playwright):
-- **Claude model:** spawn haiku agent with prompt → agent calls `mcp__playwright__` tools directly
-- **Codex model:** TWO options:
-  1. **Orchestrator-driven:** main orchestrator calls Playwright tools + passes snapshots/results to subagent as text → subagent returns instructions/analysis only (no tool calls). Slower but preserves parallelism benefit.
-  2. **Single-agent:** orchestrator runs scanner workflow inline (no spawn). Simpler but no parallelism; suitable for 1-2 view scans but slow for 14+ views.
+### Support-skill MCP pattern
 
-Default: **single-agent inline** unless skill explicitly documents the orchestrator-driven pattern for that step.
-
-### Persistence probe (Layer 4) — execution model
-
-For review/test skills that verify mutation persistence:
-- Main orchestrator holds Playwright session (claimed via lock manager)
-- Pre-snapshot + submit + refresh + re-read all run in orchestrator Playwright calls (not spawned)
-- If skill delegates analysis to subagent, orchestrator must capture snapshots + pass text to subagent; subagent returns verdict JSON `{persisted: bool, pre: ..., post: ...}`
-
-### Lock manager (Playwright)
-
-Same as Claude:
-```bash
-SESSION_ID="codex-${skill}-${phase}-$$"
-PLAYWRIGHT_SERVER=$(bash "${HOME}/.claude/playwright-locks/playwright-lock.sh" claim "$SESSION_ID")
-trap "bash '${HOME}/.claude/playwright-locks/playwright-lock.sh' release \"$SESSION_ID\" 2>/dev/null" EXIT INT TERM
-```
-
-Pool name in Codex: `codex` (separate from Claude's `claude` pool). Lock manager handles both without collision.
+Pattern A: INLINE ORCHESTRATOR. For MCP-heavy support skills such as
+`vg-haiku-scanner`, Codex keeps Playwright/Maestro actions in the main
+orchestrator and only delegates read-only classification after snapshots are
+captured. This preserves MCP access and avoids false confidence from a child
+process that cannot see browser tools.
 
 ## Invocation
 
-This skill is invoked by mentioning `$vg-build`. Treat all user text after `$vg-build` as arguments.
-
-If argument-hint in source frontmatter is not empty and user provides no args, ask once via request_user_input before proceeding.
+Invoke this skill as `$vg-build`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
+
 
 
 <NARRATION_POLICY>
@@ -104,7 +154,7 @@ Why: those tools persist items in Claude Code's status tail across sessions. Wav
 1. **Blueprint required** — phase must have PLAN*.md AND API-CONTRACTS.md before build. Missing = BLOCK.
 2. **Contract injection + runtime verification** — every executor agent receives relevant contract sections as context. At run-complete, orchestrator dispatches `verify-contract-runtime` validator: for each `## METHOD /path` endpoint declared in API-CONTRACTS.md, static presence check across framework patterns (fastify / express / nest / hono); missing routes → BLOCK. Catches phantom endpoints at wave-commit boundary instead of surfacing at review/test 1+ hour later (OHOK A2, v2.4).
 3. **Orchestrator coordinates, not executes** — discover plans, group waves, spawn agents, collect results.
-4. **Context budget per agent ~2000 lines** — each executor gets 7 context blocks (task/contract/goals/design/sibling/wave/execution). Modern Claude 200k comfortable; starving context causes drift. See step 8c for per-block line budgets.
+4. **Context budget per agent ~2000 lines** — each executor gets scoped context blocks (task/API contract/CRUD surface/goals/design/sibling/wave/execution). Modern Claude 200k comfortable; starving context causes drift. See step 8c for per-block line budgets.
 5. **Wave execution** — sequential between waves, parallel within.
 6. **Flags are opt-in** — only active when literal token appears in $ARGUMENTS.
 7. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as its FINAL action, run:
@@ -1292,10 +1342,131 @@ CONTEXT_JSON=$(${PYTHON_BIN} .claude/scripts/pre-executor-check.py \
 TASK_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['task_context'])")
 CONTRACT_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['contract_context'])")
 GOALS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['goals_context'])")
+CRUD_SURFACE_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin).get('crud_surface_context','CRUD-SURFACES.md not found'))")
 TASK_SIBLINGS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['sibling_context'])")
 TASK_CALLERS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['downstream_callers'])")
 DESIGN_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['design_context'])")
 BUILD_CONFIG=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.dumps(json.load(sys.stdin)['build_config']))")
+
+# ─── Phase 15 D-12a + D-14 — UI-MAP wave-scoped subtree injection ────────
+# Pull the ~50-line subtree owned by the current wave (and optionally the
+# current task) out of the planner's UI-MAP.md and inject as a dedicated
+# context block. Deterministic JSON filter via extract-subtree-haiku.mjs —
+# despite the filename, no Haiku sub-agent is spawned (D-14 settled on the
+# pure-JS filter as faster + free + reproducible).
+#
+# Skip when:
+#   - UI-MAP.md missing (backend-only phase or planner skipped 2b6b)
+#   - extract-subtree-haiku.mjs missing (Phase 15 T4.2 not installed)
+UI_MAP_SUBTREE=""
+UI_MAP_SUBTREE_BLOCK=""
+if [ -f "${PHASE_DIR}/UI-MAP.md" ] \
+   && [ -f "${REPO_ROOT}/.claude/scripts/extract-subtree-haiku.mjs" ]; then
+  UIMAP_TMP="${VG_TMP:-${PHASE_DIR}/.vg-tmp}/uimap-subtree-w${N}-t${TASK_NUM}.md"
+  mkdir -p "$(dirname "$UIMAP_TMP")" 2>/dev/null
+  # owner-wave-id convention: planner emits "wave-${N}" (per blueprint 2b6b
+  # planner prompt). owner-task-id convention: "T-${TASK_NUM}".
+  if node "${REPO_ROOT}/.claude/scripts/extract-subtree-haiku.mjs" \
+        --uimap "${PHASE_DIR}/UI-MAP.md" \
+        --owner-wave-id "wave-${N}" \
+        --owner-task-id "T-${TASK_NUM}" \
+        --format markdown \
+        --output "$UIMAP_TMP" 2>/dev/null; then
+    SUBTREE_LINES=$(wc -l < "$UIMAP_TMP" 2>/dev/null || echo 0)
+    if [ "${SUBTREE_LINES:-0}" -gt 1 ]; then
+      UI_MAP_SUBTREE=$(cat "$UIMAP_TMP")
+      # H2 marker required by verify-uimap-injection.py (D-12a). Don't change
+      # `## UI-MAP-SUBTREE-FOR-THIS-WAVE` — validator greps that exact string.
+      UI_MAP_SUBTREE_BLOCK="## UI-MAP-SUBTREE-FOR-THIS-WAVE
+
+Wave-scoped subtree from planner UI-MAP.md (Phase 15 D-12a + D-14).
+Owner filter: wave-${N} / T-${TASK_NUM}. ~${SUBTREE_LINES} lines.
+Build the components listed below — names, classes, props, text are the
+planned target. Reviewer post-wave drift gate (D-12b) compares your code
+against this subtree.
+
+${UI_MAP_SUBTREE}
+"
+      echo "✓ UI-MAP subtree (${SUBTREE_LINES} lines) extracted for wave-${N}/T-${TASK_NUM}"
+    else
+      # Empty subtree — task likely doesn't own UI nodes (e.g., backend task
+      # within a mixed-profile wave). Inject explicit NONE marker so executor
+      # doesn't accidentally invent components.
+      UI_MAP_SUBTREE_BLOCK="## UI-MAP-SUBTREE-FOR-THIS-WAVE
+
+NONE — task has no owned UI subtree (backend / non-FE task in mixed wave).
+"
+    fi
+  fi
+fi
+
+# ─── Phase 16 hot-fix (v2.11.1) — split persist (BLOCKers 2+3) ────────────
+# Cross-AI consensus rework: previous code wrapped BOTH the prompt body
+# persist AND the meta sidecar persist inside the UI/design conditional.
+# Two failure modes:
+#   (B2) UI tasks: ${TASK_NUM}.md contained UI-MAP wrapper, NOT task body —
+#        verify-task-fidelity.py compared against that wrapper's line count
+#        → false BLOCK on every UI task (test fixture bypassed by writing
+#        body directly to disk).
+#   (B3) Backend tasks (no UI subtree, no design context): step 8c
+#        short-circuited entirely → no meta.json → audit silent PASS →
+#        orchestrator could paraphrase backend task bodies freely.
+#
+# Now: 3 file shapes, 2 always-on + 1 conditional:
+#   ${TASK_NUM}.body.md  — raw task body (what the executor's <task_context>
+#                          should mirror). Always persisted. Read by
+#                          verify-task-fidelity.py for hash compare.
+#   ${TASK_NUM}.meta.json — D-01 sidecar with source_block_sha256. Always
+#                          persisted. Read by verify-task-fidelity.py.
+#   ${TASK_NUM}.uimap.md  — D-12a UI-MAP+DESIGN-REF wrapper. Only persisted
+#                          for UI tasks. Read by verify-uimap-injection.py.
+
+PROMPT_PERSIST_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
+mkdir -p "$PROMPT_PERSIST_DIR" 2>/dev/null
+PROMPT_BODY_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.body.md"
+PROMPT_META_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.meta.json"
+PROMPT_FULL_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.prompt.md"
+
+# (1) Body persist — always. Source of truth is $TASK_CONTEXT (the
+# canonical PLAN task body from CONTEXT_JSON, written by
+# pre-executor-check.py extract_task_section_v2 in C1 hot-fix).
+printf '%s\n' "$TASK_CONTEXT" > "$PROMPT_BODY_PERSIST"
+echo "✓ Task body persisted → $PROMPT_BODY_PERSIST"
+
+# (2) Meta sidecar — always. wave field overridden from "unknown"
+# (pre-executor-check.py default) to actual wave-${N}.
+echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "
+import json, sys
+ctx = json.load(sys.stdin)
+meta = ctx.get('task_meta')
+if not meta:
+    sys.exit(0)  # hasher missing — sidecar skipped, T-4.3 audit will WARN
+meta['wave'] = 'wave-${N}'
+print(json.dumps(meta, indent=2))
+" > "$PROMPT_META_PERSIST" 2>/dev/null || true
+if [ -s "$PROMPT_META_PERSIST" ]; then
+  echo "✓ P16 D-01 task meta persisted → $PROMPT_META_PERSIST"
+fi
+
+# (3) UI-MAP wrapper persist — UI tasks only (D-12a injection audit input).
+if [ -n "$UI_MAP_SUBTREE_BLOCK" ] || [ -n "$DESIGN_CONTEXT" ]; then
+  PROMPT_UIMAP_PERSIST="${PROMPT_PERSIST_DIR}/${TASK_NUM}.uimap.md"
+  {
+    echo "<!-- Wave ${N} / Task ${TASK_NUM} UI-MAP+design-ref wrapper (Phase 15 D-12a). -->"
+    echo "<!-- Read by verify-uimap-injection.py — separate from .body.md (P16 hotfix). -->"
+    echo ""
+    echo "${UI_MAP_SUBTREE_BLOCK:-## UI-MAP-SUBTREE-FOR-THIS-WAVE\n\nNONE}"
+    echo ""
+    echo "## DESIGN-REF"
+    echo ""
+    if [ -n "$DESIGN_CONTEXT" ]; then
+      echo "$DESIGN_CONTEXT"
+    else
+      echo "NONE — task has no <design-ref> attribute (non-UI task)."
+    fi
+  } > "$PROMPT_UIMAP_PERSIST"
+  echo "✓ UI-MAP+design-ref wrapper persisted → $PROMPT_UIMAP_PERSIST"
+fi
 
 # Script auto-builds siblings + callers if missing (runs find-siblings.py + build-caller-graph.py)
 # Graphify used: ${graphify.enabled} from config → sibling/caller enrichment
@@ -1307,16 +1478,22 @@ import json, sys
 
 ctx = json.loads('''$CONTEXT_JSON''')
 
-# Per-block soft limits (from rule R4)
-BUDGETS = {
+# Phase 16 D-04 — read R4 caps from CONTEXT_JSON.applied_caps (set by
+# pre-executor-check.py based on CONTEXT.md frontmatter cross_ai_enriched
+# flag). Falls back to baseline 300/500/200/400/400/200/80 + total 2500
+# when applied_caps absent (older pre-executor-check.py without D-04).
+BUDGETS = ctx.get('applied_caps') or {
     'task_context': 300,
     'contract_context': 500,
     'goals_context': 200,
+    'crud_surface_context': 300,
     'sibling_context': 400,
     'downstream_callers': 400,
     'design_context': 200,
+    'ui_map_subtree': 80,
 }
-HARD_TOTAL_MAX = ${CONFIG_BUILD_PROMPT_MAX_LINES:-2500}
+HARD_TOTAL_MAX = ctx.get('hard_total_max') or ${CONFIG_BUILD_PROMPT_MAX_LINES:-2500}
+BUDGET_MODE = ctx.get('budget_mode', 'default')
 
 per_block_lines = {}
 total = 0
@@ -1344,7 +1521,7 @@ if total > HARD_TOTAL_MAX:
     print(f"   Reduce contract sections (chỉ endpoint task touches) hoặc tăng config.build.prompt_max_lines")
     sys.exit(1)
 else:
-    print(f"✓ R4 budget: {total} lines (hard max {HARD_TOTAL_MAX}), per-block ok")
+    print(f"✓ R4 budget [{BUDGET_MODE}]: {total} lines (hard max {HARD_TOTAL_MAX}), per-block ok")
 PY
 R4_RC=$?
 if [ "$R4_RC" != "0" ]; then
@@ -1440,6 +1617,76 @@ PY
 elif [ "$CTX_INJECT_MODE" = "full" ] && [ -f "${PHASE_DIR}/CONTEXT.md" ]; then
   DECISION_CONTEXT="$(cat "${PHASE_DIR}/CONTEXT.md")"
 fi
+
+# Materialize critical prompt blocks literally. Do not rely on @file expansion
+# inside child Agent/Task prompts; that is exactly where lazy-read drift starts.
+VG_EXECUTOR_RULES=""
+[ -f ".claude/commands/vg/_shared/vg-executor-rules.md" ] && \
+  VG_EXECUTOR_RULES="$(cat .claude/commands/vg/_shared/vg-executor-rules.md)"
+
+UI_SPEC_CONTEXT="NONE - UI-SPEC.md unavailable or not relevant for this task."
+[ -f "${PHASE_DIR}/UI-SPEC.md" ] && \
+  UI_SPEC_CONTEXT="$(sed -n '1,260p' "${PHASE_DIR}/UI-SPEC.md")"
+
+WAVE_CONTEXT="NONE - wave context unavailable."
+[ -f "${PHASE_DIR}/wave-${N}-context.md" ] && \
+  WAVE_CONTEXT="$(cat "${PHASE_DIR}/wave-${N}-context.md")"
+
+# Persist the full executor prompt evidence before spawn. D-06 task-fidelity
+# validator verifies that this full prompt contains TASK_CONTEXT verbatim, not
+# just a pointer to a task file or a paraphrased summary.
+{
+  echo "<vg_executor_rules>"
+  printf '%s\n' "$VG_EXECUTOR_RULES"
+  echo "</vg_executor_rules>"
+  echo ""
+  echo "<bootstrap_rules>"
+  printf '%s\n' "$BOOTSTRAP_RULES_BLOCK"
+  echo "</bootstrap_rules>"
+  echo ""
+  echo "<decision_context>"
+  printf '%s\n' "$DECISION_CONTEXT"
+  echo "</decision_context>"
+  echo ""
+  echo "<task_context>"
+  printf '%s\n' "$TASK_CONTEXT"
+  echo "</task_context>"
+  echo ""
+  echo "<contract_context>"
+  printf '%s\n' "$CONTRACT_CONTEXT"
+  echo "</contract_context>"
+  echo ""
+  echo "<crud_surface_context>"
+  printf '%s\n' "$CRUD_SURFACE_CONTEXT"
+  echo "</crud_surface_context>"
+  echo ""
+  echo "<ui_spec_context>"
+  printf '%s\n' "$UI_SPEC_CONTEXT"
+  echo "</ui_spec_context>"
+  echo ""
+  echo "<goals_context>"
+  printf '%s\n' "$GOALS_CONTEXT"
+  echo "</goals_context>"
+  echo ""
+  echo "<design_context>"
+  printf '%s\n' "$DESIGN_CONTEXT"
+  echo "</design_context>"
+  echo ""
+  printf '%s\n' "$UI_MAP_SUBTREE_BLOCK"
+  echo ""
+  echo "<sibling_context>"
+  printf '%s\n' "$TASK_SIBLINGS"
+  echo "</sibling_context>"
+  echo ""
+  echo "<downstream_callers>"
+  printf '%s\n' "$TASK_CALLERS"
+  echo "</downstream_callers>"
+  echo ""
+  echo "<wave_context>"
+  printf '%s\n' "$WAVE_CONTEXT"
+  echo "</wave_context>"
+} > "$PROMPT_FULL_PERSIST"
+echo "✓ Full executor prompt persisted -> $PROMPT_FULL_PERSIST"
 ```
 
 **Spawn executor agent (one per plan task):**
@@ -1447,7 +1694,7 @@ fi
 Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
   prompt: |
     <vg_executor_rules>
-    @.claude/commands/vg/_shared/vg-executor-rules.md
+    ${VG_EXECUTOR_RULES}
     </vg_executor_rules>
 
     <bootstrap_rules>
@@ -1471,7 +1718,7 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
     </decision_context>
 
     <task_context>
-    @${TASKS_DIR}/task-${TASK_NUM}.md  (~100-300 lines)
+    ${TASK_CONTEXT}
     </task_context>
 
     <contract_context>
@@ -1483,26 +1730,27 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
     Import types from: ${config.contract_format.generated_types_path}
     </contract_context>
 
+    <crud_surface_context>
+    Resource-level CRUD contract slice from CRUD-SURFACES.md. This is the
+    source of truth for platform-specific list/form/delete/API behavior.
+    Follow the overlay matching this task's platform; do not apply web table
+    rules to mobile screens or backend-only endpoints.
+    ${CRUD_SURFACE_CONTEXT}
+    </crud_surface_context>
+
     <ui_spec_context>
-    # Only if UI-SPEC.md exists (FE tasks) — layout/spacing/component tokens
-    @${PHASE_DIR}/UI-SPEC.md  (relevant sections, ~200 lines)
+    ${UI_SPEC_CONTEXT}
     </ui_spec_context>
 
     <goals_context>
-    Task implements: ${TASK_GOALS}  (from task's <goals-covered>)
-    Success criteria + mutation evidence:
-    @${PHASE_DIR}/TEST-GOALS.md (goals listed above only, ~200 lines)
+    ${GOALS_CONTEXT}
     </goals_context>
 
     <design_context>
-    # ONLY if task has <design-ref> attribute. Paths resolved from step 4b.
-    Visual reference (AI VISION — nhìn pixel trực tiếp):
-    @${DESIGN_OUTPUT_DIR}/screenshots/${DESIGN_SLUG}.default.png
-    @${DESIGN_OUTPUT_DIR}/screenshots/${DESIGN_SLUG}.${STATE}.png  (per state relevant)
-    Structural DOM: @${DESIGN_OUTPUT_DIR}/refs/${DESIGN_SLUG}.structural.html
-    Interactions: @${DESIGN_OUTPUT_DIR}/refs/${DESIGN_SLUG}.interactions.md
-    Rule: layout/components/spacing MUST match screenshot. DOM is structural truth.
+    ${DESIGN_CONTEXT}
     </design_context>
+
+    ${UI_MAP_SUBTREE_BLOCK}
 
     <sibling_context>
     # Resolved by step 4c — top-2 peer modules (signatures only, not full code)
@@ -1528,7 +1776,7 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
 
     <wave_context>
     Other tasks running in THIS WAVE — field names + endpoints MUST align:
-    @${PHASE_DIR}/wave-${N}-context.md (~300 lines)
+    ${WAVE_CONTEXT}
     </wave_context>
 
     <!-- execution_context: VG-native (self-contained in vg-executor-rules.md above) -->
@@ -1856,6 +2104,73 @@ if [ -f "$INTEGRITY_SCRIPT" ]; then
   esac
 else
   echo "⚠ verify-wave-integrity.py missing — skipping integrity check (older install)"
+fi
+```
+
+**Phase 15 D-12a — UI-MAP + design-ref injection audit (NEW, 2026-04-27):**
+
+Audits the executor prompts persisted in step 8c to confirm BOTH
+`## UI-MAP-SUBTREE-FOR-THIS-WAVE` and `## DESIGN-REF` H2 sections were
+injected for every UI-touching task. Catches regressions like Wave 7
+B2 where the inject path silently dropped the markers.
+
+```bash
+INJ_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-uimap-injection.py"
+WAVE_PROMPT_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
+if [ -x "$INJ_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
+  ${PYTHON_BIN} "$INJ_VAL" --phase "${PHASE_NUMBER}" \
+      --prompts-dir "$WAVE_PROMPT_DIR" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/uimap-injection-w${N}.json" 2>&1 || true
+  IV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/uimap-injection-w${N}.json" 2>/dev/null)
+  case "$IV" in
+    PASS|WARN) echo "✓ D-12a UI-MAP+design-ref injection audit: $IV" ;;
+    BLOCK)
+      echo "⛔ D-12a injection audit: BLOCK — see ${VG_TMP}/uimap-injection-w${N}.json" >&2
+      echo "   Step 8c persist did not write both ## UI-MAP-SUBTREE-FOR-THIS-WAVE +" >&2
+      echo "   ## DESIGN-REF headers into ${WAVE_PROMPT_DIR}/<task>.md." >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-uimap-injection-audit ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ D-12a injection audit: $IV" ;;
+  esac
+fi
+```
+
+**Phase 16 D-06 — Task fidelity audit (orchestrator paraphrase detection):**
+
+Post-spawn 3-way hash audit. For each (wave × task) pair under
+`.build/wave-${N}/executor-prompts/`, compares:
+  1. PLAN.md task block re-extracted now (current truth)
+  2. .meta.json sidecar (snapshot at spawn time, P16 D-01)
+  3. .md prompt body (what executor actually received)
+
+Detects 2 failure modes:
+- PLAN drift since spawn (rare; mid-build edit → WARN)
+- Body shortfall (orchestrator paraphrase / truncate):
+    ≤10% PASS, 10-30% WARN, >30% BLOCK
+
+Closes the PARAPHRASE leg of the "AI lazy-read blueprint" failure mode
+(P15 W9 closed SPAWN AUDIT, v2.11.0 closed MISSING + TRUNCATION).
+
+```bash
+TF_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-task-fidelity.py"
+WAVE_PROMPT_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
+if [ -x "$TF_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
+  ${PYTHON_BIN} "$TF_VAL" --phase "${PHASE_NUMBER}" \
+      --prompts-dir "$WAVE_PROMPT_DIR" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-fidelity-w${N}.json" 2>&1 || true
+  TFV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-fidelity-w${N}.json" 2>/dev/null)
+  case "$TFV" in
+    PASS|WARN) echo "✓ D-06 task fidelity audit: $TFV" ;;
+    BLOCK)
+      echo "⛔ D-06 task fidelity audit: BLOCK — orchestrator likely paraphrased task body" >&2
+      echo "   See ${VG_TMP}/task-fidelity-w${N}.json for per-task shortfall breakdown" >&2
+      echo "   Override: --skip-task-fidelity-audit (logs override-debt as kind=task-fidelity-audit-skipped)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-task-fidelity-audit ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ D-06 task fidelity audit: $TFV" ;;
+  esac
 fi
 ```
 

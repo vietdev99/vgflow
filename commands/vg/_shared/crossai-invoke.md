@@ -75,7 +75,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # Read CLIs from config
 # config.crossai_clis = [
-#   { name: "codex", command: "codex exec -m gpt-5.4 \"{prompt}\"", label: "Codex GPT 5.4" },
+#   { name: "codex", command: "codex exec \"{prompt}\"", label: "Codex configured model" },
 #   { name: "gemini", command: "cat \"{context}\" | gemini -m gemini-2.5-pro -p \"{prompt}\" --yolo", label: "Gemini Pro High 3.1" },
 #   { name: "claude", command: "cat \"{context}\" | claude --model sonnet -p \"{prompt}\"", label: "Claude Sonnet 4.6" }
 # ]

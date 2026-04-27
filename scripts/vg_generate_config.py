@@ -126,12 +126,12 @@ def render_crossai_clis(team_size: str) -> str:
         ]
     elif team_size in ("2-5",):
         clis = [
-            ("Codex", 'cat {context} | codex exec -m gpt-5.4 "{prompt}"', "Codex GPT 5.4"),
+            ("Codex", 'cat {context} | codex exec "{prompt}"', "Codex configured model"),
             ("Claude", 'cat {context} | claude --model sonnet -p "{prompt}"', "Claude Sonnet 4.6"),
         ]
     else:
         clis = [
-            ("Codex", 'cat {context} | codex exec -m gpt-5.4 "{prompt}"', "Codex GPT 5.4"),
+            ("Codex", 'cat {context} | codex exec "{prompt}"', "Codex configured model"),
             ("Gemini", 'cat {context} | gemini -m gemini-3.1-pro-preview -p "{prompt}" --yolo', "Gemini Pro High 3.1"),
             ("Claude", 'cat {context} | claude --model sonnet -p "{prompt}"', "Claude Sonnet 4.6"),
         ]

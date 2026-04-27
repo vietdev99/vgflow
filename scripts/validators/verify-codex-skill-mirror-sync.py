@@ -1,45 +1,17 @@
 #!/usr/bin/env python3
-"""
-Codex skill mirror sync validator (Phase 0 of v2.5.2 hardening).
+"""Validate Codex skill mirror sync across source, local, and global copies.
 
-Problem closed:
-  When .claude/commands/vg/ source is patched with anti-forge contracts
-  but .codex/skills/ + ~/.codex/skills/ mirrors remain stale, Codex agents
-  run the old trust model and can forge evidence against the pre-patch
-  contract. v2.5.1's trust parity breach is exactly this.
+This validator is layout-aware:
 
-This validator establishes the forensic baseline: SHA256 hash parity
-across 3 locations (RTB source → local .codex mirror → global ~/.codex
-mirror), plus optional vgflow-repo upstream verification.
+* Source repository mode:
+  commands/vg + skills/* -> codex-skills -> .codex/skills -> ~/.codex/skills
 
-Locations compared:
-  - Chain A (Claude path):
-      $REPO_ROOT/.claude/commands/vg/*.md
-      $VGFLOW_REPO/commands/vg/*.md            (optional, if $VGFLOW_REPO set)
-  - Chain B (Codex path):
-      $VGFLOW_REPO/codex-skills/vg-*/SKILL.md  (authoritative mirror)
-      $REPO_ROOT/.codex/skills/vg-*/SKILL.md
-      $HOME/.codex/skills/vg-*/SKILL.md
+* Installed project mode:
+  .claude/commands/vg -> $VGFLOW_REPO/codex-skills -> .codex/skills
+  -> ~/.codex/skills
 
-Chain B is transformed from Chain A (strips <NARRATION_POLICY>, prepends
-codex adapter prelude). Transform itself is NOT verified — only that all
-3 Chain-B locations agree amongst themselves.
-
-Exit codes:
-  0 = all in sync
-  1 = drift detected
-  2 = path/config error
-
-Usage:
-  verify-codex-skill-mirror-sync.py                    # human-readable report
-  verify-codex-skill-mirror-sync.py --quiet            # suppress output if synced
-  verify-codex-skill-mirror-sync.py --fast             # mtime-only check (faster)
-  verify-codex-skill-mirror-sync.py --json             # machine-readable
-  verify-codex-skill-mirror-sync.py --skill blueprint  # check one skill only
-
-Environment:
-  REPO_ROOT     — project root (default: current dir via `git rev-parse`)
-  VGFLOW_REPO   — path to vgflow-repo clone (optional sibling check)
+It checks mirror byte parity after newline normalization. Functional
+source-to-Codex body equivalence is handled by verify-codex-mirror-equivalence.py.
 """
 from __future__ import annotations
 
@@ -52,22 +24,18 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# v2.5.1 pinned set — the 7 contract-enforced commands.
-# Additional skills (bootstrap, doctor, etc.) also mirrored but not pinned.
-# If new skill added to .claude/commands/vg/, auto-discover via glob.
 CONTRACTED_SKILLS = (
-    "accept", "blueprint", "build", "review", "scope", "specs", "test",
+    "accept",
+    "blueprint",
+    "build",
+    "review",
+    "scope",
+    "specs",
+    "test",
 )
 
 
 def _sha256(path: Path, normalize_newlines: bool = True) -> Optional[str]:
-    """Return hex SHA256 of file content, or None if missing.
-
-    Normalize line endings (CRLF/CR → LF) before hashing — on Windows,
-    git checkout may autocrlf convert, making byte-identical source
-    files hash differently across RTB (LF) and vgflow-repo (CRLF).
-    Functional content is the same; line endings are cosmetic.
-    """
     try:
         data = path.read_bytes()
         if normalize_newlines:
@@ -77,249 +45,409 @@ def _sha256(path: Path, normalize_newlines: bool = True) -> Optional[str]:
         return None
 
 
+def _file_manifest(root: Path) -> Optional[dict[str, str]]:
+    if not root.is_dir():
+        return None
+    manifest: dict[str, str] = {}
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(root).as_posix()
+        digest = _sha256(path)
+        if digest is None:
+            return None
+        manifest[rel] = digest
+    return manifest
+
+
 def _resolve_repo_root() -> Path:
-    """Get project root via git, fallback to cwd."""
-    env = os.environ.get("REPO_ROOT")
+    env = os.environ.get("REPO_ROOT") or os.environ.get("VG_REPO_ROOT")
     if env:
         return Path(env).resolve()
     try:
         out = subprocess.check_output(
             ["git", "rev-parse", "--show-toplevel"],
-            stderr=subprocess.DEVNULL, text=True,
+            stderr=subprocess.DEVNULL,
+            text=True,
         )
         return Path(out.strip()).resolve()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return Path.cwd().resolve()
 
 
+def _is_source_repo(root: Path) -> bool:
+    return (root / "commands" / "vg").is_dir() and (root / "codex-skills").is_dir()
+
+
 def _resolve_vgflow_repo(repo_root: Path) -> Optional[Path]:
-    """Locate vgflow-repo via VGFLOW_REPO env OR sibling-dir heuristic."""
     env = os.environ.get("VGFLOW_REPO")
     if env:
         p = Path(env).resolve()
-        return p if (p / "sync.sh").exists() else None
+        return p if (p / "codex-skills").is_dir() else None
     for candidate in (
         repo_root.parent / "vgflow-repo",
         Path.home() / "Workspace" / "Messi" / "Code" / "vgflow-repo",
     ):
-        if (candidate / "sync.sh").exists():
+        if (candidate / "codex-skills").is_dir():
             return candidate.resolve()
     return None
 
 
-def _resolve_codex_global() -> Path:
-    """~/.codex/skills/ — Codex CLI reads here for global skills."""
+def _global_codex_skills() -> Path:
     return Path.home() / ".codex" / "skills"
 
 
-def _discover_skill_names(claude_commands: Path) -> list[str]:
-    """List all .md files in .claude/commands/vg/ (strip .md suffix)."""
-    if not claude_commands.is_dir():
-        return list(CONTRACTED_SKILLS)
-    names = []
-    for f in sorted(claude_commands.glob("*.md")):
-        # Skip internal staging files
-        name = f.stem
-        if name.startswith("_"):
-            continue
-        names.append(name)
-    # Union: ensure all contract-pinned skills present even if one got deleted
-    seen = set(names)
+def _source_commands_dir(repo_root: Path, source_repo: bool) -> Path:
+    if source_repo:
+        return repo_root / "commands" / "vg"
+    return repo_root / ".claude" / "commands" / "vg"
+
+
+def _source_support_dir(repo_root: Path, source_repo: bool) -> Path:
+    if source_repo:
+        return repo_root / "skills"
+    return repo_root / ".claude" / "skills"
+
+
+def _authoritative_codex_dir(
+    repo_root: Path,
+    source_repo: bool,
+    vgflow_repo: Optional[Path],
+) -> Path:
+    if source_repo:
+        return repo_root / "codex-skills"
+    if vgflow_repo:
+        return vgflow_repo / "codex-skills"
+    return repo_root / ".codex" / "skills"
+
+
+def _discover_skill_names(
+    source_commands: Path,
+    authoritative_codex: Path,
+) -> list[str]:
+    names: list[str] = []
+    if source_commands.is_dir():
+        for f in sorted(source_commands.glob("*.md")):
+            name = f.stem
+            if name.startswith("_") or name.endswith("-insert"):
+                continue
+            names.append(name)
+
+    if authoritative_codex.is_dir():
+        for skill_dir in sorted(authoritative_codex.glob("vg-*")):
+            if (skill_dir / "SKILL.md").is_file():
+                name = skill_dir.name.removeprefix("vg-")
+                if (source_commands / f"{name}.md").is_file() or name in CONTRACTED_SKILLS:
+                    names.append(name)
+
     for req in CONTRACTED_SKILLS:
-        if req not in seen:
-            names.append(req)
-    return names
+        names.append(req)
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            deduped.append(name)
+    return deduped
 
 
-def _check_chain_a_claude(
+def _discover_support_skill_names(support_dir: Path) -> list[str]:
+    if not support_dir.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in support_dir.iterdir()
+        if path.is_dir() and (path / "SKILL.md").is_file()
+    )
+
+
+def _check_chain_a(
     skill: str,
     repo_root: Path,
+    source_repo: bool,
     vgflow_repo: Optional[Path],
 ) -> dict:
-    """Chain A = Claude source path. source must match vgflow-repo mirror."""
-    rtb_path = repo_root / ".claude" / "commands" / "vg" / f"{skill}.md"
-    rtb_hash = _sha256(rtb_path)
+    source_commands = _source_commands_dir(repo_root, source_repo)
+    local_path = source_commands / f"{skill}.md"
+    local_hash = _sha256(local_path)
 
     result = {
         "chain": "A",
         "skill": skill,
-        "rtb_source": {
-            "path": str(rtb_path),
-            "sha256": rtb_hash,
-            "exists": rtb_hash is not None,
-        },
-    }
-
-    if vgflow_repo:
-        vgflow_path = vgflow_repo / "commands" / "vg" / f"{skill}.md"
-        vgflow_hash = _sha256(vgflow_path)
-        result["vgflow_mirror"] = {
-            "path": str(vgflow_path),
-            "sha256": vgflow_hash,
-            "exists": vgflow_hash is not None,
-        }
-        if rtb_hash and vgflow_hash:
-            result["in_sync"] = rtb_hash == vgflow_hash
-        else:
-            result["in_sync"] = False
-    else:
-        result["vgflow_mirror"] = None
-        result["in_sync"] = True  # nothing to compare
-    return result
-
-
-def _check_chain_b_codex(
-    skill: str,
-    repo_root: Path,
-    vgflow_repo: Optional[Path],
-) -> dict:
-    """Chain B = Codex transformed path. All 3 mirrors must agree."""
-    local_path = repo_root / ".codex" / "skills" / f"vg-{skill}" / "SKILL.md"
-    global_path = _resolve_codex_global() / f"vg-{skill}" / "SKILL.md"
-
-    local_hash = _sha256(local_path)
-    global_hash = _sha256(global_path)
-
-    result = {
-        "chain": "B",
-        "skill": skill,
-        "local_codex": {
+        "local_source": {
             "path": str(local_path),
             "sha256": local_hash,
             "exists": local_hash is not None,
         },
-        "global_codex": {
-            "path": str(global_path),
-            "sha256": global_hash,
-            "exists": global_hash is not None,
-        },
+        "upstream_source": None,
+        "in_sync": local_hash is not None,
     }
 
-    if vgflow_repo:
-        vgflow_codex_path = (
-            vgflow_repo / "codex-skills" / f"vg-{skill}" / "SKILL.md"
-        )
-        vgflow_codex_hash = _sha256(vgflow_codex_path)
-        result["vgflow_codex"] = {
-            "path": str(vgflow_codex_path),
-            "sha256": vgflow_codex_hash,
-            "exists": vgflow_codex_hash is not None,
+    if not source_repo and vgflow_repo:
+        upstream_path = vgflow_repo / "commands" / "vg" / f"{skill}.md"
+        upstream_hash = _sha256(upstream_path)
+        result["upstream_source"] = {
+            "path": str(upstream_path),
+            "sha256": upstream_hash,
+            "exists": upstream_hash is not None,
         }
-        mirrors = [vgflow_codex_hash, local_hash, global_hash]
-    else:
-        result["vgflow_codex"] = None
-        mirrors = [local_hash, global_hash]
+        result["in_sync"] = (
+            local_hash is not None
+            and upstream_hash is not None
+            and local_hash == upstream_hash
+        )
 
-    # Strict parity: every expected mirror must exist AND all must hash
-    # identically. Missing ≠ "no drift" — missing IS drift.
-    all_present = all(h is not None for h in mirrors)
-    all_match = len(set(h for h in mirrors if h is not None)) <= 1
-    result["in_sync"] = all_present and all_match
     return result
 
 
-def _format_human_report(results: list[dict], quiet: bool) -> str:
-    """Build human-readable drift report."""
+def _check_support_chain_a(
+    skill: str,
+    repo_root: Path,
+    source_repo: bool,
+    vgflow_repo: Optional[Path],
+) -> dict:
+    support_dir = _source_support_dir(repo_root, source_repo)
+    local_path = support_dir / skill / "SKILL.md"
+    local_hash = _sha256(local_path)
+
+    result = {
+        "chain": "A",
+        "kind": "support",
+        "skill": skill,
+        "local_source": {
+            "path": str(local_path),
+            "sha256": local_hash,
+            "exists": local_hash is not None,
+        },
+        "upstream_source": None,
+        "in_sync": local_hash is not None,
+    }
+
+    if not source_repo and vgflow_repo:
+        upstream_path = vgflow_repo / "skills" / skill / "SKILL.md"
+        upstream_hash = _sha256(upstream_path)
+        result["upstream_source"] = {
+            "path": str(upstream_path),
+            "sha256": upstream_hash,
+            "exists": upstream_hash is not None,
+        }
+        result["in_sync"] = (
+            local_hash is not None
+            and upstream_hash is not None
+            and local_hash == upstream_hash
+        )
+
+    return result
+
+
+def _check_chain_b(
+    skill: str,
+    repo_root: Path,
+    authoritative_codex: Path,
+    skip_global: bool,
+    source_repo: bool,
+    codex_name: Optional[str] = None,
+) -> dict:
+    codex_name = codex_name or f"vg-{skill}"
+    canonical_dir = authoritative_codex / codex_name
+    local_dir = repo_root / ".codex" / "skills" / codex_name
+    global_dir = _global_codex_skills() / codex_name
+
+    canonical_path = canonical_dir / "SKILL.md"
+    local_path = local_dir / "SKILL.md"
+    global_path = global_dir / "SKILL.md"
+
+    mirrors = [
+        (
+            "canonical_codex",
+            canonical_path,
+            _sha256(canonical_path),
+            canonical_dir,
+            _file_manifest(canonical_dir),
+        )
+    ]
+    local_root = repo_root / ".codex" / "skills"
+    if local_root.is_dir() or not source_repo:
+        mirrors.append(
+            ("local_codex", local_path, _sha256(local_path), local_dir, _file_manifest(local_dir))
+        )
+    if not skip_global:
+        mirrors.append(
+            ("global_codex", global_path, _sha256(global_path), global_dir, _file_manifest(global_dir))
+        )
+
+    result = {
+        "chain": "B",
+        "skill": skill,
+        "codex_name": codex_name,
+        "in_sync": False,
+    }
+    hashes = []
+    manifests = []
+    for key, path, digest, skill_dir, manifest in mirrors:
+        result[key] = {
+            "path": str(path),
+            "sha256": digest,
+            "exists": digest is not None,
+            "dir": str(skill_dir),
+            "dir_exists": skill_dir.is_dir(),
+            "file_count": len(manifest) if manifest is not None else None,
+        }
+        hashes.append(digest)
+        manifests.append(manifest)
+
+    all_present = all(digest is not None for digest in hashes)
+    all_match = len({digest for digest in hashes if digest is not None}) <= 1
+    all_manifests_present = all(manifest is not None for manifest in manifests)
+    manifest_match = (
+        len(
+            {
+                json.dumps(manifest, sort_keys=True)
+                for manifest in manifests
+                if manifest is not None
+            }
+        )
+        <= 1
+    )
+    result["manifest_drift"] = all_manifests_present and not manifest_match
+    result["in_sync"] = all_present and all_match and all_manifests_present and manifest_match
+    return result
+
+
+def _format_human_report(results: list[dict], quiet: bool, source_repo: bool) -> str:
     drift = [r for r in results if not r.get("in_sync", False)]
     if not drift and quiet:
         return ""
 
-    lines = []
-    if drift:
-        lines.append(f"⛔ Codex skill mirror drift: {len(drift)} skill(s) out of sync\n")
-        lines.append(f"{'skill':<12} {'chain':<6} {'status':<20}")
-        lines.append(f"{'-'*12} {'-'*6} {'-'*20}")
-        for r in drift:
-            skill = r["skill"]
-            chain = r["chain"]
-            # Identify which mirror drifted
-            tags = []
-            if r.get("chain") == "A":
-                src = r["rtb_source"]
-                mir = r.get("vgflow_mirror")
-                if src and not src["exists"]:
-                    tags.append("RTB_MISSING")
-                if mir and not mir["exists"]:
-                    tags.append("VGFLOW_MISSING")
-                if (src and mir and src["sha256"] and mir["sha256"]
-                        and src["sha256"] != mir["sha256"]):
-                    tags.append("RTB_vs_VGFLOW_DRIFT")
-            else:  # chain B
-                loc = r["local_codex"]
-                glb = r["global_codex"]
-                vgc = r.get("vgflow_codex")
-                if not loc["exists"]:
-                    tags.append("LOCAL_MISSING")
-                if not glb["exists"]:
-                    tags.append("GLOBAL_MISSING")
-                if vgc and not vgc["exists"]:
-                    tags.append("VGFLOW_CODEX_MISSING")
-                hashes = set()
-                for m in (loc, glb, vgc):
-                    if m and m["exists"]:
-                        hashes.add(m["sha256"])
-                if len(hashes) > 1:
-                    tags.append("CODEX_MIRROR_DRIFT")
-            lines.append(f"{skill:<12} {chain:<6} {','.join(tags) or 'UNKNOWN'}")
+    lines: list[str] = []
+    if not drift:
+        lines.append(f"OK: Codex skill mirror sync clean ({len(results)} checks)")
+        return "\n".join(lines)
 
-        lines.append("")
-        lines.append("Fix:")
-        lines.append("  DEV_ROOT=\"$PWD\" bash ../vgflow-repo/sync.sh")
-        lines.append("")
-    else:
-        total = len(results)
-        if not quiet:
-            lines.append(f"✓ Codex skill mirror sync OK — {total} checks passed")
+    lines.append(f"DRIFT: Codex skill mirror drift in {len(drift)} check(s)")
+    lines.append(f"{'skill':<18} {'chain':<6} status")
+    lines.append(f"{'-'*18} {'-'*6} {'-'*30}")
+
+    for r in drift:
+        tags: list[str] = []
+        if r["chain"] == "A":
+            local = r["local_source"]
+            upstream = r.get("upstream_source")
+            if not local["exists"]:
+                tags.append("SOURCE_MISSING" if source_repo else "RTB_MISSING")
+            if upstream and not upstream["exists"]:
+                tags.append("VGFLOW_MISSING")
+            if (
+                upstream
+                and local["sha256"]
+                and upstream["sha256"]
+                and local["sha256"] != upstream["sha256"]
+            ):
+                tags.append("SOURCE_vs_VGFLOW_DRIFT" if source_repo else "RTB_vs_VGFLOW_DRIFT")
+        else:
+            for key, tag in (
+                ("canonical_codex", "CANONICAL_CODEX_MISSING"),
+                ("local_codex", "LOCAL_MISSING"),
+                ("global_codex", "GLOBAL_MISSING"),
+            ):
+                item = r.get(key)
+                if item and not item["exists"]:
+                    tags.append(tag)
+            hashes = {
+                item["sha256"]
+                for key in ("canonical_codex", "local_codex", "global_codex")
+                if (item := r.get(key)) and item["exists"]
+            }
+            if len(hashes) > 1 or r.get("manifest_drift"):
+                tags.append("CODEX_MIRROR_DRIFT")
+        lines.append(f"{r['skill']:<18} {r['chain']:<6} {','.join(tags) or 'UNKNOWN'}")
+
+    lines.append("")
+    lines.append("Fix: run `bash sync.sh` from vgflow-repo or `/vg:sync` from an installed project.")
     return "\n".join(lines)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--quiet", action="store_true",
-                    help="suppress output when fully synced")
-    ap.add_argument("--json", action="store_true",
-                    help="emit JSON for programmatic consumers")
-    ap.add_argument("--fast", action="store_true",
-                    help="mtime-only check (skip sha256 compute)")
-    ap.add_argument("--skill", default=None,
-                    help="check one skill only (by name, e.g. 'blueprint')")
-    ap.add_argument("--skip-vgflow", action="store_true",
-                    help="don't check vgflow-repo upstream")
-    ap.add_argument("--phase", help="(orchestrator-injected; ignored by this validator)")
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--fast", action="store_true", help="accepted for compatibility")
+    ap.add_argument("--skill")
+    ap.add_argument("--skip-vgflow", action="store_true")
+    ap.add_argument("--skip-global", action="store_true")
+    ap.add_argument("--phase", help="orchestrator-injected; ignored")
     args = ap.parse_args()
 
     repo_root = _resolve_repo_root()
-    claude_commands = repo_root / ".claude" / "commands" / "vg"
+    source_repo = _is_source_repo(repo_root)
+    vgflow_repo = None if (args.skip_vgflow or source_repo) else _resolve_vgflow_repo(repo_root)
+    source_commands = _source_commands_dir(repo_root, source_repo)
+    authoritative_codex = _authoritative_codex_dir(repo_root, source_repo, vgflow_repo)
 
-    vgflow_repo = None if args.skip_vgflow else _resolve_vgflow_repo(repo_root)
+    support_dir = _source_support_dir(repo_root, source_repo)
+    support_skills = _discover_support_skill_names(support_dir)
 
     if args.skill:
-        skills_to_check = [args.skill]
+        requested = args.skill.removeprefix("$")
+        command_candidate = requested.removeprefix("vg-")
+        if (source_commands / f"{command_candidate}.md").is_file():
+            skills = [command_candidate]
+            support_skills = []
+        elif (support_dir / requested / "SKILL.md").is_file():
+            skills = []
+            support_skills = [requested]
+        else:
+            skills = [command_candidate]
+            support_skills = []
     else:
-        skills_to_check = _discover_skill_names(claude_commands)
+        skills = _discover_skill_names(source_commands, authoritative_codex)
 
-    results = []
-    for skill in skills_to_check:
-        results.append(_check_chain_a_claude(skill, repo_root, vgflow_repo))
-        results.append(_check_chain_b_codex(skill, repo_root, vgflow_repo))
+    results: list[dict] = []
+    for skill in skills:
+        results.append(_check_chain_a(skill, repo_root, source_repo, vgflow_repo))
+        results.append(
+            _check_chain_b(
+                skill,
+                repo_root,
+                authoritative_codex,
+                args.skip_global,
+                source_repo,
+            )
+        )
+
+    for skill in support_skills:
+        results.append(_check_support_chain_a(skill, repo_root, source_repo, vgflow_repo))
+        results.append(
+            _check_chain_b(
+                skill,
+                repo_root,
+                authoritative_codex,
+                args.skip_global,
+                source_repo,
+                codex_name=skill,
+            )
+        )
 
     drift_count = sum(1 for r in results if not r.get("in_sync", False))
 
     if args.json:
-        print(json.dumps({
-            "validator": "verify-codex-skill-mirror-sync",
-            # v2.6 (2026-04-25): WARN (not BLOCK) — mirror drift means
-            # .codex/skills/ are stale relative to .claude/commands/vg/,
-            # but doesn't hard-block ship. Operator should /vg:sync.
-            "verdict": "PASS" if drift_count == 0 else "WARN",
-            "repo_root": str(repo_root),
-            "vgflow_repo": str(vgflow_repo) if vgflow_repo else None,
-            "skills_checked": len(skills_to_check),
-            "drift_count": drift_count,
-            "results": results,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "validator": "verify-codex-skill-mirror-sync",
+                    "verdict": "PASS" if drift_count == 0 else "WARN",
+                    "repo_root": str(repo_root),
+                    "source_repo": source_repo,
+                    "vgflow_repo": str(vgflow_repo) if vgflow_repo else None,
+                    "authoritative_codex": str(authoritative_codex),
+                    "skills_checked": len(skills) + len(support_skills),
+                    "drift_count": drift_count,
+                    "results": results,
+                },
+                indent=2,
+            )
+        )
     else:
-        out = _format_human_report(results, args.quiet)
+        out = _format_human_report(results, args.quiet, source_repo)
         if out:
             print(out)
 

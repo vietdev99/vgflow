@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.12.0 (2026-04-27) — Platform-aware CRUD Surface Contract
+
+Feature release for the "AI must not lazy-read blueprint" problem.
+
+- Added `CRUD-SURFACES.md` as the parent resource contract for list/read/create/update/delete surfaces. Existing paging/list/filter/security notes now extend this contract instead of living as loose prose.
+- Added `schemas/crud-surface.v1.json` and `verify-crud-surface-contract.py`. The gate blocks CRUD/resource phases that miss base business-flow/security/abuse/perf invariants or the required web/mobile/backend overlay.
+- Wired blueprint to generate `CRUD-SURFACES.md`; build to inject the relevant resource slice into executor prompts; review/test/accept to validate against the same contract.
+- Added platform-aware config defaults. Web phases check table/filter/search/sort/pagination/form/delete behavior, mobile phases check deep-link/pull-to-refresh/tap-target/offline states, backend phases check query allowlists, authz, mass-assignment, idempotency, audit log, and performance budget.
+- Added regression tests for validator behavior, executor context injection, and command/orchestrator wiring.
+
 ## v2.11.1 (2026-04-27) — Phase 16 hot-fix (cross-AI consensus 6-BLOCKer rework)
 
 Hot-fix release. Phase 16 "Task Fidelity Lock" was shipped at HEAD between

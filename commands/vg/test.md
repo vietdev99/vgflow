@@ -1452,7 +1452,7 @@ Display:
 <step name="5d_codegen" profile="web-fullstack,web-frontend-only">
 ## 5d: CODEGEN — Goal-based Test Generation
 
-Generate Playwright test files from VERIFIED goals. Assertions come from TEST-GOALS success criteria, navigation paths come from RUNTIME-MAP.json observations.
+Generate Playwright test files from VERIFIED goals. Assertions come from TEST-GOALS success criteria, navigation paths come from RUNTIME-MAP.json observations, and CRUD list/form/delete/security expectations come from CRUD-SURFACES.md when present.
 
 **For each goal group, generate 1 .spec.ts file:**
 
@@ -1508,6 +1508,11 @@ if goal.frontmatter.interactive_controls.url_sync == true:
 
 Goals without `interactive_controls.url_sync: true` continue through the
 existing manual codegen flow below (forms, mutations, navigation, etc).
+For resource CRUD goals, treat `interactive_controls` as the web-list extension
+of CRUD-SURFACES.md: filters/search/sort/pagination become URL-state test
+steps, while the parent contract supplies headings, descriptions, columns,
+row actions, form validation, duplicate-submit guards, delete confirmation,
+CSRF/XSS/object-authz checks, and abuse/performance expectations.
 
 **Phase 17 D-04/D-05 — Test session reuse setup (NEW, 2026-04-27):**
 
@@ -2464,7 +2469,7 @@ SEC_TIER0_EXIT=0
 # Each validator reads --phase and emits Evidence JSON per _common contract.
 # Exit 1 = BLOCK, exit 0 = PASS/WARN (orchestrator dispatcher also re-runs
 # them at run-complete as defense-in-depth).
-for V in secrets-scan verify-input-validation verify-authz-declared verify-goal-security verify-goal-perf verify-security-baseline; do
+for V in secrets-scan verify-input-validation verify-authz-declared verify-goal-security verify-goal-perf verify-crud-surface-contract verify-security-baseline; do
   OUT=$(${PYTHON_BIN:-python3} ".claude/scripts/validators/${V}.py" \
         --phase "${PHASE_NUMBER}" 2>&1)
   RC=$?
@@ -2629,7 +2634,7 @@ fi
 Display:
 ```
 5f Security:
-  Tier 0 B8 validators: {secrets,input-validation,authz} {PASS|BLOCK|WARN}
+  Tier 0 B8 validators: {secrets,input-validation,authz,crud-surface} {PASS|BLOCK|WARN}
   Tier 1 grep: {findings} ({critical}/{high}/{medium}/{low})
   Tier 2 deep: {tool used|skipped}
   Tier 3 contract-code verify: {COPY_MISMATCHES} mismatches (auth role + error shape)

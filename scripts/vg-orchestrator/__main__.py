@@ -2411,6 +2411,7 @@ COMMAND_VALIDATORS = {
                      # platform-mandatory categories (table+filter+paging on
                      # web; list_screen+touch_target on mobile; ...).
                      "verify-test-goals-platform-essentials",
+                     "verify-crud-surface-contract",
                      # Harness v2.6 (2026-04-25): blueprint META-gate at 2c.
                      # Goal-plan coverage, endpoint-goal coverage, surface
                      # essentials, mutation Layer-4, state-machine guards,
@@ -2456,6 +2457,7 @@ COMMAND_VALIDATORS = {
                  # declarations block; mutation-generic warns. Runtime
                  # cross-role boundary test deferred (needs live API).
                  "verify-authz-declared",
+                 "verify-crud-surface-contract",
                  # OHOK-7 (2026-04-22): MANDATORY post-build CrossAI loop.
                  # Must see events.db evidence of ≥1 crossai iteration +
                  # a terminal event (loop_complete / loop_exhausted /
@@ -2560,6 +2562,7 @@ COMMAND_VALIDATORS = {
                   "verify-goal-security",
                   # v2.5 Phase B.2 (2026-04-23): perf_budget check at review.
                   "verify-goal-perf",
+                  "verify-crud-surface-contract",
                   # v2.5 Phase B.3 (2026-04-23): project-wide security baseline.
                   "verify-security-baseline",
                   # Harness v2.6 (2026-04-25): test spec selectors must
@@ -2601,6 +2604,7 @@ COMMAND_VALIDATORS = {
                 # perf gates at test pipeline. Duplicate with review per SEC-1
                 # pattern — review fixes, test re-verifies before UAT.
                 "verify-goal-perf",
+                "verify-crud-surface-contract",
                 "verify-security-baseline",
                 # v2.5 Phase B.5 (2026-04-23): DAST report severity routing.
                 # Report path via env or default PHASE_DIR/dast-report.json.
@@ -2651,6 +2655,7 @@ COMMAND_VALIDATORS = {
                   # Phase D v2.5 (2026-04-23): final gate — STP schema must
                   # be valid before a phase is accepted as complete.
                   "verify-security-test-plan",
+                  "verify-crud-surface-contract",
                   # Harness v2.6 (2026-04-25): final UAT prose narration
                   # must read as a story (user-facing summary must include
                   # context, examples, EN-term gloss).
@@ -2833,6 +2838,7 @@ UNQUARANTINABLE = {
     # column count, sort, Layer-4 mutation reload, state guards, ...).
     # AI can't slip ship a phase that never wrote a paging goal.
     "verify-test-goals-platform-essentials",
+    "verify-crud-surface-contract",
     # Phase 7.14.3 retro (2026-04-25): user-facing prose must read as a
     # story (preamble → details → close), not bullet/schema dumps.
     # Validator scores text on sentence ratio, examples, EN-term gloss.

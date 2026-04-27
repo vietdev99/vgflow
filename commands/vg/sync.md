@@ -1,7 +1,7 @@
 ---
 name: vg:sync
-description: Sync VG workflow across source → mirror → installations (.claude/ → vgflow/ → ~/.codex/)
-argument-hint: "[--check] [--verify] [--no-source] [--no-global]"
+description: Sync VG workflow from canonical vgflow-repo into Claude/Codex installations
+argument-hint: "[--check] [--verify] [--no-global] [--no-source]"
 allowed-tools:
   - Bash
   - Read
@@ -13,31 +13,36 @@ runtime_contract:
 ---
 
 <objective>
-Keep VG workflow files consistent across 3 locations:
-1. **Source**: `.claude/commands/vg/` (edit here trong dev repo)
-2. **Mirror**: `vgflow/` (distribute this to other projects)
-3. **Installations**:
-   - `.codex/skills/vg-*/` (current project Codex)
-   - `~/.codex/skills/vg-*/` (global Codex — dùng cho mọi project)
+Deploy the canonical VGFlow workflow from `vgflow-repo` into the current project
+and Codex global skill/agent directories.
 
-Script delegates to `vgflow/sync.sh`. Runs bidirectional sync: edit ở source → mirror về vgflow → deploy tới installations.
+Canonical source of truth:
+1. `commands/vg/` -> `.claude/commands/vg/`
+2. `skills/` -> `.claude/skills/`
+3. `scripts/` + `schemas/` + `templates/vg/` -> `.claude/`
+4. `codex-skills/` -> `.codex/skills/` and `~/.codex/skills/`
+5. `templates/codex-agents/` -> `.codex/agents/` and `~/.codex/agents/`
+6. `vg-hooks-install.py` repairs project-local Claude hooks in `.claude/settings.local.json`
+
+`--no-source` is accepted only for backward compatibility. It is a no-op
+because this repository is now the source of truth; RTB/.claude source probing
+is intentionally removed.
 </objective>
 
 <process>
 
 <step name="0_detect">
 
-**v1.11.0 R5 — `vgflow/` folder deprecated. Use external `vgflow-repo` clone:**
+Resolve `vgflow-repo/sync.sh`:
 
 ```bash
-# Resolution priority (highest first):
 SYNC_SH=""
 for candidate in \
   "${VGFLOW_REPO:-}/sync.sh" \
   "../vgflow-repo/sync.sh" \
   "../../vgflow-repo/sync.sh" \
   "${HOME}/Workspace/Messi/Code/vgflow-repo/sync.sh" \
-  "vgflow/sync.sh"  ; do
+  "vgflow/sync.sh"; do
   if [ -f "$candidate" ]; then
     SYNC_SH="$candidate"
     break
@@ -45,69 +50,71 @@ for candidate in \
 done
 
 if [ -z "$SYNC_SH" ]; then
-  echo "⛔ vgflow-repo sync.sh not found."
-  echo "   Setup options:"
-  echo "   1. Set env: export VGFLOW_REPO=/path/to/vgflow-repo"
-  echo "   2. Clone sibling: git clone https://github.com/vietdev99/vgflow ../vgflow-repo"
-  echo "   Then re-run /vg:sync"
+  echo "vgflow-repo sync.sh not found."
+  echo "Set VGFLOW_REPO=/path/to/vgflow-repo or clone it beside this project."
   exit 1
 fi
 
-echo "✓ Using sync script: $SYNC_SH"
 export DEV_ROOT="$(pwd)"
+echo "Using sync script: $SYNC_SH"
 ```
 </step>
 
-<step name="1_run_sync">
-Parse args: `--check` (dry-run), `--verify` (codex mirror equivalence), `--no-source` (skip source→mirror), `--no-global` (skip ~/.codex)
+<step name="1_run">
 
-**`--verify` short-circuits the rest of the pipeline.** It hashes the
-post-`</codex_skill_adapter>` content of every `.codex/skills/vg-*/SKILL.md`
-mirror against the post-frontmatter content of its source
-`.claude/commands/vg/<name>.md`. This catches functional drift that the
-regular `sync.sh --check` line-level diff hides inside the ~80-line offset
-introduced by the codex adapter block (N10 fix from build-vs-blueprint audit).
+Parse args:
+- `--check`: dry-run, no writes, exits 1 if drift exists
+- `--verify`: short-circuit and run functional Codex mirror equivalence
+- `--no-global`: skip `~/.codex` deploy
+- `--no-source`: deprecated no-op, passed through for compatibility
 
 ```bash
-if echo " $ARGUMENTS " | grep -q ' --verify '; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/verify-codex-mirror-equivalence.py
-  exit $?
-fi
-
 bash "$SYNC_SH" $ARGUMENTS
 ```
 
-Output shows:
-- Files changed (new/updated)
-- Summary count
-- Dry-run indication nếu --check
-- Per-skill drift table nếu --verify
+`--verify` delegates to `scripts/verify-codex-mirror-equivalence.py` inside
+`vgflow-repo`. Installed projects receive the same script at
+`.claude/scripts/verify-codex-mirror-equivalence.py`.
 
-Exit code:
-- 0: nothing to do OR sync applied OR --verify all-equivalent
-- 1 (with --check): drift detected, needs sync
-- 1 (with --verify): functional drift between source and codex mirror — re-run `/vg:sync` (without flag) to regenerate mirrors
+The script regenerates `codex-skills` from `commands/vg` and support skills
+before deployment unless `--check` is set.
+
+It also installs/repairs Claude Code enforcement hooks after copying scripts:
+- `UserPromptSubmit`: pre-seeds `vg-orchestrator run-start`.
+- `Stop`: verifies `runtime_contract` evidence before the agent can claim done.
+- `PostToolUse` edit warning: warns when VG command/skill files were edited in-session.
+- `PostToolUse` Bash step tracker: writes step activity telemetry into `.vg/events.db`.
 </step>
 
 <step name="2_report">
-After apply (not --check), surface:
-- Số files synced
-- Locations touched
-- Nếu có global deploy: remind user Codex sessions hiện tại cần restart để load skills mới
 
-Nếu --check báo drift:
-- Suggest: `/vg:sync` (without --check) để apply
-- Hoặc `/vg:sync --no-global` nếu không muốn deploy global
+Surface:
+- files changed or would change
+- target project path
+- whether global Codex deploy was skipped
+- functional Codex mirror check result
+
+If `--check` reports drift, suggest:
+
+```bash
+/vg:sync
+```
+
+or:
+
+```bash
+/vg:sync --no-global
+```
 </step>
 
 </process>
 
 <success_criteria>
-- `.claude/commands/vg/*.md` ↔ `vgflow/commands/vg/*.md` identical
-- `.claude/skills/{api-contract,vg-*}/` ↔ `vgflow/skills/` identical
-- `.claude/scripts/*.py` ↔ `vgflow/scripts/*.py` identical
-- `vgflow/codex-skills/*/SKILL.md` deployed to both `.codex/skills/` và `~/.codex/skills/`
-- Report accurate file count delta
-- Zero data loss (no silent overwrites khi src missing)
-- `/vg:sync --verify` reports zero drift between `.claude/commands/vg/<name>.md` and `.codex/skills/vg-<name>/SKILL.md` (post-adapter SHA256 match)
+- Project `.claude/commands/vg` matches `vgflow-repo/commands/vg`.
+- Project `.claude/skills`, `.claude/scripts`, `.claude/schemas`, and `.claude/templates/vg` match repo source.
+- Project `.codex/skills` matches `vgflow-repo/codex-skills`.
+- Project `.codex/agents` contains VGFlow Codex agent templates.
+- If not `--no-global`, `~/.codex/skills` and `~/.codex/agents` are refreshed.
+- Project `.claude/settings.local.json` contains VG enforcement hooks for `UserPromptSubmit`, `Stop`, and both `PostToolUse` paths.
+- `/vg:sync --verify` reports zero functional drift between command sources and Codex skill mirrors after adapter stripping.
 </success_criteria>
