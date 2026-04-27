@@ -265,26 +265,32 @@ class TestPhase15I18n:
 # ─── 8. Per-wave tests still green together ──────────────────────────────
 
 class TestPhase15RegressionGreen:
-    """Sanity: invoking the per-wave Phase 15 test files together still passes.
+    """Sanity: invoking the per-wave test files together still passes.
     This guards against ordering- or fixture-coupling bugs that hide when each
-    file runs in isolation."""
+    file runs in isolation. Phase 17 added — Phase 15 templates were modified
+    by Phase 17 D-03 (useAuth replaces beforeEach loginAs); cross-phase smoke
+    catches if that work breaks Phase 15 acceptance assumptions."""
 
-    def test_phase15_suite_passes(self):
+    def test_phase15_plus_phase17_suite_passes(self):
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        # Discover all Phase 15 + Phase 17 per-wave tests dynamically — file
+        # additions in future waves auto-pick up without editing this list.
+        test_files = sorted(
+            str(p.relative_to(REPO_ROOT))
+            for p in (REPO_ROOT / "scripts" / "tests" / "root_verifiers").glob(
+                "test_phase1[57]_*.py"
+            )
+            if p.name != "test_phase15_acceptance.py"
+            and p.name != "test_phase17_acceptance.py"
+        )
         proc = subprocess.run(
-            [
-                sys.executable, "-m", "pytest", "-q", "--no-header",
-                "scripts/tests/root_verifiers/test_phase15_design_extractors.py",
-                "scripts/tests/root_verifiers/test_phase15_validators_and_matrix.py",
-            ],
+            [sys.executable, "-m", "pytest", "-q", "--no-header", *test_files],
             cwd=str(REPO_ROOT),
-            capture_output=True, text=True, timeout=60, env=env,
+            capture_output=True, text=True, timeout=90, env=env,
             encoding="utf-8", errors="replace",
         )
-        # Pytest exit code 0 = all passed; 5 = no tests collected (acceptable
-        # if the files were renamed but coverage gone).
         assert proc.returncode == 0, (
-            f"Phase 15 per-wave suite regressed:\n"
+            f"Phase 15+17 per-wave suite regressed:\n"
             f"stdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-500:]}"
         )
