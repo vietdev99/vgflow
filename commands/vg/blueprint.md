@@ -2598,6 +2598,68 @@ if [ -x "$TG_VAL" ]; then
 fi
 ```
 
+### 2d-3c: Phase 16 task schema + cross-AI output gates (hot-fix v2.11.1)
+
+Phase 16 hot-fix wires two validators that were registered/documented but
+never invoked from this skill body (cross-AI consensus BLOCKer 5).
+
+**Gate C: verify-task-schema.py** — classify PLAN tasks as xml/heading/mixed.
+Mode resolves from `vg.config.task_schema` (default: `legacy` → WARN-only
+on heading format; `structured` → BLOCK heading; `both` → WARN both). XML
+tasks REQUIRE frontmatter `acceptance: [...]` array (BLOCK if missing).
+
+**Gate D: verify-crossai-output.py** — diff-based audit of cross-AI
+enrichment (only fires when `--crossai` flag in arguments — gates the
+output of /vg:blueprint --crossai or /vg:scope --crossai run that just
+happened). Catches: long prose inlined into task body without context-refs
+escape, and missing `cross_ai_enriched: true` flag in CONTEXT.md
+frontmatter (which would silently disable Phase 16 D-04 R4 cap bumps).
+
+```bash
+# Gate C: task-schema (always runs; mode-aware)
+TS_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-task-schema.py"
+if [ -x "$TS_VAL" ]; then
+  ${PYTHON_BIN} "$TS_VAL" --phase "${PHASE_NUMBER}" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-schema.json" 2>&1 || true
+  TS_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-schema.json" 2>/dev/null)
+  case "$TS_V" in
+    PASS|WARN) echo "✓ P16 task-schema: $TS_V" ;;
+    BLOCK)
+      echo "⛔ P16 task-schema: BLOCK — see ${VG_TMP}/task-schema.json" >&2
+      echo "   Mode=structured rejects heading-format tasks, OR XML task missing" >&2
+      echo "   frontmatter 'acceptance:' array. Migrate or add acceptance criteria." >&2
+      echo "   Override: --skip-task-schema (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-task-schema ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ P16 task-schema: $TS_V" ;;
+  esac
+fi
+
+# Gate D: crossai-output (gated on --crossai flag — only audits diff if a
+# cross-AI enrichment actually ran)
+if [[ "$ARGUMENTS" =~ --crossai ]]; then
+  CO_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crossai-output.py"
+  if [ -x "$CO_VAL" ]; then
+    ${PYTHON_BIN} "$CO_VAL" --phase "${PHASE_NUMBER}" \
+        > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/crossai-output.json" 2>&1 || true
+    CO_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+          "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/crossai-output.json" 2>/dev/null)
+    case "$CO_V" in
+      PASS|WARN) echo "✓ P16 crossai-output: $CO_V" ;;
+      BLOCK)
+        echo "⛔ P16 crossai-output: BLOCK — see ${VG_TMP}/crossai-output.json" >&2
+        echo "   Cross-AI inlined > 30 prose lines into a task body without adding" >&2
+        echo "   <context-refs> ID. Move long prose to CONTEXT decision block." >&2
+        echo "   Override: --skip-crossai-output (logs override-debt)" >&2
+        if [[ ! "$ARGUMENTS" =~ --skip-crossai-output ]]; then exit 1; fi
+        ;;
+      *) echo "ℹ P16 crossai-output: $CO_V" ;;
+    esac
+  fi
+fi
+```
+
 ### 2d-4: Gate decision
 
 ```
