@@ -228,8 +228,57 @@ class TestPhase17ValidatorBehavior:
         assert r.returncode == 0
         out = json.loads(r.stdout)
         assert out["verdict"] == "WARN"
-        # Only the legacy file should appear in evidence; modern not flagged.
         flagged_files = [e.get("file", "") for e in out["evidence"]
                          if e.get("type") == "stale_codegen_pattern"]
         assert len(flagged_files) == 1, f"expected 1 flagged file; got {flagged_files}"
         assert "g-legacy" in flagged_files[0]
+
+
+# ─── 7. Orphan validator wire (P17 polish — Phase 7.14.3 retrospective) ──
+
+class TestPhase17OrphanValidators:
+    """Phase 17 polish wired 2 historically-orphaned validators into
+    blueprint.md step 2d-3b. These tests ensure they stay registered +
+    wired so future drift can't re-orphan them."""
+
+    @pytest.mark.parametrize("vid", [
+        "blueprint-completeness",
+        "test-goals-platform-essentials",
+    ])
+    def test_registry_entry_present(self, vid):
+        text = (VALIDATORS / "registry.yaml").read_text(encoding="utf-8")
+        assert re.search(rf"^\s*-\s*id:\s*['\"]?{re.escape(vid)}['\"]?\s*$",
+                         text, flags=re.MULTILINE), (
+            f"registry.yaml missing {vid} entry — was it accidentally removed?"
+        )
+
+    @pytest.mark.parametrize("vid", [
+        "blueprint-completeness",
+        "test-goals-platform-essentials",
+    ])
+    def test_validator_script_present(self, vid):
+        path = VALIDATORS / f"verify-{vid}.py"
+        assert path.exists(), f"validator script missing: {path}"
+
+    @pytest.mark.parametrize("script_name,marker", [
+        ("verify-blueprint-completeness.py", "blueprint-completeness:"),
+        ("verify-test-goals-platform-essentials.py", "test-goals-platform-essentials:"),
+    ])
+    def test_blueprint_md_wires_validator(self, script_name, marker):
+        bp = (COMMANDS / "blueprint.md").read_text(encoding="utf-8")
+        assert script_name in bp, (
+            f"blueprint.md must invoke {script_name} (P17 polish wire)"
+        )
+        # Verify the bash case statement handles BLOCK verdict
+        assert marker in bp, (
+            f"blueprint.md must surface verdict line containing '{marker}'"
+        )
+
+    def test_blueprint_md_step_2d_3b_section_present(self):
+        bp = (COMMANDS / "blueprint.md").read_text(encoding="utf-8")
+        assert "### 2d-3b" in bp, "blueprint.md missing step 2d-3b section header"
+        assert "Phase 7.14.3 retrospective" in bp, (
+            "blueprint.md must document why the orphan validators are wired now"
+        )
+
+

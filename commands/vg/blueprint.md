@@ -2539,6 +2539,65 @@ goals_miss_pct=$(( GOAL_TOTAL > 0 ? GOAL_MISS * 100 / GOAL_TOTAL : 0 ))
 endpoints_miss_pct=$(( EP_TOTAL > 0 ? EP_MISS * 100 / EP_TOTAL : 0 ))
 ```
 
+### 2d-3b: Deep blueprint completeness gates (Phase 17 polish — orphan validators wired)
+
+Two Python validators historically existed (commits per Phase 7.14.3
+retrospective: "AI lazy-read blueprint markdown rules → skip filter row +
+pagination + state-machine guards → bugs runtime") but were ORPHANED —
+not registered, not wired. Phase 17 polish wires them here so blueprint
+quality is machine-checked, not just bash grep coverage.
+
+These run AFTER the 2d-3 bash cross-checks pass surface-level (decisions/
+goals/endpoints exist) — they then check DEPTH (does each endpoint have
+auth_path + happy + 4xx + 401 goal coverage; does every list-view goal
+declare interactive_controls; do mutation goals declare 4-layer
+persistence check; etc.).
+
+```bash
+# Gate A: blueprint-completeness (C1 GOAL↔PLAN coverage; C2 ENDPOINT↔GOAL
+#         coverage incl auth_path/happy/4xx/401)
+BC_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-blueprint-completeness.py"
+if [ -x "$BC_VAL" ]; then
+  ${PYTHON_BIN} "$BC_VAL" --phase "${PHASE_NUMBER}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/blueprint-completeness.json" 2>&1 || true
+  BC_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/blueprint-completeness.json" 2>/dev/null)
+  case "$BC_V" in
+    PASS|WARN) echo "✓ blueprint-completeness: $BC_V" ;;
+    BLOCK)
+      echo "⛔ blueprint-completeness: BLOCK — see ${VG_TMP}/blueprint-completeness.json" >&2
+      echo "   GOAL↔PLAN or ENDPOINT↔GOAL coverage gaps detected." >&2
+      echo "   Override: --skip-blueprint-completeness (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-blueprint-completeness ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ blueprint-completeness: $BC_V" ;;
+  esac
+fi
+
+# Gate B: test-goals-platform-essentials (filter row + pagination + column
+#         visibility persistence + mutation 4-layer + state-machine guards)
+TG_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-test-goals-platform-essentials.py"
+if [ -x "$TG_VAL" ]; then
+  ${PYTHON_BIN} "$TG_VAL" --phase "${PHASE_NUMBER}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/test-goals-platform-essentials.json" 2>&1 || true
+  TG_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/test-goals-platform-essentials.json" 2>/dev/null)
+  case "$TG_V" in
+    PASS|WARN) echo "✓ test-goals-platform-essentials: $TG_V" ;;
+    BLOCK)
+      echo "⛔ test-goals-platform-essentials: BLOCK — see ${VG_TMP}/test-goals-platform-essentials.json" >&2
+      echo "   Phase 7.14.3 retrospective gaps detected (filter row / pagination /" >&2
+      echo "   column visibility persistence / mutation 4-layer / state-machine guard)." >&2
+      echo "   Override: --skip-platform-essentials (logs override-debt)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-platform-essentials ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ test-goals-platform-essentials: $TG_V" ;;
+  esac
+fi
+```
+
 ### 2d-4: Gate decision
 
 ```

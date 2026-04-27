@@ -686,3 +686,26 @@ validators:
     runtime_target_ms: 1000
     added_in: v2.11.0-phase-17
     description: P17 D-06 — detect generated specs still using legacy beforeEach(loginAs) instead of test.use(useAuth) per Phase 17 storage-state pattern. WARN now; escalate to BLOCK after 2 release cycles.
+
+  # ──── Phase 17 polish — orphan validators wired (Phase 7.14.3 retrospective fixes) ────
+  # Both validators existed pre-P17 but were never registered/wired —
+  # rationale documented in their docstrings. P17 polish ship wires them
+  # into commands/vg/blueprint.md step 2d-3b so blueprint completeness +
+  # platform essentials are machine-checked at planning time, not surfaced
+  # as runtime bugs in /vg:review (Phase 7.14.3 failure mode).
+  - id: blueprint-completeness
+    path: .claude/scripts/validators/verify-blueprint-completeness.py
+    severity: block
+    phases_active: [blueprint]
+    domain: artifact
+    runtime_target_ms: 2000
+    added_in: pre-existed; wired-in v2.11.0-phase-17-polish
+    description: META-GATE — every G-XX in TEST-GOALS has ≥1 PLAN task tag (C1); every endpoint in API-CONTRACTS has ≥1 goal with auth_path + happy + 4xx + 401 (C2). BLOCKs blueprint commit when coverage gaps detected (Phase 7.14.3 root cause).
+  - id: test-goals-platform-essentials
+    path: .claude/scripts/validators/verify-test-goals-platform-essentials.py
+    severity: block
+    phases_active: [blueprint]
+    domain: artifact
+    runtime_target_ms: 2000
+    added_in: pre-existed; wired-in v2.11.0-phase-17-polish
+    description: Platform-aware coverage gate — list/table/grid views must declare interactive_controls (filter row + pagination + column visibility); mutation goals must declare 4-layer persistence check (toast + API + reload + re-read + diff); state-machine guards must be tested. Phase 7.14.3 retrospective: each gap surfaced as phantom bug at runtime.
