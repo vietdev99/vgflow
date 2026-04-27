@@ -49,6 +49,48 @@ vg_config_get() {
           -e "s/^[\"']//" -e "s/[\"']$//"
 }
 
+# === P19 D-08 — Design citation gate (runs even if commit_msg_hook is disabled) ===
+# When the commit touches FE files, the body MUST contain ONE of:
+#   - "Per design/{slug}.png"        (Form A — slug from design/manifest.json)
+#   - "Design: no-asset (...)"        (Form B — explicit gap with reason)
+#   - "Design: refactor-only"         (rename/move/format only, no visual change)
+# Disable per-project: design_citation.enabled=false in vg.config.md.
+DESIGN_GATE_ENABLED=$(vg_config_get design_citation enabled)
+DESIGN_GATE_ENABLED="${DESIGN_GATE_ENABLED:-true}"
+if [ "$DESIGN_GATE_ENABLED" = "true" ]; then
+  STAGED_NAMES_D08=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null || true)
+  RENAMED_ONLY_D08=$(git diff --cached --name-only --diff-filter=R 2>/dev/null || true)
+  FE_TOUCHED_D08=""
+  if [ -n "$STAGED_NAMES_D08" ]; then
+    FE_TOUCHED_D08=$(echo "$STAGED_NAMES_D08" | grep -E '^(apps/(admin|merchant|vendor|web)/|packages/ui/src/(components|theme)/).*\.(tsx|jsx|vue|svelte)$' || true)
+  fi
+  if [ -n "$FE_TOUCHED_D08" ]; then
+    BODY_D08="$(cat "$MSG_FILE")"
+    HAS_PER_DESIGN_D08=$(echo "$BODY_D08" | grep -cE 'Per design/[a-z0-9][a-z0-9_-]+\.png' || true)
+    HAS_NO_ASSET_D08=$(echo "$BODY_D08" | grep -cE 'Design: no-asset \([^)]+\)' || true)
+    HAS_REFACTOR_ONLY_D08=$(echo "$BODY_D08" | grep -cE 'Design: refactor-only' || true)
+    if [ "${HAS_PER_DESIGN_D08:-0}" -eq 0 ] && [ "${HAS_NO_ASSET_D08:-0}" -eq 0 ] && [ "${HAS_REFACTOR_ONLY_D08:-0}" -eq 0 ]; then
+      if [ -z "$STAGED_NAMES_D08" ] && [ -n "$RENAMED_ONLY_D08" ]; then
+        : # rename-only commit
+      else
+        echo ""
+        echo "[vg commit-msg] REJECTED - P19 D-08 design citation missing."
+        echo ""
+        echo "  FE files staged:"
+        echo "$FE_TOUCHED_D08" | sed 's/^/    /'
+        echo ""
+        echo "  Commit body must contain ONE of:"
+        echo "    Per design/{slug}.png       — Form A; slug from design/manifest.json"
+        echo "    Design: no-asset (reason)   — Form B; explicit gap, reason required"
+        echo "    Design: refactor-only       — rename/format only, no visual change"
+        echo ""
+        echo "  Disable per project: set design_citation.enabled=false in $CONFIG_FILE"
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 ENABLED=$(vg_config_get commit_msg_hook enabled)
 ENABLED="${ENABLED:-true}"
 if [ "$ENABLED" != "true" ]; then

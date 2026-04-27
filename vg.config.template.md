@@ -342,6 +342,10 @@ design_assets_view_decomposition:
   model: "claude-opus-4-7"
   min_components_per_slug: 3
 
+# P19 D-08 — design citation gate at commit-msg hook.
+design_citation:
+  enabled: true
+
 # === Performance Budgets (RTB-specific) ===
 perf_budgets:
   rtb_bid_response_ms: 50

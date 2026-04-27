@@ -249,6 +249,13 @@ visual_checks:
     model: "claude-haiku-4-5-20251001"
     timeout_s: 30
 
+# === Commit-msg design citation gate (P19 D-08) ===
+# Enforces PR #15 L-002 rule at the commit boundary: FE files require
+# "Per design/{slug}.png", "Design: no-asset (reason)", or "Design: refactor-only"
+# in the commit body. Disable per-project if your repo doesn't track design assets.
+design_citation:
+  enabled: true
+
 # === Design Asset Pipeline ===
 design_assets:
   # paths/output_dir/handlers — already documented above.
