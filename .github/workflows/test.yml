@@ -17,8 +17,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install jsonschema + pyyaml
-        run: pip install jsonschema pyyaml
+      - name: Install test dependencies
+        run: pip install jsonschema pyyaml pytest
 
       - name: Validate JSON schemas
         run: |
@@ -182,7 +182,7 @@ jobs:
         run: |
           if [ -f scripts/tests/test_bypass_negative.py ]; then
             cp -r scripts/tests .claude/scripts/
-            python .claude/scripts/tests/test_bypass_negative.py
+            python -m pytest .claude/scripts/tests/test_bypass_negative.py -q
           else
             echo "(no negative tests yet)"
           fi
