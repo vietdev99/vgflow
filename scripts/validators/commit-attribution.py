@@ -74,11 +74,28 @@ CONVENTIONAL_SUBJECT_RE = re.compile(
     re.MULTILINE,
 )
 
-# Citations accepted (any ONE sufficient for code-touching commit)
+# Citations accepted (any ONE sufficient for code-touching commit).
+#
+# Accepts both legacy bare D-XX/G-XX and v1.8.0+ phase-namespaced
+# (P1.D-XX, P7.10.1.D-XX). Also accepts inline forms — "implements P1.D-78",
+# "Goals G-100, G-141", "P1.D-XX placeholder", "G-W10-05" (wave-scoped),
+# "G-141.M1" (manual sub-goal) — because those carry the same audit-trail
+# semantics as the canonical "Per CONTEXT.md D-XX" / "Covers goal: G-XX"
+# prose. The validator's CHECK 2 only runs for code-touching commits whose
+# subject already carries the phase tag (`feat(7.6-04): ...`), so a body
+# mention of D-XX or G-XX unambiguously cites THIS phase's artifacts.
+#
+# Phantom-ID detection (DECISION_EXTRACT_RE / GOAL_EXTRACT_RE below) still
+# runs after a citation match — catches fabricated D/G IDs that don't
+# resolve to real CONTEXT.md / TEST-GOALS.md entries.
 CITATION_PATTERNS = [
     re.compile(r"Per\s+API-CONTRACTS\.md", re.IGNORECASE),
-    re.compile(r"Per\s+CONTEXT\.md\s+D-\d+", re.IGNORECASE),
-    re.compile(r"Covers?\s+goal:?\s+G-\d+", re.IGNORECASE),
+    # Decision reference — accepts P{phase}.D-{N|XX} or bare D-{N|XX}.
+    # The literal "XX" placeholder appears in early-scoping commits.
+    re.compile(r"\b(?:P[\d.]+\.)?D-(?:\d+|XX)\b"),
+    # Goal reference — accepts G-{N}, G-W{wave}-{N} (wave-scoped goals
+    # from gap-closure waves), G-{N}.M{N} (manual sub-goals), etc.
+    re.compile(r"\bG-[\w.]+\b"),
     re.compile(r"\bno-goal-impact\b", re.IGNORECASE),
     re.compile(r"\bno-impact\b", re.IGNORECASE),  # shorter variant
 ]
