@@ -29,7 +29,21 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+def _find_repo_root() -> Path:
+    """Marker-walk so this works whether the test file is invoked from
+    canonical (`scripts/tests/`, depth 3) or install target
+    (`.claude/scripts/tests/`, depth 4). Previous implementation used a
+    fixed `parents[3]` which only matched install-target depth; running
+    pytest from the canonical mirror walked one level outside the repo
+    and `REGISTRY_CLI` resolved to a non-existent path."""
+    here = Path(__file__).resolve()
+    for parent in [here.parent, *here.parents]:
+        if (parent / "VERSION").exists() and (parent / ".git").exists():
+            return parent
+    return here.parents[3]  # fallback to historical behavior
+
+
+REPO_ROOT = _find_repo_root()
 REGISTRY_CLI = REPO_ROOT / ".claude" / "scripts" / "validator-registry.py"
 DRIFT_VALIDATOR = REPO_ROOT / ".claude" / "scripts" / "validators" / \
     "verify-validator-drift.py"

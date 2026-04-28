@@ -29,7 +29,18 @@ def _repo_root() -> Path:
     env = _os.environ.get("VG_REPO_ROOT")
     if env:
         return Path(env).resolve()
-    return Path(__file__).resolve().parents[2]
+    # Marker-walk so this resolves correctly whether the script is invoked
+    # from canonical (`scripts/validator-registry.py`, depth 2) or install
+    # target (`.claude/scripts/validator-registry.py`, depth 3). Previous
+    # implementation used `parents[2]` which was correct only for the
+    # install-target depth and walked one level too far when called from
+    # canonical — `validate` would silently see 0 entries because the
+    # registry path resolved outside the repo.
+    here = Path(__file__).resolve()
+    for parent in [here.parent, *here.parents]:
+        if (parent / "VERSION").exists() and (parent / ".git").exists():
+            return parent
+    return here.parents[2]  # fallback to historical behavior
 
 
 def _registry_path() -> Path:
