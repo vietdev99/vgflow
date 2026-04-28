@@ -752,6 +752,39 @@ PY
     echo "   These need manual triage. Recommended: re-run the original gate OR mark --wont-fix."
   fi
 fi
+
+# ─── P19 D-07 — design override-debt threshold gate ────────────────────────
+# The 4-layer pixel pipeline has 4 override flags
+# (--skip-design-pixel-gate / --skip-fingerprint-check / --skip-build-visual /
+# --allow-design-drift). Each logs override-debt with kind=design-*. Without
+# a count threshold, an executor can stack all 4 overrides per phase and ship
+# silently. This gate caps that: ≥2 unresolved kind=design-* → BLOCK accept.
+DESIGN_DEBT_THRESHOLD="$(vg_config_get override_debt.design_threshold 2 2>/dev/null || echo 2)"
+DESIGN_DEBT_REPORT="${VG_TMP}/design-debt-threshold.json"
+"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-override-debt-threshold.py \
+  --debt-file "${PLANNING_DIR}/OVERRIDE-DEBT.md" \
+  --kind 'design-*' \
+  --threshold "${DESIGN_DEBT_THRESHOLD}" \
+  --status unresolved \
+  --output "${DESIGN_DEBT_REPORT}" >/dev/null 2>&1
+DESIGN_DEBT_RC=$?
+if [ "$DESIGN_DEBT_RC" != "0" ] && [[ ! "$ARGUMENTS" =~ --allow-design-debt-threshold ]]; then
+  DESIGN_DEBT_COUNT=$("${PYTHON_BIN:-python3}" -c "import json; print(json.load(open('${DESIGN_DEBT_REPORT}')).get('count',0))" 2>/dev/null || echo 0)
+  echo ""
+  echo "⛔ P19 D-07 design-debt threshold gate BLOCKED — ${DESIGN_DEBT_COUNT} unresolved kind=design-* entries (threshold: ${DESIGN_DEBT_THRESHOLD})"
+  echo ""
+  echo "Resolution paths:"
+  echo "  1. /vg:override-resolve <ID> per entry — re-run gate cleanly OR mark WONT_FIX with rationalization-guard"
+  echo "  2. /vg:build ${PHASE_NUMBER} --gaps-only — re-trigger affected gates so they auto-resolve"
+  echo "  3. /vg:accept ${PHASE_NUMBER} --allow-design-debt-threshold --reason='<why shipping with stacked design overrides>'"
+  echo ""
+  echo "  Detail: ${DESIGN_DEBT_REPORT}"
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "accept_design_debt_threshold" "${PHASE_NUMBER}" "accept.3c" \
+      "design_debt_threshold" "BLOCK" "{\"count\":${DESIGN_DEBT_COUNT},\"threshold\":${DESIGN_DEBT_THRESHOLD}}"
+  fi
+  exit 1
+fi
 ```
 
 **NEW command placeholder:** `/vg:override-resolve {gate_id} --wont-fix --reason='...'` — explicit decline path for overrides that will never be clean-resolved. Ships in v1.9+. Until then, use `--allow-unresolved-overrides` inline path (logs new debt entry, still blocks next accept — forces eventual confrontation).
@@ -1175,17 +1208,50 @@ AskUserQuestion:
 If `n` → abort UAT, write UAT.md status = `DEFERRED_PENDING_RIPPLE_REVIEW`.
 
 ### D. Design fidelity (if design refs exist)
+
+**P19 D-06 — strict 3-file inspection when L4 produced diffs.** If
+`${PHASE_DIR}/visual-fidelity/{ref}.diff.png` exists (the L4 review SSIM
+gate produced a baseline-vs-current diff), surface ALL THREE files in the
+prompt so the user can open them side-by-side. Reject = phase not
+acceptable (returns to /vg:build with override-debt logged).
+
 For each unique design-ref in `${VG_TMP}/uat-designs.txt`:
+
+```bash
+DESIGN_DIR_REL_UAT="$(vg_config_get design_assets.output_dir .vg/design-normalized 2>/dev/null || echo .vg/design-normalized)"
+DIFF_PNG="${PHASE_DIR}/visual-fidelity/{ref}.diff.png"
+CURRENT_PNG="${PHASE_DIR}/visual-fidelity/{ref}.current.png"
+BASELINE_PNG="${REPO_ROOT}/${DESIGN_DIR_REL_UAT}/screenshots/{ref}.default.png"
+
+if [ -f "$DIFF_PNG" ]; then
+  PROMPT_BODY="Design ref: {ref}
+   THREE files to open side-by-side (P19 D-06):
+     baseline:  ${BASELINE_PNG}
+     current:   ${CURRENT_PNG}
+     diff:      ${DIFF_PNG}
+   The diff PNG highlights pixel mismatches in red.
+   Built output matches design (layout, spacing, components, copy)?"
+else
+  PROMPT_BODY="Design ref: {ref}
+   Screenshot: ${REPO_ROOT}/${DESIGN_DIR_REL_UAT}/screenshots/{ref}.default.png
+   (No L4 diff PNG produced — review browser may not have captured this view.)
+   Built output matches screenshot (layout, spacing, components)?"
+fi
+```
+
 ```
 AskUserQuestion:
-  "Design ref: {ref}
-   Screenshot: ${PLANNING_DIR}/design-normalized/screenshots/{ref}.png (or similar)
-   Built output matches screenshot (layout, spacing, components)?
+  "${PROMPT_BODY}
 
    [p] Pass — visual match
-   [f] Fail — significant drift (describe)
+   [f] Fail — significant drift (describe; logs override-debt kind=human-rejected-design)
    [s] Skip — no design ref available / cannot verify"
 ```
+
+**Fail handling (P19 D-06):** if user picks `f` for any ref, write to
+override-debt register (`kind=human-rejected-design`, severity=critical)
+and abort UAT with status `REJECTED_DESIGN_DRIFT`. User must `/vg:build`
+again to fix; debt entry resolved when rerun yields PASS.
 
 **Mobile extension** (runs ONLY when `$PROFILE` matches `mobile-*`):
 For each simulator/emulator screenshot in `${VG_TMP}/uat-mobile-screenshots.txt`:

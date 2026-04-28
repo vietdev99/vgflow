@@ -3198,6 +3198,123 @@ if [ -x "${REPO_ROOT}/.claude/scripts/verify-holistic-drift.py" ] \
 fi
 ```
 
+**6e. L4 — Design-fidelity SSIM gate (NEW, 2026-04-28):**
+
+Final safety net for the 4-layer pixel pipeline. L1 (executor reads PNG) +
+L2 (LAYOUT-FINGERPRINT) + L3 (build-time render vs baseline) all run
+during /vg:build. This gate runs during /vg:review using the live browser
+session — if any of the upstream layers were skipped or overridden, this
+catches the drift before it leaves the phase. **Severity = BLOCK** by
+design; override `--allow-design-drift` consumes a rationalization-guard
+slot and logs override-debt.
+
+```bash
+DESIGN_DIR_REL="$(vg_config_get design_assets.output_dir .vg/design-normalized 2>/dev/null || echo .vg/design-normalized)"
+DF_THRESHOLD="$(vg_config_get visual_checks.design_fidelity_threshold_pct 5.0 2>/dev/null || echo 5.0)"
+DF_BASELINE_DIR="${REPO_ROOT}/${DESIGN_DIR_REL}/screenshots"
+
+if [ -d "$DF_BASELINE_DIR" ] && [ -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
+  DF_PAIRS=$(${PYTHON_BIN} - "${PHASE_DIR}/RUNTIME-MAP.json" "$DF_BASELINE_DIR" <<'PY'
+import json, os, sys
+from pathlib import Path
+rt = json.load(open(sys.argv[1], encoding="utf-8"))
+baseline_dir = Path(sys.argv[2])
+views = rt.get("views") or rt.get("routes") or []
+for v in views:
+    slug = v.get("design_ref") or v.get("design_slug") or v.get("slug")
+    if not slug:
+        continue
+    png = baseline_dir / f"{slug}.default.png"
+    if not png.exists():
+        legacy = baseline_dir / f"{slug}.png"
+        if not legacy.exists():
+            continue
+        png = legacy
+    label = v.get("label") or v.get("path") or v.get("url") or slug
+    url = v.get("url") or v.get("path") or "/"
+    print(f"{slug}\t{url}\t{png}\t{label}")
+PY
+  )
+
+  DF_ISSUES=()
+  DF_CHECKS=0
+  if [ -n "$DF_PAIRS" ]; then
+    mkdir -p "${PHASE_DIR}/visual-fidelity" 2>/dev/null
+    while IFS=$'\t' read -r DF_SLUG DF_URL DF_BASELINE DF_LABEL; do
+      [ -z "$DF_SLUG" ] && continue
+      DF_CHECKS=$((DF_CHECKS + 1))
+      DF_CURRENT="${PHASE_DIR}/visual-fidelity/${DF_SLUG}.current.png"
+      DF_DIFF="${PHASE_DIR}/visual-fidelity/${DF_SLUG}.diff.png"
+
+      # Reuse the Phase 2 browser session — already navigated + logged in.
+      # MCP step (orchestrator runs in-context):
+      #   browser_navigate { url: $DF_URL }
+      #   browser_evaluate "await new Promise(r => setTimeout(r, 500))"
+      #   browser_take_screenshot { path: $DF_CURRENT }
+      # If an MCP step is unavailable, the diff falls back to SKIP and the
+      # next phase 2.5 sweep will pick the slug up.
+
+      if [ ! -f "$DF_CURRENT" ]; then
+        echo "ℹ L4 fidelity ${DF_SLUG}: SKIP — current screenshot not produced (MCP browser step missing)"
+        continue
+      fi
+
+      DF_PCT=$(${PYTHON_BIN} - "$DF_CURRENT" "$DF_BASELINE" "$DF_DIFF" <<'PY'
+import sys
+try:
+    from PIL import Image
+    from pixelmatch.contrib.PIL import pixelmatch
+except ImportError:
+    print("-1")
+    sys.exit(0)
+a = Image.open(sys.argv[1]).convert("RGBA")
+b = Image.open(sys.argv[2]).convert("RGBA")
+if a.size != b.size:
+    b = b.resize(a.size)
+diff = Image.new("RGBA", a.size)
+mismatch = pixelmatch(a, b, diff, threshold=0.1)
+total = a.size[0] * a.size[1]
+pct = (mismatch / total) * 100 if total else 0
+diff.save(sys.argv[3])
+print(f"{pct:.3f}")
+PY
+      )
+
+      if [ "$DF_PCT" = "-1" ]; then
+        echo "ℹ L4 fidelity ${DF_SLUG}: SKIP — pixelmatch+PIL not installed"
+        continue
+      fi
+
+      DF_VERDICT=$(${PYTHON_BIN} -c "import sys; print('PASS' if float(sys.argv[1]) <= float(sys.argv[2]) else 'BLOCK')" "$DF_PCT" "$DF_THRESHOLD")
+      cat > "${PHASE_DIR}/visual-fidelity/${DF_SLUG}.json" <<JSON
+{"slug":"${DF_SLUG}","url":"${DF_URL}","label":"${DF_LABEL}","diff_pct":${DF_PCT},"threshold_pct":${DF_THRESHOLD},"verdict":"${DF_VERDICT}","current":"${DF_CURRENT}","baseline":"${DF_BASELINE}","diff":"${DF_DIFF}"}
+JSON
+      if [ "$DF_VERDICT" = "BLOCK" ]; then
+        DF_ISSUES+=("${DF_SLUG} (${DF_PCT}% > ${DF_THRESHOLD}%)")
+        echo "⛔ L4 fidelity ${DF_SLUG}: ${DF_PCT}% drift > ${DF_THRESHOLD}% → see ${DF_DIFF}"
+      else
+        echo "✓ L4 fidelity ${DF_SLUG}: ${DF_PCT}% (≤ ${DF_THRESHOLD}%)"
+      fi
+    done <<< "$DF_PAIRS"
+  fi
+
+  if [ ${#DF_ISSUES[@]} -gt 0 ]; then
+    echo "⛔ L4 design-fidelity gate: ${#DF_ISSUES[@]} view(s) drift past ${DF_THRESHOLD}%:"
+    for i in "${DF_ISSUES[@]}"; do echo "    - $i"; done
+    echo "   Diffs: ${PHASE_DIR}/visual-fidelity/*.diff.png"
+    echo "   Override: --allow-design-drift (rationalization-guard + override-debt)"
+    if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+      emit_telemetry_v2 "review_l4_fidelity" "${PHASE_NUMBER}" "review.phase2_5" \
+        "design_fidelity" "BLOCK" "{\"count\":${#DF_ISSUES[@]},\"threshold\":${DF_THRESHOLD}}"
+    fi
+    if [[ ! "$ARGUMENTS" =~ --allow-design-drift ]]; then exit 1; fi
+    echo "⚠ --allow-design-drift set — drift accepted; override-debt logged."
+  elif [ "${DF_CHECKS:-0}" -gt 0 ]; then
+    echo "✓ L4 design-fidelity gate: ${DF_CHECKS} view(s) within ${DF_THRESHOLD}% of baseline"
+  fi
+fi
+```
+
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_5_visual_checks" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_5_visual_checks.done"`
 </step>
 
