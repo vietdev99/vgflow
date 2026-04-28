@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.17.0 (2026-04-28) — Phase 20 Wave B: PenBoard auto + Claude design + v0 CLI + VIEW-COMPONENTS feedback
+
+Wave B closes Phase 20. Promotes 2 stub tools to full implementation, conditionally automates 1 external tool, and wires the P19→P20 feedback loop.
+
+- **D-08 — PenBoard MCP automated** (`scaffold-penboard.sh` full impl): agent prompt for `mcp__penboard__*` chain. Workspace mode — single `.penboard` file containing multi-page navigation, shared Sidebar/TopBar across pages, entity declarations, primary user flows via `mcp__penboard__write_flow`. ~$0.20/page Opus (heavier than Pencil due to MCP tool overhead).
+- **D-09 — Claude design-shotgun integration** (`scaffold-claude-design.sh` full impl): detects `gstack:design-shotgun` skill via `~/.claude/skills/` glob. When present, emits orchestrator prompt for `/design-shotgun` (variants) + user pick + `/design-html` finalization chain. When absent, prints fallback message + ai-html alternative.
+- **D-10 — v0 CLI conditional automation** (`scaffold-v0.sh` extension): detects `v0` CLI on PATH + auth via `v0 whoami`. Authenticated → drives `v0 generate --prompt --output --format html` per page, writes evidence with `v0_cli=true`. Else falls back to existing manual-export instructional.
+- **D-11 — VIEW-COMPONENTS-aware mockup generation**: D-02 (Pencil MCP) and D-03 (AI HTML) prompts now detect `${PHASE_DIR}/VIEW-COMPONENTS.md` (P19 D-02 vision-decomposition output). When present, per-slug component list becomes AUTHORITATIVE input — every component must appear in mockup output. Closes the P19↔P20 feedback loop: vision decomposition spec → scaffold consumes → tighter mockups → P19 L1-L6 verify against tighter ground truth.
+
+**Backward compatibility:** D-11 gates by file presence — projects without P19 D-02 baseline (first scaffold pass) get original prompts unchanged.
+
+Phase 20 fully shipped. All 12 decisions (D-01..D-12) implemented across Wave A (v2.16.0) + Wave B (v2.17.0). Future tracking: dogfood reliability measurement on greenfield phase, mobile-specific mockup tools (Sketch/Marvel), reverse-engineering live UI to mockups (separate phase).
+
 ## v2.16.0 (2026-04-28) — Phase 20 Wave A: greenfield design scaffold
 
 Closes the upstream gap exposed by Phase 19. Greenfield projects (zero design assets) bypassed every L1-L6 gate via Form B `no-asset:` and shipped AI-imagined UI. Wave A delivers an entry command, blueprint pre-flight gate, and 8-tool selector covering Pencil MCP / PenBoard MCP / AI HTML / Claude design / Stitch / v0 / Figma / manual.
