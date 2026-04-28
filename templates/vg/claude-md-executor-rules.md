@@ -10,8 +10,18 @@
 
 ## VG Executor Rules (universal, all phases)
 
-Applies to any agent executing VG plan tasks (gsd-executor spawned by /vg:build,
-or any direct code change under VG workflow). These override GSD generic defaults.
+Applies to any agent executing VG plan tasks (general-purpose subagent
+spawned by /vg:build, or any direct code change under VG workflow).
+These rules are VG-native and apply regardless of which subagent type
+the orchestrator selects.
+
+**IMPORTANT — VG vs GSD executor:** /vg:build spawns
+`subagent_type=general-purpose`, NOT `gsd-executor`. GSD's executor
+agent enforces a different (looser) rule set including `--no-verify`
+parallel mode that VG explicitly forbids. If a wave dispatch shows
+"gsd-executor(...)" in the spawn line, that is a stale-install symptom
+— /vg:update silent-merge bug (#30, fixed v2.24.0) kept old build.md.
+Re-run /vg:update on v2.24.0+ to land the general-purpose dispatch.
 
 ### Commit discipline
 

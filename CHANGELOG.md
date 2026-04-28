@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.25.0 (2026-04-28) — hooks python3 detection + gsd-executor doc fix
+
+Closes #33 (hooks call `python` instead of `python3`) + clarifies executor agent type so AI doesn't pick `gsd-executor` when project's CLAUDE.md inherits a stale doc fragment.
+
+### Issue #33 — hook commands fail on python3-only systems
+
+`scripts/vg-hooks-install.py:HOOK_ENTRY` hard-coded `python` as the interpreter for all 4 hooks (Stop, PostToolUse Edit, PostToolUse Bash, UserPromptSubmit). On macOS Homebrew (default Python 3.x install) and many Linux distros, only `python3` is on PATH — no `python` symlink. All 4 hooks silently failed with `/bin/sh: python: command not found`. Script shebangs were correct (`#!/usr/bin/env python3`); only the bootstrap settings template was wrong.
+
+**Fix:**
+- New `_detect_python_cmd()` resolves at install time via `shutil.which`. Prefers `python3` (matches script shebangs), falls back to `python`, then literal `"python3"` if neither resolves.
+- All 4 `HOOK_ENTRY` command strings use the detected name via f-string interpolation.
+- `merge_hooks()` repair pass now also detects existing hook commands whose interpreter token doesn't resolve on PATH (e.g., a project installed on a Mac without `python` symlink) and repairs them in-place using the freshly-resolved name. Existing v2.5.2.4 unquoted-path repair preserved.
+
+Affects new installs and any user re-running `bash sync.sh` or `python .claude/scripts/vg-hooks-install.py` on an existing project. Re-run after upgrading to land the repair.
+
+### Stale `gsd-executor` reference (user reported)
+
+User saw wave dispatch line `gsd-executor(Wave 3 Task 7 — Ledger posting service)` instead of expected `general-purpose(...)`. Root cause traced to `templates/vg/claude-md-executor-rules.md:13` which still read "gsd-executor spawned by /vg:build" — old prose from before v2.5.1's migration to general-purpose. Users who copy-pasted this template into their project CLAUDE.md gave their AI sessions an instruction that contradicted the actual `Agent(subagent_type="general-purpose", ...)` line in build.md, and the AI sometimes resolved the contradiction toward the doc instead of the dispatcher.
+
+**Fix:**
+- `templates/vg/claude-md-executor-rules.md` rewrites line 13 prose to "general-purpose subagent spawned by /vg:build" + adds explicit IMPORTANT block: "VG spawns general-purpose, NOT gsd-executor. Wrong agent type → stale install symptom (#30, fixed v2.24.0). Re-run /vg:update."
+- `commands/vg/build.md` step 7 (executor spawn) prepends MANDATORY guard: "subagent_type MUST be general-purpose. NEVER spawn gsd-executor. If project's CLAUDE.md mentions gsd-executor, IGNORE it." Status line will read `general-purpose(Wave N Task M)` not `gsd-executor(...)`.
+
+User action: paste the updated template block into project CLAUDE.md (or remove the old block — VG_EXECUTOR_RULES are also injected inline at every spawn so CLAUDE.md is no longer authoritative for them).
+
+### Closed
+- **#33** (this release — python3 detection + repair)
+
 ## v2.24.0 (2026-04-28) — silent update fix + cross-session zombie + is_stale tz bug
 
 3 issues, 1 critical hidden bug. Closes #30, #32, partial #31.

@@ -1761,6 +1761,16 @@ echo "✓ Full executor prompt persisted -> $PROMPT_FULL_PERSIST"
 ```
 
 **Spawn executor agent (one per plan task):**
+
+**MANDATORY:** subagent_type MUST be `general-purpose`. **NEVER spawn
+`gsd-executor`.** GSD's executor enforces a different (looser) rule set
+including `--no-verify` parallel mode that VG explicitly forbids. If
+the project's CLAUDE.md mentions "gsd-executor spawned by /vg:build",
+that is a stale doc from old vgflow versions — IGNORE it; spawn
+general-purpose with the VG_EXECUTOR_RULES block below. The wave
+status line in your output will read `general-purpose(Wave N Task M)`,
+not `gsd-executor(...)`.
+
 ```
 Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
   prompt: |

@@ -26,6 +26,26 @@ from pathlib import Path
 REPO_ROOT = Path(os.getcwd()).resolve()
 
 
+def _detect_python_cmd() -> str:
+    """Pick the python interpreter name to bake into hook commands.
+
+    Issue #33: hard-coding `python` broke macOS Homebrew users and any
+    distro where only `python3` is on PATH (no `python` symlink). All 4
+    VG hooks would fail with `python: command not found`. Detect at
+    install time and write the resolved name. Prefer `python3` to match
+    script shebangs (`#!/usr/bin/env python3`).
+    """
+    import shutil
+    if shutil.which("python3"):
+        return "python3"
+    if shutil.which("python"):
+        return "python"
+    return "python3"  # fallback — error surfaces at first hook fire
+
+
+PYTHON_CMD = _detect_python_cmd()
+
+
 HOOK_ENTRY = {
     "Stop": [
         {
@@ -35,8 +55,10 @@ HOOK_ENTRY = {
                     # v2.5.2.4: quote ${CLAUDE_PROJECT_DIR} so paths with spaces
                     # (e.g. "D:\AI CODE PROJECT") don't break shell argv parsing
                     # when Claude Code expands the variable.
+                    # v2.25.0 (#33): use detected PYTHON_CMD instead of literal
+                    # `python` so macOS Homebrew + python3-only distros work.
                     "command": (
-                        'python '
+                        f'{PYTHON_CMD} '
                         '"${CLAUDE_PROJECT_DIR}/.claude/scripts/vg-verify-claim.py"'
                     ),
                     "comment": (
@@ -55,7 +77,7 @@ HOOK_ENTRY = {
                 {
                     "type": "command",
                     "command": (
-                        'python '
+                        f'{PYTHON_CMD} '
                         '"${CLAUDE_PROJECT_DIR}/.claude/scripts/vg-edit-warn.py"'
                     ),
                     "comment": (
@@ -74,7 +96,7 @@ HOOK_ENTRY = {
                 {
                     "type": "command",
                     "command": (
-                        'python '
+                        f'{PYTHON_CMD} '
                         '"${CLAUDE_PROJECT_DIR}/.claude/scripts/vg-step-tracker.py"'
                     ),
                     "comment": (
@@ -92,7 +114,7 @@ HOOK_ENTRY = {
                 {
                     "type": "command",
                     "command": (
-                        'python '
+                        f'{PYTHON_CMD} '
                         '"${CLAUDE_PROJECT_DIR}/.claude/scripts/vg-entry-hook.py"'
                     ),
                     "comment": (
@@ -157,6 +179,16 @@ def merge_hooks(existing: dict, new_hooks: dict) -> tuple[dict, list[str]]:
                         has_var = "${CLAUDE_PROJECT_DIR}" in existing_cmd
                         is_quoted = '"${CLAUDE_PROJECT_DIR}' in existing_cmd
                         if has_var and not is_quoted and vg_command:
+                            h["command"] = vg_command
+                            repaired = True
+                            break
+                        # v2.25.0 (#33): existing hook uses an interpreter that
+                        # doesn't exist on PATH (typically `python` on macOS
+                        # Homebrew where only `python3` is installed). Detect
+                        # by checking if the leading token resolves on PATH.
+                        first_token = existing_cmd.strip().split()[0] if existing_cmd.strip() else ""
+                        import shutil as _sh
+                        if first_token and not _sh.which(first_token) and vg_command:
                             h["command"] = vg_command
                             repaired = True
                         break
