@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.16.0 (2026-04-28) — Phase 20 Wave A: greenfield design scaffold
+
+Closes the upstream gap exposed by Phase 19. Greenfield projects (zero design assets) bypassed every L1-L6 gate via Form B `no-asset:` and shipped AI-imagined UI. Wave A delivers an entry command, blueprint pre-flight gate, and 8-tool selector covering Pencil MCP / PenBoard MCP / AI HTML / Claude design / Stitch / v0 / Figma / manual.
+
+- **D-01 — `/vg:design-scaffold` entry command** with `--tool=<id>` selector + decision matrix (`--help-tools`). Default `pencil-mcp` per user choice. Bulk by default + `--interactive` flag for per-page review pause.
+- **D-02 — Pencil MCP automated** (`scaffold-pencil.sh`): spawns Opus with `mcp__pencil__batch_design` + DESIGN.md tokens, output `.pen` files for `pencil_mcp` handler.
+- **D-03 — AI HTML automated** (`scaffold-ai-html.sh`): Opus emits HTML+Tailwind from DESIGN.md tokens; L-002 anti-pattern explicitly banned in prompt; output `.html` for `playwright_render` handler.
+- **D-03b — Auto-regen on DESIGN.md change** (`scaffold-staleness-check.py`): caches by DESIGN.md SHA256 in `.scaffold-evidence/<slug>.json`; mismatch → mark stale → re-run.
+- **D-04 — 4 instructional sub-flows**: `scaffold-stitch.sh` (Google Stitch), `scaffold-v0.sh` (Vercel v0), `scaffold-figma.sh` (Figma), `scaffold-manual.sh` (hand-written HTML). Print tool-specific instructions + `scaffold_wait_for_files` validation loop with [c]ontinue/[s]kip/[a]bort prompts.
+- **D-05 — `/vg:specs` proactive suggestion**: after SPECS committed, soft-prints `/vg:design-system + /vg:design-scaffold` recommendations when FE work + missing tokens/mockups.
+- **D-06 — Greenfield Form B critical block at `/vg:accept`**: extends step 3c with `verify-override-debt-threshold.py --kind 'design-greenfield-*' --threshold 1` — ANY single greenfield Form B BLOCKs accept until resolved via scaffold or rationalization-guard.
+- **D-12 — Blueprint pre-flight design discovery (NEW per user request 2026-04-28)**: new step 0_design_discovery in `/vg:blueprint` — detects FE work + zero mockups, AskUserQuestion routes 5 options ([a]existing path, [b]external tool, [c]scaffold, [d]explicit skip with critical debt, [skip]one-time bypass). Re-checks after a/b/c. Config gate `design_discovery.enabled` (default true). Closes the silent-skip risk that D-05 soft suggestion alone can't prevent.
+
+**Wave B deferred (v2.17.0):** D-08 PenBoard MCP automation, D-09 Claude design-shotgun integration, D-10 v0 CLI hook, D-11 VIEW-COMPONENTS-aware scaffold (P19 D-02 feedback loop).
+
+**Tool stubs in Wave A:** `scaffold-penboard.sh` and `scaffold-claude-design.sh` print Wave B deferral message + manual workaround.
+
+**Codex mirror count:** 61 → 62 (added `vg-design-scaffold`).
+
 ## v2.15.3 (2026-04-28) — CI hard-gate on codex mirror drift (closes #16 process gap)
 
 Patch release. Closes the process gap that allowed v2.15.0–v2.15.1 to ship stale codex mirrors. No code behaviour change.
