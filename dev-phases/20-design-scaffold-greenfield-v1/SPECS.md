@@ -1,7 +1,16 @@
 # Phase 20 — Design Scaffold for Greenfield — SPECS
 
-**Version:** v1 (draft 2026-04-28)
-**Total decisions:** 11 (D-01..D-11; D-08..D-11 deferred to Wave B / v2.17.0)
+**Version:** v2 (locked 2026-04-28 — open questions resolved + D-12 added)
+**Total decisions:** 13 (D-01..D-12 in Wave A; D-04 fine-grained planner from P19 was different doc; D-08..D-11 still in Wave B / v2.17.0)
+
+## Locked decisions (user 2026-04-28)
+
+| Q | Decision | Rationale |
+|---|---|---|
+| 1 | **Default tool = `pencil-mcp`** (Tool A) when user runs `/vg:design-scaffold` without `--tool=` | Auto + binary output ideal for L1-L6 |
+| 2 | **Bulk default + `--interactive` flag** for per-page review | Speed by default; safety opt-in |
+| 3 | **Auto-regen on DESIGN.md change** | Token edits propagate without manual re-run; cache by DESIGN.md SHA256 |
+| 4 | **Wave A ships ALL 8 tools** (A+C automated, B/D/E/F/G/H instructional) | Full UX from first release; instructional flows are cheap (~1.5h each) |
 **Source:** ROADMAP-ENTRY.md (this folder)
 **Critical reality check:** Existing `/vg:design-extract` already supports 4 input handlers (`playwright_render` for HTML, `passthrough` for PNG/JPG, `pencil_mcp` for `.pen`, `penboard_mcp` for `.penboard`/`.flow`, `figma_fallback` for `.fig`). Phase 20 does NOT change extract. It produces files that drop into `design_assets.paths/` so extract picks them up unchanged.
 
@@ -412,9 +421,67 @@ End-to-end: dogfood Phase 20 itself by treating it as a greenfield "FE phase" (i
 | Cost balloon (Opus per page × N pages × M iterations) | MED | MED | Default `--pages` to single-page; user opts into bulk; cache by ROADMAP hash |
 | Tool ecosystem churn (Stitch API ships, v0 export changes) | HIGH | LOW | External tools are routed-only; updating instruction text is a doc PR |
 
-## Open questions
+---
 
-1. **Default tool when user picks "auto"**: pencil-mcp (binary, automated) vs ai-html (cheaper, more inspectable). Recommend pencil-mcp because L1-L6 prefer binary but flag for user discussion.
-2. **Multi-page bulk vs page-by-page interactive**: bulk faster, page-by-page allows mid-flight correction. Recommend bulk default with `--interactive` opt-in.
-3. **Should `/vg:design-scaffold` regenerate mockups when DESIGN.md changes?** I.e. token version awareness. Skip for Wave A; revisit if dogfood shows token-drift issues.
-4. **Wave A vs B split — is D-04 instructional sub-flow really needed in Wave A?** Could ship Wave A with only A+C automated and route everything else to "manual: drop file in path" until Wave B. Faster ship but worse UX. Lean toward Wave A as scoped (covers all 8 tools) for completeness.
+## D-12 — Blueprint pre-flight design discovery (NEW per user 2026-04-28)
+
+**Problem:** Even with `/vg:specs` D-05 suggesting scaffold proactively, user might forget. By the time `/vg:blueprint` step 4b BLOCKs with "design assets missing", user is already deep in pipeline. Need a more aggressive gate that asks "where is the UI?" the moment blueprint detects FE work.
+
+**Decision:** Add new step `0_design_discovery` in `/vg:blueprint` (very early, before step 1 normal flow) that:
+
+1. **Detect FE work in current PLAN's task list** (regex match `apps/{admin,merchant,vendor,web}/**`, `packages/ui/src/**`, `.tsx/.jsx/.vue/.svelte`).
+2. **If FE work present**, glob `${design_assets.paths}` for any mockup files.
+3. **If FE work + no mockups**: AskUserQuestion routing 4 options:
+
+```
+⛔ Phase này có UI work nhưng chưa thấy mockup nào ở ${design_assets.paths}.
+   Giao diện ở đâu?
+
+   [a] Đã có file ở đâu đó — cho tôi đường dẫn (file/folder/Figma URL)
+   [b] Đang dùng tool external (Stitch / Figma / v0...) — chỉ chưa import vào project
+   [c] Chưa có gì cả → /vg:design-scaffold (greenfield case, dùng AI tự gen)
+   [d] Skip — phase này không có visual mockup (rare; sẽ log Form B critical-severity)
+```
+
+4. **Per option dispatch:**
+
+| Option | Action |
+|---|---|
+| `a` | Prompt path. Validate files exist. Copy/symlink to `design_assets.paths[0]/`. Resume blueprint. |
+| `b` | Print decision matrix (E/F/G tools). User picks → `SlashCommand /vg:design-scaffold --tool=<X>` instructional flow. After scaffold completes, resume blueprint. |
+| `c` | `SlashCommand /vg:design-scaffold` (interactive selector, default `pencil-mcp` per choice 1). After completes, resume blueprint. |
+| `d` | Log Form B `<design-ref>no-asset:greenfield-explicit-skip-blueprint</design-ref>` for every FE task. Trigger D-06 critical-severity at /vg:accept. Continue blueprint with WARN. |
+
+5. **After scaffold completes**, re-run discovery once. Files now exist → proceed normally to step 1.
+
+**Why this matters:** D-05 (specs routing) is a soft suggestion. D-12 is a HARD gate at blueprint — user cannot skip past it without conscious choice. AI cannot silently bypass either: option `d` requires explicit confirmation and writes critical-severity debt that blocks `/vg:accept`.
+
+**File changes:**
+- `commands/vg/blueprint.md`: insert new step `0_design_discovery` before any other step (before existing `0_gate_integrity_precheck` or as first step). ~80 LOC.
+- Reuse `commands/vg/_shared/lib/scaffold-discovery.sh` helper for detection logic (~40 LOC) — also called by D-05.
+
+**Effort:** 2h (heavier than typical because routing logic + 4-option dispatch + resume-after-scaffold).
+
+**Risk:** MED. Adding a step to blueprint is invasive (blueprint is ~3300 lines). Mitigation: gate behind `design_discovery.enabled` config flag (default ON for new installs, off for existing on first migration to avoid surprising mid-phase users).
+
+---
+
+## Decision summary post-locks
+
+**Wave A scope (v2.16.0 ship target):**
+
+| ID | Topic | Status |
+|---|---|---|
+| D-01 | Entry command + selector | implement |
+| D-02 | Pencil MCP automated (DEFAULT per Q1) | implement |
+| D-03 | AI HTML automated | implement |
+| D-03b | Auto-regen on DESIGN.md change (per Q3) | implement |
+| D-04 | Instructional sub-flows E/F/G/H (per Q4) | implement |
+| D-05 | /vg:specs proactive suggestion | implement |
+| D-06 | Form B greenfield-* critical block at /vg:accept | implement |
+| D-07 | Codex mirror regen on release (CI gate v2.15.3 catches) | process |
+| **D-12** | **Blueprint pre-flight discovery (NEW per user 2026-04-28)** | **implement** |
+
+**Bulk-vs-interactive (per Q2):** D-02 + D-03 default to bulk generation. `--interactive` flag pauses between pages for user review. Implemented in scaffold-pencil.sh + scaffold-ai-html.sh inner loop.
+
+**Wave B (v2.17.0):** D-08 (PenBoard MCP), D-09 (Claude design-shotgun), D-10 (v0 CLI hook), D-11 (VIEW-COMPONENTS feedback loop) — unchanged from v1 plan.
