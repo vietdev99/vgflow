@@ -71,7 +71,7 @@ def log(msg: str) -> None:
     try:
         HOOK_LOG.parent.mkdir(parents=True, exist_ok=True)
         with HOOK_LOG.open("a", encoding="utf-8") as f:
-            ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             f.write(f"[{ts}] {msg.rstrip()}\n")
     except Exception:
         pass
@@ -93,7 +93,7 @@ def is_stale(run: dict) -> bool:
         return True
     try:
         ts = datetime.datetime.fromisoformat(started.rstrip("Z"))
-        age_min = (datetime.datetime.utcnow() - ts).total_seconds() / 60
+        age_min = (datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds() / 60
         return age_min > STALE_MINUTES
     except Exception:
         return True
@@ -156,7 +156,7 @@ def _read_drift_state() -> dict:
         return {}
     # GC entries older than DRIFT_STATE_TTL_MINUTES — keeps file from
     # growing unbounded across many runs.
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     cleaned = {}
     for run_id, entry in data.items():
         last = entry.get("last_drift_at", "")
@@ -180,7 +180,7 @@ def _write_drift_state(state: dict) -> None:
 def _bump_drift(run_id: str, violation_types: set[str]) -> int:
     """Increment drift counter for run_id, return new count."""
     state = _read_drift_state()
-    now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     entry = state.get(run_id) or {
         "drift_count": 0,
         "first_drift_at": now,

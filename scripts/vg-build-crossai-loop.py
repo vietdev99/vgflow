@@ -342,7 +342,7 @@ def emit_event(event_type: str, phase: str, payload: dict) -> None:
     """OHOK-8: bypass the emit-event CLI (which blocks reserved `build.crossai_*`
     after round-3 forgery mitigation). Import db module directly so only this
     script — not user CLI — can land these events. Preserves hash chain because
-    db.append_event serializes via _flock().
+    db.append_event serializes via SQLite BEGIN IMMEDIATE + busy_timeout.
 
     OHOK-8 round-3 hardening: raise EmitError on failure instead of silently
     swallowing. An emit failure means the validator cannot later prove the
@@ -512,7 +512,7 @@ def main() -> int:
         "phase": args.phase,
         "iteration": args.iteration,
         "max_iterations": args.max_iterations,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         "codex": {
             "rc": codex_rc,
             "verdict": codex_verdict["verdict"] if codex_verdict else "PARSE_FAIL",

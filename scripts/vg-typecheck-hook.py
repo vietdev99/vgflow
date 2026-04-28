@@ -39,7 +39,7 @@ def log(msg: str) -> None:
         LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open("a", encoding="utf-8") as f:
             from datetime import datetime
-            f.write(f"[{datetime.utcnow().isoformat()}Z] {msg}\n")
+            f.write(f"[{datetime.now(timezone.utc).isoformat()}Z] {msg}\n")
     except Exception:
         pass
 

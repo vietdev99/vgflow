@@ -88,7 +88,7 @@ def _drive_main(mod, capsys, stdin_payload: dict | None = None) -> tuple[int, st
 
 def _fresh_started_at() -> str:
     """ISO timestamp 1 minute ago — within STALE_MINUTES window."""
-    ts = datetime.utcnow() - timedelta(minutes=1)
+    ts = datetime.now(timezone.utc) - timedelta(minutes=1)
     return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -346,8 +346,8 @@ def test_drift_state_gc_drops_stale_entries(tmp_path):
     repo = _setup_fake_repo(tmp_path)
     mod = _load_hook_module(repo)
     # Pre-seed: one fresh, one stale (>120min)
-    fresh_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    stale_ts = (datetime.utcnow() - timedelta(minutes=200)).strftime(
+    fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=200)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     raw = {

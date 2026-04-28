@@ -84,7 +84,7 @@ def log(msg: str) -> None:
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open("a", encoding="utf-8") as f:
-            ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             f.write(f"[{ts}] {msg.rstrip()}\n")
     except Exception:
         pass
@@ -180,7 +180,7 @@ def main() -> int:
             history.append({
                 "step": step_name,
                 "transition": kind,
-                "ts": datetime.datetime.utcnow().strftime(
+                "ts": datetime.datetime.now(datetime.timezone.utc).strftime(
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
             })

@@ -312,7 +312,7 @@ def _is_run_stale(active: dict) -> bool:
         return True
     try:
         ts = datetime.fromisoformat(started.rstrip("Z"))
-        age_min = (datetime.utcnow() - ts).total_seconds() / 60
+        age_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60
         return age_min > _RUN_STALE_MINUTES
     except Exception:
         return True
@@ -1329,7 +1329,7 @@ def cmd_promote_goal_manual(args) -> int:
         return 1
 
     # Append justification line near goal row (or in a dedicated MANUAL section)
-    manual_entry = (f"\n- **{args.goal_id} MANUAL** ({datetime.utcnow().isoformat()}Z): "
+    manual_entry = (f"\n- **{args.goal_id} MANUAL** ({datetime.now(timezone.utc).isoformat()}Z): "
                     f"{args.reason}\n")
     new_text += manual_entry
     matrix.write_text(new_text, encoding="utf-8")
@@ -1408,7 +1408,7 @@ def cmd_promote_goal_manual(args) -> int:
         with register.open("a", encoding="utf-8") as f:
             f.write(
                 f"\n- id: PROMOTE-MANUAL-{phase}-{args.goal_id}\n"
-                f"  logged_at: {datetime.utcnow().isoformat()}Z\n"
+                f"  logged_at: {datetime.now(timezone.utc).isoformat()}Z\n"
                 f"  type: goal_promoted_manual\n"
                 f"  phase: \"{phase}\"\n"
                 f"  goal_id: {args.goal_id}\n"
@@ -2449,7 +2449,7 @@ def cmd_learn(args) -> int:
     # Append block + audit metadata to destination
     dest_path = accepted_path if args.action == "promote" else rejected_path
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # auth_method classification: HMAC token in env → "hmac"; else "tty".
     # verify_human_operator prefers TTY when a TTY exists, but when both
     # a TTY AND token are present we still tag as "tty" because it was the
@@ -3688,8 +3688,12 @@ def _format_block_message(command: str, phase: str,
         "",
         "Fix options:",
         "  1. Run missing step + produce artifacts + mark + emit",
-        "  2. vg-orchestrator override --flag <f> --reason <text> "
-        "(logs to OVERRIDE-DEBT.md)",
+        "  2. vg-orchestrator override --flag <f> --reason <text>",
+        "       — logs OVERRIDE-DEBT.md entry ONLY. Does NOT bypass this",
+        "       run's runtime_contract violations. Stop hook will re-fire",
+        "       at next /vg command unless underlying evidence is produced.",
+        "       Use --skip-<validator> CLI flag at command invocation for",
+        "       per-run bypass (e.g., /vg:build 3.1 --skip-build-crossai).",
         "  3. vg-orchestrator run-abort --reason <text> (gives up)",
         "",
         "Log: .vg/events.db",

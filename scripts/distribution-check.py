@@ -109,7 +109,7 @@ def cmd_generate() -> int:
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "version": 1,
-        "generated_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat() + "Z",
         "file_count": len(current),
         "files": dict(sorted(current.items())),
     }

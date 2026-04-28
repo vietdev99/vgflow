@@ -56,7 +56,7 @@ def log(msg: str) -> None:
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open("a", encoding="utf-8") as f:
-            f.write(f"[{datetime.utcnow().isoformat()}Z] {msg}\n")
+            f.write(f"[{datetime.now(timezone.utc).isoformat()}Z] {msg}\n")
     except Exception:
         pass
 
@@ -91,7 +91,7 @@ def _write_session_context(run_id: str, command: str, phase: str) -> None:
         "run_id": run_id,
         "command": command,
         "phase": phase,
-        "started_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "current_step": None,
         "step_history": [],
         "telemetry_emitted": [],

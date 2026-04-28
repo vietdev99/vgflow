@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.22.0 (2026-04-28) — events.db lock fix + datetime deprecation + crossai stderr separation
+
+User reported: 2 concurrent /vg sessions in the **same project** collide on events.db. One session times out, its slash-command body continues running with no events emitted, Stop hook then reports a misleading runtime_contract violation (missing telemetry, missing markers). Plus a `datetime.utcnow()` deprecation warning surfaces at every Stop hook on Python 3.12+.
+
+### Root cause (lock issue)
+
+`db.py` wrapped every event write in an advisory `_flock()` lockfile (`.vg/.events.lock`) on top of SQLite's WAL + busy_timeout. The advisory lock was redundant — WAL natively serializes writers — and worse, it added a second contention layer with its own 10s timeout and stale-detection logic. When session A held the file lock, session B raised `TimeoutError("flock held >10s")`. The orchestrator caller didn't surface this clearly; the slash-command continued, all subsequent emit-event calls also failed the file lock, and the run ended with **zero events written**. Stop hook saw empty events.db evidence → ran the runtime_contract checker → reported the symptom (violations) instead of the root cause (lock).
+
+### Fix
+- **`scripts/vg-orchestrator/db.py`** (and `.claude/` mirror):
+  - Dropped the `_flock()` advisory lockfile entirely. No more `.vg/.events.lock`.
+  - Switched `connect()` to `isolation_level=None` (autocommit mode) and bumped `busy_timeout` from 5000 → 30000ms.
+  - Every write (`create_run`, `complete_run`, `append_event`) now wraps work in `BEGIN IMMEDIATE` + `COMMIT` (or `ROLLBACK` on exception), acquiring the SQLite RESERVED lock at txn start instead of upgrading later. Eliminates SQLITE_BUSY upgrade races.
+  - Added `_retry_locked(work, max_total_wait=60s)` Python-level safety net for residual lock errors (e.g., WAL checkpoint stalls). Surfaces a clear `TimeoutError` naming the likely cause when contention exceeds 60s — much better signal than the old "flock held >10s".
+  - Updated stale comment in `vg-build-crossai-loop.py:345` ("serializes via _flock" → "serializes via SQLite BEGIN IMMEDIATE + busy_timeout").
+- Stress-tested 8 concurrent threads × 10 writes each = 80 events total: 0 errors, hash chain valid. Old code would have timed out at least one thread after 10s.
+
+### Other fixes
+
+- **`datetime.utcnow()` deprecation** (Python 3.12+): replaced 46 occurrences across 13 files with timezone-aware `datetime.now(datetime.timezone.utc)`. Format strings preserve `Z` literal so output is byte-identical. Files: `bootstrap-test-runner`, `build-uat-narrative`, `design-reverse`, `distribution-check`, `generate-pentest-checklist`, `tests/test_verify_claim_hybrid`, `vg-build-crossai-loop`, `vg-entry-hook`, `vg-orchestrator/__main__`, `vg-step-tracker`, `vg-typecheck-hook`, `vg-verify-claim`, `vg-wired-check`. The `DeprecationWarning` user saw at every Stop hook now silent.
+
+- **#27 — CrossAI stderr→stdout merge polluting verdict XML**: `commands/vg/_shared/crossai-invoke.md` line 99 redirected `2>&1` into `result-${cli.name}.xml`. When a CLI emitted large stderr (e.g., Codex CLI's TOML parser warnings on `~/.codex/agents/*.toml`), the XML file became 5000 lines of warnings followed by the actual verdict block; downstream parsers either matched the prompt's example XML (false-positive) or timed out. Split: stdout → `.xml`, stderr → `.err` (forensics-only, not parsed). Closes #27.
+
+- **#28 — `vg-orchestrator override` text honesty**: Stop hook's "Fix options" block in `vg-orchestrator/__main__.py:3691` advertised option 2 as "logs to OVERRIDE-DEBT.md" without mentioning it does NOT bypass the validator on the current run. Users hit the gate, ran override, hit the same gate again — rationalization spiral. Hook text now reads: "logs OVERRIDE-DEBT.md entry ONLY. Does NOT bypass this run's runtime_contract violations. Stop hook will re-fire at next /vg command unless underlying evidence is produced. Use --skip-<validator> CLI flag at command invocation for per-run bypass." Real bypass-via-active-run-flag-consultation behavior deferred to v2.23+ (needs threat-modeling on what counts as "active run", what validators the override should disable, etc.). Partial-fix #28 (text-only); deeper fix tracked.
+
+### Closed issues
+- **#27** (this release — stderr separation)
+- **#28** partial (this release — text honesty; deep fix deferred to v2.23+)
+- **#24, #25** — duplicate noise from #29 (empty-context bug-reports). Already fixed in v2.19.0 (commit 46b4df8) which rewrote `bug_reporter_redact` to use a Python subprocess. Reporter on v2.18.0 needs to update.
+- **#29** — same as #24/#25; redact bash parse error, fixed in v2.19.0 redact rewrite. User on v2.18.0 needs to update.
+
+### Deferred
+- **#26** — CRUD validator forces `platforms.web` overlay for BE-only phases. Real bug, bigger fix (validator must scan PLAN.md for FE patterns or honor `phase-profile.sh detect_phase_profile`). Defer to v2.23+ to avoid release thrash.
+
 ## v2.21.0 (2026-04-28) — Adversarial coverage Hook 1+3 (declarative threat model)
 
 User asked: wire a step that writes tests for cheat / edge / error / lách-goals cases? Plan-mode pushback: NOT a separate step — it's a **cross-cutting concern** that belongs declaratively at goal definition (blueprint) and enforcement-wise at /vg:test. Step 2 of `.claude/plans/cheeky-mapping-engelbart.md`.

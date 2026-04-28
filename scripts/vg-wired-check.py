@@ -144,7 +144,7 @@ def check_validators(fast: bool = False) -> list[dict]:
             added_str = DORMANT_EXPECTED[name]
             try:
                 added = _dt.datetime.fromisoformat(added_str)
-                age_days = (_dt.datetime.utcnow() - added).days
+                age_days = (_dt.datetime.now(_dt.timezone.utc) - added).days
                 if age_days > DORMANT_TTL_DAYS:
                     # Expired — no longer count as OK; still warn the user
                     is_dormant_ok = False

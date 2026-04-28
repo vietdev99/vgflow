@@ -1,8 +1,8 @@
 """
-SQLite event store with hash chain + WAL + flock single-writer serialization.
+SQLite event store with hash chain + WAL + native serialization.
 
 Primitives:
-- connect(): opens DB with WAL, busy_timeout, hash-chain PRAGMA
+- connect(): opens DB with WAL, busy_timeout=30s, autocommit (manual txn)
 - append_event(): atomic insert with hash chain — only path to write events
 - query_events(): read-only projection
 - verify_hash_chain(): walk events table, recompute + assert each hash
@@ -13,10 +13,28 @@ Design:
   readability + grep compat; never trusted for decisions.
 - Hash chain = sha256(prev_hash + event_type + phase + command + payload_json + ts).
   Edit any row → hash mismatches subsequent rows → detected at next query.
+
+Concurrency model (v2.22.0+):
+- WAL journal_mode → readers never block writers and vice versa.
+- BEGIN IMMEDIATE on every write → acquires RESERVED lock at txn start
+  (not deferred upgrade). Eliminates SQLITE_BUSY upgrade races.
+- busy_timeout=30000 → SQLite waits up to 30s for the writer slot before
+  surfacing `database is locked`.
+- _retry_locked() Python-level safety net for any residual lock errors
+  (e.g., during WAL checkpoint). Surfaces a clear TimeoutError naming the
+  likely cause (concurrent /vg session in same project) so the user
+  doesn't get a runtime_contract violation as the only signal.
+
+Earlier (≤v2.21) used an advisory `.events.lock` file + `_flock()` context
+manager. That was redundant with WAL native locking AND collided when two
+sessions in the same project ran simultaneously: one acquired the file
+lock, the other timed out with TimeoutError, and its slash-command body
+continued running with NO events emitted → Stop hook reported empty
+events.db evidence → runtime_contract violation. Dropping the advisory
+lock fixes the user-visible "2 session bị lock event.db" symptom.
 """
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
@@ -24,63 +42,59 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, TypeVar
 
 SCHEMA_VERSION = 1
-LOCK_STALE_SECONDS = 30
+BUSY_TIMEOUT_MS = 30_000
+RETRY_TOTAL_WAIT_S = 60.0
+RETRY_BACKOFF_S = 0.2
 
 from _repo_root import find_repo_root  # noqa: E402
 
 REPO_ROOT = find_repo_root(__file__)
 DB_PATH = REPO_ROOT / ".vg" / "events.db"
-LOCK_PATH = REPO_ROOT / ".vg" / ".events.lock"
 PROJECTION_PATH = REPO_ROOT / ".vg" / "events.jsonl"
 
 ZERO_HASH = "0" * 64
+
+T = TypeVar("T")
 
 
 class IntegrityError(Exception):
     """Raised when hash chain verification fails."""
 
 
-@contextlib.contextmanager
-def _flock() -> Iterator[None]:
-    """Cross-platform advisory lock via lockfile. Stale locks (>30s) auto-broken."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _retry_locked(work: Callable[[], T],
+                  max_total_wait: float = RETRY_TOTAL_WAIT_S) -> T:
+    """Run `work` with retry on SQLite lock errors.
 
+    SQLite's busy_timeout (30s set on the connection) handles most lock
+    contention internally. This Python-level wrapper catches edge cases
+    (e.g., WAL checkpoint stalls, schema migrations, cross-process write
+    bursts) and surfaces a useful error message after total wait elapses.
+    """
     start = time.time()
-    while True:
+    last_err: Exception | None = None
+    while time.time() - start < max_total_wait:
         try:
-            fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            break
-        except FileExistsError:
-            # Check staleness
-            try:
-                age = time.time() - LOCK_PATH.stat().st_mtime
-                if age > LOCK_STALE_SECONDS:
-                    try:
-                        LOCK_PATH.unlink()
-                    except FileNotFoundError:
-                        pass
-                    continue
-            except FileNotFoundError:
-                continue
-            if time.time() - start > 10:
-                raise TimeoutError(f"flock held >10s on {LOCK_PATH}")
-            time.sleep(0.05)
-
-    try:
-        yield
-    finally:
-        try:
-            LOCK_PATH.unlink()
-        except FileNotFoundError:
-            pass
+            return work()
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "locked" not in msg and "busy" not in msg:
+                raise
+            last_err = e
+            time.sleep(RETRY_BACKOFF_S)
+    raise TimeoutError(
+        f"events.db locked by another vg session for >{max_total_wait}s. "
+        f"Likely cause: concurrent /vg command in the same project. "
+        f"Inspect with `vg-orchestrator run-status`. Last error: {last_err}"
+    )
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
+    # Idempotent. Runs in autocommit mode (isolation_level=None) so we don't
+    # need an explicit commit. CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE
+    # are safe under WAL even with concurrent connections.
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
@@ -124,20 +138,41 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
-    conn.commit()
 
 
 def connect() -> sqlite3.Connection:
-    """Open DB with WAL + busy timeout. Safe for concurrent readers."""
+    """Open DB with WAL + native lock serialization.
+
+    isolation_level=None → autocommit; we drive transactions explicitly
+    via BEGIN IMMEDIATE / COMMIT inside write helpers so the writer slot
+    is acquired up-front (RESERVED lock) instead of upgraded later.
+    busy_timeout=30s gives SQLite room to wait for a concurrent writer
+    in the same project before surfacing `database is locked`.
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=5.0, isolation_level="DEFERRED")
+    conn = sqlite3.connect(
+        str(DB_PATH), timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys = ON")
     _init_schema(conn)
     return conn
+
+
+def _begin_immediate(conn: sqlite3.Connection) -> None:
+    """Acquire RESERVED lock. Honors busy_timeout (30s) before failing."""
+    conn.execute("BEGIN IMMEDIATE")
+
+
+def _rollback_safe(conn: sqlite3.Connection) -> None:
+    """Roll back without raising on already-finalized txn."""
+    try:
+        conn.execute("ROLLBACK")
+    except sqlite3.OperationalError:
+        pass
 
 
 def _compute_hash(prev_hash: str, ts: str, event_type: str, phase: str,
@@ -158,32 +193,48 @@ def create_run(command: str, phase: str, args: str = "",
     """Write runs table row. Returns run_id."""
     run_id = str(uuid.uuid4())
     ts = _utc_now()
-    with _flock():
+
+    def _do() -> str:
         conn = connect()
         try:
-            conn.execute(
-                "INSERT INTO runs(run_id, command, phase, args, started_at, "
-                "session_id, git_sha) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (run_id, command, phase, args, ts, session_id, git_sha),
-            )
-            conn.commit()
+            _begin_immediate(conn)
+            try:
+                conn.execute(
+                    "INSERT INTO runs(run_id, command, phase, args, started_at, "
+                    "session_id, git_sha) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (run_id, command, phase, args, ts, session_id, git_sha),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                _rollback_safe(conn)
+                raise
         finally:
             conn.close()
-    return run_id
+        return run_id
+
+    return _retry_locked(_do)
 
 
 def complete_run(run_id: str, outcome: str = "PASS") -> None:
     ts = _utc_now()
-    with _flock():
+
+    def _do() -> None:
         conn = connect()
         try:
-            conn.execute(
-                "UPDATE runs SET completed_at = ?, outcome = ? WHERE run_id = ?",
-                (ts, outcome, run_id),
-            )
-            conn.commit()
+            _begin_immediate(conn)
+            try:
+                conn.execute(
+                    "UPDATE runs SET completed_at = ?, outcome = ? WHERE run_id = ?",
+                    (ts, outcome, run_id),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                _rollback_safe(conn)
+                raise
         finally:
             conn.close()
+
+    _retry_locked(_do)
 
 
 def get_run(run_id: str) -> dict | None:
@@ -230,28 +281,34 @@ def append_event(run_id: str, event_type: str, phase: str, command: str,
     payload_json = json.dumps(merged_payload, sort_keys=True,
                               separators=(",", ":"))
 
-    with _flock():
+    def _do() -> dict:
         conn = connect()
         try:
-            prev_hash = _latest_hash(conn)
-            this_hash = _compute_hash(
-                prev_hash, ts, event_type, phase, command, payload_json,
-            )
-            conn.execute(
-                "INSERT INTO events(run_id, ts, event_type, phase, command, "
-                "step, actor, outcome, payload_json, prev_hash, this_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, ts, event_type, phase, command, step, actor,
-                 outcome, payload_json, prev_hash, this_hash),
-            )
-            conn.commit()
-            row = conn.execute(
-                "SELECT * FROM events WHERE this_hash = ?", (this_hash,)
-            ).fetchone()
-            event_dict = dict(row)
+            _begin_immediate(conn)
+            try:
+                prev_hash = _latest_hash(conn)
+                this_hash = _compute_hash(
+                    prev_hash, ts, event_type, phase, command, payload_json,
+                )
+                conn.execute(
+                    "INSERT INTO events(run_id, ts, event_type, phase, command, "
+                    "step, actor, outcome, payload_json, prev_hash, this_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (run_id, ts, event_type, phase, command, step, actor,
+                     outcome, payload_json, prev_hash, this_hash),
+                )
+                row = conn.execute(
+                    "SELECT * FROM events WHERE this_hash = ?", (this_hash,)
+                ).fetchone()
+                conn.execute("COMMIT")
+                return dict(row)
+            except Exception:
+                _rollback_safe(conn)
+                raise
         finally:
             conn.close()
 
+    event_dict = _retry_locked(_do)
     _append_projection(event_dict)
     return event_dict
 

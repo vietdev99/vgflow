@@ -495,7 +495,7 @@ def main() -> int:
     # Assemble document
     header = (
         f"# UAT Narrative — phase {args.phase}\n\n"
-        f"**Generated:** {__import__('datetime').datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}  \n"
+        f"**Generated:** {__import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}  \n"
         f"**Locale:** {locale}  \n"
         f"**Prompts:** {len(rendered_blocks)} "
         f"({len(decisions)} decisions, {len(goals)} goals, {len(design_refs)} design-refs)\n\n"

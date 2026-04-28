@@ -435,7 +435,7 @@ def _run_scenario_e2e_workflow(fixture: dict) -> tuple[str, str]:
             # Snapshot timestamp for event counting window
             ts_before = subprocess.run(
                 [sys.executable, "-c",
-                 "import datetime; print(datetime.datetime.utcnow().isoformat())"],
+                 "import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())"],
                 capture_output=True, text=True,
             ).stdout.strip()
 

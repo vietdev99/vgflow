@@ -84,8 +84,15 @@ PROMPT="Review artifacts and output crossai_review XML per format specified"
 
 # For each CLI in the spawn set:
 #   1. Substitute {prompt} → $PROMPT and {context} → $CONTEXT_FILE in cli.command
-#   2. Redirect output to "$OUTPUT_DIR/result-${cli.name}.xml"
-#   3. Run as background process, capture PID
+#   2. Redirect stdout to "$OUTPUT_DIR/result-${cli.name}.xml" (parsed for verdict)
+#   3. Redirect stderr to "$OUTPUT_DIR/result-${cli.name}.err" (forensics only)
+#   4. Run as background process, capture PID
+#
+# Issue #27 (v2.21→v2.22): merging stderr into stdout (`2>&1`) polluted the
+# verdict XML with TOML parser warnings from `~/.codex/agents/*.toml`,
+# causing the parser to either match on the prompt's example XML (false-
+# positive) or run out of timeout before reaching the real verdict.
+# Separate streams; parser reads .xml only.
 
 # Example for a 3-CLI config:
 CROSSAI_TIMEOUT=120  # seconds — kill CLI if it hangs
@@ -96,7 +103,9 @@ for cli in "${CROSSAI_CLIS[@]}"; do
   CMD=$(echo "${cli.command}" | sed "s|{prompt}|${PROMPT}|g" | sed "s|{context}|${CONTEXT_FILE}|g")
   # Run with explicit exit-code capture via wrapper file
   (
-    timeout ${CROSSAI_TIMEOUT} bash -c "$CMD" > "$OUTPUT_DIR/result-${cli.name}.xml" 2>&1
+    timeout ${CROSSAI_TIMEOUT} bash -c "$CMD" \
+      > "$OUTPUT_DIR/result-${cli.name}.xml" \
+      2> "$OUTPUT_DIR/result-${cli.name}.err"
     echo "$?" > "$OUTPUT_DIR/result-${cli.name}.exit"
   ) &
   PIDS+=($!)

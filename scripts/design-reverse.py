@@ -151,7 +151,7 @@ def main() -> int:
                         "slug": slug,
                         "url": url,
                         "png": str(png_path),
-                        "captured_at": datetime.datetime.utcnow().isoformat() + "Z",
+                        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
                         "viewport": [vw, vh],
                         "full_page": args.full_page,
                         "tool": "design-reverse",
