@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.23.0 (2026-04-28) — CRUD validator BE-only fix (closes #26)
+
+Backend-only phases in `web-fullstack` projects (wallet/ledger/billing/integration types) generated 270+ field-missing errors per resource at `/vg:blueprint` step 2d_validation_gate because `verify-crud-surface-contract.py` forced a `platforms.web` overlay even when the phase had zero FE work.
+
+### Root cause
+
+`_required_platforms("web-fullstack", phase_text)` checked `WEB_SIGNAL_RE` (matches `view|page|table|form|button|...`) against concatenated SPECS+CONTEXT+API-CONTRACTS+TEST-GOALS+PLAN text. Real BE-only phase docs contain those words in DB/API context — `"wallet table schema"`, `"form validation in handler"`, `"view permissions on /api/wallet/{id}"` — triggering false positives. Validator then required platforms.web for every resource and emitted ~270 missing-field violations per resource × 16 resources for fictional UI that won't exist until phase 6/8.
+
+### Fix
+
+Switched to a deterministic **file-path** signal sourced from `PLAN.md` (the post-blueprint task list cites concrete source paths):
+
+- New `_plan_text(phase_dir)` helper reads `PLAN*.md` only (returns `None` if no PLAN exists yet).
+- New `FE_SOURCE_PATH_RE` matches `apps/admin/`, `apps/merchant/`, `apps/vendor/`, `apps/web/`, `packages/ui/`, `packages/web-`, `frontend/`, `.tsx`, `.jsx`.
+- `_required_platforms()` now branches:
+  - **PLAN.md exists** → trust file paths over prose. Require `platforms.web` only when `FE_SOURCE_PATH_RE` matches PLAN. Always require `platforms.backend` when backend signals (API routes, handler, schema, migration) appear.
+  - **No PLAN.md** (pre-blueprint phase) → fall back to legacy prose heuristic (preserves existing behavior on early-stage phases and the 5 existing tests).
+
+### Test coverage
+- `test_be_only_phase_in_fullstack_skips_web_overlay` — Reproduces #26: SPECS has FE-prose words from API/DB context, PLAN.md cites only `apps/api/` paths. With the fix: validator requires backend only, contract with backend overlay → PASS. Without the fix: would force web overlay → BLOCK with phantom missing fields.
+- `test_fullstack_phase_with_fe_source_in_plan_requires_web` — Counter-test: PLAN.md cites `apps/admin/...Campaigns.tsx`, contract supplies only backend → BLOCK with `platforms.web overlay missing`.
+- All 5 existing tests preserved (no PLAN.md fixture, falls back to legacy heuristic).
+
+### Pipeline impact
+- `/vg:blueprint` step 2d_validation_gate on BE-only phases of fullstack projects no longer emits phantom platforms.web requirements
+- Phases affected on PrintwayV3 per reporter: 3.1 Wallet, 3.2 Topup, 3.3 Order Payment, 3.4a Team RBAC, 3.4b Credit, 3.5 Invoice, 4 Order Flow, 4.1 Net Terms, 5 Integrations, 11 Migration, 12 Competitive — all now author backend overlays only without contract thrash.
+
 ## v2.22.0 (2026-04-28) — events.db lock fix + datetime deprecation + crossai stderr separation
 
 User reported: 2 concurrent /vg sessions in the **same project** collide on events.db. One session times out, its slash-command body continues running with no events emitted, Stop hook then reports a misleading runtime_contract violation (missing telemetry, missing markers). Plus a `datetime.utcnow()` deprecation warning surfaces at every Stop hook on Python 3.12+.

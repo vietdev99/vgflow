@@ -203,3 +203,68 @@ def test_no_crud_signals_and_no_contract_passes(tmp_path: Path) -> None:
     rc, payload = _run(tmp_path)
     assert rc == 0
     assert payload["verdict"] == "PASS"
+
+
+def test_be_only_phase_in_fullstack_skips_web_overlay(tmp_path: Path) -> None:
+    """Issue #26: Backend-only phase in a web-fullstack project.
+
+    Phase has API/DB content (matches WEB_SIGNAL_RE prose like "table",
+    "form", "view" because of "wallet table schema" / "form validation
+    in handler") but PLAN.md has zero FE source paths. Validator should
+    require platforms.backend ONLY — not platforms.web.
+    """
+    (tmp_path / ".claude").mkdir(parents=True)
+    (tmp_path / ".claude" / "vg.config.md").write_text(
+        "profile: web-fullstack\n", encoding="utf-8")
+    phase = tmp_path / ".vg" / "phases" / "03-wallet-ledger"
+    phase.mkdir(parents=True)
+    # FE-leaning prose in SPECS (table/form) — these are the false-positive
+    # words from real BE-only phase docs ("wallet table schema",
+    # "form validation in handler") that triggered the bug.
+    (phase / "SPECS.md").write_text(
+        "Wallet ledger foundation: balance table schema with audit log,\n"
+        "credit/debit handler with form validation, view permissions on\n"
+        "GET /api/wallet/{id}, mutation guards on POST /api/wallet/credit.\n",
+        encoding="utf-8")
+    (phase / "API-CONTRACTS.md").write_text(
+        "### GET /api/wallet/{id}\n\n### POST /api/wallet/credit\n\n"
+        "### POST /api/wallet/debit\n",
+        encoding="utf-8")
+    # PLAN.md task list with NO FE source paths — only backend files.
+    (phase / "PLAN.md").write_text(
+        "## Wave 1\n"
+        "- Task 01: apps/api/src/wallet/ledger.ts handler\n"
+        "- Task 02: apps/api/src/wallet/migration.sql\n"
+        "- Task 03: apps/api/test/wallet.test.ts\n",
+        encoding="utf-8")
+    # CRUD contract supplies backend overlay only.
+    contract = _contract(include_web=False, include_backend=True)
+    _write_contract(phase, contract)
+    rc, payload = _run(tmp_path, phase="3")
+    assert rc == 0, payload
+    assert payload["verdict"] == "PASS"
+
+
+def test_fullstack_phase_with_fe_source_in_plan_requires_web(tmp_path: Path) -> None:
+    """Counter-test: PLAN.md cites apps/admin/ → require platforms.web."""
+    (tmp_path / ".claude").mkdir(parents=True)
+    (tmp_path / ".claude" / "vg.config.md").write_text(
+        "profile: web-fullstack\n", encoding="utf-8")
+    phase = tmp_path / ".vg" / "phases" / "08-admin-dashboard"
+    phase.mkdir(parents=True)
+    (phase / "SPECS.md").write_text(
+        "Admin dashboard for campaigns.\n", encoding="utf-8")
+    (phase / "API-CONTRACTS.md").write_text(
+        "### GET /api/campaigns\n", encoding="utf-8")
+    (phase / "PLAN.md").write_text(
+        "## Wave 1\n"
+        "- Task 01: apps/admin/src/pages/Campaigns.tsx\n"
+        "- Task 02: apps/api/src/campaigns/list.ts\n",
+        encoding="utf-8")
+    # Contract with backend only — should BLOCK because PLAN cites .tsx
+    contract = _contract(include_web=False, include_backend=True)
+    _write_contract(phase, contract)
+    rc, payload = _run(tmp_path, phase="8")
+    assert rc == 1
+    assert payload["verdict"] == "BLOCK"
+    assert any("platforms.web" in e.get("message", "") for e in payload["evidence"])

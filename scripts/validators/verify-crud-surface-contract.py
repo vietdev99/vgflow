@@ -49,6 +49,18 @@ BACKEND_SIGNAL_RE = re.compile(
     r"PUT\s+/|PATCH\s+/|DELETE\s+/)\b",
     re.IGNORECASE,
 )
+# Issue #26: BE-only phases mention "table"/"form"/"view" in API + DB
+# context (e.g. "wallet table schema", "form validation in handler"),
+# triggering false WEB_SIGNAL_RE hits → forced platforms.web overlay
+# generated 270+ field-missing errors per phase. The deterministic fix:
+# scan PLAN.md (post-blueprint task list) for explicit FE source paths.
+# Real FE work cites apps/admin/, apps/web/, .tsx files, etc.; BE-only
+# phases don't. SPECS/CONTEXT prose alone is too noisy.
+FE_SOURCE_PATH_RE = re.compile(
+    r"\b(apps/(admin|merchant|vendor|web)/|packages/(ui|web-)|"
+    r"frontend/|\b\.tsx\b|\b\.jsx\b)",
+    re.IGNORECASE,
+)
 
 
 def _read(path: Path) -> str:
@@ -69,6 +81,17 @@ def _phase_text(phase_dir: Path) -> str:
     return "\n".join(chunks)
 
 
+def _plan_text(phase_dir: Path) -> str | None:
+    """Read PLAN*.md only. Returns None if no PLAN file exists yet
+    (phase pre-blueprint). Issue #26: PLAN.md is the authoritative
+    task list — its presence/absence of FE source paths is the
+    deterministic signal for whether the phase has FE work."""
+    plans = sorted(phase_dir.glob("*PLAN*.md"))
+    if not plans:
+        return None
+    return "\n".join(_read(p) for p in plans)
+
+
 def _read_project_profile(config: Path) -> str:
     text = _read(config)
     for key in ("project_profile", "profile"):
@@ -78,7 +101,24 @@ def _read_project_profile(config: Path) -> str:
     return "web-fullstack"
 
 
-def _required_platforms(profile: str, phase_text: str) -> list[str]:
+def _required_platforms(profile: str, phase_text: str,
+                        plan_text: str | None = None) -> list[str]:
+    """Decide which platform overlays the contract must declare.
+
+    Issue #26: when project profile is `web-fullstack` but the phase is
+    BE-only (common for wallet/ledger/billing/integration phases in
+    fullstack projects), prose words like `table`/`form`/`view` —
+    triggered by API/DB context such as "wallet table schema" or
+    "form validation in handler" — caused false WEB_SIGNAL_RE hits and
+    forced a platforms.web overlay generating 270+ field-missing errors.
+
+    Fix: prefer the deterministic file-path signal from PLAN.md (the
+    post-blueprint task list cites concrete source paths). When PLAN.md
+    exists and has zero FE source paths but does have backend signals,
+    require ONLY platforms.backend. Pre-blueprint phases (no PLAN.md
+    yet) fall back to the legacy prose heuristic so existing behavior
+    on early-stage phases is preserved.
+    """
     if profile in {"cli-tool", "library"}:
         return []
     if profile == "web-frontend-only":
@@ -87,8 +127,27 @@ def _required_platforms(profile: str, phase_text: str) -> list[str]:
         return ["backend"]
     if profile == "web-fullstack":
         platforms: list[str] = []
-        web_signal = bool(WEB_SIGNAL_RE.search(phase_text))
         backend_signal = bool(BACKEND_SIGNAL_RE.search(phase_text))
+
+        # Strong signal: explicit FE source paths in PLAN.md task list.
+        plan_has_fe_source = bool(
+            plan_text and FE_SOURCE_PATH_RE.search(plan_text)
+        )
+
+        if plan_text is not None:
+            # PLAN.md exists → trust its file paths over prose heuristics.
+            if plan_has_fe_source:
+                platforms.append("web")
+            if backend_signal:
+                platforms.append("backend")
+            # Edge: PLAN.md exists but neither FE paths nor backend signal
+            # detected (e.g., docs-only phase). Default to web for safety.
+            if not platforms:
+                platforms.append("web")
+            return platforms
+
+        # No PLAN.md (pre-blueprint phase) — legacy prose heuristic.
+        web_signal = bool(WEB_SIGNAL_RE.search(phase_text))
         if web_signal or not backend_signal:
             platforms.append("web")
         if backend_signal:
@@ -401,7 +460,8 @@ def main() -> None:
             ))
 
         profile = _read_project_profile(Path(args.config))
-        required_platforms = _required_platforms(profile, text)
+        plan_text = _plan_text(phase_dir)
+        required_platforms = _required_platforms(profile, text, plan_text)
         for resource in resources:
             if isinstance(resource, dict):
                 _validate_resource(out, resource, required_platforms, str(contract_path))
