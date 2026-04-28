@@ -240,37 +240,98 @@ override_resolve_by_id() {
     [ -n "$emitted" ] && event_id="$emitted"
   fi
 
-  # Patch the single matching row (by DEBT-ID, must be OPEN)
+  # Patch the single matching row (by DEBT-ID, must be OPEN/active).
+  # Issue #19: register has TWO coexisting formats:
+  #   - Markdown table:  | DEBT-YYYYMMDDHHMMSS-PID | sev | ph | step | flag | reason | ts | OPEN | gid | rbe | legacy |
+  #   - YAML block:      `- id: OD-NNN\n  logged_at: ...\n  ... \n  status: active\n`
+  # Orchestrator CLI writes the YAML form; legacy gates use the table.
+  # Detect by ID prefix and mutate the right shape.
   ${PYTHON_BIN:-python3} - "$register" "$debt_id" "$new_status" "$event_id" "$reason" <<'PY' || return 1
 import re, sys
+from datetime import datetime, timezone
 from pathlib import Path
 register, target_id, new_status, event_id, reason = sys.argv[1:6]
 p = Path(register)
 text = p.read_text(encoding='utf-8')
 lines = text.splitlines()
-row_re = re.compile(
-  r'^\|\s*(DEBT-\d+-\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*(OPEN|RESOLVED|WONT_FIX)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|'
-)
-out, matched, found_any = [], 0, False
-for line in lines:
-  m = row_re.match(line)
-  if not m:
-    out.append(line); continue
-  did, sev, ph, step, flag, reason_old, ts, status, gid, rbe, legacy = [g.strip() for g in m.groups()]
-  if did == target_id:
-    found_any = True
-    if status == 'OPEN':
-      # Append resolution reason to original reason (audit trail preserves both)
-      merged_reason = f"{reason_old} || {new_status.lower()}: {reason}"
-      out.append(f"| {did} | {sev} | {ph} | {step} | {flag} | {merged_reason} | {ts} | {new_status} | {gid} | {event_id} | {legacy or 'false'} |")
-      matched += 1
-      continue
-  out.append(line)
+
+is_yaml_id = bool(re.match(r'^OD-\d+$', target_id))
+
+if is_yaml_id:
+  # YAML block format. Find `- id: OD-NNN`, update its status sub-key.
+  out, matched, found_any = [], 0, False
+  i = 0
+  while i < len(lines):
+    line = lines[i]
+    stripped = line.strip()
+    if stripped == f'- id: {target_id}':
+      found_any = True
+      # Block runs from this `- id:` line up to (but not including)
+      # the next `- ` at the same indent or EOF.
+      block = [line]
+      j = i + 1
+      while j < len(lines):
+        nxt = lines[j]
+        if re.match(r'^- ', nxt):
+          break
+        block.append(nxt)
+        j += 1
+      # Find status: line inside the block.
+      status_idx = None
+      for k, bl in enumerate(block):
+        if re.match(r'^\s*status:', bl):
+          status_idx = k
+          break
+      if status_idx is None:
+        # Malformed block — leave alone, keep going.
+        out.extend(block); i = j; continue
+      current = block[status_idx].split(':', 1)[1].strip()
+      if current.lower() in ('active', 'open'):
+        # Preserve indentation of the status line.
+        indent = re.match(r'^(\s*)', block[status_idx]).group(1)
+        ts_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        # Replace newlines + double-quotes in reason for safe YAML scalar.
+        safe_reason = reason.replace('"', "'").replace('\n', ' ')
+        block[status_idx] = f"{indent}status: {new_status}"
+        # Insert resolved_* keys immediately after status to keep the YAML
+        # block contiguous (avoids blank-line gaps if the original entry
+        # ended with whitespace).
+        block[status_idx+1:status_idx+1] = [
+          f"{indent}resolved_at: {ts_iso}",
+          f"{indent}resolved_event_id: {event_id}",
+          f'{indent}resolution_reason: "{safe_reason}"',
+        ]
+        matched += 1
+      out.extend(block)
+      i = j
+    else:
+      out.append(line)
+      i += 1
+else:
+  # Markdown table format (legacy DEBT-... IDs).
+  row_re = re.compile(
+    r'^\|\s*(DEBT-\d+-\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*(OPEN|RESOLVED|WONT_FIX)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|'
+  )
+  out, matched, found_any = [], 0, False
+  for line in lines:
+    m = row_re.match(line)
+    if not m:
+      out.append(line); continue
+    did, sev, ph, step, flag, reason_old, ts, status, gid, rbe, legacy = [g.strip() for g in m.groups()]
+    if did == target_id:
+      found_any = True
+      if status == 'OPEN':
+        merged_reason = f"{reason_old} || {new_status.lower()}: {reason}"
+        out.append(f"| {did} | {sev} | {ph} | {step} | {flag} | {merged_reason} | {ts} | {new_status} | {gid} | {event_id} | {legacy or 'false'} |")
+        matched += 1
+        continue
+    out.append(line)
+
 p.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
 if not found_any:
   print(f"override_resolve_by_id: DEBT-ID not found: {target_id}", file=sys.stderr); sys.exit(2)
 if matched == 0:
-  print(f"override_resolve_by_id: {target_id} already resolved (not OPEN) — no change", file=sys.stderr); sys.exit(3)
+  print(f"override_resolve_by_id: {target_id} already resolved (not OPEN/active) — no change", file=sys.stderr); sys.exit(3)
 print(f"override_resolve_by_id: {target_id} → {new_status} (event {event_id})", file=sys.stderr)
 PY
 
