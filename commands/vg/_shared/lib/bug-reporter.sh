@@ -281,20 +281,28 @@ import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:8
     return 0
   fi
 
-  # Build event JSON
+  # Build event JSON. Issue #34/35/36 (2026-04-29): pass values via env
+  # vars instead of substituting into Python source. The earlier triple-
+  # quote substitution `'''${redacted}'''` died with SyntaxError whenever
+  # redacted JSON contained a quote/triple-quote/newline; `2>/dev/null`
+  # then silently dropped the event → GitHub issues with empty context.
   local version
   version=$(cat .claude/VGFLOW-VERSION 2>/dev/null || echo "unknown")
   local event
-  event=$(${PYTHON_BIN:-python3} -c "
-import json, sys, datetime
+  event=$(BR_SIG="$sig" BR_TYPE="$type" BR_SEV="$severity" \
+          BR_VER="$version" BR_DATA="$redacted" \
+          ${PYTHON_BIN:-python3} -c "
+import json, os, sys, datetime
+data_raw = os.environ.get('BR_DATA', '')
+data_val = json.loads(data_raw) if data_raw.startswith('{') else data_raw
 print(json.dumps({
-  'signature': '${sig}',
-  'type': '${type}',
-  'severity': '${severity}',
-  'version': '${version}',
+  'signature': os.environ.get('BR_SIG', ''),
+  'type': os.environ.get('BR_TYPE', ''),
+  'severity': os.environ.get('BR_SEV', ''),
+  'version': os.environ.get('BR_VER', ''),
   'os': sys.platform,
   'ts': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-  'data': json.loads('''${redacted}''') if '''${redacted}'''.startswith('{') else '''${redacted}'''
+  'data': data_val,
 }))
 " 2>/dev/null)
 
@@ -386,11 +394,26 @@ report_bug() {
       ;;
   esac
 
+  # Issue #34/35/36 (2026-04-29): pass sig + context via env vars rather
+  # than substituting them into the Python source. Earlier code used
+  # `'''${context}'''` triple-quote substitution, which exploded into a
+  # SyntaxError when context contained a quote, single-quote run, or
+  # `$`/backtick — `2>/dev/null` swallowed the error so data became
+  # empty. GitHub issue bodies came through with `Context: \`\`\`json\n\n\`\`\``.
+  # Env-var passing is fully byte-safe: Python reads from os.environ.
   local data
-  data=$(${PYTHON_BIN:-python3} -c "
-import json
-print(json.dumps({'signature_hint':'${sig}','context':'''${context}'''}))
+  data=$(BR_SIG="$sig" BR_CTX="$context" ${PYTHON_BIN:-python3} -c "
+import json, os
+print(json.dumps({
+    'signature_hint': os.environ.get('BR_SIG', ''),
+    'context': os.environ.get('BR_CTX', ''),
+}))
 " 2>/dev/null)
+  if [ -z "$data" ]; then
+    # Fallback: never let report_bug submit with empty data — the issue
+    # body becomes useless. Build a minimal sentinel JSON manually.
+    data="{\"signature_hint\":\"${sig}\",\"context\":\"(context-encode-failed)\"}"
+  fi
   report_event "$type" "$severity" "$data"
 }
 

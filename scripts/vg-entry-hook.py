@@ -36,7 +36,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
@@ -99,12 +99,37 @@ def _write_session_context(run_id: str, command: str, phase: str) -> None:
     SESSION_CONTEXT.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def already_active(command: str, phase: str) -> bool:
-    """Skip if current-run.json already matches."""
+def _safe_session_filename(sid: str) -> str:
+    if not sid:
+        return "unknown"
+    safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+    return safe or "unknown"
+
+
+def already_active(command: str, phase: str, session_id: str | None = None) -> bool:
+    """Skip if THIS session's active run already matches command + phase.
+
+    v2.28.0: prefer per-session state file. Two windows on the same project
+    each have their own active run; idempotency is per-session.
+    """
+    if session_id:
+        per_session = REPO_ROOT / ".vg" / "active-runs" / f"{_safe_session_filename(session_id)}.json"
+        if per_session.exists():
+            try:
+                d = json.loads(per_session.read_text(encoding="utf-8"))
+                return d.get("command") == command and d.get("phase") == phase
+            except Exception:
+                return False
     if not CURRENT_RUN.exists():
         return False
     try:
         d = json.loads(CURRENT_RUN.read_text(encoding="utf-8"))
+        # Only honor legacy snapshot for THIS session (or pre-v2.28 install
+        # without session_id field). Otherwise, the snapshot might belong
+        # to another session — don't treat that as "already active here".
+        legacy_sid = d.get("session_id")
+        if session_id and legacy_sid and legacy_sid != session_id:
+            return False
         return d.get("command") == command and d.get("phase") == phase
     except Exception:
         return False
@@ -211,6 +236,7 @@ def main() -> int:
         approve()
 
     prompt = hook_input.get("prompt") or ""
+    session_id = hook_input.get("session_id") or None
 
     # Fast path: non-VG messages
     if "/vg:" not in prompt:
@@ -244,8 +270,8 @@ def main() -> int:
 
     command = f"vg:{cmd_name}"
 
-    # Idempotent check
-    if already_active(command, phase_token):
+    # Idempotent check (per-session in v2.28.0)
+    if already_active(command, phase_token, session_id=session_id):
         log(f"{command} phase={phase_token} already active — skip")
         approve(context=f"VG run {command} phase={phase_token} already "
                         f"registered (orchestrator idempotent).")
@@ -255,12 +281,19 @@ def main() -> int:
         log(f"orchestrator missing at {ORCH} — approve degraded")
         approve()
 
-    # Fire run-start
+    # Fire run-start. v2.28.0: pass session_id via env so orchestrator
+    # writes state to .vg/active-runs/{session_id}.json (per-session).
+    # Claude Code provides session_id in hook_input but does NOT set
+    # CLAUDE_SESSION_ID in the hook subprocess env — propagate manually.
     try:
+        env = os.environ.copy()
+        if session_id:
+            env["CLAUDE_SESSION_ID"] = session_id
         r = subprocess.run(
             [sys.executable, str(ORCH), "run-start", command, phase_token],
             capture_output=True, text=True, timeout=10,
             cwd=str(REPO_ROOT),
+            env=env,
         )
         if r.returncode == 0:
             run_id = r.stdout.strip()

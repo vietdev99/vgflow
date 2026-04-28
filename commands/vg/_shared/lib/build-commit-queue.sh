@@ -211,3 +211,85 @@ vg_commit_queue_wrap() {
   vg_commit_queue_release
   return $rc
 }
+
+# Issue #38 (2026-04-29): atomic "stage + commit" inside the mutex with an
+# explicit file list. Eliminates the cross-absorb bug where parallel
+# executors `git add` BEFORE acquiring the lock — by the time they hit
+# the mutex, the index already contains another task's staged files.
+#
+# This helper is the SAFE primitive — agents should call it instead of
+# `git add` + `vg_commit_queue_acquire` + `git commit` separately.
+#
+# Usage:
+#   echo "feat(10-02): extend ClickHouse schemas
+#
+#   Per CONTEXT.md D-15
+#   " > /tmp/msg-10-02.txt
+#   vg_commit_with_files "task-10-02" 180 /tmp/msg-10-02.txt \
+#     apps/workers/src/consumer/clickhouse/schemas.js \
+#     apps/workers/src/consumer/clickhouse/migration.sql
+#
+# Args:
+#   1: task_id (required) — recorded in holder.txt for debugging
+#   2: max_wait_seconds — passed to acquire
+#   3: msg_file — path to commit message file (consumed via `git commit -F`)
+#   4..N: files to stage with `git add` (each path separately, no globs)
+#
+# Exit codes:
+#   0 — committed successfully
+#   1 — lock acquire timeout (no change)
+#   2 — usage error (missing args / msg_file not found)
+#   * — propagates `git add` or `git commit` exit code on failure
+#
+# Why explicit file list (not glob): glob expansion happens in the caller's
+# context BEFORE acquire, defeating the purpose. List the files literally.
+vg_commit_with_files() {
+  local task_id="${1:-}"
+  local max_wait="${2:-180}"
+  local msg_file="${3:-}"
+  shift 3 || true
+
+  if [ -z "$task_id" ] || [ -z "$msg_file" ] || [ "$#" -eq 0 ]; then
+    echo "⛔ vg_commit_with_files usage: vg_commit_with_files <task_id> <max_wait> <msg_file> <file>..." >&2
+    return 2
+  fi
+
+  if [ ! -f "$msg_file" ]; then
+    echo "⛔ vg_commit_with_files: msg_file not found: $msg_file" >&2
+    return 2
+  fi
+
+  # Pre-flight check: warn if the index already has staged files belonging
+  # to OTHER tasks. This is the #38 symptom — caller broke discipline.
+  # We don't auto-fix here (acquire's orphan-clean handles crash recovery);
+  # this is just diagnostic.
+  local pre_staged
+  pre_staged=$(git diff --cached --name-only 2>/dev/null)
+  if [ -n "$pre_staged" ]; then
+    echo "⚠ vg_commit_with_files($task_id): index has pre-staged files BEFORE acquire:" >&2
+    echo "$pre_staged" | sed 's/^/   /' >&2
+    echo "   These will be absorbed into THIS task's commit. If they belong to" >&2
+    echo "   another task, abort now (Ctrl-C) — issue #38 cross-absorb pattern." >&2
+  fi
+
+  vg_commit_queue_acquire "$task_id" "$max_wait" || return $?
+
+  local rc=0
+  # Stage AFTER acquire — this is the only correct sequencing.
+  local f
+  for f in "$@"; do
+    if ! git add -- "$f"; then
+      echo "⛔ vg_commit_with_files: git add failed for $f" >&2
+      rc=$?
+      break
+    fi
+  done
+
+  if [ "$rc" -eq 0 ]; then
+    git commit -F "$msg_file"
+    rc=$?
+  fi
+
+  vg_commit_queue_release
+  return $rc
+}

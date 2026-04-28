@@ -162,6 +162,11 @@ vg_commit_queue_release
 ```
 
 **Rules:**
+- ⛔ **DO NOT run `git add` BEFORE `vg_commit_queue_acquire`.** Issue #38
+  surfaced this: parallel executors that staged their files before
+  acquiring the mutex caused cross-absorb — the next agent to acquire
+  the lock pulled in the other task's staged files. The mutex only
+  protects `commit`, not the index. Stage AFTER acquire, period.
 - Only ONE `git add` + `git commit` critical section per task. No staging files
   outside the lock.
 - If typecheck fails: unstage inside the lock OR release + retry. Never commit
@@ -170,6 +175,29 @@ vg_commit_queue_release
   peer agent is stuck. Do not force-break.
 - The helper auto-breaks locks older than 600s (crashed agent recovery).
 - The helper auto-releases on EXIT trap — safe if your shell dies mid-critical.
+
+**Preferred safe primitive (v2.28.0+):** use `vg_commit_with_files` instead
+of separate `acquire` + `git add` + `git commit`. Atomic by construction —
+impossible to stage before acquiring:
+
+```bash
+# Build commit message file (multi-line — body cites contract/decision)
+cat > /tmp/msg-${PHASE_NUMBER}-${TASK_NUM}.txt <<'EOF'
+feat(PHASE-TASK): subject
+
+Per CONTEXT.md D-XX
+Covers goal: G-XX
+EOF
+
+# Stages + commits inside the mutex — exit code is the inner git result
+vg_commit_with_files "task-${PHASE_NUMBER}-${TASK_NUM}" 180 \
+  /tmp/msg-${PHASE_NUMBER}-${TASK_NUM}.txt \
+  path/to/my-file.ts \
+  path/to/my-file.test.ts
+
+# If typecheck must run BEFORE commit, fall back to the explicit
+# acquire/release pattern above — but call `git add` ONLY after acquire.
+```
 
 **Why mkdir instead of flock:** flock isn't shipped with Git Bash on Windows
 (VG must run cross-platform). `mkdir` is atomic on POSIX + NTFS.

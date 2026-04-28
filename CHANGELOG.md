@@ -1,5 +1,58 @@
 # Changelog
 
+## v2.28.0 (2026-04-29) — multi-tenant active-run + #37/38/39 + bug-reporter context
+
+User pushback: "tôi bật 2 cửa sổ, 2 session khác phase, cái nào làm sau bị lock". Plus 6 open GitHub issues (#34–39). Triage found two truly independent failure modes the user perceived as a single "lock" symptom, and three low-context auto-reported bugs traced to one root cause.
+
+### Root causes addressed
+
+1. **`current-run.json` was single-tenant.** A second `/vg:*` invocation on the same project blocked at `cmd_run_start` with `⛔ Active run exists` — even when started from a different Claude Code session. v2.24.0 cross-session detection patched the Stop hook side, never the run-start side.
+2. **`commit-attribution.py` greps the commit body** (issue #37). On phase 2, `git log --grep="\(2[-.0-9]*-[0-9]+\):"` matched a pre-existing commit whose body contained `(2026-04-22):` (year `2026` parsed as `2`+`-`+`22`). Pre-existing commit hard-flagged as `subject_format_violation`, blocking `/vg:build run-complete` deterministically. THIS was the actual cause of the user's screenshot — not the multi-session race.
+3. **`emit_event` raised EmitError when `current-run.json` had empty `run_id`** (issue #39). Mid-CrossAI-loop run-abort or run-repair cleared state; the loop's expensive Codex+Gemini work succeeded but post-completion event emit fell through and the build BLOCKed. Chicken-and-egg.
+4. **Parallel executor agents staged files BEFORE acquiring the commit-queue mutex** (issue #38). The mutex only protected `commit`, not the index. First agent to acquire absorbed the second agent's pre-staged files → cross-attribution corruption.
+5. **`bug-reporter.sh` substituted `${context}` into a Python triple-quoted string literal** (issues #34/35/36). Any context with a quote, triple-quote, or newline produced a SyntaxError; `2>/dev/null` swallowed the error → empty data → GitHub issues with empty `Context: \`\`\`json\n\n\`\`\`` blocks.
+6. **`__main__.py` referenced `timezone.utc` without importing `timezone`** (pre-existing, latent). `_is_run_stale()` always took the exception path → returned True for every run. v2.24.0 fixed the same pattern in `vg-verify-claim.py` but missed `__main__.py`. Cross-session WARN never fired and same-session block path was unreachable in production.
+
+### Multi-tenant active-run state
+
+- **NEW** `.vg/active-runs/{session_id}.json` — per-session state, authoritative for that session.
+- `.vg/current-run.json` — kept as latest-write snapshot for `run-status` aggregate view + pre-v2.28.0 install fallback.
+- `state.py` rewritten with `read_active_run` / `write_active_run` / `clear_active_run` / `list_active_runs` keyed by session_id. Legacy `read_current_run` / `write_current_run` / `clear_current_run` shims route through the new API via env `CLAUDE_SESSION_ID`.
+- `cmd_run_start`: same-session active → existing block-or-stale-clear logic. Other-session active → WARN nhẹ (not blocking) noting shared git index + commit-queue mutex. Two windows on different phases can now coexist.
+- `cmd_run_status`: shows current session run + `other_sessions_active` array of sibling sessions for awareness.
+- `vg-verify-claim.py`: Stop hook reads per-session file via `hook_input.session_id`; cross-session detection retained as defense-in-depth.
+- `vg-entry-hook.py`, `vg-agent-spawn-guard.py`: per-session reads + propagate `CLAUDE_SESSION_ID` env to subprocess invocations of orchestrator (Claude Code provides session_id via stdin only, not env — manual propagation required).
+
+### Issue fixes (closes #37, #38, #39, #34, #35, #36)
+
+- **#37** `commit-attribution.py:git_log_subjects()`: replaced `git log --grep=PATTERN` (which scans body) with raw `git log --pretty=format:%H%x00%s%x00%b%x01 -2000` then Python-side `re.match` against subject only. Body is no longer scanned for phase regex; date strings in commit bodies can no longer trigger phantom violations.
+- **#38** `build-commit-queue.sh`: new `vg_commit_with_files <task_id> <max_wait> <msg_file> <file>...` primitive. Atomic stage+commit inside the mutex with explicit file list — impossible to stage before acquire by construction. Plus diagnostic warning when index has pre-staged files at acquire time. `vg-executor-rules.md` § Parallel-wave commit safety: added explicit "⛔ DO NOT run `git add` BEFORE acquire" rule + showcased the new helper as preferred primitive.
+- **#39** `vg-build-crossai-loop.py:emit_event()`: added `_resolve_active_run(phase)` with 3-tier fallback — (1) `.vg/active-runs/{session_id}.json`, (2) legacy `.vg/current-run.json`, (3) SQLite `runs` table for the most recent open `vg:build` row at this phase. Recovers the chicken-and-egg trap; only raises EmitError if all three sources fail.
+- **#34/35/36** `bug-reporter.sh:report_bug()` + `report_event()`: pass `sig`, `context`, `redacted` data via env vars (`BR_SIG`, `BR_CTX`, `BR_DATA`) instead of substituting into Python source. Python reads from `os.environ` — fully byte-safe regardless of quotes, triple-quotes, newlines, `$`, backticks. Plus sentinel fallback if encode still fails so issue body never goes empty.
+
+### Smoke matrix verified
+
+- 2 sessions, same project, different phases (`/vg:scope 1` + `/vg:build 2`) → both start, WARN visible to second session.
+- `run-status` from session A shows `this_session=A` + `other_sessions_active=[B]`.
+- `run-abort` from session A clears only sessionA.json; sessionB.json untouched.
+- commit-attribution: fixture repo with body containing `(2026-04-22):` + a real `feat(2-01):` commit → PASS (date string no longer flagged).
+- emit_event: simulated empty current-run.json + open vg:build row in events.db → resolves run_id from DB, no EmitError.
+- vg_commit_with_files: pre-staged file from prior crashed task → diagnostic WARN + acquire's orphan-clean unstages → final commit contains only the requested files.
+- bug-reporter: adversarial context (newline + triple-quote + single-quote + `$dollar`) → event JSON properly nests data with chars preserved.
+
+### Compatibility
+
+- Pre-v2.28.0 installs missing `.vg/active-runs/` directory → `read_active_run()` falls back to legacy `current-run.json`. No state migration required.
+- Subprocess CLAUDE_SESSION_ID propagation is opt-in (passes if env present); no env present → falls back to legacy single-tenant behavior. Old hooks keep working.
+
+### User action
+
+After `/vg:update` lands v2.28.0:
+- 2 windows on same project: just open both — the second `/vg:build` no longer blocks. WARN about shared git index appears once per run-start.
+- Old `current-run.json` snapshot preserved as latest-write mirror; can be safely deleted if state seems wedged.
+
+---
+
 ## v2.27.0 (2026-04-28) — programmatic gsd-* spawn guard (PreToolUse hook)
 
 User pushback on v2.26.0: "rule chỉ là text, có chắc AI sẽ không gọi GSD nữa không?". Right — informational reinforcement is a soft enforce. Investigation found a real programmatic mechanism + shipped it.

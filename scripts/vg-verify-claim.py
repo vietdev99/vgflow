@@ -51,6 +51,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 CURRENT_RUN = REPO_ROOT / ".vg" / "current-run.json"
+ACTIVE_RUNS_DIR = REPO_ROOT / ".vg" / "active-runs"  # v2.28.0 per-session
 HOOK_LOG = REPO_ROOT / ".vg" / "hook-verifier.log"
 ORCHESTRATOR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
 SESSION_DRIFT = REPO_ROOT / ".vg" / ".session-drift.json"
@@ -77,7 +78,36 @@ def log(msg: str) -> None:
         pass
 
 
-def read_current_run() -> dict | None:
+def _safe_session_filename(sid: str) -> str:
+    if not sid:
+        return "unknown"
+    safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+    return safe or "unknown"
+
+
+def read_current_run(hook_session: str | None = None) -> dict | None:
+    """v2.28.0: read per-session active run when hook_session is known.
+
+    Resolution:
+      1. .vg/active-runs/{hook_session}.json — owns THIS session's state
+      2. Legacy .vg/current-run.json — fallback for pre-v2.28.0 install OR
+         when no per-session file exists for this session yet.
+      3. None.
+
+    Returning the per-session file means a Stop hook fired in session A
+    will check session A's run, never session B's. The cross-session
+    branch in main() then becomes a defensive backstop rather than the
+    primary safety net.
+    """
+    if hook_session:
+        per_session = ACTIVE_RUNS_DIR / f"{_safe_session_filename(hook_session)}.json"
+        if per_session.exists():
+            try:
+                return json.loads(per_session.read_text(encoding="utf-8"))
+            except Exception as e:
+                log(f"per-session active-run parse error: {e}")
+                # fall through to legacy
+
     if not CURRENT_RUN.exists():
         return None
     try:
@@ -146,24 +176,42 @@ def get_run_session_id(run: dict) -> str | None:
         return None
 
 
-def auto_abort_run(reason: str) -> None:
-    """Best-effort run-abort via orchestrator. Never raises."""
+def auto_abort_run(reason: str, session_id: str | None = None) -> None:
+    """Best-effort run-abort via orchestrator. Never raises.
+
+    v2.28.0: pass session_id via env so orchestrator clears the right
+    per-session active-run file (not the legacy snapshot mirror).
+    """
     try:
+        env = os.environ.copy()
+        if session_id:
+            env["CLAUDE_SESSION_ID"] = session_id
         subprocess.run(
             [sys.executable, str(ORCHESTRATOR), "run-abort",
              "--reason", reason],
             capture_output=True, text=True, timeout=15,
+            env=env,
         )
     except Exception as e:
         log(f"auto_abort_run failed: {e}")
 
 
-def run_orchestrator_complete() -> tuple[int, str, str]:
-    """Invoke vg-orchestrator run-complete. Returns (exit_code, stdout, stderr)."""
+def run_orchestrator_complete(session_id: str | None = None) -> tuple[int, str, str]:
+    """Invoke vg-orchestrator run-complete. Returns (exit_code, stdout, stderr).
+
+    v2.28.0: explicitly pass CLAUDE_SESSION_ID via env so the orchestrator
+    routes state.read_active_run() to THIS session's per-session file.
+    Claude Code passes session_id only via stdin hook_input — the env var
+    is not always set for hook subprocesses, so we propagate it manually.
+    """
     python_bin = sys.executable or "python"
+    env = os.environ.copy()
+    if session_id:
+        env["CLAUDE_SESSION_ID"] = session_id
     proc = subprocess.run(
         [python_bin, str(ORCHESTRATOR), "run-complete"],
         capture_output=True, text=True, timeout=30,
+        env=env,
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -255,15 +303,21 @@ def _bump_drift(run_id: str, violation_types: set[str]) -> int:
     return entry["drift_count"]
 
 
-def _emit_telemetry(event_type: str, payload: dict) -> None:
+def _emit_telemetry(event_type: str, payload: dict, session_id: str | None = None) -> None:
     """Best-effort telemetry emission via vg-orchestrator emit-event.
     Phase + command auto-resolved from current-run.json by orchestrator.
     Never blocks hook on failure. event_type MUST NOT be reserved (run.*,
     validation.*, wave.*, build.crossai_*, override.*, debt_register.*,
     step.marked) — use a hook.* prefix to avoid forgery-detector trips.
+
+    v2.28.0: propagate session_id env so orchestrator routes to the right
+    per-session active-run for phase/command resolution.
     """
     try:
         python_bin = sys.executable or "python"
+        env = os.environ.copy()
+        if session_id:
+            env["CLAUDE_SESSION_ID"] = session_id
         subprocess.run(
             [python_bin, str(ORCHESTRATOR), "emit-event",
              event_type,  # positional
@@ -271,12 +325,13 @@ def _emit_telemetry(event_type: str, payload: dict) -> None:
              "--outcome", "INFO",
              "--payload", json.dumps(payload)],
             capture_output=True, text=True, timeout=10,
+            env=env,
         )
     except Exception as e:
         log(f"telemetry emit failed for {event_type}: {e}")
 
 
-def _auto_fire_markers(phase: str) -> tuple[int, str, str]:
+def _auto_fire_markers(phase: str, session_id: str | None = None) -> tuple[int, str, str]:
     """Invoke migrate-state.py {phase} --apply. Returns (rc, stdout, stderr).
     The script is idempotent: if drift was already resolved (e.g. by a
     parallel run), it returns rc=0 with 'no drift' in stdout.
@@ -284,10 +339,14 @@ def _auto_fire_markers(phase: str) -> tuple[int, str, str]:
     if not MIGRATE_STATE.exists():
         return (127, "", f"migrate-state.py not found at {MIGRATE_STATE}")
     python_bin = sys.executable or "python"
+    env = os.environ.copy()
+    if session_id:
+        env["CLAUDE_SESSION_ID"] = session_id
     proc = subprocess.run(
         [python_bin, str(MIGRATE_STATE), phase, "--apply"],
         capture_output=True, text=True, timeout=60,
         cwd=str(REPO_ROOT),
+        env=env,
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -311,7 +370,7 @@ def main() -> int:
         print(json.dumps({"decision": "approve", "reason": "loop-guard"}))
         return 0
 
-    current = read_current_run()
+    current = read_current_run(session_id if session_id and session_id != "?" else None)
     if not current:
         log("no current-run.json — nothing to verify, approve")
         print(json.dumps({"decision": "approve",
@@ -342,10 +401,14 @@ def main() -> int:
         if is_stale(current):
             log(f"cross-session stale zombie {command} phase={phase} "
                 f"from session={run_session[:12]}; auto-abort + approve")
+            # v2.28.0: pass run_session (the OWNER session of the zombie),
+            # not hook_session — we want orchestrator to clear that
+            # session's active-run slot, not the current one's.
             auto_abort_run(
                 f"cross-session-auto-abort: zombie from session "
                 f"{run_session[:12] if run_session else '?'}, "
-                f"current session={hook_session[:12] if hook_session else '?'}"
+                f"current session={hook_session[:12] if hook_session else '?'}",
+                session_id=run_session,
             )
             print(json.dumps({
                 "decision": "approve",
@@ -384,7 +447,7 @@ def main() -> int:
         return 2
 
     log(f"active run {command} phase={phase} → invoking orchestrator run-complete")
-    rc, stdout, stderr = run_orchestrator_complete()
+    rc, stdout, stderr = run_orchestrator_complete(session_id=session_id)
     log(f"orchestrator rc={rc}")
 
     if rc == 0:
@@ -413,12 +476,12 @@ def main() -> int:
             if new_count >= 2:
                 # Auto-fire eligible — try migrate-state then retry
                 log(f"drift_count={new_count} ≥ 2 → invoking migrate-state {phase} --apply")
-                ar_rc, ar_out, ar_err = _auto_fire_markers(phase)
+                ar_rc, ar_out, ar_err = _auto_fire_markers(phase, session_id=session_id)
                 log(f"migrate-state rc={ar_rc} stdout={ar_out[:200]!r}")
 
                 if ar_rc == 0:
                     # Retry orchestrator run-complete
-                    rc2, sout2, serr2 = run_orchestrator_complete()
+                    rc2, sout2, serr2 = run_orchestrator_complete(session_id=session_id)
                     log(f"retry run-complete rc={rc2}")
                     if rc2 == 0:
                         # Recovery succeeded — emit telemetry, approve
@@ -427,6 +490,7 @@ def main() -> int:
                             {"run_id": run_id, "drift_count": new_count,
                              "violations": sorted(violation_types),
                              "migrate_state_stdout": ar_out[:500]},
+                            session_id=session_id,
                         )
                         approve_msg = (
                             f"✓ Marker drift auto-recovered (drift_count={new_count}, "

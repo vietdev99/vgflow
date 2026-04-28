@@ -193,12 +193,18 @@ BYPASS_RE = re.compile(
 
 def git_log_subjects(phase_num: str, since_ref: str | None = None) -> list[dict]:
     """Return list of {sha, subject, body, files} for commits in phase range.
-    Strategy: grep subject for phase number pattern + exclude planning-only changes.
+
+    Issue #37 (2026-04-29): prior version used `git log --grep=PATTERN` which
+    scans BOTH subject AND body. Pre-existing commits whose body contained a
+    date string like `(2026-04-22):` were matched as phase 2 commits when
+    `phase_num=2` (year `2026` parsed as `\\d-\\d`-ish around literal `2`).
+    Validator falsely flagged them as `subject_format_violation`, hard-blocking
+    `/vg:build run-complete` on Phase 1/2/3 (single-digit phases collide with
+    year prefix). Fix: drop --grep, fetch recent log, filter subject in Python
+    with a regex anchored at start-of-string. Body is NEVER matched.
     """
-    # We use git log with a grep pattern on commit subject — phase tag
-    # Pattern covers 7, 07, 7.1, 07.12 etc.
     phase_variants = [phase_num]
-    # Zero-pad for 1-digit and 2-digit phases
+    # Zero-pad for 1-digit and 2-digit phases (e.g. "2" → also "02", "7.6" → also "07.6")
     if "." in phase_num:
         base, sub = phase_num.split(".", 1)
         if len(base) == 1:
@@ -206,16 +212,26 @@ def git_log_subjects(phase_num: str, since_ref: str | None = None) -> list[dict]
     elif len(phase_num) == 1:
         phase_variants.append(f"0{phase_num}")
 
-    # Build alternation regex for git log --grep
-    grep_pattern = "|".join(
-        f"\\({v}[-.0-9]*-[0-9]+\\):" for v in phase_variants
+    # Subject matcher — anchored at start, NEVER scans body.
+    phase_alt = "|".join(re.escape(v) for v in phase_variants)
+    subject_phase_re = re.compile(
+        r"^(feat|fix|refactor|test|chore|docs|build|ci|perf|style|revert|review|specs|scope|blueprint|config)"
+        rf"\(({phase_alt})[-.0-9]*-[0-9]+\):"
     )
+
+    cmd = ["git", "log", "--no-merges",
+           "--pretty=format:%H%x00%s%x00%b%x01"]
+    if since_ref:
+        cmd.append(since_ref)
+    else:
+        # Cap scan to recent history. With no ref-range, git log walks the
+        # full branch ancestry; 2000 covers any realistic phase commit
+        # density without scanning across the project's entire lifetime.
+        cmd.append("-2000")
 
     try:
         r = subprocess.run(
-            ["git", "log", "--no-merges",
-             "-E", f"--grep={grep_pattern}",
-             "--pretty=format:%H%x00%s%x00%b%x01"],
+            cmd,
             capture_output=True, text=True, timeout=15, cwd=REPO_ROOT,
         )
     except Exception:
@@ -235,6 +251,10 @@ def git_log_subjects(phase_num: str, since_ref: str | None = None) -> list[dict]
         sha = parts[0].strip()
         subject = parts[1].strip() if len(parts) > 1 else ""
         body = parts[2].strip() if len(parts) > 2 else ""
+
+        # Subject-only filter — body never matches phase regex.
+        if not subject_phase_re.match(subject):
+            continue
 
         # Get files changed for citation requirement
         try:

@@ -60,6 +60,7 @@ REPO_ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR")
                  or os.environ.get("VG_REPO_ROOT")
                  or os.getcwd()).resolve()
 CURRENT_RUN = REPO_ROOT / ".vg" / "current-run.json"
+ACTIVE_RUNS_DIR = REPO_ROOT / ".vg" / "active-runs"  # v2.28.0 per-session
 
 # Allow-list: gsd-* subagents legitimately used by VG. Currently only
 # gsd-debugger (referenced in commands/vg/build.md step 12). Extend if
@@ -84,18 +85,44 @@ def deny(reason: str) -> int:
     return 0
 
 
-def in_active_vg_run() -> tuple[bool, str | None]:
-    """Read .vg/current-run.json. Returns (active, command).
+def _safe_session_filename(sid: str) -> str:
+    if not sid:
+        return "unknown"
+    safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+    return safe or "unknown"
 
-    `active` means an active VG run is registered AND its command starts
-    with `vg:` (so we don't trigger on stale or non-VG runs). `command`
-    is the active run's command string for inclusion in the deny reason.
+
+def in_active_vg_run(hook_session: str | None = None) -> tuple[bool, str | None]:
+    """Returns (active, command) where `active` means THIS session has a
+    running VG run.
+
+    v2.28.0: scope by per-session active-run file. Two windows on same
+    project, only one running /vg:*: only THAT session's Agent spawns
+    are guarded. Other session's general-purpose / mcp Agent calls are
+    unaffected. Falls back to legacy .vg/current-run.json snapshot for
+    pre-v2.28.0 installs (or when session_id missing).
     """
+    # v2.28.0 per-session preferred
+    if hook_session:
+        per_session = ACTIVE_RUNS_DIR / f"{_safe_session_filename(hook_session)}.json"
+        if per_session.exists():
+            try:
+                data = json.loads(per_session.read_text(encoding="utf-8"))
+                cmd = data.get("command", "")
+                return bool(cmd and cmd.startswith("vg:")), cmd or None
+            except (OSError, json.JSONDecodeError):
+                pass
+
     if not CURRENT_RUN.exists():
         return False, None
     try:
         data = json.loads(CURRENT_RUN.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return False, None
+    # Only honor legacy snapshot if it belongs to THIS session (or has no
+    # session_id field — pre-v2.24 install).
+    legacy_sid = data.get("session_id")
+    if hook_session and legacy_sid and legacy_sid != hook_session:
         return False, None
     cmd = data.get("command", "")
     return bool(cmd and cmd.startswith("vg:")), cmd or None
@@ -113,6 +140,7 @@ def main() -> int:
     if hook_input.get("tool_name") != "Agent":
         return allow()
 
+    hook_session = hook_input.get("session_id") or None
     subagent_type = (hook_input.get("tool_input") or {}).get("subagent_type", "")
     if not isinstance(subagent_type, str):
         return allow()
@@ -129,7 +157,7 @@ def main() -> int:
     # Only block when an active VG run is in progress. Outside VG context
     # (e.g., user running /gsd-execute-phase directly), let the spawn
     # proceed — VG isn't authoritative there.
-    is_active, vg_command = in_active_vg_run()
+    is_active, vg_command = in_active_vg_run(hook_session=hook_session)
     if not is_active:
         return allow()
 

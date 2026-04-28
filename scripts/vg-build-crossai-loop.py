@@ -338,28 +338,90 @@ class EmitError(Exception):
     iteration never ran."""
 
 
+def _resolve_active_run(phase: str) -> tuple[str | None, str]:
+    """Resolve (run_id, command) for the current /vg:build run.
+
+    Resolution order (issue #39 — chicken-and-egg fix):
+      1. Per-session active-run file (.vg/active-runs/{session_id}.json)
+         when CLAUDE_SESSION_ID env is set — v2.28.0 multi-tenant authority.
+      2. Legacy snapshot (.vg/current-run.json) for pre-v2.28.0 installs
+         and as a one-session fallback.
+      3. SQLite runs table — most recent vg:build row for THIS phase that
+         hasn't been completed_at yet. This handles the chicken-and-egg
+         trap where run-abort cleared current-run.json mid-CrossAI-loop:
+         the runs row still exists, the CLI work succeeded, only the
+         post-completion event-emit lost the run_id.
+      4. None → caller raises EmitError with the recovery hint.
+    """
+    # 1. Per-session
+    sid = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if sid:
+        safe = "".join(c for c in sid if c.isalnum() or c in "-_") or "unknown"
+        per_session = REPO_ROOT / ".vg" / "active-runs" / f"{safe}.json"
+        if per_session.exists():
+            try:
+                run = json.loads(per_session.read_text(encoding="utf-8"))
+                rid = run.get("run_id")
+                if rid:
+                    return rid, run.get("command", "vg:build")
+            except Exception:
+                pass
+
+    # 2. Legacy snapshot
+    legacy = REPO_ROOT / ".vg" / "current-run.json"
+    if legacy.exists():
+        try:
+            run = json.loads(legacy.read_text(encoding="utf-8"))
+            rid = run.get("run_id")
+            if rid:
+                return rid, run.get("command", "vg:build")
+        except Exception:
+            pass
+
+    # 3. DB fallback — most recent open vg:build run for this phase
+    try:
+        import sqlite3
+        db_path = REPO_ROOT / ".vg" / "events.db"
+        if db_path.exists():
+            conn = sqlite3.connect(str(db_path), timeout=2.0)
+            try:
+                row = conn.execute(
+                    "SELECT run_id, command FROM runs "
+                    "WHERE command LIKE 'vg:build%' AND phase = ? "
+                    "AND completed_at IS NULL "
+                    "ORDER BY started_at DESC LIMIT 1",
+                    (phase,),
+                ).fetchone()
+                if row:
+                    return row[0], row[1]
+            finally:
+                conn.close()
+    except Exception:
+        pass
+
+    return None, "vg:build"
+
+
 def emit_event(event_type: str, phase: str, payload: dict) -> None:
     """OHOK-8: bypass the emit-event CLI (which blocks reserved `build.crossai_*`
     after round-3 forgery mitigation). Import db module directly so only this
     script — not user CLI — can land these events. Preserves hash chain because
     db.append_event serializes via SQLite BEGIN IMMEDIATE + busy_timeout.
 
-    OHOK-8 round-3 hardening: raise EmitError on failure instead of silently
-    swallowing. An emit failure means the validator cannot later prove the
-    iteration ran → build would BLOCK anyway. Fail-closed here gives main() a
-    chance to exit 2 with the real cause surfaced.
+    Issue #39 (2026-04-29): no longer fail closed when current-run.json is
+    missing/empty mid-loop. Now resolves run_id via _resolve_active_run()
+    which falls back to the events.db runs table — recovers from
+    chicken-and-egg traps (run-abort or run-repair clearing current-run.json
+    while CrossAI's expensive Codex+Gemini calls were already in flight).
     """
-    current_run_file = REPO_ROOT / ".vg" / "current-run.json"
-    if not current_run_file.exists():
-        raise EmitError(f"no current-run.json when emitting {event_type}")
-    try:
-        run = json.loads(current_run_file.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise EmitError(f"current-run.json unreadable: {e}") from e
-    run_id = run.get("run_id")
+    run_id, command = _resolve_active_run(phase)
     if not run_id:
-        raise EmitError(f"current-run.json missing run_id field")
-    command = run.get("command", "vg:build")
+        raise EmitError(
+            f"cannot resolve active run for {event_type}: no per-session "
+            f"state, no current-run.json, no open vg:build row in events.db. "
+            f"Manual recovery: vg-orchestrator run-repair --force OR "
+            f"run-start a fresh vg:build {phase} run before retrying."
+        )
 
     # Import db lazily — adds orchestrator/ to sys.path once
     if str(ORCHESTRATOR) not in sys.path:

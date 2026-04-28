@@ -33,7 +33,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure package-relative imports work when run via `python -m vg_orchestrator`
@@ -329,9 +329,21 @@ def _is_run_stale(active: dict) -> bool:
 
 
 def cmd_run_start(args) -> int:
-    """Write runs row + emit run.started. Return run_id on stdout."""
-    active = state_mod.read_current_run()
+    """Write runs row + emit run.started. Return run_id on stdout.
+
+    v2.28.0: per-session active-run keying. The active-run check now scopes
+    to THIS session's state file (.vg/active-runs/{session_id}.json) rather
+    than the global current-run.json. Two parallel Claude Code sessions on
+    the same project (different phases) used to cross-block here; now each
+    session manages its own slot. Cross-session active runs are surfaced
+    as a WARN, never blocking — prevents user-perceived "lock" when one
+    window runs /vg:scope while another runs /vg:build.
+    """
+    session_id = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+
+    active = state_mod.read_active_run(session_id)
     if active:
+        # Same-session active run — existing block-or-stale-clear logic applies.
         # OHOK-4 (2026-04-22): previously blocked forever if prior run crashed
         # without run-complete — user had to manually rm current-run.json.
         # Now: auto-clear stale (>30min) runs + warn, block fresh ones.
@@ -344,7 +356,6 @@ def cmd_run_start(args) -> int:
                 f"   intentional, run-abort it first to preserve audit trail.",
                 file=sys.stderr,
             )
-            # Emit event so events.db reflects the takeover
             try:
                 db.append_event(
                     run_id=active.get("run_id", "unknown"),
@@ -360,10 +371,10 @@ def cmd_run_start(args) -> int:
                 )
             except Exception:
                 pass
-            state_mod.clear_current_run()
+            state_mod.clear_active_run(session_id)
             # Continue to fresh run-start below
         else:
-            print(f"⛔ Active run exists: {active.get('command')} "
+            print(f"⛔ Active run exists in THIS session: {active.get('command')} "
                   f"phase={active.get('phase')} started "
                   f"{active.get('started_at', '?')} (<{_RUN_STALE_MINUTES}min old).\n"
                   f"   Options:\n"
@@ -373,7 +384,24 @@ def cmd_run_start(args) -> int:
                   file=sys.stderr)
             return 1
 
-    session_id = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    # v2.28.0: cross-session active runs from OTHER sessions are surfaced as a
+    # warning, not a block. Two windows on the same project doing different
+    # phases is a legitimate workflow. Stop hook (vg-verify-claim) handles
+    # the cross-session case via session_id matching, so safety is preserved.
+    if session_id:
+        for other in state_mod.list_active_runs():
+            other_sid = other.get("session_id")
+            if other_sid and other_sid != session_id and not _is_run_stale(other):
+                print(
+                    f"⚠ Another session is running {other.get('command')} "
+                    f"phase={other.get('phase')} (session "
+                    f"{other_sid[:12]}…). Starting concurrent run in this "
+                    f"session is allowed but git index + commit-queue mutex "
+                    f"are shared — sequence build steps if they touch the "
+                    f"same files.",
+                    file=sys.stderr,
+                )
+                break
     extra_str = " ".join(args.extra) if isinstance(args.extra, list) else (args.extra or "")
 
     # OHOK v2 Day 2 — reject --override-reason < 50 chars or obvious placeholders.
@@ -616,10 +644,15 @@ def cmd_run_start(args) -> int:
         "phase": args.phase,
         "args": extra_str,
         "started_at": _now_iso(),
+        # v2.28.0: persist session_id in state file. Stop hook
+        # (vg-verify-claim) reads this for cross-session detection;
+        # state.read_active_run() routes by session_id; multi-tenant
+        # active-run dispatch needs it as the routing key.
+        "session_id": session_id,
     }
     if lock_token:
         current_run_entry["lock_token"] = lock_token
-    state_mod.write_current_run(current_run_entry)
+    state_mod.write_active_run(current_run_entry, session_id=session_id)
 
     db.append_event(
         run_id=run_id,
@@ -664,13 +697,42 @@ def cmd_run_start(args) -> int:
 
 
 def cmd_run_status(_args) -> int:
-    current = state_mod.read_current_run()
-    if not current:
+    """Show active run for THIS session + cross-session sibling runs (if any).
+
+    v2.28.0: surfaces multi-tenant state. Two parallel sessions on the same
+    project will both show up, each scoped to its own session_id.
+    """
+    session_id = (
+        os.environ.get("CLAUDE_SESSION_ID")
+        or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    )
+    current = state_mod.read_active_run(session_id)
+    all_active = state_mod.list_active_runs()
+
+    other_sessions = [
+        r for r in all_active
+        if r.get("session_id") and r.get("session_id") != session_id
+    ]
+
+    if not current and not other_sessions:
         print("no-active-run")
         return 0
-    run = db.get_run(current["run_id"])
-    print(json.dumps({"current_run": current, "run_row": run}, indent=2,
-                     default=str))
+
+    run_row = db.get_run(current["run_id"]) if current else None
+    payload = {
+        "this_session": session_id,
+        "current_run": current,
+        "run_row": run_row,
+    }
+    if other_sessions:
+        payload["other_sessions_active"] = [
+            {"session_id": (r.get("session_id") or "")[:12],
+             "command": r.get("command"),
+             "phase": r.get("phase"),
+             "started_at": r.get("started_at")}
+            for r in other_sessions
+        ]
+    print(json.dumps(payload, indent=2, default=str))
     return 0
 
 
