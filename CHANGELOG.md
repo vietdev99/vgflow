@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.15.0 (2026-04-28) — Closing Phase 19: cryptographic Read evidence + fine-grained planner
+
+Closes the two items v2.14.0 left open. With this release, every Phase 19 decision (D-01 through D-09) has shipped or is documented research.
+
+- **D-09 — read-evidence sentinel with PNG SHA256 (L6 build gate)**: promoted from RESEARCH.md to a shipped gate. Executor MUST Write `.read-evidence/task-${N}.json` after Read PNG, declaring the SHA256 of every file Read at that moment. New `verify-read-evidence.py` re-hashes every declared PNG; mismatch = BLOCK. Cryptographically infeasible to fabricate (search space 2^256), so this is the strongest "prove you Read it" gate available without runtime hook transcript surface. Wired in `build.md` step 9 after L5; off by default via `visual_checks.read_evidence.enabled` until executor rule rollout.
+- **D-04 — fine-grained planner component-scope (FEATURE-FLAGGED)**: planner Rule 9 added. When `planner.fine_grained_components.enabled=true` AND `VIEW-COMPONENTS.md` exists (D-02 output), planner decomposes one-page tasks into N tasks per top-level component (`child_count >= 3` OR `position area >= 20% viewport`). New `<component-scope>{Name}</component-scope>` task field. New `verify-component-scope.py` blocks at /vg:build step 9 when staged files fall outside the declared scope and aren't explicitly listed in `<file-path>`. NO-OPS on tasks without the tag → fully backward compatible with v2.14.0 PLAN files.
+
+**Config additions:**
+- `visual_checks.read_evidence.enabled` (D-09)
+- `planner.fine_grained_components.enabled` (D-04)
+
+**Phase 19 status — final:**
+
+| Decision | Status |
+|---|---|
+| D-01 scan.json into UI-SPEC | ✅ shipped v2.14.0 |
+| D-02 view-decomposition step 2b6c | ✅ shipped v2.14.0 |
+| D-03 cross-AI gap-hunt | ✅ shipped v2.14.0 |
+| D-04 fine-grained planner | ✅ shipped v2.15.0 (flagged) |
+| D-05 vision-self-verify (L5) | ✅ shipped v2.14.0 |
+| D-06 manual UAT 3-file diff | ✅ shipped v2.14.0 |
+| D-07 override-debt threshold | ✅ shipped v2.14.0 |
+| D-08 commit-msg citation | ✅ shipped v2.14.0 |
+| D-09 sentinel-with-hash (L6) | ✅ shipped v2.15.0 |
+
+Combined ladder reaches the practical reliability ceiling: ~95% with all default-on layers, ~97% with D-04+D-09 enabled and dogfood-tuned.
+
 ## v2.14.0 (2026-04-28) — Design fidelity 95%: upstream view-decomp + downstream vision guard + forcing functions
 
 Phase 19 minor release. Closes the residual gap after v2.13.0's 4-layer pixel pipeline + L-002 mandate. Eight decisions (D-01 through D-09; D-04 deferred), three implementation waves. AI alone never reaches 100%, but the combined stack now meaningfully approaches 95% reliability on dogfood phases.
