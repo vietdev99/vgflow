@@ -255,6 +255,42 @@ if [ ! -d "$ANCESTOR_DIR" ]; then
   echo "   Cause: prior install never snapshotted, OR VGFLOW-VERSION"
   echo "          mismatched ancestor stash version, OR previous failed update."
   echo ""
+
+  # Issue #42 pre-flight integrity scan: count force-upstream-at-risk files
+  # + show first N filenames so user can audit before silent overwrite.
+  # Non-fatal — preflight always exits 0; we parse JSON to decide.
+  PREFLIGHT_JSON="$(python3 "$HELPER" preflight \
+    --extracted-root "$EXTRACTED" \
+    --install-root   "${REPO_ROOT}/.claude" \
+    --ancestor-dir   "$ANCESTOR_DIR" 2>&1)"
+  AT_RISK="$(printf '%s' "$PREFLIGHT_JSON" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('force_upstream_count', 0))
+except Exception:
+    print(0)
+")"
+  if [ "${AT_RISK:-0}" -gt 0 ]; then
+    echo "Pre-flight scan: ${AT_RISK} file(s) at risk of silent force-upstream overwrite."
+    echo "First 10 (sorted):"
+    printf '%s' "$PREFLIGHT_JSON" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    for f in d.get('force_upstream_files', [])[:10]:
+        print('  - ' + f)
+    extra = d.get('force_upstream_count', 0) - 10
+    if extra > 0:
+        print('  ... + {} more (run /vg:update --check-preflight to see all)'.format(extra))
+except Exception:
+    pass
+"
+    echo ""
+    echo "  These files will be OVERWRITTEN with upstream content. Local edits lost."
+    echo "  Recover post-update via: git diff HEAD~1 -- .claude/ | head -200"
+    echo ""
+  fi
 fi
 
 # Process substitution instead of pipe so counter vars persist in this shell

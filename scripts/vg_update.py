@@ -316,6 +316,154 @@ def cmd_merge(args):
     return 0 if res.status in ("clean", "force-upstream") else 1
 
 
+# ---- Pre-flight integrity scan (issue #42 — meta-bug visibility) ------------
+#
+# Problem: when /vg:update runs and `vgflow-ancestor/v{installed}/` is missing
+# or stale, every file with local-vs-upstream divergence falls into the
+# `force-upstream` path (issue #30 fix). That path correctly overwrites local
+# with upstream, but it does so silently — the merge-loop only prints a count
+# at the end. If the user has unsynced local edits or accumulated an
+# upgrade-debt across many versions, those edits get clobbered without any
+# pre-flight visibility.
+#
+# This subcommand walks the extracted upstream tree + local install + ancestor
+# stash, classifies every file into one of: clean (no change), local-only-edit
+# (will be 3-way merged or conflict-parked), or "force-upstream-at-risk" (no
+# 3-way possible because ancestor missing AND content differs from upstream).
+# The bash caller in commands/vg/update.md step 6 invokes this BEFORE the
+# merge loop and prints a preview so the user can audit before pressing enter.
+#
+# Non-fatal — exit 0 always. The caller decides whether to halt or proceed
+# based on `at_risk_count` parsed from JSON output.
+
+# Same path filter as the merge loop in commands/vg/update.md step 6.
+_PREFLIGHT_INSTALL_PREFIXES = (
+    "commands/", "skills/", "scripts/", "schemas/", "templates/vg/",
+)
+_PREFLIGHT_SKIP_NAMES = {
+    "VERSION", "CHANGELOG.md", "README.md", "README.vi.md", "LICENSE",
+    "install.sh", "sync.sh", "vg.config.template.md",
+    ".gitignore", ".gitattributes",
+}
+_PREFLIGHT_SKIP_PREFIXES = (
+    "codex-skills/", "gemini-skills/", "templates/codex/", "templates/codex-agents/",
+)
+
+
+def _file_sha256(path: Path) -> str:
+    """Hex SHA256 of file content, or empty string if missing."""
+    if not path.exists():
+        return ""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(64 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def preflight_scan(extracted_root: Path, install_root: Path, ancestor_dir: Path) -> dict:
+    """Walk upstream tree + classify every file's merge-risk.
+
+    Returns a dict:
+      {
+        "ancestor_present": bool,
+        "totals": {"clean": N, "new": N, "force_upstream": N, "skipped": N},
+        "force_upstream_files": [<rel_path>, ...],   # at-risk: ancestor missing + content differs
+        "force_upstream_count": N,
+      }
+
+    "Force-upstream-at-risk" means: local file exists, ancestor file does NOT
+    (or ancestor dir entirely missing), AND local content != upstream content.
+    Such files will be force-upstreamed by the merge loop, overwriting any
+    local divergence with no 3-way merge possible.
+    """
+    extracted_root = Path(extracted_root)
+    install_root = Path(install_root)
+    ancestor_dir = Path(ancestor_dir)
+
+    totals = {"clean": 0, "new": 0, "force_upstream": 0, "skipped": 0}
+    at_risk_files: list[str] = []
+
+    if not extracted_root.exists():
+        return {
+            "ancestor_present": ancestor_dir.exists(),
+            "totals": totals,
+            "force_upstream_files": [],
+            "force_upstream_count": 0,
+            "error": f"extracted root not found: {extracted_root}",
+        }
+
+    for upstream_file in extracted_root.rglob("*"):
+        if not upstream_file.is_file():
+            continue
+        rel = str(upstream_file.relative_to(extracted_root))
+
+        # Skip meta + non-Claude assets — match step 6 filtering exactly.
+        if rel in _PREFLIGHT_SKIP_NAMES:
+            totals["skipped"] += 1
+            continue
+        if any(rel.startswith(p) for p in _PREFLIGHT_SKIP_PREFIXES):
+            totals["skipped"] += 1
+            continue
+        if not any(rel.startswith(p) for p in _PREFLIGHT_INSTALL_PREFIXES):
+            totals["skipped"] += 1
+            continue
+
+        local_path = install_root / rel
+        ancestor_path = ancestor_dir / rel
+
+        if not local_path.exists():
+            # New file from upstream — straight copy in step 6, no risk.
+            totals["new"] += 1
+            continue
+
+        upstream_hash = _file_sha256(upstream_file)
+        local_hash = _file_sha256(local_path)
+
+        if upstream_hash == local_hash:
+            # Nothing to do — content already matches upstream.
+            totals["clean"] += 1
+            continue
+
+        if not ancestor_path.exists():
+            # Force-upstream-at-risk: 3-way impossible, local edits will be
+            # overwritten by upstream content silently in the merge loop.
+            totals["force_upstream"] += 1
+            at_risk_files.append(rel)
+        # Else: ancestor present, content differs — normal 3-way merge path,
+        # could be clean OR conflict but is NOT at-risk for silent overwrite.
+
+    at_risk_files.sort()
+    return {
+        "ancestor_present": ancestor_dir.exists(),
+        "totals": totals,
+        "force_upstream_files": at_risk_files,
+        "force_upstream_count": len(at_risk_files),
+    }
+
+
+def cmd_preflight(args):
+    """Pre-flight integrity scan before /vg:update merge loop (issue #42).
+
+    Prints JSON to stdout:
+      {"ancestor_present": bool,
+       "totals": {"clean": N, "new": N, "force_upstream": N, "skipped": N},
+       "force_upstream_files": ["scripts/vg-verify-claim.py", ...],
+       "force_upstream_count": N}
+
+    Always exits 0 — the bash caller decides whether to halt or proceed
+    based on `force_upstream_count`. This subcommand is purely informational.
+    """
+    result = preflight_scan(
+        Path(args.extracted_root),
+        Path(args.install_root),
+        Path(args.ancestor_dir),
+    )
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
 # ---- T8: Gate integrity verification (v1.8.0) -------------------------------
 #
 # Problem: `/vg:update` does a 3-way merge into AI-generated command files that
@@ -702,6 +850,22 @@ def main():
     m.add_argument("--upstream", required=True)
     m.add_argument("--output", required=True)
     m.set_defaults(func=cmd_merge)
+
+    pf = sub.add_parser(
+        "preflight",
+        help=(
+            "Pre-flight integrity scan before merge loop (issue #42). "
+            "Counts files that will be force-upstreamed (ancestor missing + "
+            "content differs) so user can audit before silent overwrite."
+        ),
+    )
+    pf.add_argument("--extracted-root", required=True,
+                    help="Path to extracted upstream tarball root (e.g. .vgflow-cache/v2.29.0/vgflow)")
+    pf.add_argument("--install-root", required=True,
+                    help="Path to local install root (e.g. .claude)")
+    pf.add_argument("--ancestor-dir", required=True,
+                    help="Path to ancestor stash dir (e.g. .claude/vgflow-ancestor/v{installed})")
+    pf.set_defaults(func=cmd_preflight)
 
     # T8: post-merge gate integrity verification
     vg = sub.add_parser(

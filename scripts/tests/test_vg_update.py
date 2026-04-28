@@ -13,6 +13,7 @@ from vg_update import (
     three_way_merge,
     MergeResult,
     PatchesManifest,
+    preflight_scan,
 )
 
 _HAS_GIT = shutil.which("git") is not None
@@ -214,3 +215,161 @@ def test_manifest_save_does_not_leave_tmp_files(tmp_path):
     m.add("b.md", "conflict")
     leftovers = list(tmp_path.glob("*.tmp"))
     assert leftovers == [], "Unexpected tmp files remain: {}".format(leftovers)
+
+
+# ---- Issue #42: pre-flight integrity scan -----------------------------------
+
+def _make_preflight_fixture(tmp_path):
+    """Build a synthetic upstream + install + ancestor tree.
+
+    Returns (extracted_root, install_root, ancestor_root) Paths.
+    Ancestor dir is created EMPTY by default — caller drops files in
+    selectively to simulate "ancestor present for some files, missing for
+    others" scenarios.
+    """
+    extracted = tmp_path / "extracted"
+    install = tmp_path / "install"
+    ancestor = tmp_path / "ancestor"
+    for d in (extracted, install, ancestor):
+        d.mkdir(parents=True, exist_ok=True)
+    return extracted, install, ancestor
+
+
+def test_preflight_no_local_install_dir_returns_zeros(tmp_path):
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    (extracted / "scripts").mkdir()
+    (extracted / "scripts" / "foo.py").write_text("upstream", encoding="utf-8")
+    # install dir empty — every file is "new"
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["force_upstream_count"] == 0
+    assert res["totals"]["new"] == 1
+    assert res["force_upstream_files"] == []
+
+
+def test_preflight_clean_match_no_risk(tmp_path):
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    (extracted / "scripts").mkdir()
+    (install / "scripts").mkdir()
+    (extracted / "scripts" / "foo.py").write_text("same", encoding="utf-8")
+    (install / "scripts" / "foo.py").write_text("same", encoding="utf-8")
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["force_upstream_count"] == 0
+    assert res["totals"]["clean"] == 1
+
+
+def test_preflight_ancestor_missing_local_diverges_flags_at_risk(tmp_path):
+    """The smoking-gun case from issue #42: ancestor missing AND local
+    differs from upstream → file will be silently force-upstreamed."""
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    (extracted / "scripts").mkdir()
+    (install / "scripts").mkdir()
+    (extracted / "scripts" / "verify-claim.py").write_text("upstream-fix\n", encoding="utf-8")
+    (install / "scripts" / "verify-claim.py").write_text("local-stale\n", encoding="utf-8")
+    # ancestor dir exists but does NOT contain scripts/verify-claim.py
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["force_upstream_count"] == 1
+    assert res["force_upstream_files"] == ["scripts/verify-claim.py"]
+
+
+def test_preflight_ancestor_present_for_diverged_file_not_at_risk(tmp_path):
+    """Ancestor present + content diverges → 3-way merge handles it →
+    not at risk for silent overwrite."""
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    for sub in ("scripts", ):
+        (extracted / sub).mkdir()
+        (install / sub).mkdir()
+        (ancestor / sub).mkdir()
+    (extracted / "scripts" / "foo.py").write_text("upstream", encoding="utf-8")
+    (install / "scripts" / "foo.py").write_text("local", encoding="utf-8")
+    (ancestor / "scripts" / "foo.py").write_text("ancestor", encoding="utf-8")
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["force_upstream_count"] == 0
+
+
+def test_preflight_skips_meta_files(tmp_path):
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    for name in ("VERSION", "CHANGELOG.md", "README.md", "LICENSE"):
+        (extracted / name).write_text("upstream", encoding="utf-8")
+        (install / name).write_text("local", encoding="utf-8")
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["totals"]["skipped"] == 4
+    assert res["force_upstream_count"] == 0
+
+
+def test_preflight_skips_codex_skills(tmp_path):
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    (extracted / "codex-skills" / "vg-build").mkdir(parents=True)
+    (extracted / "codex-skills" / "vg-build" / "SKILL.md").write_text("up", encoding="utf-8")
+    (install / "codex-skills" / "vg-build").mkdir(parents=True)
+    (install / "codex-skills" / "vg-build" / "SKILL.md").write_text("loc", encoding="utf-8")
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["totals"]["skipped"] == 1
+    assert res["force_upstream_count"] == 0
+
+
+def test_preflight_only_install_prefixes_count(tmp_path):
+    """Files outside commands/skills/scripts/schemas/templates/vg are skipped."""
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    (extracted / "random-tool").mkdir()
+    (extracted / "random-tool" / "x.py").write_text("up", encoding="utf-8")
+    (install / "random-tool").mkdir()
+    (install / "random-tool" / "x.py").write_text("loc", encoding="utf-8")
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["totals"]["skipped"] == 1
+    assert res["force_upstream_count"] == 0
+
+
+def test_preflight_at_risk_files_sorted_alphabetically(tmp_path):
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    (extracted / "scripts").mkdir()
+    (install / "scripts").mkdir()
+    for name in ("zebra.py", "alpha.py", "middle.py"):
+        (extracted / "scripts" / name).write_text("up", encoding="utf-8")
+        (install / "scripts" / name).write_text("loc", encoding="utf-8")
+    res = preflight_scan(extracted, install, ancestor)
+    assert res["force_upstream_files"] == [
+        "scripts/alpha.py", "scripts/middle.py", "scripts/zebra.py",
+    ]
+
+
+def test_preflight_extracted_root_missing_returns_error_field(tmp_path):
+    extracted = tmp_path / "does-not-exist"
+    install = tmp_path / "install"; install.mkdir()
+    ancestor = tmp_path / "ancestor"
+    res = preflight_scan(extracted, install, ancestor)
+    assert "error" in res
+    assert res["force_upstream_count"] == 0
+
+
+def test_preflight_ancestor_present_field_reflects_dir_state(tmp_path):
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    res_present = preflight_scan(extracted, install, ancestor)
+    assert res_present["ancestor_present"] is True
+    res_missing = preflight_scan(extracted, install, tmp_path / "nope")
+    assert res_missing["ancestor_present"] is False
+
+
+def test_preflight_real_world_scenario_issue_42(tmp_path):
+    """End-to-end scenario from issue #42 — upgrading from v2.12.7 to v2.28.0
+    with ancestor stash for v2.12.7 missing entirely. Expected: ALL diverged
+    files in scripts/ flagged as at-risk."""
+    extracted, install, ancestor = _make_preflight_fixture(tmp_path)
+    (extracted / "scripts").mkdir()
+    (install / "scripts").mkdir()
+    # 14 files that drifted between v2.12.7 and v2.28.0 in PrintwayV3 case
+    drifted = [
+        "vg-verify-claim.py", "vg-step-tracker.py", "vg-wired-check.py",
+        "vg-typecheck-hook.py", "vg-entry-hook.py", "vg-build-crossai-loop.py",
+        "generate-pentest-checklist.py", "distribution-check.py",
+        "build-uat-narrative.py", "bootstrap-test-runner.py",
+    ]
+    for name in drifted:
+        (extracted / "scripts" / name).write_text("v2.28.0\n", encoding="utf-8")
+        (install / "scripts" / name).write_text("v2.12.7\n", encoding="utf-8")
+
+    # Ancestor stash for v2.12.7 is missing entirely (the smoking gun)
+    res = preflight_scan(extracted, install, ancestor)  # ancestor exists but EMPTY
+    assert res["ancestor_present"] is True  # dir exists
+    assert res["force_upstream_count"] == len(drifted)
+    # Order is sorted; user can audit specific files
+    assert res["force_upstream_files"][0] == "scripts/bootstrap-test-runner.py"

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — pre-flight integrity scan in /vg:update (issue #42)
+
+User pushback (closes #42 partial): when `/vg:update` runs with `vgflow-ancestor/v{installed}/` missing or stale, every diverged file falls into the `force-upstream` path (issue #30 / d14d656). That path is correct under "give me the new version" intent, but the merge loop only prints a count at the end — by then any local edits to those files are already overwritten. No pre-flight visibility, no audit window.
+
+### Added
+
+- **`vg_update.py preflight` subcommand** — walks extracted upstream tarball + local install + ancestor stash; classifies every file as `clean` / `new` / `force_upstream_at_risk` / `skipped`; emits JSON to stdout.
+- **`commands/vg/update.md` step 6** — when `ANCESTOR_DIR` missing, calls `preflight` and shows count + first 10 at-risk filenames before the merge loop runs. User sees the audit list before silent overwrite.
+- **11 unit tests** in `scripts/tests/test_vg_update.py` covering the smoking-gun scenario from issue #42 (v2.12.7 → v2.28.0 with empty ancestor stash → ALL diverged files flagged).
+
+### Why
+
+Issue #42 documented a real install where 14 deprecation-bug-affected files (`vg-verify-claim.py`, `vg-orchestrator/__main__.py`, …) sat at v2.12.7 baseline despite the install reporting `VGFLOW-VERSION = 2.28.0`. The user-side cause was missing ancestor stash — the v2.24.0 fix (force-upstream) handled it correctly going forward but provided no pre-flight visibility. This change closes that gap. Non-fatal: the bash caller still proceeds with the merge loop; preflight is purely informational so existing flows aren't broken.
+
+### Limitations / future work
+
+- Threshold-based REFUSE (suggestion #42(a)) NOT implemented — kept as informational. If upstream wants to escalate, add `--max-force-upstream N` flag wiring.
+- Auto-stash-on-update (suggestion #42(c)) NOT implemented — would eliminate the failure mode entirely; out of scope for this PR.
+- 9 pre-existing test failures in `scripts/tests/test_verify_claim_hybrid.py` carried over (fixture drift vs multi-tenant active-run rewrite) — separate issue.
+
+---
+
 ## v2.28.0 (2026-04-29) — multi-tenant active-run + #37/38/39 + bug-reporter context
 
 User pushback: "tôi bật 2 cửa sổ, 2 session khác phase, cái nào làm sau bị lock". Plus 6 open GitHub issues (#34–39). Triage found two truly independent failure modes the user perceived as a single "lock" symptom, and three low-context auto-reported bugs traced to one root cause.
