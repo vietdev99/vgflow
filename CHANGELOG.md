@@ -1,5 +1,37 @@
 # Changelog
 
+## v2.20.0 (2026-04-28) — `/vg:polish` optional code-cleanup command
+
+User asked: should code-clean / optimize be wired into the pipeline as a step after build / review / test / fix? Plan-mode pushback: NO, not as a gate. Reasons in `.claude/plans/cheeky-mapping-engelbart.md`:
+
+1. Zero evidence vgflow-built code is dirty enough to warrant a hard gate. Building gates for non-existent problems is premature.
+2. Each cleanup commit is a regression risk; gating means clean → re-test → re-clean loop in loop, 2-3× phase slowdown for 5% dirty-code reduction.
+3. `simplify` skill (gstack) already covers the same need from user discretion.
+4. "Polish" is a human judgement, not a gate-able rule (auto-extract a function may strip domain context, auto-rename may erase intent).
+
+Shipped instead as **optional command** users invoke when ready:
+
+### New
+- **`/vg:polish`** (`commands/vg/polish.md` + `scripts/vg_polish.py`):
+  - Modes: `--scan` (default, dry-run preview) | `--apply` (atomic commit per fix)
+  - Levels: `--level=light` (default) — strip leftover `console.log`/`console.debug`/`console.info`, trailing whitespace. Safe: only touches code that cannot affect runtime. `--level=deep` adds warn-only signals (long functions >80 lines, empty if/else/catch blocks). v1 deep mode is warn-only — no auto-refactor.
+  - Scope: `--scope=phase-N` | `--since=<sha>` | `--file=<path>`. Default = whole repo.
+  - Per fix: read file, apply minimal edit, `git add` + `git commit -m "polish: <type> in <file>"`. Atomic — failure on one fix doesn't block others.
+  - Reverse line-order apply per file so deletions don't shift indices for subsequent fixes in same file.
+  - Working-tree-clean precondition (override with `--allow-dirty` for users mid-WIP).
+  - Telemetry: `polish.started` / `polish.fix_applied` / `polish.completed`. Decide ROI from `/vg:telemetry --command=vg:polish` after a few months of dogfood; if useful, v3 may promote to gate.
+
+### Detector smoke test (sample.ts fixture)
+3 fix candidates + 2 warnings detected. Apply produces 2 atomic commits (1 fix per commit, deduplication via reverse-line ordering when overlap with trailing-whitespace on the same line). `console.error` correctly preserved (not in default delete list). Commented-out `console.log` correctly skipped.
+
+### Deferred to v2.21+
+- Unused imports / unused vars detector (needs language-aware tooling — eslint/ruff/tsc integration)
+- Deep-mode auto-refactor (long-fn extraction, dup-block dedup) — v1 is warn-only
+- `polish-helpers.sh` bash module (engine is Python; bash helpers not needed for v1)
+
+### Pipeline impact
+Zero. Pipeline (specs → scope → blueprint → build → review → test → accept) does NOT depend on `/vg:polish`. Accept gate unchanged. No new validators registered (opt-in only via `vg.config.md`).
+
 ## v2.19.0 (2026-04-28) — Bug squash + run-backfill subcommand (closes 14 issues)
 
 Triage sweep of accumulated `bug-auto` queue surfaced 6 new issues + 1 PR same morning. Single commit-batch closes all of them plus 8 stale issues already fixed in prior versions. One new feature (`run-backfill`) earns the minor bump; everything else is fix.
