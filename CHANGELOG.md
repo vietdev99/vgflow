@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.19.0 (2026-04-28) — Bug squash + run-backfill subcommand (closes 14 issues)
+
+Triage sweep of accumulated `bug-auto` queue surfaced 6 new issues + 1 PR same morning. Single commit-batch closes all of them plus 8 stale issues already fixed in prior versions. One new feature (`run-backfill`) earns the minor bump; everything else is fix.
+
+### New
+- **`vg-orchestrator run-backfill`** (`scripts/vg-orchestrator/__main__.py`): documented path for emitting `run.completed` on legacy runs that predate Stop-hook contract enforcement (issue #21). Strict 5-condition guard: (1) `run.started` exists for `--run-id`, (2) no terminal event already, (3) command in supported set, (4) all required artifacts present in phase dir (mirrors `event-reconciliation` REQUIRED_ARTIFACTS), (5) `--reason` ≥ 10 chars. On success: emits `run.completed` with `payload.backfill=true` AND appends critical-severity entry to `OVERRIDE-DEBT.md` so the reviewer must triage at `/vg:accept`. Replaces the `db.append_event` bypass workaround that violated the forgery-detection guard.
+
+### Fix
+- **Registry YAML parse** (`scripts/validators/registry.yaml`): two `description:` entries had unquoted `: ` mid-string (line 747 + 889), breaking `yaml.safe_load` at line 747 col 310. Single-quote wrap restored 93/93 entry parse. The pre-existing failure was masking `validator-registry` from loading the catalog (`validate` / `list` returned 0 entries).
+- **Commit-attribution regex** (#20, PR #23 by external contributor — merged): `CITATION_PATTERNS` accepted only literal `Per CONTEXT.md D-XX` / `Covers goal: G-XX`. 30+ real commits using natural variants (`implements P1.D-78`, `Goals G-100, G-141`, `G-W10-05`, `G-141.M1`) failed the gate. Relaxed to `\b(?:P[\d.]+\.)?D-(?:\d+|XX)\b` and `\bG-[\w.]+\b`. Phantom-ID detection downstream unchanged (still catches fabricated D/G IDs that don't resolve to real artifacts).
+- **`bug-reporter.sh` redact + assignee** (#22, also closes #17 #18 noise + #7 verified): `sed 's|\\|/|g'` was malformed (bash double-quote ate one backslash → sed got `s|\|/|g` matching `|`, not `\`). Bash native `${x//\\//}` also failed under MSYS bash 5.2 glob matcher. Switched whole redact path to a Python subprocess — verified 6 cases (backslash + forward-slash paths, email, phase ID, plain text, empty, embedded quotes). Empty-data side-effect that collapsed sigs to `7467b7f1` resolved. `gh issue create --assignee=vietdev99` permission failures for external submitters now retry without `--assignee` so reports still land. Issue #7's arg-validation guard at lines 358-376 verified in place.
+- **`override-resolve` ID format** (#19): orchestrator CLI writes register entries with `OD-NNN` IDs in YAML form; slash command regex only matched legacy table-format `DEBT-YYYYMMDDHHMMSS-PID`. Relaxed to `(DEBT-[0-9]+-[0-9]+|OD-[0-9]+|BF-[0-9]+-[0-9]+)`. Helper `override_resolve_by_id` now branches on ID prefix: YAML IDs → flip `status: active` + insert `resolved_at`/`resolved_event_id`/`resolution_reason` immediately after status (contiguous block); table IDs → unchanged path. The `BF-` flavor was added in the same commit batch for `run-backfill` debt entries.
+- **Marker-walk repo root** (`scripts/validator-registry.py`, `scripts/tests/test_validator_registry.py`): both files used a fixed `parents[N]` index that resolved correctly only at install-target depth. Running canonical `scripts/...` directly walked one level outside the repo, so CLI silently reported 0 entries and pytest hit `JSONDecodeError`. Replaced with marker-walk searching upward for `VERSION` + `.git`. Verified canonical CLI now reports 93 entries; canonical pytest 12/12 pass; install-target pytest still 12/12.
+
+### Closed
+14 issues closed:
+- **Active fixes:** #19, #20, #21, #22 (this release)
+- **Verified existing:** #7 (arg-validation guard already present), #14 (wontfix-upstream — Claude Code core injects `<system-reminder>` at harness layer, no skill-side suppression API)
+- **Duplicate noise:** #17, #18 (root cause = #22 redact bug, sigs collapsed to `7467b7f1`)
+- **Stale fixes shipped in prior versions, verified on v2.18.0:** #3 (v1.11.1), #4 (v1.12.x migration), #6 (v1.12.2+ schema validation), #9 (v1.12.2+ bug-reporter), #10 #11 #12 #13 (all v1.14.1)
+
 ## v2.18.0 (2026-04-28) — Phase 20 Wave C: mobile mockup + reverse-engineer + Pencil validator
 
 Wave C closes Phase 20 entirely. 3 decisions covering mobile design tooling, migration use-case (live URL → mockups), and Pencil output sanity.
