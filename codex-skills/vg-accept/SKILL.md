@@ -753,6 +753,38 @@ PY
   fi
 fi
 
+# ─── P20 D-06 — greenfield design Form B critical block ───────────────────
+# Form B no-asset:greenfield-* entries (logged when /vg:blueprint D-12
+# user picks "skip" or planner emits Form B for greenfield) are treated as
+# critical-severity. ANY single greenfield Form B BLOCKs accept until
+# resolved via /vg:design-scaffold or /vg:override-resolve with rationale.
+# Distinct from P19 D-07 (count-based threshold for general design-*).
+GREENFIELD_REPORT="${VG_TMP}/greenfield-debt.json"
+"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-override-debt-threshold.py \
+  --debt-file "${PLANNING_DIR}/OVERRIDE-DEBT.md" \
+  --kind 'design-greenfield-*' \
+  --threshold 1 \
+  --status unresolved \
+  --output "${GREENFIELD_REPORT}" >/dev/null 2>&1
+GF_RC=$?
+if [ "$GF_RC" != "0" ] && [[ ! "$ARGUMENTS" =~ --allow-greenfield-shipped ]]; then
+  GF_COUNT=$("${PYTHON_BIN:-python3}" -c "import json; print(json.load(open('${GREENFIELD_REPORT}')).get('count',0))" 2>/dev/null || echo 0)
+  echo ""
+  echo "⛔ P20 D-06 greenfield design block — ${GF_COUNT} unresolved Form B 'no-asset:greenfield-*' entries"
+  echo ""
+  echo "Resolution paths:"
+  echo "  1. /vg:design-scaffold     (recommended — generate mockups, replace Form B with Form A slug)"
+  echo "  2. /vg:override-resolve <ID> --rationale='<concrete reason ship without design>'"
+  echo "  3. /vg:accept ${PHASE_NUMBER} --allow-greenfield-shipped --reason='<why>' (rationalization-guard)"
+  echo ""
+  echo "  Detail: ${GREENFIELD_REPORT}"
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "accept_greenfield_block" "${PHASE_NUMBER}" "accept.3c" \
+      "design_greenfield" "BLOCK" "{\"count\":${GF_COUNT}}"
+  fi
+  exit 1
+fi
+
 # ─── P19 D-07 — design override-debt threshold gate ────────────────────────
 # The 4-layer pixel pipeline has 4 override flags
 # (--skip-design-pixel-gate / --skip-fingerprint-check / --skip-build-visual /

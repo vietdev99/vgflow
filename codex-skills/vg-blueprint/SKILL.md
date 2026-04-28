@@ -166,6 +166,100 @@ Sub-steps:
 
 **Config:** Read .claude/commands/vg/_shared/config-loader.md first.
 
+<step name="0_design_discovery">
+## Step 0 (Phase 20 D-12): Design discovery pre-flight
+
+Before any planning work, verify FE phases have mockup ground truth.
+Without mockups, the entire L1-L6 stack from Phase 19 SKIPs via Form B
+and the executor ships AI-imagined UI (the L-002 anti-pattern this
+whole stack was built to prevent). Catch the gap here, ask the user
+where the design lives, route to scaffold if greenfield.
+
+```bash
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/scaffold-discovery.sh" 2>/dev/null || true
+
+DESIGN_ASSETS_DIR=$(vg_config_get design_assets.paths "" | head -1)
+DESIGN_ASSETS_DIR="${DESIGN_ASSETS_DIR:-designs}"
+
+# Skip if disabled by config (default ON for new installs; flip false to opt-out)
+DESIGN_DISCOVERY_ENABLED=$(vg_config_get design_discovery.enabled true 2>/dev/null || echo true)
+if [ "$DESIGN_DISCOVERY_ENABLED" != "true" ]; then
+  echo "ℹ design_discovery.enabled=false — skipping P20 D-12 pre-flight"
+elif [[ "$ARGUMENTS" =~ --skip-design-discovery ]]; then
+  echo "⚠ --skip-design-discovery set — Form B 'no-asset:greenfield-explicit-skip' will trigger /vg:accept critical block"
+elif type -t scaffold_should_block_blueprint >/dev/null 2>&1 \
+     && scaffold_should_block_blueprint "$PHASE_DIR" "$DESIGN_ASSETS_DIR"; then
+  echo ""
+  echo "⛔ Phase ${PHASE_NUMBER} có UI work nhưng chưa thấy mockup nào ở ${DESIGN_ASSETS_DIR}/"
+  echo ""
+  echo "  Phase 19 các gate L1-L6 (design fidelity) sẽ SKIP toàn bộ → executor"
+  echo "  có thể ship UI tự bịa. Cần resolve trước khi plan."
+  echo ""
+  echo "  Giao diện ở đâu?"
+fi
+```
+
+```
+AskUserQuestion: "Chọn 1 phương án — phải resolve trước khi blueprint chạy:
+
+  [a] Đã có file ở đâu đó — tôi sẽ cho path (file, folder, Figma URL)
+  [b] Đang dùng tool external (Stitch / Figma / v0...) — chỉ chưa import
+  [c] Chưa có gì cả → /vg:design-scaffold (greenfield, AI tự gen)
+  [d] Skip — phase này không có visual mockup (Form B critical, sẽ block /vg:accept)
+  [skip] Override pre-flight này một lần — tôi tự xử lý sau"
+```
+
+```bash
+case "$DESIGN_DISCOVERY_CHOICE" in
+  a)
+    AskUserQuestion: "Path tới file/folder chứa mockup (tuyệt đối hoặc relative repo root):"
+    USER_PATH="$ANSWER"
+    if [ -e "$USER_PATH" ]; then
+      mkdir -p "$DESIGN_ASSETS_DIR"
+      cp -r "$USER_PATH" "$DESIGN_ASSETS_DIR/" 2>&1 || cp "$USER_PATH" "$DESIGN_ASSETS_DIR/"
+      echo "✓ Mockup imported. Re-checking discovery..."
+      scaffold_should_block_blueprint "$PHASE_DIR" "$DESIGN_ASSETS_DIR" \
+        && { echo "⛔ Vẫn không thấy mockup ở $DESIGN_ASSETS_DIR — kiểm tra path"; exit 1; }
+    else
+      echo "⛔ Path không tồn tại: $USER_PATH"
+      exit 1
+    fi
+    ;;
+  b)
+    echo "Chuyển sang /vg:design-scaffold để chọn external tool flow:"
+    SlashCommand: /vg:design-scaffold
+    # After scaffold completes, re-check
+    scaffold_should_block_blueprint "$PHASE_DIR" "$DESIGN_ASSETS_DIR" \
+      && { echo "⛔ Scaffold không produce mockup ở $DESIGN_ASSETS_DIR"; exit 1; }
+    ;;
+  c)
+    echo "Greenfield case — spawning /vg:design-scaffold (default tool: pencil-mcp)..."
+    SlashCommand: /vg:design-scaffold
+    scaffold_should_block_blueprint "$PHASE_DIR" "$DESIGN_ASSETS_DIR" \
+      && { echo "⛔ Scaffold không hoàn tất"; exit 1; }
+    ;;
+  d)
+    echo "⚠ User chọn skip explicit. Logging Form B critical-severity cho mọi FE task."
+    if type -t log_override_debt >/dev/null 2>&1; then
+      log_override_debt "design-greenfield-explicit-skip" "phase=${PHASE_NUMBER}" "critical"
+    fi
+    if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+      emit_telemetry_v2 "blueprint_design_discovery" "${PHASE_NUMBER}" "blueprint.0" \
+        "design_discovery" "OVERRIDE" "{\"choice\":\"explicit-skip\"}"
+    fi
+    echo "  → /vg:accept sẽ BLOCK on greenfield-* critical debt (P20 D-06). Resolve qua /vg:design-scaffold sau, hoặc /vg:override-resolve với rationale."
+    ;;
+  skip)
+    echo "⚠ Pre-flight bỏ qua một lần — bạn tự đảm bảo mockup landed trước /vg:build"
+    ;;
+esac
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_design_discovery" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_design_discovery.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 0_design_discovery 2>/dev/null || true
+```
+</step>
+
 <step name="0_amendment_preflight">
 ## Step 0: Scope Amendment Preflight (v1.14.1+ NEW)
 

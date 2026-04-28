@@ -448,6 +448,30 @@ git commit -m "specs(${PHASE_NUMBER}): create SPECS.md for phase ${PHASE_NUMBER}
   exit 1
 }
 
+# ─── P20 D-05: greenfield design discovery suggestion ──────────────────────
+# After SPECS committed, surface design state proactively. Soft suggestion
+# (doesn't block). Hard gate fires later in /vg:blueprint D-12.
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/scaffold-discovery.sh" 2>/dev/null || true
+if type -t scaffold_detect_fe_work >/dev/null 2>&1 && scaffold_detect_fe_work "$PHASE_DIR"; then
+  DESIGN_DIR=$(vg_config_get design_assets.paths "" 2>/dev/null | head -1)
+  DESIGN_DIR="${DESIGN_DIR:-designs}"
+  if ! scaffold_design_md_present "$PHASE_DIR"; then
+    echo ""
+    echo "ℹ Phase ${PHASE_NUMBER} có FE work nhưng chưa có DESIGN.md (tokens). Khuyến nghị:"
+    echo "    /vg:design-system --browse   (chọn brand từ 58 variants)"
+    echo "    /vg:design-system --create   (tạo custom)"
+  fi
+  MOCKUP_COUNT=$(scaffold_count_existing_mockups "$DESIGN_DIR")
+  if [ "$MOCKUP_COUNT" = "0" ]; then
+    echo ""
+    echo "ℹ Chưa có mockup nào ở ${DESIGN_DIR}/. Khuyến nghị trước /vg:blueprint:"
+    echo "    /vg:design-scaffold       (interactive tool selector)"
+    echo "    /vg:design-scaffold --tool=pencil-mcp   (auto-generate)"
+    echo ""
+    echo "  /vg:blueprint D-12 sẽ HARD-BLOCK nếu vẫn thiếu mockup."
+  fi
+fi
+
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "commit_and_next" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/commit_and_next.done"
 
 # Orchestrator run-complete — validates runtime_contract + emits specs.completed
