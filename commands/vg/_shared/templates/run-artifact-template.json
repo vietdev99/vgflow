@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "vgflow.run-artifact.v1",
+  "title": "Run Artifact (v2.35.0+)",
+  "description": "Per-(resource × role) workflow execution artifact. Findings derived from steps[].status==fail. Existence + coverage prove execution; findings record divergence from expected behavior.",
+  "type": "object",
+  "required": ["run_id", "resource", "role", "kit", "started_at", "completed_at", "steps", "coverage", "findings", "cleanup_status"],
+  "properties": {
+    "run_id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "resource": {"type": "string"},
+    "role": {"type": "string", "examples": ["admin", "user", "anon"]},
+    "kit": {"type": "string", "enum": ["crud-roundtrip", "approval-flow", "bulk-action", "settings-toggle", "read-only-dashboard"]},
+    "scope": {"type": "string", "enum": ["global", "owner-only", "tenant-scoped", "self-service"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": {"type": "string"},
+          "status": {"type": "string", "enum": ["pass", "fail", "blocked", "skipped"]},
+          "expected": {"type": ["object", "null"]},
+          "observed": {"type": ["object", "null"]},
+          "evidence_ref": {"type": ["string", "null"]},
+          "blocked_reason": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["attempted", "passed", "failed", "blocked", "skipped"],
+      "properties": {
+        "attempted": {"type": "integer", "minimum": 0},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "blocked": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0}
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "severity", "dedupe_key", "step_ref"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^F-[0-9]+$"},
+          "title": {"type": "string"},
+          "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
+          "security_impact": {"type": "string", "enum": ["auth_bypass", "scope_violation", "data_integrity", "tenant_leakage", "info_disclosure", "none"]},
+          "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+          "dedupe_key": {"type": "string"},
+          "actor": {"type": "object"},
+          "environment": {"type": "string"},
+          "step_ref": {"type": "string"},
+          "request": {"type": ["object", "null"]},
+          "response": {"type": ["object", "null"]},
+          "trace_id": {"type": ["string", "null"]},
+          "data_created": {"type": "array"},
+          "cleanup_status": {"type": "string", "enum": ["completed", "partial", "skipped"]},
+          "remediation_steps": {"type": "array", "items": {"type": "string"}},
+          "cwe": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "cleanup_status": {"type": "string", "enum": ["completed", "partial", "skipped"]}
+  }
+}

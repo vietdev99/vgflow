@@ -400,6 +400,47 @@ review:
     escalate_on_critical_domain: true   # touches critical_goal_domains → always escalate
     max_iterations: 3                   # max fix iterations before giving up (3-strike rule)
 
+  # ── v2.35.0 CRUD round-trip lens dispatch ─────────────────────────
+  # Phase 2d spawns Gemini Flash workers per (resource × role) declared
+  # in CRUD-SURFACES.md kit:crud-roundtrip. Workers run 8-step Read→Create
+  # →Read→Update→Read→Delete→Read with persistence verification.
+  crud_roundtrip:
+    enabled: true                       # set false to skip Phase 2d
+    cost_cap_usd: 1.50                  # estimated cost ceiling per phase (Gemini Flash $0.075/M)
+    concurrency: 2                      # parallel workers (per-resource serialization within)
+    worker_model: "gemini-2.5-flash"    # cheap model for structured workflow
+    worker_mcp_server: "playwright1"    # MCP server slot from ~/.gemini/settings.json
+    worker_timeout_seconds: 600
+
+  # ── v2.35.0 Auth fixture (workers authenticate per role) ──────────
+  # Workers need real auth tokens to test role-aware behavior. Tokens
+  # are issued ephemerally via the app's login API and stored in
+  # `.review-fixtures/tokens.local.yaml` (gitignored). Seed credentials
+  # live in `.review-fixtures/seed-users.local.yaml` (gitignored, user-managed).
+  roles: ["admin", "user", "anon"]
+  auth:
+    base_url: ""                        # e.g. "http://localhost:3001" — required for fixture bootstrap
+    login_endpoint: "POST /api/auth/login"
+    seed_users_path: ".review-fixtures/seed-users.local.yaml"
+    token_ttl_seconds: 3600
+
+  # ── v2.35.0 Iterative re-discovery ────────────────────────────────
+  # When Haiku scans expose sub_views_discovered[] not in initial nav,
+  # queue additional discovery rounds. Caps prevent runaway scans.
+  iteration:
+    enabled: true
+    max_iterations: 2
+    max_new_views_per_iteration: 5
+
+  # ── v2.35.0 Live-endpoint verifier (closes #50) ───────────────────
+  # Probes registered routes against running app to catch URL drift
+  # between contract/code and what the server actually serves.
+  url_drift_gate:
+    enabled: true
+    severity: "block"                   # block | warn — block fails review on drift detected
+    concurrency: 5
+    timeout_seconds: 5
+
 # === Design System (v1.10.0 R4 — NEW) ==========================
 # Integrates getdesign.md ecosystem DESIGN.md (58 brand variants: Stripe,
 # Linear, Vercel, Apple, Ferrari, BMW, Claude, Cursor, ...).

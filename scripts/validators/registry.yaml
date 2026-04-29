@@ -906,3 +906,31 @@ validators:
     runtime_target_ms: 1500
     added_in: v2.21.0
     description: 'v2.21 Hook 3. Enforces adversarial_scope coverage on security-enriched goals. Rule 1: security_checks present + adversarial_scope missing → WARN. Rule 2: auth_model != public + threats missing auth_bypass/role_escalation → WARN. Rule 3: pii_fields non-empty + threats missing injection → WARN. Severity warn for v1 dogfood; promote block via vg.config.md adversarial_coverage.severity. Override: --skip-adversarial=<reason> logs critical OVERRIDE-DEBT.'
+
+  # ──── v2.35.0 — CRUD round-trip review (closes #51) ────
+  - id: haiku-scan-completeness
+    path: .claude/scripts/validators/verify-haiku-scan-completeness.py
+    severity: block
+    phases_active: [review]
+    domain: artifact
+    runtime_target_ms: 500
+    added_in: v2.35.0
+    description: 'v2.35.0 closes #51 invariant 1. Every non-UNREACHABLE view in nav-discovery.json must have scan-{slug}.json with elements_total >= 1. Catches Haiku scanner skill silently writing empty artifacts (addendum/cross-CLI mode skip).'
+
+  - id: runtime-map-coverage
+    path: .claude/scripts/validators/verify-runtime-map-coverage.py
+    severity: block
+    phases_active: [review]
+    domain: artifact
+    runtime_target_ms: 800
+    added_in: v2.35.0
+    description: 'v2.35.0 closes #51 invariant 2. Every UI-surface goal in TEST-GOALS.md must have RUNTIME-MAP.json views[X].elements > 0 AND goal_sequences[id].steps > 0. Verdict gate hardened content check.'
+
+  - id: crud-runs-coverage
+    path: .claude/scripts/validators/verify-crud-runs-coverage.py
+    severity: block
+    phases_active: [review]
+    domain: artifact
+    runtime_target_ms: 800
+    added_in: v2.35.0
+    description: 'v2.35.0 closes #51 invariant 3. Every (resource × role) declared in CRUD-SURFACES.md kit:crud-roundtrip must have runs/{resource}-{role}.json with coverage.attempted >= 1 and evidence_ref populated per non-skipped step. Catches AI gaming via empty run artifacts.'

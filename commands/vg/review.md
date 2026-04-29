@@ -2778,6 +2778,92 @@ fi
 ```
 </step>
 
+<step name="phase2d_crud_roundtrip_dispatch" profile="web-fullstack,web-frontend-only">
+## Phase 2d — CRUD round-trip lens dispatch (v2.35.0+, closes #51)
+
+Dispatches Gemini Flash workers per `(resource × role)` declared with `kit: crud-roundtrip` in CRUD-SURFACES.md. Each worker runs the 8-step Read→Create→Read→Update→Read→Delete→Read round-trip per `commands/vg/_shared/transition-kits/crud-roundtrip.md`.
+
+**Why Gemini Flash (not Claude Haiku):** $0.075/M input vs $1.00/M = 13× cheaper. Already MCP-configured (5 Playwright servers in `~/.gemini/settings.json`). Already in cross-CLI plumbing.
+
+**Pre-flight:** auth fixture must exist. If not, run `scripts/review-fixture-bootstrap.py` first.
+
+```bash
+echo ""
+echo "━━━ Phase 2d — CRUD round-trip lens dispatch ━━━"
+
+# Skip if no CRUD-SURFACES or no resources declare this kit
+if [ ! -f "${PHASE_DIR}/CRUD-SURFACES.md" ]; then
+  echo "  (no CRUD-SURFACES.md — skipping Phase 2d)"
+elif ! grep -q '"kit"\s*:\s*"crud-roundtrip"' "${PHASE_DIR}/CRUD-SURFACES.md"; then
+  echo "  (no resources with kit: crud-roundtrip — skipping Phase 2d)"
+else
+  # Bootstrap auth tokens if missing
+  TOKENS_PATH="${PHASE_DIR}/.review-fixtures/tokens.local.yaml"
+  REPO_TOKENS_PATH="${REPO_ROOT}/.review-fixtures/tokens.local.yaml"
+  if [ ! -f "$TOKENS_PATH" ] && [ ! -f "$REPO_TOKENS_PATH" ]; then
+    echo "  Bootstrapping auth tokens..."
+    ${PYTHON_BIN:-python3} .claude/scripts/review-fixture-bootstrap.py \
+      --phase-dir "$PHASE_DIR" || {
+        echo "  ⚠ Auth fixture bootstrap failed — Phase 2d skipped (workers cannot authenticate)"
+      }
+  fi
+
+  if [ -f "$TOKENS_PATH" ] || [ -f "$REPO_TOKENS_PATH" ]; then
+    COST_CAP=$(vg_config_get "review.crud_roundtrip.cost_cap_usd" "1.50" 2>/dev/null || echo "1.50")
+    CONCURRENCY=$(vg_config_get "review.crud_roundtrip.concurrency" "2" 2>/dev/null || echo "2")
+
+    ${PYTHON_BIN:-python3} .claude/scripts/spawn-crud-roundtrip.py \
+      --phase-dir "$PHASE_DIR" \
+      --concurrency "$CONCURRENCY" \
+      --cost-cap "$COST_CAP"
+    DISPATCH_RC=$?
+
+    if [ "$DISPATCH_RC" -eq 0 ]; then
+      ARTIFACTS=$(${PYTHON_BIN:-python3} -c "import json; d=json.load(open('${PHASE_DIR}/runs/INDEX.json')); print(d.get('artifacts_present', 0))" 2>/dev/null || echo "0")
+      echo "  ✓ CRUD round-trip dispatch complete: ${ARTIFACTS} run artifact(s)"
+      emit_telemetry_v2 "review_phase2d_dispatched" "${PHASE_NUMBER}" \
+        "review.2d-crud-dispatch" "crud_roundtrip" "PASS" \
+        "{\"artifacts\":${ARTIFACTS}}" 2>/dev/null || true
+    else
+      echo "  ⚠ CRUD round-trip dispatch failed (rc=${DISPATCH_RC})"
+      emit_telemetry_v2 "review_phase2d_failed" "${PHASE_NUMBER}" \
+        "review.2d-crud-dispatch" "crud_roundtrip" "FAIL" \
+        "{\"rc\":${DISPATCH_RC}}" 2>/dev/null || true
+    fi
+  fi
+fi
+```
+</step>
+
+<step name="phase2e_findings_merge" profile="web-fullstack,web-frontend-only">
+## Phase 2e — Findings derivation (v2.35.0+)
+
+Reads run artifacts from Phase 2d and derives `REVIEW-FINDINGS.json` (machine-readable, deduped) + `REVIEW-BUGS.md` (Strix-style human-readable triage doc).
+
+**No auto-route to /vg:build in v2.35.0** — manual triage during dogfood per Codex review feedback. Auto-route candidate for v2.37.0 after schema confidence/dedupe quality validated on real findings.
+
+```bash
+echo ""
+echo "━━━ Phase 2e — Findings derivation ━━━"
+
+if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/null | grep -v INDEX.json)" ]; then
+  ${PYTHON_BIN:-python3} .claude/scripts/derive-findings.py \
+    --phase-dir "$PHASE_DIR"
+  DERIVE_RC=$?
+
+  if [ "$DERIVE_RC" -eq 0 ] && [ -f "${PHASE_DIR}/REVIEW-FINDINGS.json" ]; then
+    FINDING_COUNT=$(${PYTHON_BIN:-python3} -c "import json; d=json.load(open('${PHASE_DIR}/REVIEW-FINDINGS.json')); print(d.get('findings_total', 0))" 2>/dev/null || echo "0")
+    echo "  ✓ ${FINDING_COUNT} finding(s) derived → ${PHASE_DIR}/REVIEW-BUGS.md"
+    emit_telemetry_v2 "review_phase2e_findings" "${PHASE_NUMBER}" \
+      "review.2e-findings" "findings_derive" "PASS" \
+      "{\"findings\":${FINDING_COUNT}}" 2>/dev/null || true
+  fi
+else
+  echo "  (no run artifacts to derive — skipping)"
+fi
+```
+</step>
+
 <step name="phase2_exploration_limits" profile="web-fullstack,web-frontend-only">
 ## Phase 2-limit: EXPLORATION LIMIT CHECK (R8 enforcement — v1.14.4+)
 
@@ -4328,6 +4414,29 @@ if [ -f "$CRUD_DEPTH_VAL" ]; then
     exit 1
   fi
 fi
+
+# v2.35.0 verdict gate hardening (closes #51) — 3 invariants replacing path-existence checks
+# Override per-phase: --skip-content-invariants=<reason> logs OVERRIDE-DEBT
+if [[ ! "$ARGUMENTS" =~ --skip-content-invariants ]]; then
+  for VALIDATOR in verify-haiku-scan-completeness verify-runtime-map-coverage verify-crud-runs-coverage; do
+    VAL_PATH="${REPO_ROOT}/.claude/scripts/validators/${VALIDATOR}.py"
+    if [ -f "$VAL_PATH" ]; then
+      ${PYTHON_BIN:-python3} "$VAL_PATH" --phase-dir "$PHASE_DIR"
+      VAL_RC=$?
+      if [ "$VAL_RC" -ne 0 ]; then
+        echo ""
+        echo "⛔ Verdict gate invariant FAILED: ${VALIDATOR}"
+        echo "   v2.35.0 hardened gate: review cannot PASS with empty/incomplete artifacts."
+        echo "   Either re-run /vg:review ${PHASE_NUMBER} with proper scanner/dispatch coverage,"
+        echo "   or pass --skip-content-invariants=\"<reason>\" to log OVERRIDE-DEBT."
+        emit_telemetry_v2 "review_verdict_invariant_failed" "${PHASE_NUMBER}" \
+          "review.4-verdict" "${VALIDATOR}" "BLOCK" "{}" 2>/dev/null || true
+        exit 1
+      fi
+    fi
+  done
+fi
+
 ```
 
 **Generated matrix format (canonical, from matrix-merger):**

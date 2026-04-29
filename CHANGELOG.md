@@ -1,5 +1,169 @@
 # Changelog
 
+## v2.35.0 (2026-04-30) — CRUD round-trip review (closes #50, #51)
+
+User feedback: review pipeline is "hời hợt" — prescribed exhaustive scan, target wrong roles, wastes tokens, fails to find real bugs. CRUD operations are not independent lenses; they're a chained workflow with Read interleaved between mutations to verify persistence.
+
+This release reshapes review's bug-finding strategy around two ideas borrowed from `usestrix/strix`:
+
+1. **Skills are prompts, not code** — the kit prompt `crud-roundtrip.md` teaches an LLM how to find bugs in a CRUD resource. No prescribed click-everything workflow.
+2. **Run artifacts, not findings-only** — workers emit `coverage{attempted, passed, failed, blocked, skipped}` per workflow run. Findings derived from `steps[].status==fail`. Verdict gate distinguishes "ran clean" from "didn't run".
+
+After Codex GPT-5 cross-AI review, the abstraction was widened from "5 CRUD lenses" to "state transition with invariants" — `(role, resource, precondition, action, expected_state_delta, forbidden_side_effects)`. CRUD round-trip is the first kit; v2.36+ will add approval-flow, bulk-action, settings-toggle.
+
+### Architecture
+
+```
+Manager (Claude Sonnet via Task)              ← reads CRUD-SURFACES, dispatches
+  ├─ scripts/review-fixture-bootstrap.py       ← issues ephemeral tokens per role
+  ├─ scripts/extract-routes-static.py          ← graphify-less route extractor
+  ├─ scripts/verify-routes-live.py             ← URL drift gate (closes #50)
+  ├─ scripts/merge-nav-by-role.py              ← 3-role navigator merger
+  ├─ scripts/discover-iteration.py             ← iterative re-discovery (max 2 iter)
+  ├─ scripts/spawn-crud-roundtrip.py           ← worker dispatcher (Gemini Flash)
+  └─ scripts/derive-findings.py                ← Strix-style findings + REVIEW-BUGS.md
+       │
+       └─ Workers (Gemini Flash via gemini CLI)
+              ├─ -p "@crud-roundtrip.md + context"
+              ├─ -m gemini-2.5-flash             ← $0.075/M = 13× cheaper than Haiku
+              ├─ --approval-mode yolo
+              ├─ --allowed-mcp-server-names playwright1
+              └─ writes runs/{resource}-{role}.json (run artifact)
+```
+
+### Worker tier — Gemini Flash via gemini CLI
+
+Cost per phase (30 round-trip workflows × ~20k tokens):
+- Haiku 4.5: ~$0.60
+- DeepSeek V3 (via opencode): ~$0.16
+- **Gemini-2.5-flash: ~$0.045** (13× cheaper than Haiku, 3.7× cheaper than DeepSeek)
+
+Gemini CLI already MCP-configured by `install.sh` (5 Playwright servers in `~/.gemini/settings.json`). Already in cross-CLI plumbing. Zero new dependency.
+
+### Closes #50 — Build URL drift gate
+
+`scripts/verify-routes-live.py` probes every registered route against the running app via `curl --head`. Classifies live/drift/error/auth_only. With `--gate` flag, exits 1 on drift detected. Routes loaded from either `routes-static.json` (extract-routes-static.py output), `CRUD-SURFACES.md`, or both.
+
+### Closes #51 — Verdict gate hardening (3 invariants)
+
+Replaces path-existence checks with content invariants. AI cannot write empty artifacts to bypass review verdict.
+
+1. **`verify-haiku-scan-completeness.py`** — every non-UNREACHABLE view in nav-discovery.json must have `scan-{slug}.json` with `elements_total >= 1`
+2. **`verify-runtime-map-coverage.py`** — every UI-surface goal in TEST-GOALS.md must have `views[X].elements > 0` AND `goal_sequences[id].steps > 0` in RUNTIME-MAP.json
+3. **`verify-crud-runs-coverage.py`** — every `(resource × role)` declared with `kit: crud-roundtrip` must have `runs/{resource}-{role}.json` with `coverage.attempted >= 1` and `evidence_ref` populated per non-skipped step
+
+Override per-phase via `--skip-content-invariants=<reason>` (logs OVERRIDE-DEBT for post-merge triage).
+
+### New transition kit format
+
+`commands/vg/_shared/transition-kits/crud-roundtrip.md` — first kit. Format mirrors Strix's vulnerability skills (~150 lines markdown teaching LLM how to test, not runnable code). 8-step round-trip per (resource × role):
+
+1. Read list (baseline) — capture row count, columns, sample rows
+2. Create — submit valid payload OR verify role denied (matrix-driven)
+3. Read list (persistence) — verify row count incremented + new row visible
+4. Read detail — verify all fields persisted
+5. Update — modify field OR verify role denied
+6. Read detail (apply) — verify field changed (compare actual values, not `updated_at` to avoid clock-skew)
+7. Delete — confirm dialog handling + DELETE OR verify role denied
+8. Read list (deletion) — entity gone (hard) OR archived (soft per `delete_policy`)
+
+Per-step expected behavior matrix from `CRUD-SURFACES.expected_behavior[role]` block. Per-run unique payload values (`name: "vg-review-{run_id}-create"`) avoid collisions across parallel workers.
+
+### Findings schema — Strix-influenced
+
+Enriched per Codex review feedback. Severity separated from security_impact:
+
+```json
+{
+  "id": "F-001",
+  "title": "...",
+  "severity": "critical|high|medium|low|info",
+  "security_impact": "auth_bypass|scope_violation|data_integrity|tenant_leakage|info_disclosure|none",
+  "confidence": "high|medium|low",
+  "dedupe_key": "<resource>-<role>-<step>-<normalized_title>",
+  "actor": {"role": "...", "user_id": "...", "tenant": "..."},
+  "environment": "...",
+  "step_ref": "step-2",
+  "request": {...},
+  "response": {...},
+  "trace_id": "...",
+  "data_created": [{"resource": "topup_requests", "id": "tr-x"}],
+  "cleanup_status": "completed|partial|skipped",
+  "remediation_steps": [...],
+  "cwe": "CWE-862"
+}
+```
+
+`REVIEW-BUGS.md` is the human-readable triage doc, sorted by severity. Findings NOT auto-routed to `/vg:build` in v2.35.0 (deferred to v2.37 after schema dogfood validates dedupe + confidence quality).
+
+### Auth fixture — credentials never committed
+
+Codex review flagged credentials-in-config as bad. Fixed:
+
+- `vg.config.md` declares `review.roles: [...]` and `review.auth.base_url`
+- `.review-fixtures/seed-users.local.yaml` — gitignored, user-managed credentials
+- `.review-fixtures/tokens.local.yaml` — gitignored, ephemeral tokens issued by `review-fixture-bootstrap.py` against the app's login API
+- `.gitignore` updated automatically by bootstrap script
+
+### Auth-aware navigator (3-role discovery)
+
+Navigator runs 3× (admin/user/anon), captures union of visible routes per role into a role-visibility matrix:
+
+```json
+{
+  "views": {
+    "/admin/users": {
+      "visible_to": ["admin"],
+      "denied_for": ["user", "anon"],
+      "discovery_role_evidence": {
+        "admin": {"http_status": 200, "in_sidebar": true},
+        "user": {"http_status": 403, "in_sidebar": false},
+        "anon": {"http_status": 401, "in_sidebar": false}
+      }
+    }
+  }
+}
+```
+
+Workers spawned by `spawn-crud-roundtrip.py` read this matrix to know expected behavior per role per view.
+
+### Iterative re-discovery (max 2 iter, +5 views/iter)
+
+`discover-iteration.py` reads `scan-*.json sub_views_discovered[]` after Phase 2b-3 collect+merge. New views not in initial nav-discovery get queued for additional Haiku scans. Caps prevent runaway discovery.
+
+### Static route extractor (graphify-less fallback)
+
+`extract-routes-static.py` provides regex-based route discovery for projects without graphify configured. Patterns cover Express/Fastify/Hono, FastAPI/Flask/Django, React Router/Vue Router, Next.js Pages+App Router, Go (Echo/Gin/chi). Smoke-tested on multi-framework fixture: 7 routes detected across 4 frameworks with no false positives.
+
+### Files
+
+- **NEW** `commands/vg/_shared/transition-kits/crud-roundtrip.md` — first kit prompt
+- **NEW** `commands/vg/_shared/templates/run-artifact-template.json` — JSON Schema
+- **NEW** `scripts/review-fixture-bootstrap.py`
+- **NEW** `scripts/extract-routes-static.py`
+- **NEW** `scripts/verify-routes-live.py`
+- **NEW** `scripts/merge-nav-by-role.py`
+- **NEW** `scripts/discover-iteration.py`
+- **NEW** `scripts/spawn-crud-roundtrip.py`
+- **NEW** `scripts/derive-findings.py`
+- **NEW** `scripts/validators/verify-haiku-scan-completeness.py` (closes #51 invariant 1)
+- **NEW** `scripts/validators/verify-runtime-map-coverage.py` (closes #51 invariant 2)
+- **NEW** `scripts/validators/verify-crud-runs-coverage.py` (closes #51 invariant 3)
+- **MODIFY** `commands/vg/review.md` — Phase 2d (CRUD dispatch), Phase 2e (findings), verdict gate hardening
+- **MODIFY** `vg.config.template.md` — `review.crud_roundtrip`, `review.auth`, `review.roles`, `review.iteration`, `review.url_drift_gate`
+- **MODIFY** `scripts/validators/registry.yaml` — register 3 new validators
+
+### Sequence note
+
+Per discussion 2026-04-30, this is fix 2 of 4 for the systemic *"review hời hợt"* pattern:
+
+- v2.34.0 (shipped) — closes #52 (review→test back-flow)
+- **v2.35.0 (this)** — closes #50 + #51 (URL drift + scanner content invariants + CRUD round-trip)
+- v2.36.0 — closes #49 (blueprint expand TEST-GOALS from CRUD-SURFACES) + 2 more transition kits
+- v2.37.0 — auto-route findings to /vg:build (after schema dogfood)
+
+---
+
 ## v2.34.0 (2026-04-30) — review→test goal-enrichment back-flow (closes #52)
 
 User feedback: *"chúng ta đã build từ ban đầu là review sẽ spawn haiku, với codex thì sẽ chạy trong session để dò và vẽ ra bản đồ UI, từ đó bấm rất nhiều component và rich thêm goals tổng hợp cho đoạn test sau đó, nhưng có vẻ nó đang bị bỏ quên."*
