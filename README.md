@@ -373,6 +373,15 @@ The script scans `PLAN.md <design-ref slug="...">` citations to classify each sl
 | `/vg:regression` | Re-run all tests from accepted phases |
 | `/vg:migrate {X}` | Convert legacy GSD artifacts to VG format (also backfills infra registers) |
 
+### Milestone (v2.33.0+)
+| Command | Purpose |
+|---------|---------|
+| `/vg:milestone-summary {M}` | Aggregate report — phase status, goal coverage, security posture, override debt, companion artifact links |
+| `/vg:complete-milestone {M}` | Close milestone — verify all phases accepted → security audit → summary → archive phase dirs → advance STATE.md → atomic commit |
+| `/vg:complete-milestone {M} --check` | Dry-run gate check (no mutations) |
+| `/vg:security-audit-milestone` | Cross-phase security correlation + Strix scan advisory (v2.32.0) |
+| `/vg:project --milestone` | Append next milestone scope to PROJECT.md (after `/vg:complete-milestone`) |
+
 ### Distribution + infra
 | Command | Purpose |
 |---------|---------|
@@ -380,7 +389,6 @@ The script scans `PLAN.md <design-ref slug="...">` citations to classify each sl
 | `/vg:reapply-patches` | Resolve conflicts from `/vg:update` |
 | `/vg:sync` | Dev-side source↔mirror sync (maintainer only) |
 | `/vg:telemetry` | Summarize workflow telemetry |
-| `/vg:security-audit-milestone` | Cross-phase security correlation |
 
 ## Repository layout
 

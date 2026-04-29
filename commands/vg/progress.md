@@ -292,7 +292,7 @@ Pipeline: ✅ specs → ✅ scope → ✅ blueprint → ✅ build → 🔄 revie
 | 5b (test found gaps, need deeper UAT) | `/vg:test {phase}` or `/vg:accept {phase}` |
 | 6 (no UAT.md or UAT incomplete) | `/vg:accept {phase}` |
 | 7 (UAT complete, next phase exists) | `/vg:scope {next_phase}` after `/vg:specs {next_phase}` |
-| 7 (all phases done) | `/vg:project --milestone` (milestone wrap-up — VG-native) |
+| 7 (all phases done) | `/vg:complete-milestone {M}` (close + archive); then `/vg:project --milestone` |
 
 **Output format:**
 

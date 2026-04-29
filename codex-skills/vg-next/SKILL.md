@@ -399,7 +399,8 @@ Note: RUNTIME-MAP.json is the canonical artifact — .md alone is NOT sufficient
 → Next: `/vg:scope {next_phase}`
 
 **Route 9:** All phases complete
-→ Next: `/vg:project --milestone` (milestone wrap-up — VG-native)
+→ Next: `/vg:complete-milestone {M}` (close + audit + summary + archive — v2.33.0+)
+   Then: `/vg:project --milestone` to scope the next milestone
 </step>
 
 <step name="show_and_execute">

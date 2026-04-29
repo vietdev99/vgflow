@@ -1,5 +1,70 @@
 # Changelog
 
+## v2.33.0 (2026-04-30) — milestone pipeline (full GSD parity)
+
+User feedback: "VG có tính năng milestone như GSD chưa?" Audit found VG had milestone *concept* (STATE.md `current_milestone`, `## Milestone N` headings in PROJECT.md, `.vg/milestones/{M}/` archive dir, `/vg:security-audit-milestone`, `/vg:project --milestone`) but **no closeout pipeline**. `security-audit-milestone.md:205` referenced `/vg:complete-milestone` as if it existed; it didn't. Dead code path waiting for an orchestrator.
+
+v2.33.0 builds the full pipeline.
+
+### New commands
+
+- **`/vg:milestone-summary {M}`** — aggregate report across all phases in milestone M. Phase pipeline status (specs/plan/build/review/test/UAT) per phase, goal coverage rolled up by priority (critical/important/nice-to-have), decisions inventory (D-XX namespace count), security register snapshot (open threats by severity), override-debt entries carried forward, companion artifact links (security-audit-*.md, SECURITY-PENTEST-CHECKLIST.md, STRIX-ADVISORY.md from v2.32.0), timeline (first commit → last commit). Re-runnable — non-mutating view.
+- **`/vg:complete-milestone {M}`** — atomic milestone closeout orchestrator. Six-step flow: (1) gate check via `complete-milestone.py --check` (all phases UAT-accepted, no critical OPEN threats, no critical OVERRIDE-DEBT unresolved); (2) security audit hand-off to `/vg:security-audit-milestone --milestone-gate`; (3) regenerate `MILESTONE-SUMMARY.md`; (4) `git mv .vg/phases/{N}/` → `.vg/milestones/{M}/phases/{N}/` (history preserved); (5) advance STATE.md (`current_milestone` → next, append `milestones_completed[]` entry); (6) atomic commit with `milestone(close):` subject prefix. Override flags `--allow-open-critical=<reason>` + `--allow-open-override-debt=<reason>` log to OVERRIDE-DEBT for next-milestone triage.
+
+### Phase membership resolution
+
+Both commands resolve "which phases belong to milestone M" via three patterns against ROADMAP.md:
+
+```
+## M1 …
+## Milestone M1 …
+## Milestone 1 …
+```
+
+Falls back to all phases if no milestone section found (single-milestone projects). Override with `--phases <range>` (e.g. `--phases 3-7`).
+
+### State schema additions
+
+`STATE.md` (still pure markdown, parsed via regex):
+
+```yaml
+current_milestone: M2          # was M1, advanced by complete-milestone
+milestones_completed:
+  - id: M1
+    completed_at: 2026-04-30T12:34:56Z
+    phases: [2, 5, 7]
+```
+
+`.vg/milestones/{M}/.completed` JSON marker also written:
+
+```json
+{
+  "milestone": "M1",
+  "completed_at": "2026-04-30T12:34:56Z",
+  "phase_count": 3,
+  "vgflow_version": "2.33.0"
+}
+```
+
+### Wired references
+
+- `commands/vg/next.md:279` — Route 9 (all phases done) now points to `/vg:complete-milestone {M}` first, then `/vg:project --milestone` for next-milestone scoping.
+- `commands/vg/progress.md:295` — same redirect.
+- `README.md` command reference — new "Milestone (v2.33.0+)" section.
+
+### Closes the v2.32.0 dead path
+
+`security-audit-milestone.md:205` `--milestone-gate` flag has been waiting for an orchestrator since the file was written. v2.33.0's `/vg:complete-milestone` is that orchestrator. The flag now fires.
+
+### Smoke-tested
+
+- Fixture milestone with 2 phases (1 accepted, 1 missing UAT) → `--check` exits 1, blocker message lists missing phase. After UAT.md added → `--check` passes.
+- `--finalize` writes STATE.md atomically (current_milestone advances, milestones_completed[] appended), writes `.completed` marker JSON.
+- Re-run `--finalize` is idempotent (doesn't duplicate `milestones_completed[]` entry for same id).
+- `--allow-open-critical="reason"` waives security gate, logs to OVERRIDE-DEBT carry-forward.
+
+---
+
 ## v2.32.1 (2026-04-30) — CRUD-depth review/test hardening (#47, #48)
 
 Patch release for the review/test false-pass class where a CRUD-heavy phase
