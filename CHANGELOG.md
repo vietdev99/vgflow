@@ -1,5 +1,65 @@
 # Changelog
 
+## v2.34.0 (2026-04-30) — review→test goal-enrichment back-flow (closes #52)
+
+User feedback: *"chúng ta đã build từ ban đầu là review sẽ spawn haiku, với codex thì sẽ chạy trong session để dò và vẽ ra bản đồ UI, từ đó bấm rất nhiều component và rich thêm goals tổng hợp cho đoạn test sau đó, nhưng có vẻ nó đang bị bỏ quên."*
+
+The original 4-step `/vg:review` design:
+1. Spawn Haiku/in-session Codex
+2. Discover UI + draw map → `views[X].elements[]`
+3. Click many components → `scan-{view}.json`
+4. **Enrich TEST-GOALS for test layer** ← MISSING
+
+Steps 1–3 were implemented; step 4 never wired. Result: `views[X].elements[]` accumulated 200+ runtime-discovered components (buttons, mutations, forms, tables, tabs), but no code consumed them. `/vg:test` codegen used only the 67 high-level goals from blueprint. ~70%+ of runtime-observed surface left untested.
+
+Cross-grep confirmed before this release:
+```
+"enrich", "discovered_goals", "G-AUTO", "G-DISCOVER",
+"TEST-GOALS-DISCOVERED" → 0 matches in commands/ or scripts/
+```
+
+### What this release adds
+
+- **NEW** `scripts/enrich-test-goals.py` — parses every `scan-*.json` under `${PHASE_DIR}`, classifies elements (modal triggers, mutation buttons, forms, table row actions, paging, tabs), dedupes against existing `TEST-GOALS.md` `interactive_controls`, and emits `${PHASE_DIR}/TEST-GOALS-DISCOVERED.md` with `G-AUTO-*` goal stubs in YAML frontmatter format (mirrors `TEST-GOAL-enriched-template.md` schema). Has a `--validate-only` mode that exits 1 when any view has elements scanned but zero auto-goals derived (catches scanner output drift).
+
+- **NEW** `scripts/codegen-auto-goals.py` — sister script that reads `TEST-GOALS-DISCOVERED.md` and emits skeleton Playwright specs `auto-{goal-id-slug}.spec.ts` to `GENERATED_TESTS_DIR`. No LLM call (auto-goals are review-grade stubs documenting what scanner observed; reviewer iterates on next blueprint pass). Each spec is `test.fail()` until reviewer fleshes out selectors, with comment block listing trigger/main_steps/alternate_flows/postconditions/observed-endpoint from runtime evidence.
+
+- **MODIFIED** `commands/vg/review.md` — new step `phase2c_enrich_test_goals` after `2b-3 collect+merge`. Invokes enrich script + validator. BLOCKS review if enrichment coverage gap detected (override via `--skip-enrich-validate=<reason>` logs OVERRIDE-DEBT).
+
+- **MODIFIED** `commands/vg/test.md` — new substep `5d-auto` after main `5d_codegen`. Invokes codegen-auto-goals script. Skeleton specs land in same dir as main codegen output, prefixed `auto-` for visual distinction.
+
+### Goal stub categories emitted
+
+| Element source | Goal stub | Priority |
+|---|---|---|
+| `results[].outcome == "modal_opened"` | `G-AUTO-{view}-modal-{name}` | important |
+| `results[].network[].method ∈ {POST,PUT,PATCH,DELETE}` | `G-AUTO-{view}-mutation-{name}-{method}` | critical |
+| `forms[]` | `G-AUTO-{view}-form-{trigger}` | critical |
+| `tables[].actions_per_row[]` | `G-AUTO-{view}-row-{action}` | important |
+| `tables[].row_count > 0` (no declared pagination) | `G-AUTO-{view}-table-paging` | important |
+| `tabs[]` | `G-AUTO-{view}-tab-{name}` | nice-to-have |
+
+Each stub includes `evidence{}` block with scan_ref + observed endpoint/status for traceability. `interactive_controls` declared in source TEST-GOALS.md (`filters`, `pagination`, `sort`) cause matching auto-goals to be skipped (avoid duplicates).
+
+### Smoke-tested
+
+- Fixture phase with 1 existing goal + 1 view scan (12 elements) → 8 auto-goals emitted (1 modal + 1 mutation + 1 form + 3 row-actions + 2 tabs). Pagination correctly skipped because declared in source. 8 skeleton specs written.
+- `--validate-only` mode: passes when all views have ≥1 auto-goal; fails with concrete view-level gap message when scanner output drifted.
+- Spec output validates: `import { test, expect } from '@playwright/test'` syntax, `test.describe` block, single-quote escaping in titles + main_steps comments.
+
+### Sequence note
+
+This is the FIRST of 4 fixes for the systemic *"review hời hợt"* pattern. Per discussion 2026-04-30:
+
+- v2.34.0 (this release) — closes #52 (back-flow gap)
+- v2.35.0 — closes #51 (Haiku scanner content invariants)
+- v2.36.0 — closes #49 (blueprint expand goals from CRUD-SURFACES)
+- v2.37.0 — closes #50 (build URL-drift gate)
+
+Reasoning for upstream-first: a hardened scanner output without a consumer is wasted; goal expansion at planner-time is wasted if test layer can't pull from runtime discoveries. Wire the back-flow first, then harden the producers.
+
+---
+
 ## v2.33.0 (2026-04-30) — milestone pipeline (full GSD parity)
 
 User feedback: "VG có tính năng milestone như GSD chưa?" Audit found VG had milestone *concept* (STATE.md `current_milestone`, `## Milestone N` headings in PROJECT.md, `.vg/milestones/{M}/` archive dir, `/vg:security-audit-milestone`, `/vg:project --milestone`) but **no closeout pipeline**. `security-audit-milestone.md:205` referenced `/vg:complete-milestone` as if it existed; it didn't. Dead code path waiting for an orchestrator.

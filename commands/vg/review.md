@@ -2721,6 +2721,63 @@ fi
 ```
 </step>
 
+<step name="phase2c_enrich_test_goals" profile="web-fullstack,web-frontend-only">
+## Phase 2c — Enrich TEST-GOALS from runtime discovery (v2.34.0+, closes #52)
+
+Bridges the design gap between **Step 3 (click many components)** and **Step 4 (rich goals for test layer)** of the original 4-step review architecture. Without this step, every Haiku-discovered button/form/modal/tab/row-action sits dead in `views[X].elements[]` and the downstream test layer never tests it.
+
+`enrich-test-goals.py` reads every `scan-*.json`, classifies elements (modal triggers, mutations, forms, table row actions, paging, tabs), dedupes against existing TEST-GOALS.md `interactive_controls`, and emits `${PHASE_DIR}/TEST-GOALS-DISCOVERED.md` with `G-AUTO-*` goal stubs. `/vg:test` codegen (step 5d) reads both files; auto-emitted specs land as `auto-{goal-id}.spec.ts` for visual distinction.
+
+```bash
+echo ""
+echo "━━━ Phase 2c — Enrich TEST-GOALS from runtime discovery ━━━"
+
+ENRICH_THRESHOLD=$(vg_config_get "review.enrich_min_elements" "3" 2>/dev/null || echo "3")
+
+${PYTHON_BIN:-python3} .claude/scripts/enrich-test-goals.py \
+  --phase-dir "$PHASE_DIR" \
+  --threshold "$ENRICH_THRESHOLD"
+ENRICH_RC=$?
+
+case "$ENRICH_RC" in
+  0)
+    AUTO_COUNT=$(grep -c "^id: G-AUTO-" "$PHASE_DIR/TEST-GOALS-DISCOVERED.md" 2>/dev/null || echo 0)
+    echo "  ✓ Phase 2c: ${AUTO_COUNT} auto-emitted goals → ${PHASE_DIR}/TEST-GOALS-DISCOVERED.md"
+    emit_telemetry_v2 "review_phase2c_enriched" "${PHASE_NUMBER}" \
+      "review.2c-enrich" "test_goals_enrichment" "PASS" \
+      "{\"auto_goals\":${AUTO_COUNT}}" 2>/dev/null || true
+    ;;
+  *)
+    echo "  ⚠ Phase 2c enrichment failed (rc=${ENRICH_RC}) — TEST-GOALS-DISCOVERED.md not written."
+    echo "    Test layer codegen will fall back to TEST-GOALS.md only (legacy behavior)."
+    emit_telemetry_v2 "review_phase2c_failed" "${PHASE_NUMBER}" \
+      "review.2c-enrich" "test_goals_enrichment" "WARN" \
+      "{\"rc\":${ENRICH_RC}}" 2>/dev/null || true
+    ;;
+esac
+
+# Coverage validator: BLOCK if any view had elements scanned but no goals derived.
+# This catches the failure mode where Haiku ran but classification missed everything
+# (e.g. element schema drift, parser bug). Per-phase override via --skip-enrich-validate.
+if [[ ! "$ARGUMENTS" =~ --skip-enrich-validate ]]; then
+  ${PYTHON_BIN:-python3} .claude/scripts/enrich-test-goals.py \
+    --phase-dir "$PHASE_DIR" \
+    --threshold "$ENRICH_THRESHOLD" \
+    --validate-only
+  VALIDATE_RC=$?
+  if [ "$VALIDATE_RC" -ne 0 ]; then
+    echo "  ⛔ Phase 2c enrichment validation FAILED."
+    echo "     Either re-run /vg:review {phase} so scanners visit those views,"
+    echo "     or pass --skip-enrich-validate=\"<reason>\" to log OVERRIDE-DEBT."
+    emit_telemetry_v2 "review_phase2c_coverage_gap" "${PHASE_NUMBER}" \
+      "review.2c-enrich" "test_goals_enrichment_coverage" "FAIL" \
+      "{\"rc\":${VALIDATE_RC}}" 2>/dev/null || true
+    exit 1
+  fi
+fi
+```
+</step>
+
 <step name="phase2_exploration_limits" profile="web-fullstack,web-frontend-only">
 ## Phase 2-limit: EXPLORATION LIMIT CHECK (R8 enforcement — v1.14.4+)
 

@@ -1920,6 +1920,39 @@ Display:
   Output: ${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts
 ```
 
+### 5d-auto: Skeleton specs from review-discovered goals (v2.34.0+, closes #52)
+
+After main codegen, also emit skeleton Playwright specs for every `G-AUTO-*` goal in `${PHASE_DIR}/TEST-GOALS-DISCOVERED.md` (auto-emitted by `/vg:review` Phase 2c from runtime UI scan). These specs are intentionally minimal — review-grade stubs that document what the Haiku scanner observed (mutations, modals, forms, table row actions, paging, tabs). Reviewer iterates them on next `/vg:blueprint` pass.
+
+Files land as `${GENERATED_TESTS_DIR}/auto-{goal-id-slug}.spec.ts` (visually distinguishable from main `{phase}-goal-*.spec.ts`).
+
+```bash
+DISCOVERED_FILE="${PHASE_DIR}/TEST-GOALS-DISCOVERED.md"
+if [ -f "$DISCOVERED_FILE" ]; then
+  echo ""
+  echo "━━━ 5d-auto — Skeleton specs from review-discovered goals ━━━"
+
+  ${PYTHON_BIN:-python3} .claude/scripts/codegen-auto-goals.py \
+    --phase-dir "$PHASE_DIR" \
+    --out-dir "$GENERATED_TESTS_DIR"
+  AUTO_RC=$?
+
+  if [ "$AUTO_RC" -eq 0 ]; then
+    AUTO_FILE_COUNT=$(ls "$GENERATED_TESTS_DIR"/auto-g-auto-*.spec.ts 2>/dev/null | wc -l | tr -d ' ')
+    echo "  ✓ ${AUTO_FILE_COUNT} skeleton spec(s) emitted"
+    emit_telemetry_v2 "test_5d_auto_emitted" "${PHASE_NUMBER}" \
+      "test.5d-auto" "auto_codegen" "PASS" \
+      "{\"specs\":${AUTO_FILE_COUNT}}" 2>/dev/null || true
+  else
+    echo "  ⚠ Auto-codegen failed (rc=${AUTO_RC}) — skeleton specs not emitted, main codegen unaffected."
+  fi
+else
+  echo "  (no TEST-GOALS-DISCOVERED.md — review Phase 2c either skipped or pre-v2.34 install)"
+fi
+```
+</step>
+
+<step name="5d_binding_gate" profile="web-fullstack,web-frontend-only">
 ### 5d-binding: Phase-end Goal-Test Binding Gate (STRICT by default)
 
 After codegen, verify EVERY goal in TEST-GOALS.md is covered by at least one
