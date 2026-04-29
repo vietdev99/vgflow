@@ -14,15 +14,20 @@
 set -e
 
 REFRESH=false
+MIGRATE_DESIGN=false
 TARGET=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --refresh)
       REFRESH=true
       ;;
+    --migrate-design)
+      MIGRATE_DESIGN=true
+      ;;
     -h|--help)
-      echo "Usage: ./install.sh [--refresh] /path/to/your/project"
-      echo "  --refresh  force-refresh VG managed files after backing them up"
+      echo "Usage: ./install.sh [--refresh] [--migrate-design] /path/to/your/project"
+      echo "  --refresh          force-refresh VG managed files after backing them up"
+      echo "  --migrate-design   auto-move legacy .vg/design-normalized/ into 2-tier layout"
       exit 0
       ;;
     -*)
@@ -761,5 +766,26 @@ EOF
     else
       echo "✓ Bug reporting disabled. Re-enable: /vg:bug-report --enable"
     fi
+  fi
+fi
+
+# ============================================================
+# 8. Design path migration (opt-in via --migrate-design)
+# ============================================================
+if [ "$MIGRATE_DESIGN" = "true" ]; then
+  echo ""
+  echo "[8/8] Design path migration (v2.30.0 2-tier layout)..."
+  MIGRATE_SCRIPT="$SCRIPT_DIR/scripts/migrate-design-paths.py"
+  if [ -z "${PYTHON_BIN:-}" ]; then
+    PYTHON_BIN=$(command -v python3 || command -v python || true)
+  fi
+  if [ -z "${PYTHON_BIN:-}" ]; then
+    echo "  ⚠ Python not found — skipping design migration."
+    echo "  Run manually: python3 scripts/migrate-design-paths.py --repo $TARGET --apply"
+  elif [ ! -f "$MIGRATE_SCRIPT" ]; then
+    echo "  ⚠ migrate-design-paths.py not found at $MIGRATE_SCRIPT — skipping."
+  else
+    echo "  Running design path migration (--apply)..."
+    "$PYTHON_BIN" "$MIGRATE_SCRIPT" --repo "$TARGET" --apply --verbose
   fi
 fi

@@ -1,5 +1,44 @@
 # Changelog
 
+## v2.30.0 (2026-04-29) — design path 2-tier layout + migration script
+
+User reported design assets landing in project-level `.vg/design-normalized/` regardless of which phase generated them. Root cause: `design-extract.md` had a single hardcoded output dir from `vg.config.md:design_assets.output_dir`; no per-phase scoping.
+
+### 2-tier design path layout
+
+v2.30.0 introduces a 2-tier structure:
+
+- **Tier 1 — phase-scoped** `.vg/phases/{N}/design/`: assets that belong to exactly one phase. `/vg:design-extract` writes here by default for all per-phase design work.
+- **Tier 2 — project-shared** `.vg/design-system/`: cross-phase brand assets, design tokens, shared component screenshots. `/vg:design-extract --shared` writes here.
+- **Tier 3 — legacy** `.vg/design-normalized/` (soft-deprecated): read-fallback for 2 releases; WARN on first use.
+
+### New files
+
+- **`commands/vg/_shared/lib/design-path-resolver.sh`** — resolver helper. Functions: `vg_design_phase_dir`, `vg_design_shared_dir`, `vg_design_legacy_dir`, `vg_resolve_design_ref` (3-tier read with fallback), `vg_resolve_design_dir` (write target with scope). All consumers source this instead of hardcoding paths.
+- **`scripts/migrate-design-paths.py`** — one-shot migration script. Walks legacy `.vg/design-normalized/`, scans `PLAN.md <design-ref slug="...">` citations to classify each slug: single-phase cite → `phases/{N}/design/`; multi-phase cite → `.vg/design-system/`; no cite → `.vg/design-system/orphans/`. Pre-migration backup to `.vg/.design-migration-backup/{ts}/`. Dry-run by default; pass `--apply` to move.
+
+### Files modified
+
+- `commands/vg/design-extract.md` — `WRITE_SCOPE` dispatch: `--shared` → Tier 2, default → Tier 1 via `vg_resolve_design_dir`. Step 2 uses resolver.
+- `commands/vg/blueprint.md` — design section sources resolver; detects which tier has manifest.json; WARN on legacy path use.
+- `commands/vg/accept.md` — design baseline `BASELINE_PNG` resolved via `vg_resolve_design_ref` (3-tier fallback); legacy absolute path kept as human-readable error fallback.
+- `install.sh` — new `--migrate-design` flag: runs `migrate-design-paths.py --apply` on target project after all files are installed.
+
+### Migration for existing projects
+
+```bash
+# Dry-run first (default):
+python3 .claude/scripts/migrate-design-paths.py --repo . --verbose
+
+# Apply when ready:
+python3 .claude/scripts/migrate-design-paths.py --repo . --apply --verbose
+
+# Or during fresh install on a project that has legacy design dir:
+bash /path/to/vgflow/install.sh --migrate-design /path/to/project
+```
+
+---
+
 ## v2.29.0 (2026-04-29) — utcnow() deprecation cleanup + #41/#42 update self-deploy fix
 
 User reported v2.28.0 install on PrintwayV3 still emitting `DeprecationWarning: datetime.datetime.utcnow() is deprecated` from `vg-verify-claim.py:74` + `:96`. Triage found two layers:

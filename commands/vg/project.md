@@ -423,12 +423,26 @@ if planning_dir.is_dir():
         if research_count > 0:
             scan["docs_found"].append(f"${PLANNING_DIR}/research/ ({research_count} research docs)")
 
-    # 9j. design-normalized/ — extracted design assets
-    design_dir = planning_dir / "design-normalized"
-    if design_dir.is_dir():
-        design_count = len(list(design_dir.rglob("*.md"))) + len(list(design_dir.rglob("*.png")))
-        if design_count > 0:
-            scan["docs_found"].append(f"${PLANNING_DIR}/design-normalized/ ({design_count} design refs)")
+    # 9j. design refs — v2.30+ 2-tier (phase-scoped + project-shared) +
+    # legacy compat. Sum design refs across all known locations.
+    design_count = 0
+    # Tier 2: project-shared (.vg/design-system/)
+    shared_dir = planning_dir.parent / ".vg" / "design-system"
+    if shared_dir.is_dir():
+        design_count += len(list(shared_dir.rglob("*.md"))) + len(list(shared_dir.rglob("*.png")))
+    # Tier 1: phase-scoped (.vg/phases/{N}/design/)
+    phases_dir = planning_dir.parent / ".vg" / "phases"
+    if phases_dir.is_dir():
+        for ph in phases_dir.iterdir():
+            phd = ph / "design"
+            if phd.is_dir():
+                design_count += len(list(phd.rglob("*.md"))) + len(list(phd.rglob("*.png")))
+    # Tier 3: legacy (.planning/design-normalized/, .vg/design-normalized/)
+    for legacy in (planning_dir / "design-normalized", planning_dir.parent / ".vg" / "design-normalized"):
+        if legacy.is_dir():
+            design_count += len(list(legacy.rglob("*.md"))) + len(list(legacy.rglob("*.png")))
+    if design_count > 0:
+        scan["docs_found"].append(f"design refs across phase/shared/legacy ({design_count} files)")
 
     # 9k. milestones/ — completed milestone archives
     milestones_dir = planning_dir / "milestones"

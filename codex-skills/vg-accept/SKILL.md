@@ -1250,10 +1250,16 @@ acceptable (returns to /vg:build with override-debt logged).
 For each unique design-ref in `${VG_TMP}/uat-designs.txt`:
 
 ```bash
-DESIGN_DIR_REL_UAT="$(vg_config_get design_assets.output_dir .vg/design-normalized 2>/dev/null || echo .vg/design-normalized)"
+# v2.30+ 2-tier resolver — try phase-scoped first, shared fallback, legacy last
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/design-path-resolver.sh"
+BASELINE_PNG="$(vg_resolve_design_ref "{ref}" "screenshots/{ref}.default.png" "$PHASE_DIR" 2>/dev/null)"
+if [ -z "$BASELINE_PNG" ]; then
+  # Legacy compat absolute path for human-readable error
+  DESIGN_DIR_REL_UAT="$(vg_design_legacy_dir 2>/dev/null || echo .vg/design-normalized)"
+  BASELINE_PNG="${REPO_ROOT}/${DESIGN_DIR_REL_UAT}/screenshots/{ref}.default.png"
+fi
 DIFF_PNG="${PHASE_DIR}/visual-fidelity/{ref}.diff.png"
 CURRENT_PNG="${PHASE_DIR}/visual-fidelity/{ref}.current.png"
-BASELINE_PNG="${REPO_ROOT}/${DESIGN_DIR_REL_UAT}/screenshots/{ref}.default.png"
 
 if [ -f "$DIFF_PNG" ]; then
   PROMPT_BODY="Design ref: {ref}

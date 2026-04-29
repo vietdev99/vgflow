@@ -1,7 +1,7 @@
 ---
 name: vg:design-extract
 description: Extract design assets (HTML/PNG/Figma/PenBoard/Pencil) into PNG + structural refs for AI vision consumption
-argument-hint: "[phase-or-all] [--paths=<glob>] [--no-states] [--refresh]"
+argument-hint: "[phase-or-all] [--paths=<glob>] [--no-states] [--refresh] [--shared]"
 allowed-tools:
   - Read
   - Write
@@ -30,11 +30,26 @@ runtime_contract:
 </rules>
 
 <objective>
-Normalize any design format into AI-consumable visual + structural refs. Output at `{config.design_assets.output_dir}`:
+Normalize any design format into AI-consumable visual + structural refs.
+
+**v2.30.0 — 2-tier output:**
+- **Phase-scoped** (default when invoked with phase number) → `${PHASE_DIR}/design/`
+  Each phase owns its mockups; isolation prevents cross-phase contamination.
+- **Project-shared** (with `--shared` flag, or scope=all without phase) →
+  `${config.design_assets.shared_dir}` (default `.vg/design-system/`).
+  For brand foundations / design system / cross-phase components.
+
+Layout under either tier:
   screenshots/{slug}.{state}.png      ← for Claude vision injection
   refs/{slug}.structural.{html|json|xml}  ← DOM/tree truth
   refs/{slug}.interactions.md         ← handler map (HTML only)
   manifest.json                        ← inventory for blueprint + build
+
+Resolution order at consume time (blueprint/build/accept):
+  1. `${PHASE_DIR}/design/...`        (Tier 1 — phase-scoped)
+  2. `${config.design_assets.shared_dir}/...`  (Tier 2 — shared)
+  3. `${config.design_assets.output_dir}/...`  (Tier 3 — legacy compat,
+                                                soft-deprecated for 2 releases)
 </objective>
 
 <available_agent_types>
@@ -48,7 +63,7 @@ Normalize any design format into AI-consumable visual + structural refs. Output 
 <step name="0_validate_config">
 Check `.claude/vg.config.md` has:
   - `design_assets.paths` (non-empty array)
-  - `design_assets.output_dir`
+  - `design_assets.shared_dir` (v2.30+; falls back to `output_dir` for compat)
   - `design_assets.handlers`
   - `design_assets.render_states` (bool)
 
@@ -60,9 +75,19 @@ Parse `$ARGUMENTS`:
 - Positional 1 → `SCOPE` (either "all" OR phase number to filter assets)
 - `--paths=<glob>` → override config paths for this run
 - `--no-states` → disable capture_states for HTML (faster, fewer screenshots)
-- `--refresh` → delete output_dir first, redo from scratch
+- `--refresh` → delete the resolved write-target dir first, redo from scratch
+- `--shared` (v2.30+) → write to project-shared dir (`design_assets.shared_dir`)
+                        instead of phase-scoped. Use for design-system / brand
+                        foundations / cross-phase components.
 
 Defaults: SCOPE=all, capture_states=config.design_assets.render_states.
+
+**Write-target dispatch (v2.30+):**
+- `SCOPE` is a phase number AND `--shared` not set → `${PHASE_DIR}/design/`
+- `SCOPE=all` OR `--shared` set → `${config.design_assets.shared_dir}` (default
+  `.vg/design-system/`)
+
+This dispatch happens in step 2 below — `OUTPUT_DIR` resolves accordingly.
 </step>
 
 <step name="2_inventory">
@@ -71,7 +96,22 @@ Defaults: SCOPE=all, capture_states=config.design_assets.render_states.
 Collect all assets matching config.design_assets.paths (or --paths override).
 
 ```bash
-OUTPUT_DIR="${config.design_assets.output_dir}"   # default ${PLANNING_DIR}/design-normalized
+# v2.30+ 2-tier resolver — dispatch by --shared flag + SCOPE (phase number)
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/design-path-resolver.sh"
+
+if [ "$WRITE_SCOPE" = "shared" ] || [ "$SCOPE" = "all" ]; then
+  # Project-shared dir (design system, cross-phase components)
+  OUTPUT_DIR="$(vg_resolve_design_dir "" shared)"
+elif [ -n "$SCOPE" ] && [ "$SCOPE" != "all" ]; then
+  # Phase-scoped dir — locate phase dir from SCOPE (phase number)
+  PHASE_DIR_FOR_DESIGN="$(find_phase_dir "$SCOPE" 2>/dev/null || echo ".vg/phases/${SCOPE}")"
+  OUTPUT_DIR="$(vg_resolve_design_dir "$PHASE_DIR_FOR_DESIGN" phase)"
+else
+  # Fallback — shared dir
+  OUTPUT_DIR="$(vg_resolve_design_dir "" shared)"
+fi
+
+echo "▸ Design extract write-target: $OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
 # Resolve normalizer script path — portable across machines/CI

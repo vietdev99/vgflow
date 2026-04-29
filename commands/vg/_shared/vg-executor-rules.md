@@ -359,10 +359,26 @@ const handleSubmit = async () => {
 
 When the task has `<design-ref>` pointing to a real slug (Form A — NOT
 `no-asset:...`), `<design_context>` will be injected listing absolute PNG
-paths under the resolved `design_assets.output_dir`. The slug name is NOT
-the design — the PNG IS. Code that does not match what the PNG shows
-will be rejected by the L3 build-time visual gate or the L4 review
-phase 2.5 design-fidelity check, and the task will be reopened.
+paths. The slug name is NOT the design — the PNG IS. Code that does not
+match what the PNG shows will be rejected by the L3 build-time visual gate
+or the L4 review phase 2.5 design-fidelity check, and the task will be
+reopened.
+
+**v2.30+ design path resolution (2-tier):** orchestrator resolves each
+`<design-ref slug="...">` in this order before injecting paths:
+
+1. `${PHASE_DIR}/design/{kind}/{slug}.{ext}` — phase-scoped (preferred,
+   each phase owns its mockups; isolation prevents cross-phase pollution)
+2. `${config.design_assets.shared_dir}/{kind}/{slug}.{ext}` — project-shared
+   (for design system, brand foundations, cross-phase components written
+   via `/vg:design-extract --shared`)
+3. `${config.design_assets.output_dir}/{kind}/{slug}.{ext}` — legacy
+   single-tier path, soft-deprecated since v2.30. Migration helper:
+   `bash install.sh --migrate-design <project>`.
+
+The injected paths in `<design_context>` are absolute — Read them as
+provided. Do not second-guess where they live; the resolver picked the
+right tier for each slug.
 
 ### L1 — Read the pixels FIRST (no exceptions)
 

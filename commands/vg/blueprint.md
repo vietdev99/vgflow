@@ -482,7 +482,24 @@ Run first: /vg:scope {phase}
 # Use vg_config_get / vg_config_get_array helpers from config-loader.
 DESIGN_PATHS=$(vg_config_get_array design_assets.paths)
 if [ -n "$DESIGN_PATHS" ]; then
-  DESIGN_OUT=$(vg_config_get design_assets.output_dir "${PLANNING_DIR}/design-normalized")
+  # v2.30+ 2-tier resolver: prefer phase-scoped manifest, fall back to shared
+  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/design-path-resolver.sh"
+  DESIGN_PHASE_DIR="$(vg_design_phase_dir "$PHASE_DIR")"
+  DESIGN_SHARED_DIR="$(vg_design_shared_dir)"
+  DESIGN_LEGACY_DIR="$(vg_design_legacy_dir)"
+
+  if [ -f "${DESIGN_PHASE_DIR}/manifest.json" ]; then
+    DESIGN_OUT="$DESIGN_PHASE_DIR"
+  elif [ -f "${DESIGN_SHARED_DIR}/manifest.json" ]; then
+    DESIGN_OUT="$DESIGN_SHARED_DIR"
+  elif [ -n "$DESIGN_LEGACY_DIR" ] && [ -f "${DESIGN_LEGACY_DIR}/manifest.json" ]; then
+    DESIGN_OUT="$DESIGN_LEGACY_DIR"
+    echo "⚠ Using legacy design dir ${DESIGN_LEGACY_DIR}/ — soft-deprecated since v2.30." >&2
+    echo "   Run \`bash install.sh --migrate-design <project-root>\` to move into per-phase layout." >&2
+  else
+    # No manifest yet — write-target for the auto /vg:design-extract below
+    DESIGN_OUT="$DESIGN_PHASE_DIR"
+  fi
   DESIGN_MANIFEST="${DESIGN_OUT}/manifest.json"
 
   # Stale check: any source asset newer than manifest?
