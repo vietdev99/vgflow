@@ -34,7 +34,7 @@ from pathlib import Path
 
 
 def parse_auto_goals(discovered_path: Path) -> list[dict]:
-    """Parse TEST-GOALS-DISCOVERED.md for G-AUTO-* goal blocks."""
+    """Parse TEST-GOALS-DISCOVERED.md or TEST-GOALS-EXPANDED.md for G-AUTO-* / G-CRUD-* goal blocks."""
     if not discovered_path.is_file():
         return []
     text = discovered_path.read_text(encoding="utf-8", errors="replace")
@@ -65,8 +65,10 @@ def parse_auto_goals(discovered_path: Path) -> list[dict]:
                 data = yaml.safe_load(blob) or {}
             except Exception:
                 continue
-            if isinstance(data, dict) and str(data.get("id", "")).startswith("G-AUTO-"):
-                goals.append(data)
+            if isinstance(data, dict):
+                gid = str(data.get("id", ""))
+                if gid.startswith("G-AUTO-") or gid.startswith("G-CRUD-"):
+                    goals.append(data)
     return goals
 
 
@@ -171,14 +173,20 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     out_dir = Path(args.out_dir).resolve()
-    discovered = phase_dir / "TEST-GOALS-DISCOVERED.md"
 
-    goals = parse_auto_goals(discovered)
+    sources = [
+        phase_dir / "TEST-GOALS-DISCOVERED.md",   # v2.34.0 runtime-discovered (G-AUTO-*)
+        phase_dir / "TEST-GOALS-EXPANDED.md",     # v2.36.0 planner expansion from CRUD-SURFACES (G-CRUD-*)
+    ]
+    goals: list[dict] = []
+    for src in sources:
+        goals.extend(parse_auto_goals(src))
+
     if not goals:
         if args.json:
             print(json.dumps({"specs_written": 0, "reason": "no auto-goals found"}, indent=2))
         elif not args.quiet:
-            print(f"  (no TEST-GOALS-DISCOVERED.md auto-goals found at {discovered} — skipping auto codegen)")
+            print(f"  (no TEST-GOALS-DISCOVERED.md or TEST-GOALS-EXPANDED.md auto-goals found in {phase_dir} — skipping auto codegen)")
         return 0
 
     if not args.dry_run:

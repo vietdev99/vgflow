@@ -1,5 +1,86 @@
 # Changelog
 
+## v2.36.0 (2026-04-30) — TEST-GOALS expansion + 2 transition kits (closes #49)
+
+Continues v2.35.0's CRUD round-trip foundation. Closes the planner-time gap where blueprint declared 67 high-level goals while CRUD-SURFACES.md specified 200-300 verification points. Adds 2 more transition kits per Codex review feedback ("CRUD round-trip is a good primitive for simple admin surfaces, not a universal review primitive").
+
+### Closes #49 — blueprint expand TEST-GOALS from CRUD-SURFACES
+
+- **NEW** `scripts/expand-test-goals-from-crud-surfaces.py` — reads CRUD-SURFACES.md, enumerates per-resource × per-operation × per-role × per-variant (filter / sort / pagination / state / row_action / bulk_action), dedupes against existing TEST-GOALS.md + TEST-GOALS-DISCOVERED.md, emits `TEST-GOALS-EXPANDED.md` with `G-CRUD-*` IDs.
+- **MODIFIED** `commands/vg/blueprint.md` — new sub-step `2b5d_expand_from_crud_surfaces` after TEST-GOALS + CRUD-SURFACES generation.
+- **MODIFIED** `commands/vg/test.md` — sub-step `5d-auto` now reads BOTH `TEST-GOALS-DISCOVERED.md` (runtime, v2.34) AND `TEST-GOALS-EXPANDED.md` (planner, this release).
+- **MODIFIED** `scripts/codegen-auto-goals.py` — accepts both `G-AUTO-*` and `G-CRUD-*` prefixes.
+
+### 3-source goal layer (complete)
+
+```
+TEST-GOALS.md            ← manual high-level (blueprint primary, ~60-100 goals)
+TEST-GOALS-EXPANDED.md   ← planner expansion from CRUD-SURFACES (~200-400 goals)  [NEW v2.36]
+TEST-GOALS-DISCOVERED.md ← runtime UI scan emit (~50-150 goals)                   [v2.34]
+```
+
+Smoke test: 1 resource × 5 ops × 2 roles × 4 filters/sorts × 4 states × 3 row-actions × 1 bulk-action → **36 expansion goals** from a single resource. Realistic phase (10 resources): 200-400 expansion goals matching Codex's predicted verification surface.
+
+### Goal categories emitted
+
+| Variant | Stub format | Priority |
+|---|---|---|
+| Operation × role | `G-CRUD-{resource}-{op}-{role}` | critical (mutation) / important (read) |
+| Filter | `G-CRUD-{resource}-list-{role}-filter-{name}` | important |
+| Sort column | `G-CRUD-{resource}-list-{role}-sort-{column}` | important |
+| Pagination | `G-CRUD-{resource}-list-{role}-paging` | important |
+| State (loading/empty/error/zero_result/unauthorized) | `G-CRUD-{resource}-list-{role}-state-{name}` | nice-to-have / important |
+| Row action | `G-CRUD-{resource}-row-{role}-{action}` | important |
+| Bulk action | `G-CRUD-{resource}-bulk-{role}-{action}` | important |
+
+Each stub has `expected_status` derived from CRUD-SURFACES `expected_behavior[role][op]` matrix — not a global naive role matrix (Codex critique #4 fix).
+
+### 2 more transition kits (Codex critique #1 fix)
+
+CRUD round-trip alone misses approval workflows, bulk operations, settings toggles, async jobs. v2.36 ships:
+
+- **NEW** `commands/vg/_shared/transition-kits/approval-flow.md` — 8-step lifecycle test for resources with pending → approved/rejected state machine. Tests separation-of-duties (requester cannot approve own request), audit log emit on state transition, idempotency on re-approve, invalid transitions (reject → approve).
+- **NEW** `commands/vg/_shared/transition-kits/bulk-action.md` — 8-step multi-select + batch test. Tests partial-failure handling (5 succeed / 2 fail), batch limit enforcement (DoS), unauthorized role bulk-mutate bypass, race-condition probe (rows changing during op).
+
+Resources opt-in via `kit:` field in CRUD-SURFACES.md:
+
+```yaml
+resources:
+  - name: topup_requests
+    kit: approval-flow              # was crud-roundtrip
+    requester_role: user
+    approver_role: admin
+    lifecycle_states: [pending, approved, rejected]
+```
+
+### Token cost (estimated per phase)
+
+- Blueprint expansion: ~$0.00 (deterministic Python script, no LLM)
+- Worker dispatch (Gemini Flash): same as v2.35 (~$0.045 per 30 round-trip workflows)
+- Codegen 5d-auto: same as v2.34 (template-based, no LLM)
+
+Net: same cost as v2.35, **3-5× more goal coverage**.
+
+### Files
+
+- **NEW** `commands/vg/_shared/transition-kits/approval-flow.md`
+- **NEW** `commands/vg/_shared/transition-kits/bulk-action.md`
+- **NEW** `scripts/expand-test-goals-from-crud-surfaces.py`
+- **MODIFIED** `commands/vg/blueprint.md` (+1 sub-step)
+- **MODIFIED** `commands/vg/test.md` (5d-auto reads both sources)
+- **MODIFIED** `scripts/codegen-auto-goals.py` (accepts G-CRUD-* prefix)
+
+### Sequence note
+
+This is fix 3 of 4 for the systemic *"review hời hợt"* pattern:
+
+- v2.34.0 (shipped) — review→test back-flow (closes #52)
+- v2.35.0 (shipped) — CRUD round-trip + scanner invariants (closes #50, #51)
+- **v2.36.0 (this)** — TEST-GOALS expansion + approval-flow + bulk-action (closes #49)
+- v2.37.0 — auto-fix loop + code-only SAST kit + inter-worker findings broker
+
+---
+
 ## v2.35.0 (2026-04-30) — CRUD round-trip review (closes #50, #51)
 
 User feedback: review pipeline is "hời hợt" — prescribed exhaustive scan, target wrong roles, wastes tokens, fails to find real bugs. CRUD operations are not independent lenses; they're a chained workflow with Read interleaved between mutations to verify persistence.

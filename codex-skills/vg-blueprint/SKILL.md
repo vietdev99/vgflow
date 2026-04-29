@@ -2007,6 +2007,37 @@ fi
 ```
 </step>
 
+<step name="2b5d_expand_from_crud_surfaces">
+## Sub-step 2b5d — Expand TEST-GOALS from CRUD-SURFACES (v2.36.0+, closes #49)
+
+After TEST-GOALS.md (manual high-level) and CRUD-SURFACES.md (resource contract) are written, expand the goal layer with per-resource × per-operation × per-role × per-variant stubs. This closes the gap where blueprint declared 67 goals but CRUD-SURFACES specified 200-300 verification points.
+
+Output: `${PHASE_DIR}/TEST-GOALS-EXPANDED.md` with `G-CRUD-*` IDs. Test codegen consumes this alongside `TEST-GOALS.md` (manual) and `TEST-GOALS-DISCOVERED.md` (runtime, v2.34).
+
+```bash
+echo ""
+echo "━━━ 2b5d — Expand TEST-GOALS from CRUD-SURFACES (closes #49) ━━━"
+
+if [ ! -f "${PHASE_DIR}/CRUD-SURFACES.md" ]; then
+  echo "  (no CRUD-SURFACES.md — skipping expansion)"
+else
+  ${PYTHON_BIN:-python3} .claude/scripts/expand-test-goals-from-crud-surfaces.py \
+    --phase-dir "$PHASE_DIR"
+  EXPAND_RC=$?
+
+  if [ "$EXPAND_RC" -eq 0 ] && [ -f "${PHASE_DIR}/TEST-GOALS-EXPANDED.md" ]; then
+    EXPANDED_COUNT=$(grep -c "^id: G-CRUD-" "${PHASE_DIR}/TEST-GOALS-EXPANDED.md" 2>/dev/null || echo 0)
+    echo "  ✓ ${EXPANDED_COUNT} expansion goal(s) → TEST-GOALS-EXPANDED.md"
+    emit_telemetry_v2 "blueprint_2b5d_expanded" "${PHASE_NUMBER}" \
+      "blueprint.2b5d-expand" "test_goals_expansion" "PASS" \
+      "{\"expanded\":${EXPANDED_COUNT}}" 2>/dev/null || true
+  else
+    echo "  ⚠ Expansion failed (rc=${EXPAND_RC}) — codegen falls back to TEST-GOALS.md only"
+  fi
+fi
+```
+</step>
+
 <step name="2b6c_view_decomposition">
 ## Sub-step 2b6c: View Decomposition (P19 D-02 — vision-Read PNG → component list)
 
