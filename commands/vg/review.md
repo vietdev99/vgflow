@@ -2864,6 +2864,36 @@ fi
 ```
 </step>
 
+<step name="phase2f_route_auto_fix" profile="web-fullstack,web-frontend-only">
+## Phase 2f — Route findings to /vg:build (v2.37.0+, opt-in)
+
+Reads `REVIEW-FINDINGS.json` and emits `AUTO-FIX-TASKS.md` for findings meeting the conservative gate (severity ≥ high, confidence == high, cleanup_status == completed). `/vg:build` consumes via `--include-auto-fix` flag (opt-in v2.37, may default-on v2.38 after dogfood).
+
+```bash
+echo ""
+echo "━━━ Phase 2f — Route findings to /vg:build (auto-fix loop) ━━━"
+
+if [ -f "${PHASE_DIR}/REVIEW-FINDINGS.json" ]; then
+  ${PYTHON_BIN:-python3} .claude/scripts/route-findings-to-build.py \
+    --phase-dir "$PHASE_DIR"
+  ROUTE_RC=$?
+
+  if [ "$ROUTE_RC" -eq 0 ] && [ -f "${PHASE_DIR}/AUTO-FIX-TASKS.md" ]; then
+    TASK_COUNT=$(grep -c "^### Task AF-" "${PHASE_DIR}/AUTO-FIX-TASKS.md" 2>/dev/null || echo 0)
+    echo "  ✓ ${TASK_COUNT} auto-fix task group(s) → AUTO-FIX-TASKS.md"
+    echo "    Run /vg:build ${PHASE_NUMBER} --include-auto-fix to consume"
+    emit_telemetry_v2 "review_phase2f_routed" "${PHASE_NUMBER}" \
+      "review.2f-route" "auto_fix_routing" "PASS" \
+      "{\"task_groups\":${TASK_COUNT}}" 2>/dev/null || true
+  else
+    echo "  (no qualifying findings to route)"
+  fi
+else
+  echo "  (no REVIEW-FINDINGS.json — skipping)"
+fi
+```
+</step>
+
 <step name="phase2_exploration_limits" profile="web-fullstack,web-frontend-only">
 ## Phase 2-limit: EXPLORATION LIMIT CHECK (R8 enforcement — v1.14.4+)
 

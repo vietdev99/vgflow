@@ -1,5 +1,98 @@
 # Changelog
 
+## v2.37.0 (2026-04-30) — Auto-fix loop + code-only SAST + inter-worker broker
+
+Final piece of the 4-release "review hời hợt" remediation arc. Closes the remaining gaps from the v2.35 Codex review:
+
+- **Auto-fix feedback loop** — review findings can flow into `/vg:build` as remediation tasks (opt-in)
+- **Code-only review path** — phases without UI runtime (backend-only, CLI, library) get static SAST kit
+- **Inter-worker context sharing** — Strix's "real-time finding broadcast" pattern for parallel CRUD round-trip workers
+
+### W1 — Auto-fix loop
+
+`scripts/route-findings-to-build.py` reads `REVIEW-FINDINGS.json` (v2.35) and emits `AUTO-FIX-TASKS.md` with /vg:build-consumable task entries. Conservative gate per Codex feedback:
+
+- Severity ≥ high
+- Confidence == high
+- cleanup_status == completed (data integrity)
+- Group by dedupe_key (1 fix can address N occurrences)
+
+Wired into `commands/vg/review.md` as new Phase 2f after findings derivation. Opt-in: `/vg:build {phase} --include-auto-fix` consumes (default off in v2.37; may flip to default-on in v2.38 after dogfood).
+
+Each task entry includes:
+- Severity, confidence, security_impact, CWE
+- Affected resources × roles
+- Dedupe key + occurrence count
+- Remediation steps (from finding)
+- Repro preconditions
+- Source finding IDs
+- /vg:build instructions for the executor
+
+### W2 — Code-only SAST kit
+
+`commands/vg/_shared/transition-kits/static-sast.md` — third transition kit, for phases without UI runtime. LLM-driven static analysis: triages SAST candidates (semgrep or fallback), traces data flow, emits findings with `data_flow` field replacing `poc_script_code` (no PoC for static).
+
+`scripts/static-sast-runner.py` — SAST candidate generator. Two modes:
+- `semgrep` present → `semgrep --config=auto`
+- `semgrep` missing → fallback regex patterns for 8 bug classes:
+  - `injection` (SQLi/NoSQLi/cmd)
+  - `secrets` (hardcoded keys/tokens/JWT secrets)
+  - `broken-auth` (route without middleware)
+  - `idor` (object query without scope check)
+  - `unsafe-deserialize` (pickle/yaml/eval)
+  - `mass-assignment` (`...req.body` spread)
+  - `path-traversal` (fs ops with user input)
+  - `crypto-weak` (MD5/SHA1 for auth, AES-ECB)
+
+Smoke-tested: 7 detections across 5 bug classes from a 14-line vulnerable JS fixture (SQL concat + JWT secret + admin route + IDOR + pickle.loads).
+
+### W3 — Inter-worker findings broker
+
+`scripts/findings-broker.py` — polls `runs/` during dispatch, broadcasts critical findings to in-flight workers via `runs/.broker-context.json`. Workers MAY check this file at step boundaries.
+
+Default broadcast triggers (Strix-inspired):
+- `auth_bypass_critical` — severity=critical + security_impact=auth_bypass
+- `tenant_leakage_critical` — severity=critical + security_impact=tenant_leakage
+- `credential_in_response` — token/secret/api_key in finding's response evidence
+
+Each broadcast includes `actionable_for_other_workers[]` — concrete suggestions like "if you're testing the same role, try other admin routes — the bypass may be middleware-wide" or "inspect your responses for token leakage".
+
+Two modes:
+- Snapshot (`--phase-dir <path>`) — one-shot scan + write
+- Daemon (`--daemon --interval 5`) — alongside `spawn-crud-roundtrip.py`, polls until INDEX.json shows complete
+
+### Files
+
+- **NEW** `scripts/route-findings-to-build.py`
+- **NEW** `commands/vg/_shared/transition-kits/static-sast.md`
+- **NEW** `scripts/static-sast-runner.py`
+- **NEW** `scripts/findings-broker.py`
+- **MODIFY** `commands/vg/review.md` — Phase 2f (route auto-fix)
+
+### Sequence — arc complete
+
+Per discussion 2026-04-30, this completes the 4-release remediation:
+
+- v2.34.0 — review→test back-flow (closes #52)
+- v2.35.0 — CRUD round-trip + scanner invariants (closes #50, #51)
+- v2.36.0 — TEST-GOALS expansion + 2 kits (closes #49)
+- **v2.37.0 (this)** — auto-fix loop + code-only SAST + inter-worker broker
+
+All 4 issues opened on the "review hời hợt" pattern (#49, #50, #51, #52) are now closed. Arc summary:
+
+| Layer | Before arc | After arc |
+|---|---|---|
+| Goal layer | ~67 manual high-level | 60-100 manual + 200-400 expanded + 50-150 discovered = **3-source coverage** |
+| Worker tier | Haiku 4.5 ($1/M) | Gemini Flash ($0.075/M) — **13× cheaper** |
+| Discovery | sidebar-bound 1-role | 3-role auth-aware + iterative re-discovery + static route extractor |
+| Verdict gate | path-existence check | 3 content invariants — AI cannot bypass with empty artifacts |
+| Findings | none | Strix-style with PoC, dedupe, confidence, repro_preconditions |
+| Bug → fix | manual triage | opt-in auto-route via AUTO-FIX-TASKS.md |
+| Code-only phases | Haiku navigator (broken) | static-sast kit + semgrep wrapper |
+| Cross-worker context | none | broker broadcasts critical findings |
+
+---
+
 ## v2.36.0 (2026-04-30) — TEST-GOALS expansion + 2 transition kits (closes #49)
 
 Continues v2.35.0's CRUD round-trip foundation. Closes the planner-time gap where blueprint declared 67 high-level goals while CRUD-SURFACES.md specified 200-300 verification points. Adds 2 more transition kits per Codex review feedback ("CRUD round-trip is a good primitive for simple admin surfaces, not a universal review primitive").
