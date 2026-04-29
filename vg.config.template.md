@@ -822,6 +822,15 @@ security:
     block_on_open: ["critical"]
   milestone_audit:
     required_before_milestone_complete: true
+  # ── Strix advisor (v2.32.0 plugin, optional) ──────────────────────
+  # End-of-milestone advisory recommending the user run usestrix/strix
+  # (autonomous AI pentest agent) against the milestone's accumulated
+  # adversarial surface. VG aggregates the scope; Strix is run by the
+  # user with their own Docker + LLM API key + target URL.
+  # See: https://github.com/usestrix/strix
+  strix_advisor:
+    enabled: true                   # set false to skip Step 6 of /vg:security-audit-milestone
+    target_url: ""                  # e.g. "http://localhost:3001" — left blank = placeholder in advisory
 
 # ─── Session Lifecycle (2026-04-17) ─────────────────────────────────
 session:

@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.32.0 (2026-04-29) — Strix scan advisory plugin (end-of-milestone)
+
+User asked: học được gì từ usestrix/strix về autopentest? Decision: Strix's domain (Docker sandbox + LLM-powered ReAct loop + actual exploit execution) is intentionally **outside** VG's dependency surface. VG aggregates threat-model declarations and curates an advisory recommending the user run Strix — same pattern as Step 5 (`SECURITY-PENTEST-CHECKLIST.md` for human pentesters).
+
+### What this is NOT
+
+- VG does not bundle Strix.
+- VG does not run Strix.
+- VG does not parse Strix output (yet).
+- No new gate, no new BLOCK condition, no new dependency.
+
+### What this is
+
+End-of-milestone Step 6 inside `/vg:security-audit-milestone`. Aggregates the milestone's adversarial surface (declarative `adversarial_scope.threats` from each phase's TEST-GOALS.md + HTTP endpoints from API-CONTRACTS.md grouped by auth model) and emits two artifacts:
+
+- `.vg/milestones/{M}/STRIX-ADVISORY.md` — markdown advisory with: why-this-matters summary, ready-to-copy `docker run ghcr.io/usestrix/strix:latest …` invocation tailored to declared threats, threat → goal traceability table, endpoint surface per phase, post-scan triage guidance, resource expectations.
+- `.vg/milestones/{M}/strix-scope.json` — machine-readable scope payload for Strix's `--scope-file` flag (schema_version, target_url, threats, threat_goals, endpoints_by_phase).
+
+### Files
+
+- **NEW** `scripts/generate-strix-advisory.py` — phase walker + advisor renderer. Stdlib-only with optional PyYAML; falls back to regex when PyYAML missing. Resolves milestone scope via STATE.md / ROADMAP.md or explicit `--phases <range>`.
+- **MODIFY** `commands/vg/security-audit-milestone.md` — Step 6 added. Reads `security.strix_advisor.enabled` (default true). Skips with explicit log line when disabled.
+- **MODIFY** `vg.config.template.md` — `security.strix_advisor.{enabled, target_url}` config block under existing `security:` namespace.
+
+### Why plugin, not core integration
+
+Strix needs Docker + a separate LLM API key + a reachable target URL. Forcing those into VG's install path would break library / CLI / mobile-only project profiles. Step 6 generates an actionable recommendation; the user decides whether to spend the Docker setup + LLM tokens. After Strix runs, the user triages findings into `.vg/SECURITY-REGISTER.md` manually — auto-import is intentionally not provided so findings land with proper phase scope, owner, and severity in the project context.
+
+### Smoke verified
+
+- Fixture milestone with 2 phases, 4 distinct threats, 3 endpoints with mixed auth model (public/authenticated/admin) → advisory groups correctly per auth bucket.
+- Empty milestone (no `adversarial_scope` declarations, no API-CONTRACTS) → "Nothing to advise" stanza, no spurious docker invocation.
+- Disabled via `security.strix_advisor.enabled: false` → Step 6 logs "(strix_advisor disabled in vg.config.md — skipping Step 6)" and exits cleanly.
+
+---
+
 ## v2.31.1 (2026-04-29) - no-session active-run fallback fix
 
 v2.31.0 published successfully, but the `main` test workflow exposed an older

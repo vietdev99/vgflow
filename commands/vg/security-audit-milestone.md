@@ -274,6 +274,61 @@ fi
 ```
 </step>
 
+<step name="6_strix_advisory">
+## Step 6 — Strix Scan Advisory (v2.32.0, optional plugin)
+
+If `vg.config.md → security.strix_advisor.enabled` is true (default), generate
+a `STRIX-ADVISORY.md` recommending the user run [usestrix/strix](https://github.com/usestrix/strix)
+— an autonomous AI pentest agent — against the milestone's accumulated attack
+surface.
+
+**VG does NOT run Strix.** Step 5 outputs a checklist for human pentesters;
+Step 6 outputs an analogous advisory for AI pentesters. Both are curation, not
+execution. Strix needs Docker + a separate LLM API key + a reachable target
+URL — all user-side concerns intentionally kept outside VG's dependency
+surface.
+
+The advisor:
+- Aggregates `adversarial_scope.threats` declarations from each phase's
+  TEST-GOALS.md (v2.21.0 declarative threat schema).
+- Aggregates HTTP endpoints from API-CONTRACTS.md grouped by auth model.
+- Emits `STRIX-ADVISORY.md` (markdown) + `strix-scope.json` (machine-readable
+  for Strix `--scope-file`).
+- Provides ready-to-copy `docker run ghcr.io/usestrix/strix:latest …`
+  invocation tailored to the declared threats.
+
+```bash
+ADV_ENABLED=$(vg_config_get "security.strix_advisor.enabled" "true" 2>/dev/null || echo "true")
+
+if [ "$ADV_ENABLED" = "true" ]; then
+  echo ""
+  echo "━━━ Step 6 — Strix Scan Advisory (v2.32.0 plugin) ━━━"
+
+  STRIX_SCRIPT=".claude/scripts/generate-strix-advisory.py"
+  if [ ! -f "$STRIX_SCRIPT" ]; then
+    echo "  ⚠ Strix advisor script missing at $STRIX_SCRIPT — skipping."
+  else
+    ADV_TARGET=$(vg_config_get "security.strix_advisor.target_url" "" 2>/dev/null || echo "")
+    ADV_ARGS=( "--milestone" "${MILESTONE_ID}" )
+    [ -n "$ADV_TARGET" ] && ADV_ARGS+=( "--target-url" "$ADV_TARGET" )
+
+    ${PYTHON_BIN:-python3} "$STRIX_SCRIPT" "${ADV_ARGS[@]}"
+    ADV_RC=$?
+    if [ "$ADV_RC" -eq 0 ]; then
+      echo "  ✓ Strix advisory ready at .vg/milestones/${MILESTONE_ID}/STRIX-ADVISORY.md"
+      echo "    Disable: set security.strix_advisor.enabled: false in vg.config.md"
+    elif [ "$ADV_RC" -eq 1 ]; then
+      echo "  (no phases resolved for ${MILESTONE_ID} — advisory skipped)"
+    else
+      echo "  ⚠ Advisory generation failed (rc=${ADV_RC}) — see stderr above"
+    fi
+  fi
+else
+  echo "(strix_advisor disabled in vg.config.md — skipping Step 6)"
+fi
+```
+</step>
+
 </process>
 
 <success_criteria>
