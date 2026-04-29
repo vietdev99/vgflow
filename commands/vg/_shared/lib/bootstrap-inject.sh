@@ -97,7 +97,7 @@ vg_bootstrap_emit_fired() {
 
   ${PYTHON_BIN:-python3} - "$payload_file" "$step_name" "$phase" "$command" "$telemetry_file" <<'PY' 2>/dev/null
 import json, sys, os, subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 payload, step, phase, command, telemetry = sys.argv[1:6]
@@ -117,7 +117,7 @@ for r in rules:
 if not fired:
     sys.exit(0)
 
-ts = datetime.utcnow().isoformat() + 'Z'
+ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 # Sink 1 — telemetry.jsonl (legacy, for /vg:bootstrap --trace fallback path)
 Path(telemetry).parent.mkdir(parents=True, exist_ok=True)

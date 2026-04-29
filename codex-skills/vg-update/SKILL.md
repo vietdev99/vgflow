@@ -353,6 +353,18 @@ if [ -z "$EXTRACTED" ] || [ ! -d "$EXTRACTED" ]; then
   exit 3
 fi
 echo "Extracted: ${EXTRACTED}"
+
+# Self-bootstrap the updater: merge with the freshly downloaded helper, not
+# the installed helper. This prevents stale/broken `.claude/scripts/vg_update.py`
+# from deciding whether its own replacement is allowed to land.
+MERGE_HELPER="${EXTRACTED}/scripts/vg_update.py"
+if [ -f "$MERGE_HELPER" ]; then
+  echo "Merge helper: upstream tarball vg_update.py"
+else
+  MERGE_HELPER="$HELPER"
+  echo "Merge helper: installed vg_update.py (upstream helper missing)"
+fi
+MERGE_HELPER_DIR="$(dirname "$MERGE_HELPER")"
 ```
 </step>
 
@@ -425,7 +437,7 @@ while IFS= read -r upstream_file; do
   fi
 
   # 3-way merge via helper
-  MERGE_STATUS="$(python3 "$HELPER" merge \
+  MERGE_STATUS="$(python3 "$MERGE_HELPER" merge \
     --ancestor "$ABS_ANCESTOR" \
     --current  "$ABS_TARGET" \
     --upstream "$ABS_UPSTREAM" \
@@ -447,10 +459,10 @@ while IFS= read -r upstream_file; do
     mkdir -p "$(dirname "$PARKED")"
     mv "${ABS_TARGET}.merged" "$PARKED"
 
-    REL="$REL" MANIFEST="$MANIFEST" REPO_ROOT="$REPO_ROOT" python3 -c "
+    REL="$REL" MANIFEST="$MANIFEST" REPO_ROOT="$REPO_ROOT" MERGE_HELPER_DIR="$MERGE_HELPER_DIR" python3 -c "
 import os, sys
 from pathlib import Path
-sys.path.insert(0, os.path.join(os.environ['REPO_ROOT'], '.claude', 'scripts'))
+sys.path.insert(0, os.environ.get('MERGE_HELPER_DIR') or os.path.join(os.environ['REPO_ROOT'], '.claude', 'scripts'))
 from vg_update import PatchesManifest
 PatchesManifest(Path(os.environ['MANIFEST'])).add(os.environ['REL'], 'conflict')
 "
@@ -465,6 +477,19 @@ if [ "$FORCE_UPSTREAM" -gt 0 ]; then
   echo "    Local edits to those files (if any) were OVERWRITTEN. Inspect with:"
   echo "      git diff HEAD -- .claude/ | head -100"
   echo "    Recover via git checkout if needed."
+fi
+
+CRITICAL_UPDATE_DRIFT=0
+for rel in scripts/vg_update.py commands/vg/update.md commands/vg/reapply-patches.md; do
+  if [ -f "${EXTRACTED}/${rel}" ] && [ -f "${REPO_ROOT}/.claude/${rel}" ] && ! cmp -s "${EXTRACTED}/${rel}" "${REPO_ROOT}/.claude/${rel}"; then
+    echo "  ⛔ Core update file did not match upstream after merge: ${rel}"
+    CRITICAL_UPDATE_DRIFT=1
+  fi
+done
+if [ "$CRITICAL_UPDATE_DRIFT" -ne 0 ]; then
+  echo "Refusing to bump VGFLOW-VERSION while core update tooling is stale."
+  echo "Resolve parked conflicts with /vg:reapply-patches, or refresh install from the latest release."
+  exit 4
 fi
 ```
 </step>
@@ -481,7 +506,7 @@ set +e  # Never let this step fail the whole /vg:update run
 echo ""
 echo "=== T8: verifying hard-gate integrity ==="
 
-python3 "${REPO_ROOT}/.claude/scripts/vg_update.py" verify-gates \
+python3 "${MERGE_HELPER}" verify-gates \
   --manifest-version "${LATEST}" \
   --from-version "${INSTALLED}" \
   --merged-root "${REPO_ROOT}/.claude" \

@@ -32,6 +32,14 @@ def test_update_command_syncs_codex_without_vgflow_sync_sh():
     assert "vgflow/sync.sh not present" not in text
 
 
+def test_update_command_bootstraps_merge_helper_from_tarball():
+    text = UPDATE_MD.read_text(encoding="utf-8")
+    assert 'MERGE_HELPER="${EXTRACTED}/scripts/vg_update.py"' in text
+    assert 'python3 "$MERGE_HELPER" merge' in text
+    assert 'python3 "${MERGE_HELPER}" verify-gates' in text
+    assert "Refusing to bump VGFLOW-VERSION while core update tooling is stale." in text
+
+
 def test_update_command_keeps_codex_assets_out_of_claude_tree():
     text = UPDATE_MD.read_text(encoding="utf-8")
     assert "codex-skills/*|gemini-skills/*|templates/codex/*|templates/codex-agents/*)" in text
@@ -164,12 +172,12 @@ def test_merge_conflict(tmp_path):
 
 
 def test_merge_missing_ancestor_fallback(tmp_path):
-    """no ancestor -> conservative: keep user, report as conflict"""
+    """no ancestor -> upstream wins, with distinct status for caller logging"""
     current = tmp_path / "current.md"; current.write_text("user\n")
     upstream = tmp_path / "upstream.md"; upstream.write_text("upstream\n")
     result = three_way_merge(tmp_path / "missing.md", current, upstream)
-    assert result.status == "conflict"
-    assert "user" in result.content
+    assert result.status == "force-upstream"
+    assert result.content == "upstream\n"
 
 
 # ---- Task C4: PatchesManifest ------------------------------------------------

@@ -148,6 +148,16 @@ Script installer sẽ copy commands, skills, scripts, templates, và sinh `.clau
 
 Luồng update: query GitHub API → tải tarball + verify SHA256 → 3-way merge (giữ local edits của user) → park conflicts vào `.claude/vgflow-patches/`.
 
+Nếu install cũ báo đã lên phiên bản mới nhất nhưng core files vẫn stale, force-refresh VG managed files từ release hiện tại:
+
+```bash
+cd /đường/dẫn/project
+curl -fsSL https://raw.githubusercontent.com/vietdev99/vgflow/main/install.sh -o /tmp/vgflow-install.sh
+bash /tmp/vgflow-install.sh --refresh .
+```
+
+`--refresh` backup files đang có vào `.vgflow-refresh-backup/` trước khi overwrite commands, skills, scripts, schemas, templates, và Codex mirrors do VG quản lý.
+
 ## Danh sách commands
 
 ### Khởi tạo project

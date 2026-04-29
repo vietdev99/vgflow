@@ -125,7 +125,7 @@ import json, os, sys, datetime
 pages = json.load(open(sys.argv[1]))['pages']
 out, evid, tool, sha = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 os.makedirs(evid, exist_ok=True)
-now = datetime.datetime.utcnow().isoformat() + "Z"
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 for p in pages:
     slug = p['slug']
     for ext in ('html','htm','png','jpg','jpeg','fig','pen','penboard','flow'):

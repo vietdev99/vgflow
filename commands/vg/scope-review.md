@@ -589,7 +589,7 @@ for d in sorted(phases_dir.iterdir()):
     }
 
 baseline = {
-    "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "phases": phases,
 }
 out_path.write_text(json.dumps(baseline, indent=2, ensure_ascii=False), encoding='utf-8')

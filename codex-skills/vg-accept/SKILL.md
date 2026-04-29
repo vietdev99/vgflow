@@ -1564,14 +1564,14 @@ if [ "${CRITICAL_SKIPS:-0}" -gt "${MAX_CRIT_SKIPS:-0}" ]; then
   # Rewrite final verdict to DEFER so downstream /vg:next still blocks
   ${PYTHON_BIN:-python3} - "$RESP_JSON" <<'PY'
 import json, sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 p = Path(sys.argv[1])
 d = json.loads(p.read_text(encoding="utf-8"))
 d.setdefault("final", {})
 d["final"]["verdict"] = "DEFER"
 d["final"]["forced_by"] = "uat_quorum_override"
-d["final"]["ts"] = datetime.utcnow().isoformat() + "Z"
+d["final"]["ts"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 p.write_text(json.dumps(d, indent=2))
 PY
 fi

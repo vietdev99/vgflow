@@ -1241,11 +1241,12 @@ if [ ! -f "$FIX_LOOP_STATE" ]; then
   # First invocation — initialize
   ${PYTHON_BIN:-python3} - <<PY > "$FIX_LOOP_STATE"
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 print(json.dumps({
     "iteration_count": 0,
-    "first_run_ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "last_run_ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "first_run_ts": ts_now,
+    "last_run_ts": ts_now,
     "max_iterations": ${MAX_ITER},
     "escalations": [],
 }, indent=2))
@@ -1279,11 +1280,11 @@ if [ "${BUDGET_EXHAUSTED:-false}" != "true" ]; then
   TOTAL_ITER=$((TOTAL_ITER + 1))
   ${PYTHON_BIN:-python3} - <<PY > "$FIX_LOOP_STATE"
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 d = json.loads(Path("${FIX_LOOP_STATE}").read_text(encoding="utf-8"))
 d["iteration_count"] = ${TOTAL_ITER}
-d["last_run_ts"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+d["last_run_ts"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 d.setdefault("escalations", []).append({
     "iteration": ${TOTAL_ITER},
     "ts": d["last_run_ts"],

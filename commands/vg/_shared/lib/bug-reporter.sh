@@ -438,34 +438,34 @@ bug_reporter_github_submit_from_event() {
 
   local title="[${severity}] ${type} — sig ${sig} (vg ${version})"
   local body
-  body=$(${PYTHON_BIN:-python3} -c "
-import json, sys
-ev = json.loads('''$event''')
-print(f\"\"\"**Auto-reported via vg bug-reporter** (v{ev.get('version','?')})
+  body=$(BR_EVENT="$event" "${PYTHON_BIN:-python3}" -c '
+import json, os
+ev = json.loads(os.environ.get("BR_EVENT", "{}"))
+print(f"""**Auto-reported via vg bug-reporter** (v{ev.get("version", "?")})
 
 ## Signature
-\\\`{ev.get('signature','?')}\\\` — if matches existing issue, please add as comment.
+`{ev.get("signature", "?")}` — if matches existing issue, please add as comment.
 
 ## Type
-{ev.get('type','?')}
+{ev.get("type", "?")}
 
 ## Severity
-{ev.get('severity','?')}
+{ev.get("severity", "?")}
 
 ## Environment
-- VG version: {ev.get('version','?')}
-- OS: {ev.get('os','?')}
-- Detected: {ev.get('ts','?')}
+- VG version: {ev.get("version", "?")}
+- OS: {ev.get("os", "?")}
+- Detected: {ev.get("ts", "?")}
 
 ## Context
-\\\`\\\`\\\`json
-{json.dumps(ev.get('data','{}'), indent=2) if isinstance(ev.get('data'), dict) else ev.get('data','')}
-\\\`\\\`\\\`
+```json
+{json.dumps(ev.get("data", "{}"), indent=2) if isinstance(ev.get("data"), dict) else ev.get("data", "")}
+```
 
 ---
-🤖 Auto-submitted via vg bug-reporter. If this duplicates an existing issue, please link + close. Suppress future reports of this signature on sender side: \\\`/vg:bug-report --disable={ev.get('signature','')}\\\`
-\"\"\")
-" 2>/dev/null)
+🤖 Auto-submitted via vg bug-reporter. If this duplicates an existing issue, please link + close. Suppress future reports of this signature on sender side: `/vg:bug-report --disable={ev.get("signature", "")}`
+""")
+' 2>/dev/null)
 
   # Tier 1: gh CLI
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then

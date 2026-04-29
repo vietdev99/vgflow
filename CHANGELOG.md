@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.29.0 (2026-04-29) — utcnow() deprecation cleanup + #41/#42 update self-deploy fix
+
+User reported v2.28.0 install on PrintwayV3 still emitting `DeprecationWarning: datetime.datetime.utcnow() is deprecated` from `vg-verify-claim.py:74` + `:96`. Triage found two layers:
+
+1. **PrintwayV3 install was actually pre-v2.22** — DeprecationWarning fix landed v2.22.0, but `/vg:update` silent-merge bug (#30) parked the fixed `vg-verify-claim.py` as `.conflict` and never wrote the upstream copy. v2.24.0 fixed `three_way_merge()`, but the fix lives IN `scripts/vg_update.py` itself — chicken-and-egg #42.
+2. **18 other call-sites in canonical still used `utcnow()`** in command markdown + shared libs. Even after fixing the install-update path, those sites would emit warnings at every `/vg:scope`, `/vg:review`, `/vg:test`, `/vg:accept` run on Python 3.12+.
+
+### Closes #41, #42
+
+- **#42** `commands/vg/update.md`: self-bootstrap the merge helper. `vg_update.py` is loaded from the **freshly downloaded tarball**, not from `.claude/scripts/vg_update.py`. A stale/broken installed helper can no longer prevent its own replacement from landing. Refuses to bump `.claude/VGFLOW-VERSION` if core update files (`scripts/vg_update.py`, `commands/vg/update.md`, `commands/vg/reapply-patches.md`) did not land — surfaces silent partial upgrades.
+- **#42** `install.sh --refresh`: new flag that backs up VG-managed files in target install before refreshing, so users stuck on stale helper can `bash install.sh --refresh /path/to/project` to force-overwrite. Fresh installs now seed `.claude/vgflow-ancestor/v{version}/` so future 3-way updates have a real baseline (eliminates the "ancestor missing → force-upstream → silent overwrite" cliff).
+- **#42** `commands/vg/update.md`: pre-flight integrity scan before merge loop. Walks tarball + install + ancestor, classifies each file (`clean` / `new` / `force_upstream_at_risk` / `skipped`), prints count + first 10 at-risk filenames BEFORE files are overwritten. Audit window for users with missing ancestor stash.
+- **#41** `commands/vg/_shared/lib/bug-reporter.sh:bug_reporter_github_submit_from_event()`: GitHub issue body construction no longer embeds `$event` JSON directly into a Python triple-quoted heredoc. Switched to env var (`BR_EVENT="$event" python3 -c '...'`) with single-quoted Python source so backslash/quote/triple-quote/`$`/backtick chars in event payload no longer cause SyntaxError → empty issue body. v2.28.0 fixed the `report_event()` upstream pipeline; this fix completes the chain by also escaping the downstream submit path.
+
+### utcnow() cleanup
+
+Replaced `datetime.utcnow()` → `datetime.now(timezone.utc)` (or `datetime.datetime.now(datetime.timezone.utc)` for module-style imports) in 11 canonical files. Imports updated to include `timezone` where needed. Output identical (`%Y-%m-%dT%H:%M:%SZ`).
+
+Files touched:
+- `commands/vg/accept.md`, `project.md`, `scope.md`, `scope-review.md`, `review.md` (×6 sites), `test.md` (×3 sites)
+- `commands/vg/_shared/artifact-manifest.md`
+- `commands/vg/_shared/lib/artifact-manifest.sh`, `bootstrap-inject.sh`, `matrix-merger.sh`, `scaffold-stitch.sh`
+
+Codex skill mirrors regenerated.
+
+### Recovery for users stuck on pre-v2.22
+
+Two paths:
+
+1. **Clean refresh (recommended)**: `bash install.sh --refresh /path/to/project` from this updated vgflow-repo. Backs up VG-managed files, force-overwrites with v2.29.0 baseline.
+2. **Manual hook scripts only**: copy `scripts/vg-verify-claim.py`, `scripts/vg-orchestrator/state.py`, `scripts/vg-orchestrator/__main__.py`, `scripts/vg-build-crossai-loop.py` into `<project>/.claude/scripts/` directly.
+
+After v2.29.0, `/vg:update` self-bootstrap closes the trap — future updates use the upstream helper, not the installed one.
+
+---
+
 ## v2.28.0 (2026-04-29) — multi-tenant active-run + #37/38/39 + bug-reporter context
 
 User pushback: "tôi bật 2 cửa sổ, 2 session khác phase, cái nào làm sau bị lock". Plus 6 open GitHub issues (#34–39). Triage found two truly independent failure modes the user perceived as a single "lock" symptom, and three low-context auto-reported bugs traced to one root cause.

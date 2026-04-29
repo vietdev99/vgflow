@@ -63,7 +63,7 @@ merge_and_write_matrix() {
 
   ${PYTHON_BIN:-python3} - "$phase_dir" "$test_goals" "$runtime_map" "$probe_results" "$output_md" "$phase_num" <<'PY'
 import json, os, re, sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 phase_dir, test_goals_path, runtime_map_path, probe_path, out_path, phase_num = sys.argv[1:7]
@@ -226,7 +226,7 @@ else:
 lines = [
     f'# Goal Coverage Matrix — Phase {phase_num}',
     '',
-    f'**Generated:** {datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}  ',
+    f'**Generated:** {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}  ',
     f'**Source:** RUNTIME-MAP.json (UI goals) + .surface-probe-results.json (backend goals)  ',
     f'**Merger:** _shared/lib/matrix-merger.sh v1.9.2.4',
     '',

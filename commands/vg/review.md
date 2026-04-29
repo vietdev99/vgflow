@@ -661,7 +661,7 @@ PY
   # 5. Write GOAL-COVERAGE-MATRIX.md with implicit goals
   ${PYTHON_BIN} - "$RESULTS_JSON" "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" "$PHASE_NUMBER" "$PHASE_PROFILE" <<'PY'
 import json, sys
-from datetime import datetime
+from datetime import datetime, timezone
 results = json.load(open(sys.argv[1], encoding='utf-8'))['results']
 out_path = sys.argv[2]
 phase = sys.argv[3]
@@ -671,7 +671,7 @@ lines = [
     "",
     f"**Profile:** {profile}  ",
     f"**Source:** SPECS.success_criteria (implicit goals)  ",
-    f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}  ",
+    f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}  ",
     f"**Review mode:** infra-smoke",
     "",
     "## Implicit Goals (from SPECS `## Success criteria`)",
@@ -923,7 +923,7 @@ PY
   # 6. Write matrix with actual per-goal delta-overlap status
   ${PYTHON_BIN} - "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" "$PHASE_NUMBER" "$PARENT_REF" "$COVERAGE_JSON" <<'PY'
 import json, sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 out_path, phase, parent_ref, cov_json = sys.argv[1:5]
@@ -963,7 +963,7 @@ lines = [
     f"**Profile:** hotfix  ",
     f"**Parent phase:** {parent_ref}  ",
     f"**Source:** parent GOAL-COVERAGE-MATRIX + git delta vs HEAD~1  ",
-    f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}  ",
+    f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}  ",
     "",
     "## Parent failed goals (per-goal overlap)",
     "",
@@ -1112,7 +1112,7 @@ else
   ${PYTHON_BIN} - "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" "$PHASE_NUMBER" "$BUG_REF" \
     "$CODE_COUNT" "$TEST_COUNT" "$TEST_MENTIONS_BUG" "$REGRESSION_NOTE" <<'PY'
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 out, phase, bug, code_count, test_count, test_mentions, note = sys.argv[1:8]
 code_count = int(code_count); test_count = int(test_count); test_mentions = int(test_mentions)
 
@@ -1131,7 +1131,7 @@ lines = [
     f"**Profile:** bugfix  ",
     f"**Bug reference:** {bug}  ",
     f"**Source:** SPECS.md issue_id + git delta vs HEAD~1  ",
-    f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}",
+    f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
     "",
     "## Verification checks",
     "",
@@ -1186,14 +1186,14 @@ else
 
   ${PYTHON_BIN} - "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" "$PHASE_NUMBER" <<'PY'
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 out, phase = sys.argv[1], sys.argv[2]
 lines = [
     f"# Goal Coverage Matrix — Phase {phase} (migration schema-verify)",
     "",
     "**Profile:** migration  ",
     "**Source:** SPECS.migration_plan + ROLLBACK.md  ",
-    f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}",
+    f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
     "",
     "## Schema verification",
     "",
@@ -1237,13 +1237,13 @@ else
   fi
   ${PYTHON_BIN} - "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" "$PHASE_NUMBER" <<'PY'
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 out, phase = sys.argv[1], sys.argv[2]
 lines = [
     f"# Goal Coverage Matrix — Phase {phase} (docs link-check)",
     "",
     "**Profile:** docs  ",
-    f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}",
+    f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
     "",
     "Docs-only phase — link-check performed; content fidelity deferred to /vg:test markdown-lint.",
     "",
@@ -2745,7 +2745,7 @@ else
   PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - "$RUNTIME_MAP" "$MAX_VIEW" "$MAX_TOTAL" "$MAX_WALL" "${PHASE_DIR}" <<'PY'
 import json, sys, time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 rm_path = Path(sys.argv[1])
 max_view = int(sys.argv[2])
@@ -2822,7 +2822,7 @@ state.setdefault("metrics", {})["review_exploration"] = {
     "wall_minutes": round(wall_min, 1) if wall_min is not None else None,
     "thresholds": {"per_view": max_view, "total": max_total, "wall_min": max_wall_min},
     "warnings": warnings,
-    "recorded_at": datetime.utcnow().isoformat() + "Z",
+    "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 }
 state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 PY

@@ -359,12 +359,12 @@ if type -t detect_phase_profile >/dev/null 2>&1; then
       if [ ! -f "${PHASE_DIR}/CONTEXT.md" ]; then
         ${PYTHON_BIN} - "${PHASE_DIR}/CONTEXT.md" "$PHASE_NUMBER" "$PHASE_PROFILE" <<'PY'
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 out, phase, profile = sys.argv[1], sys.argv[2], sys.argv[3]
 content = f"""# Phase {phase} — Scope context ({profile} profile)
 
 **Profile:** {profile}  
-**Generated:** {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}  
+**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}  
 **Scope mode:** short-circuit (no 5-round discussion — profile does not require feature-depth scoping)
 
 ## Decisions

@@ -1,6 +1,6 @@
 #!/bin/bash
 # VGFlow Installer — copy pipeline files to target project
-# Usage: ./install.sh /path/to/your/project
+# Usage: ./install.sh [--refresh] /path/to/your/project
 #
 # Installs:
 #   - Claude Code commands (.claude/commands/vg/)
@@ -13,10 +13,36 @@
 
 set -e
 
-TARGET="${1:-.}"
+REFRESH=false
+TARGET=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --refresh)
+      REFRESH=true
+      ;;
+    -h|--help)
+      echo "Usage: ./install.sh [--refresh] /path/to/your/project"
+      echo "  --refresh  force-refresh VG managed files after backing them up"
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      exit 2
+      ;;
+    *)
+      if [ -n "$TARGET" ]; then
+        echo "Unexpected extra argument: $1" >&2
+        exit 2
+      fi
+      TARGET="$1"
+      ;;
+  esac
+  shift
+done
+TARGET="${TARGET:-.}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-if [ "$TARGET" = "." ]; then
+if [ "$TARGET" = "." ] && [ "$REFRESH" != "true" ]; then
   echo "Usage: ./install.sh /path/to/your/project"
   echo "  or:  ./install.sh .   (install in current directory)"
   echo ""
@@ -29,6 +55,27 @@ fi
 
 echo "Installing VGFlow to: $TARGET"
 echo ""
+
+if [ "$REFRESH" = "true" ]; then
+  TS="$(date -u +%Y%m%dT%H%M%SZ)"
+  BACKUP_DIR="$TARGET/.vgflow-refresh-backup/$TS"
+  mkdir -p "$BACKUP_DIR"
+  for path in \
+    .claude/commands/vg \
+    .claude/skills \
+    .claude/scripts \
+    .claude/schemas \
+    .claude/templates/vg \
+    .codex/skills \
+    .codex/agents; do
+    if [ -e "$TARGET/$path" ]; then
+      mkdir -p "$BACKUP_DIR/$(dirname "$path")"
+      cp -R "$TARGET/$path" "$BACKUP_DIR/$path"
+    fi
+  done
+  echo "Refresh backup: $BACKUP_DIR"
+  echo ""
+fi
 
 # ============================================================
 # 1. Claude Code commands + skills + scripts + templates
@@ -154,6 +201,24 @@ fi
 if [ -f "$SCRIPT_DIR/VGFLOW-VERSION" ]; then
   cp "$SCRIPT_DIR/VGFLOW-VERSION" "$TARGET/.claude/VGFLOW-VERSION"
   echo "  -> .claude/VGFLOW-VERSION"
+
+  INSTALLED_VERSION="$(cat "$SCRIPT_DIR/VGFLOW-VERSION" | tr -d '[:space:]')"
+  if [ -n "$INSTALLED_VERSION" ]; then
+    ANCESTOR_DIR="$TARGET/.claude/vgflow-ancestor/v${INSTALLED_VERSION#v}"
+    rm -rf "$ANCESTOR_DIR"
+    mkdir -p "$ANCESTOR_DIR"
+    for entry in commands skills scripts schemas templates codex-skills playwright-locks migrations fixtures; do
+      if [ -e "$SCRIPT_DIR/$entry" ]; then
+        cp -R "$SCRIPT_DIR/$entry" "$ANCESTOR_DIR/$entry"
+      fi
+    done
+    for file in VGFLOW-VERSION VERSION CHANGELOG.md README.md README.vi.md LICENSE install.sh sync.sh vg.config.template.md requirements.txt gate-manifest.json; do
+      if [ -f "$SCRIPT_DIR/$file" ]; then
+        cp "$SCRIPT_DIR/$file" "$ANCESTOR_DIR/$file"
+      fi
+    done
+    echo "  -> .claude/vgflow-ancestor/v${INSTALLED_VERSION#v}"
+  fi
 fi
 
 # ============================================================

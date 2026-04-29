@@ -1100,7 +1100,7 @@ cp .claude/commands/vg/_shared/templates/SECURITY-TEST-PLAN-template.md "${STP_F
 ${PYTHON_BIN} - <<'PY'
 import json, os, re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 draft = json.loads(Path(os.environ["DRAFT_FILE"]).read_text(encoding="utf-8"))
 stp = Path(os.environ["STP_FILE"] + ".staged")
@@ -1109,7 +1109,7 @@ text = stp.read_text(encoding="utf-8")
 # Placeholders: {PROJECT_NAME}, {ISO_TIMESTAMP}, {FOUNDATION_PATH},
 # {CRITICAL|MODERATE|LOW}, {ZAP|Nuclei|Custom|None}, etc.
 text = text.replace("{PROJECT_NAME}", draft["project_name"])
-text = text.replace("{ISO_TIMESTAMP}", datetime.utcnow().isoformat() + "Z")
+text = text.replace("{ISO_TIMESTAMP}", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 text = text.replace("{FOUNDATION_PATH}", os.environ["FOUNDATION_FILE"])
 # ... answers from round 8
 text = text.replace("{CRITICAL|MODERATE|LOW}", draft["security"]["risk_profile"])

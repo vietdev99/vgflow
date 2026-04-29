@@ -94,7 +94,7 @@ for rel in artifact_paths:
 manifest = {
     "manifest_version": "1.8.0",
     "phase": phase_dir.name.split("-", 1)[0] if "-" in phase_dir.name else phase_dir.name,
-    "generated_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "generated_by": command,
     "session_id": session_id,
     "artifacts": artifacts

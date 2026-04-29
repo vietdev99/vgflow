@@ -40,9 +40,9 @@ EOF
 STATUS=$(run_merge ancestor/build.md current/build.md upstream/build.md output/clean.md)
 
 if [ "$STATUS" = "clean" ] && grep -q "UPDATED" output/clean.md; then
-  echo "[1/3] clean merge: PASS"
+  echo "[1/4] clean merge: PASS"
 else
-  echo "[1/3] clean merge: FAIL (status=$STATUS)"
+  echo "[1/4] clean merge: FAIL (status=$STATUS)"
   cat output/clean.md
   FAILED=$((FAILED + 1))
 fi
@@ -65,9 +65,9 @@ if [ "$STATUS" = "conflict" ] \
    && grep -q ">>>>>>>" output/conflict.md \
    && grep -q "USER_EDIT" output/conflict.md \
    && grep -q "UPSTREAM_EDIT" output/conflict.md; then
-  echo "[2/3] conflict merge: PASS"
+  echo "[2/4] conflict merge: PASS"
 else
-  echo "[2/3] conflict merge: FAIL (status=$STATUS)"
+  echo "[2/4] conflict merge: FAIL (status=$STATUS)"
   cat output/conflict.md
   FAILED=$((FAILED + 1))
 fi
@@ -86,16 +86,35 @@ EOF
 STATUS=$(run_merge ancestor/build.md current/build.md upstream/build.md output/preserve.md)
 
 if [ "$STATUS" = "clean" ] && grep -q "USER" output/preserve.md; then
-  echo "[3/3] preserve user: PASS"
+  echo "[3/4] preserve user: PASS"
 else
-  echo "[3/3] preserve user: FAIL (status=$STATUS)"
+  echo "[3/4] preserve user: FAIL (status=$STATUS)"
   cat output/preserve.md
+  FAILED=$((FAILED + 1))
+fi
+
+# ─── Scenario 4: Missing ancestor (self-rescue path) ───
+cat > current/self.md <<'EOF'
+old updater
+EOF
+cat > upstream/self.md <<'EOF'
+new updater
+EOF
+rm -f ancestor/missing-self.md
+
+STATUS=$(run_merge ancestor/missing-self.md current/self.md upstream/self.md output/self.md)
+
+if [ "$STATUS" = "force-upstream" ] && grep -q "new updater" output/self.md; then
+  echo "[4/4] missing ancestor force-upstream: PASS"
+else
+  echo "[4/4] missing ancestor force-upstream: FAIL (status=$STATUS)"
+  cat output/self.md
   FAILED=$((FAILED + 1))
 fi
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then
-  echo "All 3 integration scenarios passed."
+  echo "All 4 integration scenarios passed."
   exit 0
 else
   echo "FAIL: ${FAILED} scenario(s) failed."

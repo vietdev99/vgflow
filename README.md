@@ -226,6 +226,16 @@ Then **restart Claude Code** — hooks are cached at session start; repaired set
 
 Update flow: query GitHub API → download tarball + SHA256 verify → 3-way merge (preserves your local edits) → park conflicts in `.claude/vgflow-patches/`.
 
+If an older install reports the latest version but core files are still stale, force-refresh VG managed files from the current release:
+
+```bash
+cd /path/to/your-project
+curl -fsSL https://raw.githubusercontent.com/vietdev99/vgflow/main/install.sh -o /tmp/vgflow-install.sh
+bash /tmp/vgflow-install.sh --refresh .
+```
+
+`--refresh` backs up existing VG managed files under `.vgflow-refresh-backup/` before overwriting commands, skills, scripts, schemas, templates, and Codex mirrors.
+
 ## Command reference
 
 ### Project setup
