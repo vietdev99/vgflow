@@ -143,7 +143,13 @@ def vt(v):
 inst_t = vt(installed)
 late_t = vt(latest)
 
-pattern = re.compile(r'## \[(\d+\.\d+\.\d+)\].*?(?=## \[|\Z)', re.S)
+# v2.38.1 fix: support both '## v2.38.0' (current VG format) and
+# '## [2.38.0]' (legacy keep-a-changelog format). Prior regex only
+# matched bracketed form → preview always empty for v2.32+.
+pattern = re.compile(
+    r'^## (?:\[)?v?(\d+\.\d+\.\d+)(?:\])?[^\n]*\n.*?(?=^## (?:\[)?v?\d+\.\d+\.\d+|\Z)',
+    re.S | re.M,
+)
 shown = False
 for m in pattern.finditer(text):
     ver = m.group(1)

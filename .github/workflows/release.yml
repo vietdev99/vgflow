@@ -118,12 +118,48 @@ jobs:
           echo "gate-manifest.json summary:"
           python -c "import json; d=json.load(open('gate-manifest.json')); print('version:', d['version']); print('gates:', len(d.get('gates', [])))"
 
+      - name: Extract CHANGELOG section for release notes (v2.38.1+)
+        id: notes
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          if [ -f CHANGELOG.md ]; then
+            VERSION="${VERSION}" python3 - <<'PY' > release-notes.md
+          import os, re, sys
+          ver = os.environ['VERSION']
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          # Match `## v2.38.0 (...) — title\n<body>` until next `## vX.Y.Z` or EOF
+          pat = re.compile(
+              rf'^## v{re.escape(ver)}\b[^\n]*\n.*?(?=^## v\d+\.\d+\.\d+|\Z)',
+              re.S | re.M,
+          )
+          m = pat.search(text)
+          if m:
+              body = m.group(0).strip()
+              print(body)
+              print()
+              print('---')
+              print()
+              print(f'Gate-manifest published for /vg:update T8 integrity verification.')
+          else:
+              print(f'Release {os.environ.get("TAG", "v"+ver)}.')
+              print()
+              print('CHANGELOG section not found for this version. See CHANGELOG.md in tarball for details.')
+          PY
+          else
+            echo "Release ${TAG}. CHANGELOG.md not present in source tree." > release-notes.md
+          fi
+          echo "  Notes preview (first 20 lines):"
+          head -20 release-notes.md
+
       - name: Create GitHub Release + upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
           if gh release view "${TAG}" >/dev/null 2>&1; then
+            # Update existing release notes (clobber asset upload too)
+            gh release edit "${TAG}" --notes-file release-notes.md
             gh release upload "${TAG}" \
               "${TAR}" \
               "${TAR}.sha256" \
@@ -132,7 +168,7 @@ jobs:
           else
             gh release create "${TAG}" \
               --title "${TAG}" \
-              --notes "Automated release. See CHANGELOG for details. Gate-manifest published for /vg:update T8 integrity verification." \
+              --notes-file release-notes.md \
               "${TAR}" \
               "${TAR}.sha256" \
               gate-manifest.json

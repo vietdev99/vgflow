@@ -1,5 +1,57 @@
 # Changelog
 
+## v2.38.1 (2026-04-30) — fix changelog preview + GH release notes auto-extract
+
+User reported on a different machine running `/vg:update`:
+
+> "CHANGELOG không có entry giữa v2.31.1 → v2.38.0 (chắc CHANGELOG.md chưa cập nhật trên main branch). Release notes chỉ ghi 'Automated release. Gate-manifest published for /vg:update T8 integrity verification.'"
+
+Two converging bugs:
+
+### 1. `commands/vg/update.md:146` regex format mismatch
+
+`/vg:update` step 3 (changelog preview) used regex:
+
+```python
+re.compile(r'## \[(\d+\.\d+\.\d+)\].*?(?=## \[|\Z)', re.S)
+```
+
+Expected `## [2.38.0]` (Keep-a-Changelog bracketed format), but VG's CHANGELOG uses `## v2.38.0 (date) — title` (no brackets, leading `v`). Regex never matched → preview always printed `(no changelog entries between versions)`.
+
+**Fix:** updated regex to support both formats:
+
+```python
+re.compile(
+    r'^## (?:\[)?v?(\d+\.\d+\.\d+)(?:\])?[^\n]*\n.*?(?=^## (?:\[)?v?\d+\.\d+\.\d+|\Z)',
+    re.S | re.M,
+)
+```
+
+Smoke verified: 8 entries (v2.32.0, 2.32.1, 2.33.0, 2.34.0, 2.35.0, 2.36.0, 2.37.0, 2.38.0) all matched against current CHANGELOG.md.
+
+### 2. `.github/workflows/release.yml` hardcoded notes placeholder
+
+The release workflow used a static `--notes "Automated release. See CHANGELOG..."` string for every release. CHANGELOG section was never extracted into the GitHub UI release notes body.
+
+**Fix:** new "Extract CHANGELOG section for release notes" step parses `CHANGELOG.md` for the section matching the version tag and feeds it via `--notes-file release-notes.md`. The footer line ("Gate-manifest published for /vg:update T8 integrity verification.") is appended below the changelog body.
+
+Also: existing-release path now calls `gh release edit --notes-file` to update notes if the workflow is re-run on an existing tag.
+
+### 3. Backfilled release notes for v2.32.0 → v2.38.0
+
+8 releases had the placeholder notes shipped before this fix. Manual backfill via `gh release edit --notes-file` ran today; user can refresh GH page to see proper changelog content for each release. Going forward, releases use auto-extract via the workflow change.
+
+### Files
+
+- **MODIFIED** `commands/vg/update.md` — line 146 regex fixed
+- **MODIFIED** `.github/workflows/release.yml` — new notes-extract step + edit existing notes path
+
+### Self-bootstrap awareness
+
+This is exactly the kind of bug v2.29.0's update self-bootstrap (#42) was designed for. Users on stale `/vg:update` get the broken regex behavior on the FIRST update run after this fix lands, but `commands/vg/update.md` ships in the tarball; subsequent runs use the fixed regex.
+
+---
+
 ## v2.38.0 (2026-04-30) — Flow compliance auditor (per-step verifier)
 
 User feedback: with override flags like `--skip-discovery`, `--evaluate-only`, `--retry-failed`, AI can silently bypass required steps in any flow. The verdict gate (v2.35) catches missing artifact content, but it doesn't catch "AI ran a degraded path that produces *some* artifacts but skipped critical steps".
