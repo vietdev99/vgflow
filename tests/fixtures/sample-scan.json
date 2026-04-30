@@ -1,0 +1,30 @@
+{
+  "view": "/admin/topup-requests",
+  "results": [
+    {
+      "action": "click delete",
+      "selector": "button#delete-42",
+      "network": [
+        {"method": "DELETE", "path": "/api/topup/42"}
+      ]
+    }
+  ],
+  "forms": [
+    {
+      "selector": "form#topup-create",
+      "submit_result": {"status": 201},
+      "fields": [
+        {"type": "text", "name": "amount"}
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "row_actions": ["edit", "delete"],
+      "bulk_actions": ["bulk_approve"]
+    }
+  ],
+  "modal_triggers": ["button#approve-modal"],
+  "sub_views_discovered": ["/admin/topup-detail/42"],
+  "tabs": ["pending", "approved", "rejected"]
+}
