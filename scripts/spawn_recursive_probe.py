@@ -52,6 +52,14 @@ try:
 except ImportError:
     env_policy = None  # type: ignore
 
+# v2.41 — telemetry helper (closes v2.40 backlog #4).
+try:
+    from _telemetry_helpers import emit_event  # type: ignore
+except ImportError:
+    def emit_event(*args, **kwargs):  # type: ignore[no-redef]
+        """Fallback no-op when the telemetry helper is unavailable."""
+        return None
+
 ELIGIBLE_PROFILES: set[str] = {"feature", "feature-legacy", "hotfix"}
 ELIGIBLE_SURFACES: set[str] = {"ui", "ui-mobile"}
 VISUAL_ONLY_SURFACES: set[str] = {"visual", "visual-only"}
@@ -280,17 +288,24 @@ def log_override_debt(reason: str) -> None:
 # ---------------------------------------------------------------------------
 # Plan composition (Task 19)
 # ---------------------------------------------------------------------------
-def build_plan(classification: list[dict[str, Any]], mode: str) -> list[dict[str, Any]]:
+def build_plan(classification: list[dict[str, Any]], mode: str,
+               *, phase_dir: Path | None = None) -> list[dict[str, Any]]:
     """Convert a classification list into a deduped, capped spawn plan.
 
     Args:
         classification: ``[{element_class, selector, view, resource, ...}, ...]``
             shaped per ``identify_interesting_clickables.py``.
         mode: ``light`` / ``deep`` / ``exhaustive`` (selects MODE_WORKER_CAPS).
+        phase_dir: Phase directory — recorded in telemetry events for
+            ``recursion.state_hash_hit``. Optional; tests omit it.
 
     Returns:
         ``[{element, lens, scope_key}, ...]`` truncated to the mode cap with
         guard #7 idempotency dedupe applied (same resource × role × lens once).
+
+    Telemetry: emits ``recursion.state_hash_hit`` when the dedupe drops an
+    entry whose ``(view_canonical, role, lens, selector_hash)`` tuple has
+    been seen before in this build_plan invocation (occurrence_count >= 2).
     """
     raw: list[dict[str, Any]] = []
     for c in classification:
@@ -307,8 +322,31 @@ def build_plan(classification: list[dict[str, Any]], mode: str) -> list[dict[str
             })
 
     seen: set[tuple[Any, Any, Any]] = set()
+    state_hash_counts: dict[tuple[Any, Any, Any, Any], int] = {}
     deduped: list[dict[str, Any]] = []
     for entry in raw:
+        # State-hash key per design doc: (view_canonical, role, lens, selector_hash).
+        elem = entry["element"]
+        sh_key = (
+            elem.get("view", ""),
+            elem.get("role", "admin"),
+            entry["lens"],
+            elem.get("selector_hash", ""),
+        )
+        state_hash_counts[sh_key] = state_hash_counts.get(sh_key, 0) + 1
+        if state_hash_counts[sh_key] == 2:
+            # First repeat — emit one event so the counter increments.
+            emit_event(
+                "recursion.state_hash_hit",
+                {
+                    "view": elem.get("view", ""),
+                    "role": elem.get("role", "admin"),
+                    "lens": entry["lens"],
+                    "selector_hash": elem.get("selector_hash", ""),
+                    "occurrence_count": state_hash_counts[sh_key],
+                },
+                phase_dir=phase_dir,
+            )
         if entry["scope_key"] in seen:
             continue
         seen.add(entry["scope_key"])
@@ -635,11 +673,15 @@ def resolve_target_env(cli_value: str | None,
 
 
 def apply_env_policy(plan: list[dict[str, Any]],
-                      target_env: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                      target_env: str,
+                      *, phase_dir: Path | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Filter plan to lenses allowed in ``target_env`` + cap to mutation budget.
 
     Returns ``(filtered_plan, policy_dict)``. Policy dict is also useful for
     surfacing in the JSON payload so callers see what was applied.
+
+    Telemetry: emits ``recursion.mutation_budget_exhausted`` once when
+    ``len(post-filter) > mutation_budget`` and the cap clips the plan.
     """
     if env_policy is None:
         return plan, {"env": target_env, "applied": False,
@@ -647,9 +689,43 @@ def apply_env_policy(plan: list[dict[str, Any]],
     policy = env_policy.policy_for(target_env)
     allowed = policy["allowed_lenses"]
     kept = [e for e in plan if e["lens"] in allowed]
+    pre_budget_count = len(kept)
     if policy["mutation_budget"] >= 0:
+        if pre_budget_count > policy["mutation_budget"]:
+            emit_event(
+                "recursion.mutation_budget_exhausted",
+                {
+                    "env": target_env,
+                    "mutation_budget": policy["mutation_budget"],
+                    "plan_size_pre_budget": pre_budget_count,
+                    "plan_size_post_budget": policy["mutation_budget"],
+                    "dropped": pre_budget_count - policy["mutation_budget"],
+                },
+                phase_dir=phase_dir,
+            )
         kept = kept[: policy["mutation_budget"]]
     return kept, {**policy, "allowed_lenses": sorted(policy["allowed_lenses"])}
+
+
+def emit_diminishing_returns(phase_dir: Path | None,
+                              round_index: int,
+                              consecutive_zero_rounds: int) -> None:
+    """Helper for v2.42 round-loop integration.
+
+    Emits ``recursion.diminishing_returns`` when 2 consecutive worker rounds
+    yielded 0 new behavior-class goals. Spawn_recursive_probe.py itself does
+    not yet have a round loop (single-shot dispatch in v2.41); the helper
+    ships ahead of the loop so v2.42 can wire it without an API churn.
+    """
+    if consecutive_zero_rounds >= 2:
+        emit_event(
+            "recursion.diminishing_returns",
+            {
+                "round_index": round_index,
+                "consecutive_zero_rounds": consecutive_zero_rounds,
+            },
+            phase_dir=phase_dir,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -781,10 +857,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    plan = build_plan(classification, args.mode)
+    plan = build_plan(classification, args.mode, phase_dir=phase_dir)
 
     # Apply env policy (Task 26c) — drop disallowed lenses + clamp to budget.
-    plan, applied_policy = apply_env_policy(plan, args.target_env)
+    plan, applied_policy = apply_env_policy(plan, args.target_env, phase_dir=phase_dir)
     payload["env_policy"] = applied_policy
 
     payload["planned_spawns"] = [

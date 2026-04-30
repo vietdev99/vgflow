@@ -118,14 +118,98 @@ def test_local_env_unlimited_budget_keeps_full_plan(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: telemetry recursion.mutation_budget_exhausted — DEFERRED to v2.41
+# Test 4: telemetry recursion.mutation_budget_exhausted — wired v2.41
 # ---------------------------------------------------------------------------
 def test_mutation_budget_exhausted_telemetry_emitted(tmp_path: Path) -> None:
-    """Future contract: when plan_pre_budget > kept_post_budget, emit a
-    ``recursion.mutation_budget_exhausted`` event. Currently apply_env_policy
-    truncates silently — the telemetry hook lands in v2.41.
+    """When plan_pre_budget > kept_post_budget, apply_env_policy emits a
+    ``recursion.mutation_budget_exhausted`` event. Closes v2.40 backlog #4.
     """
-    pytest.skip(
-        "recursion.mutation_budget_exhausted telemetry not yet wired — "
-        "see scripts/spawn_recursive_probe.py:apply_env_policy."
-    )
+    import importlib
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import spawn_recursive_probe  # type: ignore
+    import _telemetry_helpers  # type: ignore
+
+    telemetry_path = tmp_path / "telemetry.jsonl"
+    _os.environ["VG_TELEMETRY_PATH"] = str(telemetry_path)
+    importlib.reload(_telemetry_helpers)
+    importlib.reload(spawn_recursive_probe)
+    try:
+        # 80 mutation_button entries → 240 raw lens spawns; light cap 15 takes
+        # the first slice. Use exhaustive (cap 100) so we have plenty over the
+        # sandbox budget of 50.
+        classification = [
+            {"element_class": "mutation_button",
+             "view": "/admin/big",
+             "selector": f"btn-{i}",
+             "selector_hash": f"h{i}",
+             "resource": f"res{i}",
+             "role": "admin"}
+            for i in range(80)
+        ]
+        plan = spawn_recursive_probe.build_plan(classification, "exhaustive",
+                                                phase_dir=tmp_path)
+        # Sanity: exhaustive cap clipped at 100.
+        assert len(plan) == 100
+        kept, policy = spawn_recursive_probe.apply_env_policy(
+            plan, "sandbox", phase_dir=tmp_path
+        )
+        assert len(kept) == 50
+        events = _telemetry_helpers.read_events(telemetry_path)
+        exhausted = [
+            e for e in events
+            if e["event"] == "recursion.mutation_budget_exhausted"
+        ]
+        assert len(exhausted) == 1, (
+            f"expected 1 mutation_budget_exhausted event, got {len(exhausted)}: {events}"
+        )
+        payload = exhausted[0]["payload"]
+        assert payload["env"] == "sandbox"
+        assert payload["mutation_budget"] == 50
+        assert payload["plan_size_pre_budget"] == 100
+        assert payload["plan_size_post_budget"] == 50
+        assert payload["dropped"] == 50
+    finally:
+        _os.environ.pop("VG_TELEMETRY_PATH", None)
+
+
+# ---------------------------------------------------------------------------
+# Test 5: under budget → NO telemetry event (regression guard)
+# ---------------------------------------------------------------------------
+def test_mutation_budget_no_event_when_under_budget(tmp_path: Path) -> None:
+    """When kept count <= mutation_budget, no event must be emitted."""
+    import importlib
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import spawn_recursive_probe  # type: ignore
+    import _telemetry_helpers  # type: ignore
+
+    telemetry_path = tmp_path / "telemetry.jsonl"
+    _os.environ["VG_TELEMETRY_PATH"] = str(telemetry_path)
+    importlib.reload(_telemetry_helpers)
+    importlib.reload(spawn_recursive_probe)
+    try:
+        classification = [
+            {"element_class": "mutation_button",
+             "view": "/admin/small",
+             "selector": f"btn-{i}",
+             "selector_hash": f"h{i}",
+             "resource": f"res{i}",
+             "role": "admin"}
+            for i in range(3)  # 3 buttons × 3 lenses = 9 → under 50
+        ]
+        plan = spawn_recursive_probe.build_plan(classification, "light",
+                                                phase_dir=tmp_path)
+        spawn_recursive_probe.apply_env_policy(plan, "sandbox", phase_dir=tmp_path)
+        events = _telemetry_helpers.read_events(telemetry_path)
+        exhausted = [
+            e for e in events
+            if e["event"] == "recursion.mutation_budget_exhausted"
+        ]
+        assert exhausted == [], (
+            f"no event expected when under budget, got: {exhausted}"
+        )
+    finally:
+        _os.environ.pop("VG_TELEMETRY_PATH", None)
