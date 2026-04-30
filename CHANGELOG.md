@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.43.1 — `/vg:roam` HARD gates + always-ask + `self` executor mode (PR #65)
+
+Three dogfood-driven fixes layered on v2.43.0's `/vg:roam` skill (reporter's internal milestones v2.42.9 → v2.42.11):
+
+### Fixed (silent-skip closure)
+- **runtime_contract telemetry + `.tmp` marker enforcement** — AI cannot silently skip the 0aa resume prompt or the 0a env/model/mode batch. Hard bash assertion at step 1 entry fails fast if markers missing/stale or env vars empty. Closes the silent-skip path that triggered today's PrintwayV3 dogfood incident.
+
+### Fixed (resume-locks-you-in footgun)
+- **Step 0a 3-question batch (env/model/mode) now ALWAYS fires regardless of resume mode** — prior config loads as `ROAM_PRIOR_*` pre-fill (Recommended option), but user must confirm. Previously, `--resume` mode silently locked you into the prior session's env/model choices.
+
+### Added — `self` executor mode (v2.42.11)
+- **Platform detection** — web / mobile-native / desktop / api-only inferred from `CONTEXT.md` keywords + tool availability (Playwright MCP, maestro, adb, codex, gemini) → `MODES_AVAIL` array filters mode question dynamically.
+- **`self` mode** — current Claude Code session is the executor via MCP Playwright. No subprocess, no Chromium permission issues, no CLI auth gymnastics. Validated end-to-end in PrintwayV3 canary: S01 admin/audit-log on sandbox, 3 of 8 protocol steps via `mcp__playwright2`, 4 events emitted, 0 bugs. Login worked, URL state sync honored, API contract honored.
+
+### Internal
+- 17/17 bash blocks pass `bash -n` syntax check.
+- 234 tests pass.
+- Codex mirror regenerated.
+- `VGFLOW-VERSION` bumped to 2.43.1 to match `VERSION` (reporter's PR only updated the secondary file; canonical is `VGFLOW-VERSION`, used by `install.sh` + `vg_update.py`).
+- Credit: external dogfood from @vietnhprintway (PrintwayV3, same arc as PRs #57–#64).
+
 ## v2.43.0 — `/vg:roam` + `/vg:deploy` + scope step 1b env preference (PR #64)
 
 Bundles five reporter-internal milestones (v2.42.4 → v2.42.8) into a single minor release. Pure addition — 2367 insertions, 0 deletions. All built on top of v2.42.0's HARD env+mode+scanner gate and #63's `enrich-env-question.py` helper.
