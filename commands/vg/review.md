@@ -2501,10 +2501,16 @@ If eligibility fails → write `.recursive-probe-skipped.yaml` and continue to 2
 ```bash
 RECURSION_MODE="${RECURSION_MODE:-light}"           # light|deep|exhaustive
 PROBE_MODE="${PROBE_MODE:-auto}"                    # auto|manual|hybrid
-TARGET_ENV="${TARGET_ENV:-sandbox}"                 # local|sandbox|staging|prod
+TARGET_ENV="${TARGET_ENV:-}"                        # local|sandbox|staging|prod (empty → interactive prompt; CI sets explicitly)
 SKIP_REASON="${SKIP_RECURSIVE_PROBE:-}"             # populated only if user supplied --skip-recursive-probe
 
-ARGS=( --phase-dir "$PHASE_DIR" --mode "$RECURSION_MODE" --probe-mode "$PROBE_MODE" --target-env "$TARGET_ENV" )
+ARGS=( --phase-dir "$PHASE_DIR" --mode "$RECURSION_MODE" --probe-mode "$PROBE_MODE" )
+# v2.40.1 — only forward --target-env when caller pinned it. Empty TARGET_ENV
+# triggers the interactive Phase 2b-2.5 prompt (l/s/g/p) when running on a TTY;
+# falls back to 'sandbox' silently in CI/non-interactive runs.
+if [[ -n "$TARGET_ENV" ]]; then
+  ARGS+=( --target-env "$TARGET_ENV" )
+fi
 if [[ -n "$SKIP_REASON" ]]; then
   ARGS+=( --skip-recursive-probe "$SKIP_REASON" )
 fi

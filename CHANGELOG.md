@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.40.1 — Interactive target_env prompt
+
+### Added
+- Interactive target_env selection at Phase 2b-2.5 when `--target-env` flag NOT provided AND `--non-interactive` NOT set
+- Prod confirmation: typing exact phase name required to prevent accidental prod targeting (analog to GitHub repo deletion safety)
+
+### UX improvement
+Before: user had to remember/type `--target-env=sandbox` every review.
+After: VG prompts on each interactive review with 4 clear options + safety confirmation for prod.
+
+### Files
+- Modified: scripts/spawn_recursive_probe.py (+~80 LOC — `prompt_target_env`, `confirm_prod_target`, `_config_has_explicit_target_env`, main() wiring)
+- Modified: commands/vg/review.md (Phase 2b-2.5 invocation: `--target-env` only forwarded when caller pinned it)
+- Added: tests/test_spawn_recursive_probe_target_env_prompt.py (8 tests)
+
 ## v2.40.0 — Recursive Lens Probe + Multi-Phase Batch + Sandbox Env
 
 ### Added

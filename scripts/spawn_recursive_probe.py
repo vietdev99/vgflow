@@ -488,6 +488,112 @@ def _build_argparser() -> argparse.ArgumentParser:
     return ap
 
 
+TARGET_ENV_HELP = """\
+Where is the app running?
+   [l] local       — full mutations OK, unlimited budget (dev local)
+   [s] sandbox     — full mutations OK, 50/phase budget (CI default)
+   [g] staging     — mutations OK, lens-input-injection blocked, 25 budget
+   [p] prod        — READ-ONLY (no POST/PUT/PATCH/DELETE), only safe lenses
+
+Target env? [l/s/g/p] (default s): """
+
+TARGET_ENV_KEYS: dict[str, str] = {
+    "l": "local",
+    "s": "sandbox",
+    "g": "staging",
+    "p": "prod",
+    "": "sandbox",
+}
+
+
+def confirm_prod_target(phase_name: str, stdin, stdout) -> bool:
+    """Require user to type the phase name exactly to confirm prod selection.
+
+    Mirrors the GitHub repo-deletion safety pattern — typing a unique phrase
+    (the phase name) is more deliberate than a rote y/N prompt and avoids
+    accidental prod targeting through muscle memory.
+    """
+    msg = (
+        "\n⚠ PROD SELECTED — read-only mode active.\n"
+        "   Lens whitelist: lens-info-disclosure, lens-auth-jwt (others blocked)\n"
+        "   Mutations: BLOCKED (no POST/PUT/PATCH/DELETE)\n"
+        "\n"
+        f"To confirm prod target, type the phase name exactly: {phase_name}\n"
+        "> "
+    )
+    print(msg, end="", file=stdout, flush=True)
+    typed = stdin.readline().strip()
+    return typed == phase_name
+
+
+def prompt_target_env(phase_name: str, stdin=None, stdout=None,
+                      *, skip_prod_confirm: bool = False) -> str:
+    """Interactive ``--target-env`` selection. Returns env name.
+
+    Args:
+        phase_name: Phase directory basename, used as the typed-confirmation
+            phrase when the operator picks ``p`` (prod).
+        stdin / stdout: File-like objects (defaults to ``sys.stdin``/``sys.stdout``).
+            Tests inject ``io.StringIO`` to avoid touching a real terminal.
+        skip_prod_confirm: If True, accept ``p`` without typed confirmation.
+            Used when ``--i-know-this-is-prod=<reason>`` was already passed
+            on the CLI (the flag opt-in subsumes the typed phrase).
+
+    Exit codes:
+        2 — invalid choice (not in l/s/g/p/<empty>).
+        1 — prod selected but typed-confirmation phrase did not match.
+    """
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+    print(TARGET_ENV_HELP, end="", file=stdout, flush=True)
+    line = stdin.readline()
+    raw = line.strip().lower()
+    if raw not in TARGET_ENV_KEYS:
+        print(f"⛔ Invalid choice '{raw}'. Use l/s/g/p.", file=sys.stderr)
+        sys.exit(2)
+    env = TARGET_ENV_KEYS[raw]
+    if env == "prod" and not skip_prod_confirm:
+        confirmed = confirm_prod_target(phase_name, stdin, stdout)
+        if not confirmed:
+            print("⛔ Prod target not confirmed. Aborting.", file=sys.stderr)
+            sys.exit(1)
+    return env
+
+
+def _config_has_explicit_target_env(phase_dir: Path) -> bool:
+    """Return True iff vg.config.md sets ``review.target_env`` to a valid env.
+
+    Used by the Phase 2b-2.5 prompt logic to decide whether the operator
+    already pinned an env via config (skip prompt) or is leaving it to the
+    interactive selector.
+    """
+    candidates = [
+        phase_dir.parent.parent / "vg.config.md",
+        phase_dir.parent.parent / "config" / "vg.config.md",
+        phase_dir.parent.parent.parent / "vg.config.md",
+    ]
+    for cfg in candidates:
+        if not cfg.is_file():
+            continue
+        try:
+            text = cfg.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        m = re.search(r"```ya?ml\s*\n(.+?)\n```", text, re.S)
+        body = m.group(1) if m else text
+        try:
+            data = yaml.safe_load(body) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        review = data.get("review") or {}
+        env = review.get("target_env")
+        if env in {"local", "sandbox", "staging", "prod"}:
+            return True
+    return False
+
+
 def resolve_target_env(cli_value: str | None,
                        phase_dir: Path) -> str:
     """Resolve target_env honoring CLI > vg.config > 'sandbox' default.
@@ -554,14 +660,47 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"phase dir not found: {phase_dir}\n")
         return 2
 
+    # v2.40.1 — interactive target_env prompt at Phase 2b-2.5.
+    # Resolution order (matches probe-mode below):
+    #   1. --target-env CLI flag wins outright.
+    #   2. vg.config review.target_env (if present + valid) is honoured.
+    #   3. --non-interactive (or env VG_NON_INTERACTIVE=1) → skip prompt,
+    #      let resolve_target_env() pick the 'sandbox' default downstream.
+    #   4. Otherwise prompt on stdin: [l]ocal/[s]andbox/[g]taging/[p]rod.
+    #      Default 's' on Enter. Picking 'p' requires typing the phase name
+    #      as a typed-confirmation phrase (analog to GitHub repo deletion).
+    non_interactive = bool(args.non_interactive) or \
+        os.environ.get("VG_NON_INTERACTIVE") == "1"
+    # Only prompt when BOTH stdin and stdout are real TTYs. Subprocess-driven
+    # runs (CI, pytest, piped invocations) capture stdout → isatty=False → we
+    # silently fall back to 'sandbox' via resolve_target_env() below, preserving
+    # the pre-v2.40.1 contract for non-interactive callers.
+    is_interactive_terminal = False
+    try:
+        is_interactive_terminal = bool(
+            sys.stdin.isatty() and sys.stdout.isatty()
+        )
+    except (OSError, ValueError):
+        is_interactive_terminal = False
+    if args.target_env is None and not non_interactive and is_interactive_terminal:
+        cfg_explicit = _config_has_explicit_target_env(phase_dir)
+        if not cfg_explicit:
+            try:
+                args.target_env = prompt_target_env(
+                    phase_dir.name,
+                    skip_prod_confirm=bool(args.i_know_this_is_prod),
+                )
+            except (OSError, KeyboardInterrupt):
+                # Terminal vanished mid-prompt → fall through to
+                # resolve_target_env() default of 'sandbox'.
+                pass
+
     # Task 26g — interactive probe-mode prompt. Resolution order:
     #   1. --probe-mode CLI flag (if supplied) wins.
     #   2. --non-interactive (or env VG_NON_INTERACTIVE=1) → 'auto'.
     #   3. Otherwise prompt on stdin: [a]uto / [m]anual / [h]ybrid / [s]kip?
     #      Default 'a' on Enter. 's' = treat as --skip-recursive-probe with
     #      reason "interactive: operator chose skip".
-    non_interactive = bool(args.non_interactive) or \
-        os.environ.get("VG_NON_INTERACTIVE") == "1"
     if args.probe_mode is None:
         if non_interactive:
             args.probe_mode = "auto"
