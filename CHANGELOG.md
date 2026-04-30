@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.41.4 — Headed-mode preservation in playwright MCP repair (closes PR #56)
+
+### Fixed
+- `verify-playwright-mcp-config.py` `_playwright_entry()` and `_render_codex_sections()` now bake `--no-headless` into the canonical MCP server template for both Claude (`settings.json`) and Codex (`config.toml`). Pre-fix, calling `--repair` (via `/vg:update`, `install.sh`, `sync.sh`) silently stripped any user-added `--no-headless` flag, breaking the documented HEADED-mode contract in `commands/vg/test.md` (lines 564, 650). Result: `/vg:review` Phase 2b Haiku scanners launched invisible browsers — operator couldn't watch the scan progress.
+
+### Internal
+- `@playwright/mcp` v0.0.71+ documents `--headless` (default-headed) and `--no-headless` (explicit) as durable flags.
+- Existing `test_playwright_mcp_config.py` assertions still pass — `_user_data_dir()` helper locates `--user-data-dir` by name, unaffected by extra flags before it.
+- Credit: external dogfood report from @vietnhprintway (PR #56), same reporter as #53 / #55.
+
 ## v2.41.3 — `/vg:update` Windows + gate-integrity hotfixes (closes #53, #55)
 
 Bundles four cross-platform `/vg:update` hardening fixes reported by external dogfood (PrintwayV3 on macOS + a Windows install).
