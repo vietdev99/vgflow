@@ -37,10 +37,18 @@ _surface_probe_get_goal_block() {
   local gid="$1"
   local test_goals="$2"
   [ -f "$test_goals" ] || { echo ""; return 1; }
-  # Extract block starting at "## Goal $gid:" until next "## Goal" or EOF
+  # Extract block starting at goal heading until next goal heading or EOF.
+  # Tolerates these heading formats (all observed in real projects):
+  #   ## Goal G-XX: title       (vgflow canonical)
+  #   ## Goal G-XX — title      (em-dash variant)
+  #   ## G-XX — title           (project format, "Goal" word omitted)
+  #   ## G-XX: title
+  #   ## G-XX - title           (ASCII hyphen)
+  # Match logic: heading starts with `^## ` then optional `Goal `, then gid,
+  # then any non-alphanumeric separator (space/colon/em-dash/hyphen/tab).
   awk -v gid="$gid" '
-    $0 ~ "^## Goal " gid ":" { in_block=1; print; next }
-    in_block && /^## Goal / { exit }
+    $0 ~ "^##[ ]+(Goal[ ]+)?" gid "[^A-Za-z0-9_]" { in_block=1; print; next }
+    in_block && $0 ~ "^##[ ]+(Goal[ ]+)?G-[0-9]+[^A-Za-z0-9_]" { exit }
     in_block { print }
   ' "$test_goals"
 }
@@ -65,6 +73,7 @@ _surface_probe_get_criteria() {
 probe_api() {
   local gid="$1"
   local block="$2"
+  local phase_dir="${3:-}"
   local criteria
   criteria=$(_surface_probe_get_criteria "$block")
 
@@ -73,8 +82,34 @@ probe_api() {
   local endpoint_line
   endpoint_line=$(echo "$criteria" | grep -oE '\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+[/a-zA-Z0-9][a-zA-Z0-9._/:{}\-]*' | head -1)
 
+  # Fallback 1: criteria written in natural language often omit explicit
+  # method+path. Try path-only patterns (e.g. "/api/v1/credits/grant" or
+  # "/internal/credit/use") that appear without an HTTP verb prefix.
   if [ -z "$endpoint_line" ]; then
-    echo "SKIPPED|no_endpoint_pattern_in_criteria"
+    local path_only
+    path_only=$(echo "$criteria" | grep -oE '/(api|internal|public)/[a-zA-Z0-9._/:{}\-]+' | head -1)
+    if [ -n "$path_only" ]; then
+      # Synthesize a method-agnostic endpoint_line; downstream grep treats
+      # path as the discriminator anyway (frag extraction starts from path).
+      endpoint_line="ANY ${path_only}"
+    fi
+  fi
+
+  # Fallback 2: cross-reference goal_id in API-CONTRACTS.md (when phase_dir
+  # is provided). Real-world TEST-GOALS often defer endpoint shape to the
+  # contract artifact and only reference the goal by id.
+  if [ -z "$endpoint_line" ] && [ -n "$phase_dir" ] && [ -f "${phase_dir}/API-CONTRACTS.md" ]; then
+    local contract_endpoint
+    contract_endpoint=$(grep -B2 -A4 "\b${gid}\b" "${phase_dir}/API-CONTRACTS.md" 2>/dev/null \
+                        | grep -oE '\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+[/a-zA-Z0-9][a-zA-Z0-9._/:{}\-]*' \
+                        | head -1)
+    if [ -n "$contract_endpoint" ]; then
+      endpoint_line="$contract_endpoint"
+    fi
+  fi
+
+  if [ -z "$endpoint_line" ]; then
+    echo "SKIPPED|no_endpoint_in_criteria_or_contracts"
     return 0
   fi
 
@@ -334,7 +369,7 @@ run_surface_probe() {
   fi
 
   case "$surface" in
-    api)          probe_api "$gid" "$block" ;;
+    api)          probe_api "$gid" "$block" "$phase_dir" ;;
     data)         probe_data "$gid" "$block" ;;
     integration)  probe_integration "$gid" "$block" "$phase_dir" ;;
     time-driven)  probe_time_driven "$gid" "$block" ;;
