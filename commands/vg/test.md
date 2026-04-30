@@ -1839,6 +1839,33 @@ fi
    **NEVER use dynamic IDs as selectors** (e.g., `data-id="site_9872"`, `#row-abc123`).
    These break when data changes. Prefer: `getByRole('row').first()`, `getByText('site name')`,
    or `nth(0)` index. If goal_sequence recorded a dynamic ID, the pre-codegen gate above BLOCKS execution — re-run /vg:review to re-record.
+2.5. **Login flow uses id-based selectors, NOT label regex (i18n-stable, fix Bug-6)** — Forms in i18n projects use translated labels. `getByLabel(/password/i)` works for English but FAILS for Vietnamese ("Mật khẩu"), Spanish ("Contraseña"), etc. Codegen MUST emit a project-local login helper that uses `<input id>` selectors:
+
+   ```typescript
+   // apps/<role>/e2e/utils/login.ts (project-owned helper)
+   import type { Page } from '@playwright/test';
+   export async function loginAsAdmin(page: Page, creds?: { email?: string; password?: string; baseURL?: string }) {
+     const email = creds?.email ?? process.env.ADMIN_EMAIL ?? 'admin@example.local';
+     const password = creds?.password ?? process.env.ADMIN_PASSWORD ?? '';
+     const baseURL = creds?.baseURL ?? process.env.ADMIN_URL ?? 'http://localhost:3001';
+     await page.goto(`${baseURL}/login`);
+     // ID selectors are stable across i18n translations
+     await page.locator('#login-email').fill(email);  // matches FormLabel htmlFor="login-email"
+     await page.locator('#login-password').fill(password);
+     await page.locator('form button[type="submit"]').click();
+     await page.waitForURL((url) => !url.toString().includes('/login'), { timeout: 10000 });
+   }
+   ```
+
+   Generated specs import + call this helper:
+   ```typescript
+   import { loginAsAdmin } from '../utils/login';
+   test.beforeEach(async ({ page }) => { await loginAsAdmin(page); });
+   ```
+
+   **Why:** PrintwayV3 dogfood (Phase 3.4b /vg:test 2026-04-30) saw 5/5 codegen specs fail at password field because Vietnamese label "Mật khẩu" didn't match `/password/i`. After helper switch to id selectors → 2/5 passed before rate limit, demonstrating fix works.
+
+   **When goal_sequence DOES record selectors** (review captured them via Haiku): use those verbatim. The helper is the fallback when goal_sequence is empty (codegen-from-CRUD-SURFACES path) AND for the universal beforeEach login step.
 3. **Assertions from TEST-GOALS** — each `test()` block maps to a success criterion. Never invent assertions beyond what TEST-GOALS specifies.
 4. **Steps from goal_sequences** — each `do` step becomes a Playwright action, each `assert` step becomes an `expect()`. Nearly 1:1 mapping.
 5. **Web-first assertions** — use `expect(locator).toHaveText()`, `expect(locator).toBeVisible()` with auto-retry. Never use single-shot checks.
