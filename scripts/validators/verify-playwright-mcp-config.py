@@ -58,9 +58,13 @@ def _same_path(left: str | None, right: Path) -> bool:
 
 
 def _playwright_entry(profile_dir: Path) -> dict[str, Any]:
+    # --no-headless: keep browser window visible for human-watchable scans.
+    # @playwright/mcp v0.0.71+ supports both default-headed and explicit
+    # --no-headless; flag is durable across releases. Removed = scans go
+    # invisible, breaking VG /vg:review headed-mode contract.
     return {
         "command": "npx",
-        "args": [MCP_PACKAGE, "--user-data-dir", _display_path(profile_dir)],
+        "args": [MCP_PACKAGE, "--no-headless", "--user-data-dir", _display_path(profile_dir)],
     }
 
 
@@ -239,7 +243,7 @@ def _render_codex_sections(codex_home: Path) -> str:
                 [
                     f"[mcp_servers.playwright{i}]",
                     'command = "npx"',
-                    f'args = ["{MCP_PACKAGE}", "--user-data-dir", "{profile}"]',
+                    f'args = ["{MCP_PACKAGE}", "--no-headless", "--user-data-dir", "{profile}"]',
                 ]
             )
         )
