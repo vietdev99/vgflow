@@ -449,9 +449,11 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help="Override reason; logs OVERRIDE-DEBT critical.")
     ap.add_argument("--target-env",
                     choices=["local", "sandbox", "staging", "prod"],
-                    default="sandbox",
+                    default=None,
                     help="Deploy environment — controls allowed lenses + "
-                         "mutation budget via scripts/env_policy.py.")
+                         "mutation budget via scripts/env_policy.py. "
+                         "When omitted, falls back to vg.config review.target_env, "
+                         "then to 'sandbox' as a safe default.")
     ap.add_argument("--i-know-this-is-prod", default=None, metavar="REASON",
                     help="Required when --target-env=prod; logs OVERRIDE-DEBT "
                          "and bypasses the prod-safety abort.")
@@ -462,6 +464,46 @@ def _build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--json", action="store_true",
                     help="Emit machine-readable JSON on stdout.")
     return ap
+
+
+def resolve_target_env(cli_value: str | None,
+                       phase_dir: Path) -> str:
+    """Resolve target_env honoring CLI > vg.config > 'sandbox' default.
+
+    vg.config.md is searched at:
+      1. ``${PHASE_DIR}/../../vg.config.md`` (repo root for .vg/phases/N layout)
+      2. ``${PHASE_DIR}/../../config/vg.config.md`` (alternate layout)
+    The first parseable file with ``review.target_env`` wins.
+    """
+    if cli_value is not None:
+        return cli_value
+
+    candidates = [
+        phase_dir.parent.parent / "vg.config.md",
+        phase_dir.parent.parent / "config" / "vg.config.md",
+        phase_dir.parent.parent.parent / "vg.config.md",
+    ]
+    for cfg in candidates:
+        if not cfg.is_file():
+            continue
+        try:
+            text = cfg.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        m = re.search(r"```ya?ml\s*\n(.+?)\n```", text, re.S)
+        body = m.group(1) if m else text
+        try:
+            data = yaml.safe_load(body) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        review = data.get("review") or {}
+        env = review.get("target_env")
+        if env in {"local", "sandbox", "staging", "prod"}:
+            return env
+
+    return "sandbox"
 
 
 def apply_env_policy(plan: list[dict[str, Any]],
@@ -490,10 +532,15 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"phase dir not found: {phase_dir}\n")
         return 2
 
+    # Task 26f — resolve target_env via CLI → config → default chain BEFORE
+    # the prod-safety gate so operators get a single coherent picture.
+    target_env = resolve_target_env(args.target_env, phase_dir)
+    args.target_env = target_env  # echo back so downstream code sees the resolved value
+
     # Prod safety gate (Task 26c). Without --i-know-this-is-prod the run is
     # refused — operators must opt in explicitly. --skip-recursive-probe is
     # still honored downstream because that path writes a skip evidence file.
-    if args.target_env == "prod" and not args.i_know_this_is_prod \
+    if target_env == "prod" and not args.i_know_this_is_prod \
             and not args.skip_recursive_probe:
         sys.stderr.write(
             "Refusing prod run without --i-know-this-is-prod=<reason>. "
@@ -502,7 +549,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if args.target_env == "prod" and args.i_know_this_is_prod:
+    if target_env == "prod" and args.i_know_this_is_prod:
         sys.stderr.write(
             f"OVERRIDE-DEBT critical: --target-env=prod opted in via "
             f"--i-know-this-is-prod={args.i_know_this_is_prod!r}\n"
