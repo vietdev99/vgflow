@@ -1,5 +1,0 @@
-reasons:
-- ENV-CONTRACT.md disposable_seed_data not true
-- 'ENV-CONTRACT.md third_party_stubs not stubbed: [''payment'']'
-skipped_at: '2026-04-30T11:55:44.915954+00:00'
-via_override: false
