@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.41.0 — Backlog Closure (Tier-2 wiring + Telemetry + Hybrid mode)
+
+### Added
+- Tier-2 element classifier wiring (5 previously-unreachable lenses now active: open-redirect, ssrf, auth-jwt, business-logic, info-disclosure)
+- Hybrid probe-mode actual implementation per `vg.config.md review.recursive_probe.hybrid_routing`
+- Telemetry emissions: `recursion.state_hash_hit`, `recursion.mutation_budget_exhausted`
+
+### Fixed
+- `/vg:review-batch` production entry point — multi-fallback resolution (VG_REVIEW_CMD env > claude CLI > python -m vg.review > hard-fail)
+- Hybrid mode no longer hard-fails — actual per-lens routing implemented
+
+### Internal
+- `scripts/identify_interesting_clickables.py` — 6 Tier-2 detectors (replaces stubs from v2.40.0)
+- `scripts/_telemetry_helpers.py` — append-only `.vg/telemetry.jsonl` event emitter
+- 30 new tests across Tier-2, telemetry, hybrid mode
+
+### Closes
+- v2.40 backlog #1 (review_batch entry), #2 (Tier-2 wiring), #4 (telemetry), #5 (hybrid impl)
+
+### Still deferred
+- #3 Real LLM dogfood (needs user-supplied phase fixture + GEMINI_API_KEY)
+- #6 Codex GPT-5 xhigh re-review (user-driven; prompt parked)
+
 ## v2.40.2 — Manual mode per-tool subdirs + minor fixes
 
 ### Fixed (UX)
