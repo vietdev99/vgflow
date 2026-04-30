@@ -1,0 +1,7 @@
+{
+  "view": "/admin/users?page=2",
+  "results": [
+    {"selector": "button#delete-21", "network": [{"method": "DELETE", "path": "/api/users/21"}]}
+  ],
+  "forms": []
+}

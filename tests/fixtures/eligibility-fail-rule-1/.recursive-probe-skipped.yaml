@@ -1,0 +1,4 @@
+reasons:
+- phase_profile 'docs' not in ['feature', 'feature-legacy', 'hotfix']
+skipped_at: '2026-04-30T11:55:52.218874+00:00'
+via_override: false
