@@ -163,3 +163,21 @@ def test_csrf_lens_specific():
     assert fm["name"] == "lens-csrf"
     assert fm["bug_class"] == "auth"
     assert "mutation_button" in fm["applies_to_element_classes"]
+
+
+def test_duplicate_submit_lens_specific():
+    """lens-duplicate-submit.md must use bizlogic bug class and apply to mutation_button."""
+    lens = LENS_DIR / "lens-duplicate-submit.md"
+    fm = parse_frontmatter(lens.read_text(encoding="utf-8"))
+    assert fm["name"] == "lens-duplicate-submit"
+    assert fm["bug_class"] == "bizlogic"
+    assert "mutation_button" in fm["applies_to_element_classes"]
+
+
+def test_business_logic_lens_specific():
+    """lens-business-logic.md must use bizlogic bug class and apply to mutation_button."""
+    lens = LENS_DIR / "lens-business-logic.md"
+    fm = parse_frontmatter(lens.read_text(encoding="utf-8"))
+    assert fm["name"] == "lens-business-logic"
+    assert fm["bug_class"] == "bizlogic"
+    assert "mutation_button" in fm["applies_to_element_classes"]
