@@ -1,5 +1,58 @@
 # Changelog
 
+## v2.43.0 — `/vg:roam` + `/vg:deploy` + scope step 1b env preference (PR #64)
+
+Bundles five reporter-internal milestones (v2.42.4 → v2.42.8) into a single minor release. Pure addition — 2367 insertions, 0 deletions. All built on top of v2.42.0's HARD env+mode+scanner gate and #63's `enrich-env-question.py` helper.
+
+### Added — `/vg:roam` (NEW skill, 878 lines)
+
+Exploratory CRUD-lifecycle pass that runs **after** `/vg:test` and **before** `/vg:accept`. Lens-driven brief composer + LLM executor + analyzer chain catches silent state-mismatches and lifecycle gaps that scripted tests miss.
+
+- Step `0aa_resume_check` — 4 modes: fresh / `--force` / `--resume` / `--aggregate-only`. Closes the "không cache thì mỗi lần chạy là chạy mới à?" gap.
+- Step `0a_env_mode_gate` — wires `enrich-env-question.py` from #63 (B2 roam wiring); env+mode+scanner gate options decorated with DEPLOY-STATE.json evidence.
+- Step `0a_pre_prompt_1` — runtime backfill of `preferred_env_for` for phases scoped before step 1b landed (B4 backfill).
+- Real dogfood validated: PrintwayV3 phase 03.4a-team-member-rbac-2fa with local Codex executor — 20 surfaces discovered, 20 INSTRUCTION files generated with verbatim creds, 5 min wall, 43k tokens, 9 JSONL events emitted, R1-R8 detectors processed correctly.
+- New helpers: `roam-discover-surfaces.py` (145), `roam-compose-brief.py` (283), `roam-analyze.py` (300), `roam-merge-specs.py` (56).
+
+### Added — `/vg:deploy` (NEW skill, 588 lines)
+
+Standalone multi-env deploy command (sandbox/staging/prod) with prod typed-token confirmation. Writes `deployed.{env}` block to DEPLOY-STATE.json — sha, deployed_at, health, deploy_log path, previous_sha (for rollback), dry_run flag.
+
+DEPLOY-STATE.json now drives env-suggestion across review/test/roam/accept.
+
+### Added — `/vg:scope` step `1b_env_preference` (B3, +117 lines)
+
+5-option preset writes `preferred_env_for` to DEPLOY-STATE.json after scope decisions lock:
+- `auto` — heuristic per profile (feature → sandbox; security-critical → staging; emergency → prod)
+- `all-sandbox` — every step on sandbox
+- `most-common` — review/test on sandbox, roam/accept on staging
+- `paranoid` — review/test on sandbox, roam on staging, accept on prod
+- `all-local` — fastest iteration
+
+### Pipeline (post-v2.43.0)
+
+```
+specs → scope (step 1b sets preferred_env_for)
+      → blueprint
+      → build
+      → [/vg:deploy]                                          ← NEW
+      → /vg:review  (env gate decorated by enrich-helper)
+      → /vg:test    (same)
+      → [/vg:roam]  (same; runtime backfill if pref missing)  ← NEW
+      → /vg:accept
+```
+
+### Pending follow-up (not in this release)
+- Wire `enrich-env-question.py` into `/vg:review` step 0a (B2 review part)
+- Wire same into `/vg:test`
+- `/vg:rollback` consumer reading `deployed.{env}.previous_sha`
+- `/vg:next` routing — recommend `/vg:deploy` when user picks sandbox/staging/prod env at /vg:review without prior deploy
+
+### Internal
+- 234 tests pass (pure additive; no regressions in existing flow).
+- Codex mirrors regenerated — now 69 skills (2 new: `vg-roam`, `vg-deploy`).
+- Credit: external dogfood from @vietnhprintway (PrintwayV3, same arc as #57/#58/#60/#61/#62/#63 → v2.41.4/v2.42.0).
+
 ## v2.42.0 — HARD env+mode+scanner gate + 5 dogfood-driven fixes (PRs #58–#63)
 
 External dogfood (@vietnhprintway, PrintwayV3) shipped 7 PRs in 24 hours after v2.41.4 — bundling 1 major review-flow gate change + 4 bug fixes + 2 features. v2.42.0 absorbs all of them.

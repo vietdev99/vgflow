@@ -828,6 +828,123 @@ AI states: "I've analyzed all {N} decisions for conflicts, edge cases, and gaps.
 ```
 </step>
 
+<step name="1b_env_preference">
+## Step 1b — Env preference (suggestion-only, optional, v2.42.7+)
+
+After scope is locked, ask user which env they want review / test / roam /
+accept to **prefer** when those commands run later. This is **suggestion only**
+— at runtime the env+mode+scanner gate still fires AskUserQuestion; the
+saved preference just decorates the recommended option there (via
+`enrich-env-question.py` helper).
+
+User can SKIP this step and the helper falls back to profile heuristics
+(feature → sandbox; docs → local; etc).
+
+### Skip conditions
+
+- `${ARGUMENTS}` contains `--skip-env-preference` OR `--non-interactive`
+- `${PHASE_DIR}/DEPLOY-STATE.json` already has `preferred_env_for` filled
+  (don't overwrite without `--reset-env-preference`)
+
+### AskUserQuestion (1 question, 5 preset options)
+
+```
+AskUserQuestion:
+  header: "Env pref"
+  question: |
+    Phase này khi review / test / roam / accept chạy nên ưu tiên env nào?
+
+    GỢI Ý THÔI — runtime AskUserQuestion vẫn fire, đây chỉ là pre-fill option
+    "Recommended". Không lưu = AI auto-pick theo profile heuristic mỗi lần.
+  options:
+    - label: "auto — không lưu preference (Recommended cho phase mới)"
+      description: "Skip step này. Helper enrich-env-question.py sẽ dùng profile heuristic mỗi lần (feature/bugfix/hotfix → sandbox; docs → local; accept → prod)."
+    - label: "all sandbox — review/test/roam/accept đều prefer sandbox"
+      description: "Phù hợp khi phase chưa ship lên prod, dogfood sâu trên sandbox."
+    - label: "review+test+roam=sandbox, accept=prod — phổ biến nhất"
+      description: "Production-ready phase. UAT (accept) trên prod thật, mọi check khác trên sandbox an toàn."
+    - label: "review+test=sandbox, roam=staging, accept=prod — paranoid"
+      description: "Tách roam riêng sang staging để soi env gần prod hơn (multi-tenant + prod-like data). Phù hợp ship-critical phase."
+    - label: "all local — phase nội bộ / dogfood"
+      description: "Không deploy. Phase pure-backend hoặc internal tooling, chạy đâu cũng OK."
+```
+
+### Apply answer + persist
+
+```bash
+# Skip if non-interactive OR --skip-env-preference
+if [[ "$ARGUMENTS" =~ --skip-env-preference ]] || [[ "$ARGUMENTS" =~ --non-interactive ]]; then
+  echo "▸ Skipping env preference step (flag set)"
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "1b_env_preference" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1b_env_preference.done"
+  exit 0 2>/dev/null || true  # no-op if not in subshell
+fi
+
+# Skip if preference already set + no --reset-env-preference
+DEPLOY_STATE="${PHASE_DIR}/DEPLOY-STATE.json"
+if [ -f "$DEPLOY_STATE" ] && [[ ! "$ARGUMENTS" =~ --reset-env-preference ]]; then
+  HAS_PREF=$(${PYTHON_BIN:-python3} -c "import json; d=json.load(open('$DEPLOY_STATE')); print('1' if d.get('preferred_env_for') else '0')" 2>/dev/null || echo 0)
+  if [ "$HAS_PREF" = "1" ]; then
+    EXISTING=$(${PYTHON_BIN:-python3} -c "import json; print(json.dumps(json.load(open('$DEPLOY_STATE')).get('preferred_env_for', {})))" 2>/dev/null)
+    echo "▸ preferred_env_for đã set: $EXISTING — skip (re-set bằng /vg:scope ${PHASE_NUMBER} --reset-env-preference)"
+    (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "1b_env_preference" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1b_env_preference.done"
+    exit 0 2>/dev/null || true
+  fi
+fi
+
+# AI: invoke AskUserQuestion above, capture answer into ENV_PREF_CHOICE
+# Map answer label → preferred_env_for JSON
+${PYTHON_BIN:-python3} -c "
+import json, os, sys
+from pathlib import Path
+choice = os.environ.get('ENV_PREF_CHOICE', 'auto').lower()
+mapping = None
+if 'all sandbox' in choice:
+  mapping = {'review': 'sandbox', 'test': 'sandbox', 'roam': 'sandbox', 'accept': 'sandbox'}
+elif 'review+test+roam=sandbox' in choice and 'accept=prod' in choice:
+  mapping = {'review': 'sandbox', 'test': 'sandbox', 'roam': 'sandbox', 'accept': 'prod'}
+elif 'roam=staging' in choice and 'accept=prod' in choice:
+  mapping = {'review': 'sandbox', 'test': 'sandbox', 'roam': 'staging', 'accept': 'prod'}
+elif 'all local' in choice:
+  mapping = {'review': 'local', 'test': 'local', 'roam': 'local', 'accept': 'local'}
+elif 'auto' in choice:
+  mapping = None  # don't write — helper will use profile heuristic
+else:
+  print(f'[scope-1b] WARN: unrecognized choice {choice!r} — treating as auto', file=sys.stderr)
+  mapping = None
+
+if mapping is None:
+  print('[scope-1b] auto — DEPLOY-STATE.json not modified')
+  sys.exit(0)
+
+deploy_state_path = Path('$DEPLOY_STATE')
+if deploy_state_path.exists():
+  state = json.loads(deploy_state_path.read_text(encoding='utf-8'))
+else:
+  state = {'phase': '${PHASE_NUMBER}'}
+
+state['preferred_env_for'] = mapping
+deploy_state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+print(f'[scope-1b] preferred_env_for saved to DEPLOY-STATE.json: {json.dumps(mapping)}')"
+
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "1b_env_preference" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1b_env_preference.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 1b_env_preference 2>/dev/null || true
+```
+
+### Override flags
+
+- `--skip-env-preference` — explicit skip (alias of `--non-interactive` for this step)
+- `--reset-env-preference` — re-prompt even if already set (overwrites existing)
+- `--env-preference=auto|sandbox|review-sandbox-accept-prod|paranoid|local` — CLI shortcut for non-interactive flow
+
+### Consumers
+
+- `${PHASE_DIR}/DEPLOY-STATE.json` `preferred_env_for.{review|test|roam|accept}` is read by:
+  - `.claude/scripts/enrich-env-question.py` (B1) — decorates AskUserQuestion options at runtime env gate
+  - Future `/vg:deploy` (B4) — pre-selects deploy targets when phase is ready
+
+User can edit `DEPLOY-STATE.json` manually anytime to fine-tune per-command preferences. The 5 preset options here cover ~80% of cases; rare configurations (e.g. review=staging) edit by hand.
+</step>
+
 <step name="2_artifact_generation">
 ## Step 2: ARTIFACT GENERATION
 
