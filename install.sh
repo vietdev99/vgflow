@@ -132,6 +132,17 @@ if [ -d "$SCRIPT_DIR/skills" ]; then
 fi
 echo "  -> ${CLAUDE_SKILL_DEPLOYED} Claude skills installed (full helper surface)"
 
+# v2.43.1+ — Claude Code agent thin-shells (vg-planner, vg-plan-checker)
+# Agents live at .claude/agents/{name}.md. Skill frontmatter `agent: vg-*`
+# spawns these with the green tag. Both are thin-shells that fail-loud if
+# the calling skill forgets to inject the corresponding rule block.
+if [ -d "$SCRIPT_DIR/agents" ]; then
+  mkdir -p "$TARGET/.claude/agents"
+  cp "$SCRIPT_DIR/agents/"*.md "$TARGET/.claude/agents/" 2>/dev/null || true
+  AGENT_COUNT=$(ls "$TARGET/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
+  echo "  → ${AGENT_COUNT} VG agent(s) installed (vg-planner, vg-plan-checker — replaces gsd-planner / gsd-plan-checker green tag)"
+fi
+
 # All .claude/scripts/*.py and *.js go together — includes universal helpers
 # (filter-steps, design-normalize, pre-executor-check, verify-goal-test-binding,
 # phase-recon, etc.) plus mobile additions (maestro-mcp, verify-mobile-*)
