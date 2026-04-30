@@ -467,6 +467,101 @@ def dispatch_auto(plan: list[dict[str, Any]], phase_dir: Path) -> list[dict[str,
     return results
 
 
+def _load_vg_config(phase_dir: Path) -> dict[str, Any]:
+    """Best-effort loader for vg.config.md. Handles both:
+
+      - Fenced ```yaml ...``` blocks (test fixtures)
+      - Top-level YAML (vg.config.md / vg.config.template.md frontmatter style)
+
+    Search order: phase_dir-relative parents → REPO_ROOT → template fallback.
+    Mirrors resolve_target_env's search.
+    """
+    candidates = [
+        phase_dir.parent / "vg.config.md",
+        phase_dir.parent.parent / "vg.config.md",
+        phase_dir.parent.parent / "config" / "vg.config.md",
+        phase_dir.parent.parent.parent / "vg.config.md",
+        REPO_ROOT / "vg.config.md",
+        REPO_ROOT / "vg.config.template.md",
+    ]
+    for cfg in candidates:
+        if not cfg.is_file():
+            continue
+        try:
+            text = cfg.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # Try fenced block first.
+        m = re.search(r"```ya?ml\s*\n(.+?)\n```", text, re.S)
+        if m:
+            body = m.group(1)
+        else:
+            # Strip frontmatter wrapper (starts with `---\n` and ends with `\n---\n`)
+            # — vg.config.md uses this. If no closing `---`, treat the whole
+            # file as YAML (template form).
+            if text.startswith("---\n"):
+                # Look for an explicit close; otherwise everything after the
+                # opening --- is YAML.
+                close = text.find("\n---\n", 4)
+                body = text[4:close] if close > 0 else text[4:]
+            else:
+                body = text
+        try:
+            data = yaml.safe_load(body) or {}
+        except yaml.YAMLError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def split_hybrid(plan: list[dict[str, Any]],
+                 cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition plan into (auto_subset, manual_subset) per hybrid_routing.
+
+    Reads ``review.recursive_probe.hybrid_routing.{auto_lenses,manual_lenses}``
+    from the supplied config dict.
+
+    Validation:
+      - Every plan entry must be in exactly one bucket; otherwise raise
+        ``ValueError`` listing the unrouted lenses.
+      - auto_lenses ∩ manual_lenses must be empty; otherwise raise
+        ``ValueError`` listing the overlap.
+    """
+    routing = (
+        cfg.get("review", {})
+           .get("recursive_probe", {})
+           .get("hybrid_routing", {})
+    )
+    auto_lenses = set(routing.get("auto_lenses", []) or [])
+    manual_lenses = set(routing.get("manual_lenses", []) or [])
+
+    overlap = auto_lenses & manual_lenses
+    if overlap:
+        raise ValueError(
+            f"hybrid_routing config error: lenses cannot be in both auto AND "
+            f"manual lists: {sorted(overlap)}. Fix vg.config.md → "
+            f"review.recursive_probe.hybrid_routing."
+        )
+
+    auto_plan = [p for p in plan if p["lens"] in auto_lenses]
+    manual_plan = [p for p in plan if p["lens"] in manual_lenses]
+
+    unrouted = [
+        p for p in plan
+        if p["lens"] not in auto_lenses and p["lens"] not in manual_lenses
+    ]
+    if unrouted:
+        unrouted_lenses = sorted(set(p["lens"] for p in unrouted))
+        raise ValueError(
+            f"hybrid_routing config error: lenses missing from both "
+            f"auto_lenses AND manual_lenses: {unrouted_lenses}. Add each to "
+            f"exactly one list in vg.config.md."
+        )
+
+    return auto_plan, manual_plan
+
+
 def dispatch_manual(plan: list[dict[str, Any]], phase_dir: Path,
                     mode: str) -> int:
     """Hand the plan off to ``generate_recursive_prompts.py`` (Task 20)."""
@@ -901,18 +996,54 @@ def main(argv: list[str] | None = None) -> int:
     if args.probe_mode == "manual":
         return dispatch_manual(plan, phase_dir, args.mode)
 
-    # hybrid: hard-fail until v2.41 vg.config hybrid_routing wiring lands.
-    # Previous behavior silently fell back to auto, hiding the limitation
-    # from the operator. v2.40.2: refuse the run with a clear next-step
-    # message instead.
+    # v2.41 — hybrid mode actual implementation. Reads
+    # review.recursive_probe.hybrid_routing.{auto_lenses,manual_lenses} from
+    # vg.config.md, validates routing, then splits plan into two buckets:
+    # auto_plan goes through dispatch_auto (browser workers), manual_plan
+    # falls through to generate_recursive_prompts.py (paste-able prompts).
     if args.probe_mode == "hybrid":
-        sys.stderr.write(
-            "⛔ Hybrid mode is not yet implemented in v2.40.\n"
-            "   Available modes: auto (default), manual.\n"
-            "   Hybrid will ship in v2.41 with vg.config.md hybrid_routing support.\n"
-            "   Use --probe-mode=auto or --probe-mode=manual instead.\n"
+        cfg = _load_vg_config(phase_dir)
+        try:
+            auto_plan, manual_plan = split_hybrid(plan, cfg)
+        except ValueError as exc:
+            sys.stderr.write(f"⛔ {exc}\n")
+            return 1
+
+        if not auto_plan and not manual_plan:
+            print("Hybrid: empty plan after routing — nothing to dispatch.")
+            return 0
+
+        # Auto branch.
+        results: list[dict[str, Any]] = []
+        if auto_plan:
+            results = dispatch_auto(auto_plan, phase_dir)
+            index_path = phase_dir / "runs" / "INDEX.json"
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            index_path.write_text(
+                json.dumps({
+                    "mode": "hybrid-auto",
+                    "plan": [
+                        {"element_class": e["element"].get("element_class"),
+                         "selector": e["element"].get("selector"),
+                         "view": e["element"].get("view"),
+                         "lens": e["lens"]}
+                        for e in auto_plan
+                    ],
+                    "results": results,
+                }, indent=2),
+                encoding="utf-8",
+            )
+
+        # Manual branch.
+        manual_rc = 0
+        if manual_plan:
+            manual_rc = dispatch_manual(manual_plan, phase_dir, args.mode)
+
+        print(
+            f"Hybrid dispatch complete: auto={len(auto_plan)} "
+            f"manual={len(manual_plan)}"
         )
-        return 1
+        return 0 if manual_rc == 0 else manual_rc
 
     sys.stderr.write(f"unknown probe-mode: {args.probe_mode!r}\n")
     return 2
