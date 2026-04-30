@@ -32,6 +32,10 @@ import re
 import sys
 from pathlib import Path
 
+# Goal IDs we accept for codegen. v2.40.0 adds G-RECURSE- (Phase 2b-2.5
+# recursive lens probe). str.startswith accepts a tuple → pass directly.
+ALLOWED_PREFIXES: tuple[str, ...] = ("G-AUTO-", "G-CRUD-", "G-RECURSE-")
+
 
 def parse_auto_goals(discovered_path: Path) -> list[dict]:
     """Parse TEST-GOALS-DISCOVERED.md or TEST-GOALS-EXPANDED.md for G-AUTO-* / G-CRUD-* goal blocks."""
@@ -67,7 +71,7 @@ def parse_auto_goals(discovered_path: Path) -> list[dict]:
                 continue
             if isinstance(data, dict):
                 gid = str(data.get("id", ""))
-                if gid.startswith("G-AUTO-") or gid.startswith("G-CRUD-"):
+                if gid.startswith(ALLOWED_PREFIXES):
                     goals.append(data)
     return goals
 
@@ -195,7 +199,7 @@ def main() -> int:
     written: list[str] = []
     for goal in goals:
         gid = goal.get("id", "")
-        if not gid.startswith("G-AUTO-"):
+        if not gid.startswith(ALLOWED_PREFIXES):
             continue
         spec_filename = f"auto-{slug(gid)}.spec.ts"
         spec_path = out_dir / spec_filename
