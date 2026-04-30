@@ -183,7 +183,7 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--debug", action="store_true",
-                    help="Capture full stdout/stderr + resolved prompt to runs/.debug-{run_id}.log")
+                    help="Capture full stdout/stderr + redacted prompt summary to runs/.debug-{run_id}.log")
     args = ap.parse_args()
 
     phase_dir = Path(args.phase_dir).resolve()
