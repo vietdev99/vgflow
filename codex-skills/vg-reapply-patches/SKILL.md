@@ -276,7 +276,7 @@ sys.path.insert(0, os.path.join(os.environ['REPO_ROOT'], '.claude', 'scripts'))
 from pathlib import Path
 from vg_update import PatchesManifest
 print(len(PatchesManifest(Path(os.environ['MANIFEST'])).list()))
-")"
+" | tr -d '\r')"  # v2.41.3 (Issue #53 Bug #4) — strip Windows CR
 
 if [ "$COUNT" = "0" ]; then
   echo "No patches to resolve."
@@ -480,7 +480,11 @@ from pathlib import Path
 from vg_update import PatchesManifest
 for e in PatchesManifest(Path(os.environ['MANIFEST'])).list():
     print(e['path'])
-")
+" | tr -d '\r')
+# v2.41.3 (Issue #53 Bug #4) — Python on Windows emits CRLF; bash `read -r REL`
+# keeps the trailing \r, so CONFLICT_FILE="${PATCHES_DIR}/${REL}\r.conflict"
+# never exists → every entry is reported STALE, manifest never drains.
+# `tr -d '\r'` strips at the consumer side — works regardless of producer encoding.
 ```
 </step>
 
@@ -492,7 +496,7 @@ sys.path.insert(0, os.path.join(os.environ['REPO_ROOT'], '.claude', 'scripts'))
 from pathlib import Path
 from vg_update import PatchesManifest
 print(len(PatchesManifest(Path(os.environ['MANIFEST'])).list()))
-")"
+" | tr -d '\r')"  # v2.41.3 (Issue #53 Bug #4) — strip Windows CR
 
 echo "════════════════════════════════════════════"
 echo "  reapply-patches complete"

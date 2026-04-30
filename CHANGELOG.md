@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.41.3 — `/vg:update` Windows + gate-integrity hotfixes (closes #53, #55)
+
+Bundles four cross-platform `/vg:update` hardening fixes reported by external dogfood (PrintwayV3 on macOS + a Windows install).
+
+### Fixed
+- **Issue #53 Bug #1 (CRITICAL)** — `vg_update.py:three_way_merge` now passes `encoding="utf-8"` to `subprocess.run`. Pre-fix, `text=True` defaulted to `locale.getpreferredencoding()` (cp1252 on Windows), which silently mojibake-decoded UTF-8 bytes ≥ 0x80 (`⛔` → `â›"`, `→` → `â†'`, `—` → `â€"`) and re-encoded as UTF-8 — corrupting hundreds of files in a single update run. Reporter measured 373 corrupted files + 134 false-positive conflicts on a v2.27.0 → v2.41.1 update before patching locally.
+- **Issue #53 Bug #2 (HIGH)** — `vg_update.py:main()` reconfigures `sys.stdout` / `sys.stderr` to UTF-8 with `errors=replace` when the console default isn't already UTF-8. Pre-fix, `print("⛔ ...")` raised `UnicodeEncodeError` on Windows cp1252 console, breaking caller exit-code logic in `update.md` step 6b. No-op on Linux/macOS.
+- **Issue #55 + #53 Bug #3 (MEDIUM, but blocks update flow)** — `_locate_gate_block` now anchors to `<step name="{gate_id}">` directly (gate_id is unique per manifest entry). Pre-fix, the locator used `text.find(fingerprint) + rfind("<step", 0, idx)` heuristic; when the fingerprint substring also appeared inside an unrelated earlier step block (boilerplate like `**Update PIPELINE-STATE.json:**`), it walked back to the wrong step and reported a false-positive `content_hash_mismatch`. Reproducer: `review.md` with both `<step name="0_parse_and_validate">` and `<step name="complete">` sharing common prose. Fingerprint kept as a deprecated fallback for legacy manifests.
+- **Issue #53 Bug #4 (LOW but pernicious)** — `reapply-patches.md` patches-mode resolution loop + COUNT/REMAINING captures now pipe Python output through `tr -d '\r'`. Pre-fix on Windows, `python3 -c "print(...)"` emitted `\r\n`; bash `read -r REL` kept the trailing `\r`, so `${PATCHES_DIR}/${REL}\r.conflict` never existed → every entry reported "STALE — conflict file missing", manifest never drained.
+
+### Triage
+- Closed #54 (auto-report sig 4a039a9f, empty context block).
+- Closed #46 + #40 (auto-reports from v2.31.1 / v2.28.0 — outdated, empty context, no repro).
+- Updated #44 (v2.30.0 dogfood checklist superseded by v2.41.x flow).
+
+### Internal
+- 234 tests pass.
+- `_locate_gate_block` regression test verifies duplicate-fingerprint scenario picks the right step.
+
+### Notes
+- No behavior change for healthy installs on Linux/macOS that didn't hit any of these edge cases.
+- Windows users who completed a `/vg:update` between v2.40.x and v2.41.2 should run `/vg:update` again on v2.41.3 — the encoding fix only applies to NEW merges; previously corrupted files need to be restored from `.claude/vgflow-ancestor/v{prev}/` (see Issue #53 recovery section).
+
 ## v2.41.2 — Phase 2b-2.5 enforcement model fix (regression from v2.40.0)
 
 User report: "/vg:review on another project just runs headless browser and reports bugs — no prompts for recursion / probe-mode / target-env, even after v2.41.1." Cross-AI review traced this to an enforcement-model regression: v2.40.0 introduced Phase 2b-2.5 by **nesting it inside `<step name="phase2_browser_discovery">`** instead of giving it its own step wrapper. v2.39.0 had 24 top-level `<step>` wrappers, each with profile filter + `must_touch_markers` entry + telemetry contract. Phase 2b-2.5 had none of these — orchestrator could (and did) silently skip the entire 142-line block.

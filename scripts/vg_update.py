@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -112,10 +113,21 @@ def three_way_merge(ancestor, current, upstream) -> MergeResult:
             ["git", "merge-file", "-p", tmp_path, str(ancestor), str(upstream)],
             capture_output=True,
             text=True,
+            # v2.41.3 (Issue #53 Bug #1) — without explicit encoding, Python on
+            # Windows defaults to locale.getpreferredencoding() = cp1252. UTF-8
+            # bytes >= 0x80 (⛔ → 0xe2,0x9b,0x94 etc) either crash with
+            # UnicodeDecodeError or silently mojibake-decode (e.g. "⛔" → "â›"").
+            # write_text(...) downstream then re-encodes mojibake as UTF-8,
+            # silently corrupting hundreds of files in a single update run.
+            encoding="utf-8",
+            errors="replace",
         )
         # Exit code: 0 = clean, N>0 = N conflicts, <0 = error
         status = "clean" if r.returncode == 0 else "conflict"
-        return MergeResult(status, r.stdout)
+        # Defensive fallback for the rare crash case where stdout is None
+        # (e.g. git merge-file aborted before writing) — treat as conflict
+        # with empty body so caller's write_text doesn't TypeError.
+        return MergeResult(status, r.stdout or "")
     finally:
         if tmp_path:
             try:
@@ -353,16 +365,42 @@ def fetch_gate_manifest(version: str, timeout: int = 10):
         raise RuntimeError("gate-manifest fetch failed: {}".format(e))
 
 
-def _locate_gate_block(text: str, fingerprint: str):
-    """Find a gate block in `text` using its fingerprint (first ~80 chars).
+def _locate_gate_block(text: str, gate_id: str = "", fingerprint: str = ""):
+    """Find a gate block in `text`, anchored on the unique step name.
 
-    Strategy: substring search on fingerprint (stripped). Returns tuple
-    (start_idx, end_idx) spanning the containing `<step>` block OR a best-
-    effort window of ±200 lines around the match. Returns None if no match.
+    v2.41.3 (closes Issue #55 + #53 Bug #3) — primary anchor is the gate_id
+    (= unique step name in the manifest), looked up via the canonical
+    `<step name="{gate_id}">...</step>` boundary. Pre-v2.41.3 the locator
+    used `text.find(fingerprint)` + `rfind("<step", ...)`: when the
+    fingerprint substring also appeared inside an unrelated earlier `<step>`
+    block (common boilerplate like "**Update PIPELINE-STATE.json:**"), it
+    walked back to the wrong step tag and hashed the wrong block, producing
+    a false-positive `content_hash_mismatch`.
 
-    We bound to `<step ...>...</step>` when possible so that merge-shifted
-    line numbers don't break detection — the step tag is a stable anchor.
+    The fingerprint argument is retained as a fallback for legacy manifests
+    and any non-`<step>` gate forms, but should be considered deprecated for
+    step-wrapped gates.
+
+    Returns (start_idx, end_idx) span or None.
     """
+    if gate_id:
+        # Match `<step name="{gate_id}">` allowing extra attrs (profile=, ...).
+        # `re.DOTALL` + non-greedy body anchors to the FIRST `</step>` after
+        # the open tag — the standard nested-step contract in review.md.
+        pat = re.compile(
+            r'<step\s+name="' + re.escape(gate_id) + r'"[^>]*>.*?</step>',
+            re.DOTALL,
+        )
+        m = pat.search(text)
+        if m:
+            return (m.start(), m.end())
+        # Step genuinely renamed / deleted — let caller report
+        # gate_removed_by_merge instead of falling through to a wrong block.
+        return None
+
+    # Legacy fallback (deprecated): fingerprint-only lookup. Kept for
+    # backwards compatibility with older `gate-manifest.json` payloads that
+    # predate gate_id, and for any non-step gate forms (none currently).
     fp = fingerprint.strip()
     if not fp:
         return None
@@ -402,8 +440,11 @@ def verify_gate_integrity(
         if g.get("command") != command_name:
             continue
         fp = g.get("fingerprint", "")
+        gid = g.get("gate_id", "")
         expected = (g.get("block_pattern_sha256") or "").strip().lower()
-        span = _locate_gate_block(text, fp)
+        # v2.41.3 — gate_id (= unique step name) is the primary anchor;
+        # fingerprint kept as fallback for legacy / non-step gates.
+        span = _locate_gate_block(text, gid, fp)
         if not span:
             # Gate missing entirely — treat as hard conflict (merge removed it)
             conflicts.append({
@@ -684,6 +725,20 @@ def cmd_build_gate_manifest(args):
 
 
 def main():
+    # v2.41.3 (Issue #53 Bug #2) — Windows console defaults to cp1252; any
+    # print("⛔ ...") raises UnicodeEncodeError. Reconfigure stdout/stderr to
+    # UTF-8 with replace-on-encode-fail so the helper still emits a parseable
+    # message even on legacy consoles. No-op on Linux/macOS where the default
+    # is already UTF-8.
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        enc = (getattr(stream, "encoding", "") or "").lower()
+        if enc and enc not in ("utf-8", "utf8") and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass  # locked stream — caller already owns the encoding
+
     import argparse
     p = argparse.ArgumentParser(prog="vg-update")
     sub = p.add_subparsers(dest="cmd", required=True)
