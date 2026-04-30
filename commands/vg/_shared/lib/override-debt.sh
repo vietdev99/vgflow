@@ -1,4 +1,8 @@
 # shellcheck shell=bash
+# zsh-compat: enable bash-style word-splitting under Claude Code's /bin/zsh.
+# See commands/vg/_shared/lib/zsh-compat.sh.
+[ -n "${ZSH_VERSION:-}" ] && setopt SH_WORD_SPLIT 2>/dev/null
+
 # Override Debt Register — bash function library
 # Companion runtime for: .claude/commands/vg/_shared/override-debt.md
 # Docs (resolution model, entry schema, integration points) live in the .md file.

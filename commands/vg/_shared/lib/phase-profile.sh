@@ -1,4 +1,8 @@
 # shellcheck shell=bash
+# zsh-compat: enable bash-style word-splitting under Claude Code's /bin/zsh.
+# See commands/vg/_shared/lib/zsh-compat.sh.
+[ -n "${ZSH_VERSION:-}" ] && setopt SH_WORD_SPLIT 2>/dev/null
+
 # Phase Profile System — bash function library (v1.9.2 P5)
 # Companion runtime for phase-type detection and per-profile artifact rules.
 #

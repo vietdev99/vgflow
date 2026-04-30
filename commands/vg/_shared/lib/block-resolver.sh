@@ -1,4 +1,8 @@
 # shellcheck shell=bash
+# zsh-compat: enable bash-style word-splitting under Claude Code's /bin/zsh.
+# See commands/vg/_shared/lib/zsh-compat.sh.
+[ -n "${ZSH_VERSION:-}" ] && setopt SH_WORD_SPLIT 2>/dev/null
+
 # Block Resolver — bash function library (v1.9.1 R2+R4)
 # Companion runtime for gate blocks in review / test / build / accept.
 #
