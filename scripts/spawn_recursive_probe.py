@@ -44,6 +44,14 @@ import yaml
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 
+# Task 26c: env_policy lives next to this script. Import it via importlib so we
+# don't depend on a package layout (scripts/ is not a package).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import env_policy  # type: ignore
+except ImportError:
+    env_policy = None  # type: ignore
+
 ELIGIBLE_PROFILES: set[str] = {"feature", "feature-legacy", "hotfix"}
 ELIGIBLE_SURFACES: set[str] = {"ui", "ui-mobile"}
 VISUAL_ONLY_SURFACES: set[str] = {"visual", "visual-only"}
@@ -439,11 +447,39 @@ def _build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--skip-recursive-probe", default=None,
                     metavar="REASON",
                     help="Override reason; logs OVERRIDE-DEBT critical.")
+    ap.add_argument("--target-env",
+                    choices=["local", "sandbox", "staging", "prod"],
+                    default="sandbox",
+                    help="Deploy environment — controls allowed lenses + "
+                         "mutation budget via scripts/env_policy.py.")
+    ap.add_argument("--i-know-this-is-prod", default=None, metavar="REASON",
+                    help="Required when --target-env=prod; logs OVERRIDE-DEBT "
+                         "and bypasses the prod-safety abort.")
+    ap.add_argument("--non-interactive", action="store_true",
+                    help="Skip the stdin prompt for probe-mode (CI mode).")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print the plan as JSON and exit; do not spawn.")
     ap.add_argument("--json", action="store_true",
                     help="Emit machine-readable JSON on stdout.")
     return ap
+
+
+def apply_env_policy(plan: list[dict[str, Any]],
+                      target_env: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Filter plan to lenses allowed in ``target_env`` + cap to mutation budget.
+
+    Returns ``(filtered_plan, policy_dict)``. Policy dict is also useful for
+    surfacing in the JSON payload so callers see what was applied.
+    """
+    if env_policy is None:
+        return plan, {"env": target_env, "applied": False,
+                       "note": "env_policy module unavailable"}
+    policy = env_policy.policy_for(target_env)
+    allowed = policy["allowed_lenses"]
+    kept = [e for e in plan if e["lens"] in allowed]
+    if policy["mutation_budget"] >= 0:
+        kept = kept[: policy["mutation_budget"]]
+    return kept, {**policy, "allowed_lenses": sorted(policy["allowed_lenses"])}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -454,11 +490,30 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"phase dir not found: {phase_dir}\n")
         return 2
 
+    # Prod safety gate (Task 26c). Without --i-know-this-is-prod the run is
+    # refused — operators must opt in explicitly. --skip-recursive-probe is
+    # still honored downstream because that path writes a skip evidence file.
+    if args.target_env == "prod" and not args.i_know_this_is_prod \
+            and not args.skip_recursive_probe:
+        sys.stderr.write(
+            "Refusing prod run without --i-know-this-is-prod=<reason>. "
+            "Pass that flag to opt in (logs OVERRIDE-DEBT) or "
+            "--skip-recursive-probe=<reason> to skip Phase 2b-2.5 outright.\n"
+        )
+        return 2
+
+    if args.target_env == "prod" and args.i_know_this_is_prod:
+        sys.stderr.write(
+            f"OVERRIDE-DEBT critical: --target-env=prod opted in via "
+            f"--i-know-this-is-prod={args.i_know_this_is_prod!r}\n"
+        )
+
     eligibility = check_eligibility(phase_dir, args.skip_recursive_probe)
     payload: dict[str, Any] = {
         "phase_dir": str(phase_dir),
         "mode": args.mode,
         "probe_mode": args.probe_mode,
+        "target_env": args.target_env,
         "eligibility": eligibility,
     }
 
@@ -487,6 +542,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     plan = build_plan(classification, args.mode)
+
+    # Apply env policy (Task 26c) — drop disallowed lenses + clamp to budget.
+    plan, applied_policy = apply_env_policy(plan, args.target_env)
+    payload["env_policy"] = applied_policy
+
     payload["planned_spawns"] = [
         {
             "element_class": entry["element"].get("element_class"),
