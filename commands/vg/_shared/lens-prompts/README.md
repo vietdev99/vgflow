@@ -21,8 +21,16 @@ worker run per `(element × lens × role)` tuple.
   cross-view recursion. The lens stays within the element's local reach
   (sub-modals, sub-buttons, response payloads).
 - DO NOT respec the output schema beyond what `_TEMPLATE.md` already says —
-  the canonical schema lives in
-  `commands/vg/_shared/templates/run-artifact-template.json`.
+  the inline JSON skeleton in `_TEMPLATE.md` ("Run artifact write" section)
+  is the authoritative shape for v3. Note: `templates/run-artifact-template.json`
+  in this repo is the legacy v1 shape (CRUD-roundtrip kit, Phase 2d) — do not
+  reference it for recursive lens probes.
+- **Budget estimation** (no longer scripted, so estimate by recipe):
+  - Recon: 2-3 actions (navigate, snapshot, locate element)
+  - Per probe idea: 2-4 actions (execute + observe + verify)
+  - Slack for dig-on-anomaly: 5-10 actions
+  - Formula: `2 + 4 × probe_ideas_count + 8 ≈ 6N+10` where N = probe ideas count
+  - Round to nearest 5. Typical lens: 30-60 actions.
 
 ## Probe-only contract (HARD CONSTRAINT)
 
@@ -67,8 +75,21 @@ MUST always reference `${OUTPUT_PATH}` rather than hard-coding a path.
 
 ## Reference
 
-- Strix originals: see the `strix_reference` field in each lens frontmatter
-  (`C:/Users/Lionel Messi/AppData/Local/Temp/strix/strix/skills/vulnerabilities/`).
+**Strix references:** Each lens frontmatter has
+`strix_reference: strix/skills/vulnerabilities/<file>.md` (relative path within
+the Strix repo). To consult Strix sources locally:
+
+```bash
+git clone https://github.com/usestrix/strix /tmp/strix
+cat /tmp/strix/strix/skills/vulnerabilities/idor.md
+```
+
+Strix is reference material — not a runtime dependency. Lens authors should
+port concepts (probe ideas, threat model nuances) into VG's exploratory style,
+NOT copy Strix's scripted black-box workflows verbatim.
+
+**Other refs:**
+
 - Design doc: `docs/plans/2026-04-30-v2.40-recursive-lens-probe.md`.
 - Implementation plan: `docs/plans/2026-04-30-v2.40-implementation.md` (Tasks
   8-21 cover the template + 14 lens files).
