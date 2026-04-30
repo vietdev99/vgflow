@@ -145,3 +145,21 @@ def test_file_upload_lens_specific():
     assert fm["name"] == "lens-file-upload"
     assert fm["bug_class"] == "injection"
     assert "file_upload" in fm["applies_to_element_classes"]
+
+
+def test_auth_jwt_lens_specific():
+    """lens-auth-jwt.md must use auth bug class and apply to mutation_button."""
+    lens = LENS_DIR / "lens-auth-jwt.md"
+    fm = parse_frontmatter(lens.read_text(encoding="utf-8"))
+    assert fm["name"] == "lens-auth-jwt"
+    assert fm["bug_class"] == "auth"
+    assert "mutation_button" in fm["applies_to_element_classes"]
+
+
+def test_csrf_lens_specific():
+    """lens-csrf.md must use auth bug class and apply to mutation_button."""
+    lens = LENS_DIR / "lens-csrf.md"
+    fm = parse_frontmatter(lens.read_text(encoding="utf-8"))
+    assert fm["name"] == "lens-csrf"
+    assert fm["bug_class"] == "auth"
+    assert "mutation_button" in fm["applies_to_element_classes"]
