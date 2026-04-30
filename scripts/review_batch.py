@@ -35,6 +35,8 @@ import datetime as _dt
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +44,56 @@ from typing import Any
 
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+
+
+def resolve_review_cmd() -> list[str]:
+    """Resolve the per-phase /vg:review entry command.
+
+    Resolution priority (first match wins):
+      1. ``VG_REVIEW_CMD`` env var — explicit override (tests/CI). When the
+         value is a single token that resolves to an existing file, treat it
+         as a script path and prepend ``sys.executable``. Otherwise pass the
+         tokens verbatim (shlex-split) so callers can inject e.g.
+         ``"node my-shim.js"``.
+      2. ``claude`` CLI on PATH — invoke ``/vg:review`` slash command.
+      3. ``python -m vg.review`` — only if the ``vg.review`` module imports
+         (canonical install).
+      4. Hard-fail with an actionable error message — the previous silent
+         ``ModuleNotFoundError`` from production users prompted this whole
+         multi-fallback chain.
+    """
+    override = os.environ.get("VG_REVIEW_CMD")
+    if override:
+        # Fast-path: if the entire env value is an existing file (handles
+        # paths with spaces, especially on Windows where shlex POSIX mode
+        # mangles backslashes), treat it as a single script path.
+        if Path(override).is_file():
+            return [sys.executable, override]
+        # Otherwise shlex-split (POSIX mode) so callers can compose multi-token
+        # commands like ``"node my-shim.js --quiet"``.
+        tokens = shlex.split(override, posix=(os.name != "nt"))
+        if len(tokens) == 1 and Path(tokens[0]).is_file():
+            return [sys.executable, tokens[0]]
+        return tokens
+
+    if shutil.which("claude"):
+        return ["claude", "-p", "/vg:review"]
+
+    try:
+        import importlib.util  # local import — keeps module-load fast
+        if importlib.util.find_spec("vg.review") is not None:
+            return [sys.executable, "-m", "vg.review"]
+    except (ImportError, ValueError):
+        pass
+
+    raise SystemExit(
+        "⛔ Cannot resolve /vg:review entry command.\n"
+        "   Tried (in priority order):\n"
+        "     1. VG_REVIEW_CMD env var          — not set\n"
+        "     2. `claude` CLI on PATH           — not found\n"
+        "     3. `python -m vg.review` module   — not importable\n"
+        "   Fix: install Claude CLI, or set VG_REVIEW_CMD to a script path.\n"
+    )
 
 
 def _resolve_phases_explicit(spec: str) -> list[str]:
@@ -87,14 +139,8 @@ def _resolve_phases_since(repo: Path, sha: str) -> list[str]:
 
 
 def _per_phase_cmd(phase: str, args: argparse.Namespace) -> list[str]:
-    """Build the per-phase command. VG_REVIEW_CMD env wins for tests."""
-    override = os.environ.get("VG_REVIEW_CMD")
-    if override:
-        cmd = [sys.executable, override]
-    else:
-        # Production entry — assume the harness exposes ``python -m vg.review``.
-        # Phase Tasks 26e wires this via /vg:review-batch command file.
-        cmd = [sys.executable, "-m", "vg.review"]
+    """Build the per-phase command. Multi-fallback per resolve_review_cmd()."""
+    cmd = list(resolve_review_cmd())
     cmd += ["--phase", str(phase)]
     if args.recursion:
         cmd += ["--recursion", args.recursion]

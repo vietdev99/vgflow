@@ -114,6 +114,69 @@ def test_aggregate_findings_path(tmp_path: Path) -> None:
     assert payload["phases"][0]["phase"] == "1"
 
 
+def test_review_cmd_uses_env_var_first(tmp_path: Path, monkeypatch) -> None:
+    """VG_REVIEW_CMD env var wins outright — even when claude CLI is on PATH."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("review_batch_mod", SCRIPT)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    fake_script = tmp_path / "fake_review.py"
+    fake_script.write_text("# fake\n", encoding="utf-8")
+    monkeypatch.setenv("VG_REVIEW_CMD", str(fake_script))
+    # Even if claude is "available", env var should win.
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/claude")
+    cmd = mod.resolve_review_cmd()
+    assert cmd == [sys.executable, str(fake_script)]
+
+
+def test_review_cmd_falls_back_to_claude_cli(tmp_path: Path, monkeypatch) -> None:
+    """No env var → look for `claude` on PATH → emit ['claude', '-p', '/vg:review']."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("review_batch_mod", SCRIPT)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    monkeypatch.delenv("VG_REVIEW_CMD", raising=False)
+    monkeypatch.setattr(mod.shutil, "which",
+                        lambda name: "/usr/bin/claude" if name == "claude" else None)
+    cmd = mod.resolve_review_cmd()
+    assert cmd == ["claude", "-p", "/vg:review"]
+
+
+def test_review_cmd_hard_fails_when_nothing_resolved(monkeypatch) -> None:
+    """No env var, no claude CLI, no vg.review module → SystemExit with helpful msg."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("review_batch_mod", SCRIPT)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    monkeypatch.delenv("VG_REVIEW_CMD", raising=False)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    # Force the vg.review import probe to fail.
+    import importlib.util as _real_ilu
+    monkeypatch.setattr(_real_ilu, "find_spec", lambda name: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.resolve_review_cmd()
+    msg = str(excinfo.value)
+    assert "Cannot resolve" in msg
+    assert "VG_REVIEW_CMD" in msg
+    assert "claude" in msg
+
+
+def test_review_cmd_env_var_with_args(tmp_path: Path, monkeypatch) -> None:
+    """Env var with multi-token value (e.g. wrapper + flags) is shlex-split verbatim."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("review_batch_mod", SCRIPT)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    monkeypatch.setenv("VG_REVIEW_CMD", "node my-shim.js --quiet")
+    cmd = mod.resolve_review_cmd()
+    assert cmd == ["node", "my-shim.js", "--quiet"]
+
+
 def test_milestone_resolution(tmp_path: Path) -> None:
     """--milestone reads ROADMAP.md to enumerate phases."""
     repo = _seed_phases(tmp_path, ["7", "8", "9"])
