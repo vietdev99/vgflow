@@ -47,6 +47,14 @@ runtime_contract:
       phase: "${PHASE_NUMBER}"
     - event_type: "roam.analysis.completed"
       phase: "${PHASE_NUMBER}"
+    # v2.42.9 hard gates — prove interactive prompts actually fired
+    # (skip with --non-interactive only). Harness blocks run if missing.
+    - event_type: "roam.resume_mode_chosen"
+      phase: "${PHASE_NUMBER}"
+      required_unless_flag: "--non-interactive"
+    - event_type: "roam.config_confirmed"
+      phase: "${PHASE_NUMBER}"
+      required_unless_flag: "--non-interactive"
   forbidden_without_override:
     - "--override-reason"
 ---
@@ -112,6 +120,25 @@ EXISTING_CONFIG="${ROAM_DIR}/ROAM-CONFIG.json"
 HAS_RUN_BEFORE=false
 [ -f "$EXISTING_CONFIG" ] && HAS_RUN_BEFORE=true
 
+# v2.42.9 — LEGACY state detection. Pre-v2.42.6 runs didn't write
+# ROAM-CONFIG.json, but artifacts (RAW-LOG.jsonl, SURFACES.md, INSTRUCTION-*,
+# observe-*) still exist. Without this, the resume prompt silently skips
+# and a re-invocation overwrites prior work or treats stale state as fresh.
+if [ "$HAS_RUN_BEFORE" = false ]; then
+  for legacy in "${ROAM_DIR}/RAW-LOG.jsonl" "${ROAM_DIR}/SURFACES.md" "${ROAM_DIR}/ROAM-BUGS.md"; do
+    [ -f "$legacy" ] && HAS_RUN_BEFORE=true && break
+  done
+  if [ "$HAS_RUN_BEFORE" = false ]; then
+    [ -n "$(find "$ROAM_DIR" -maxdepth 3 -name 'INSTRUCTION-*.md' -print -quit 2>/dev/null)" ] && HAS_RUN_BEFORE=true
+    [ -n "$(find "$ROAM_DIR" -maxdepth 3 -name 'observe-*.jsonl' -print -quit 2>/dev/null)" ] && HAS_RUN_BEFORE=true
+  fi
+  if [ "$HAS_RUN_BEFORE" = true ] && [ ! -f "$EXISTING_CONFIG" ]; then
+    echo "▸ LEGACY roam state detected (no ROAM-CONFIG.json, artifacts present)"
+    echo "   Treating as prior run — resume prompt will fire. AI must NOT silently"
+    echo "   overwrite or backfill config without user confirmation."
+  fi
+fi
+
 # CLI flag overrides — skip AskUserQuestion when explicit
 ROAM_RESUME_MODE="fresh"
 if [[ "$ARGUMENTS" =~ --force ]]; then
@@ -166,20 +193,19 @@ case "$ROAM_RESUME_MODE" in
     ROAM_RESUME_MODE="fresh"  # downstream treats as fresh after wipe
     ;;
   resume|aggregate-only)
-    echo "▸ Resume mode: ${ROAM_RESUME_MODE} — loading saved config from ROAM-CONFIG.json"
-    # Reload env/model/mode from saved config (skip 0a AskUserQuestion)
-    ROAM_ENV=$(${PYTHON_BIN:-python3} -c "import json; print(json.load(open('$EXISTING_CONFIG')).get('env',''))" 2>/dev/null)
-    ROAM_MODEL=$(${PYTHON_BIN:-python3} -c "import json; print(json.load(open('$EXISTING_CONFIG')).get('model',''))" 2>/dev/null)
-    ROAM_MODE=$(${PYTHON_BIN:-python3} -c "import json; print(json.load(open('$EXISTING_CONFIG')).get('mode',''))" 2>/dev/null)
-    ROAM_TARGET_URL=$(${PYTHON_BIN:-python3} -c "import json; print(json.load(open('$EXISTING_CONFIG')).get('target_url',''))" 2>/dev/null)
-    if [ "$ROAM_MODEL" = "council" ]; then
-      ROAM_MODEL_DIRS=("${ROAM_DIR}/codex" "${ROAM_DIR}/gemini")
-    else
-      ROAM_MODEL_DIRS=("${ROAM_DIR}/${ROAM_MODEL}")
-    fi
-    export ROAM_ENV ROAM_MODEL ROAM_MODE ROAM_TARGET_URL
+    # v2.42.10 — load prior config as PRE-FILL ONLY. Step 0a will STILL fire
+    # its 3-question batch and use these as Recommended defaults. Silent
+    # load was a footgun: user often wanted to switch env/model/mode mid-run
+    # but resume mode locked them in. Now: prior config informs pre-fill,
+    # user always confirms.
+    echo "▸ Resume mode: ${ROAM_RESUME_MODE} — loading PRIOR config as pre-fill (step 0a will still ask)"
+    ROAM_PRIOR_ENV=$(${PYTHON_BIN:-python3} -c "import json; print(json.load(open('$EXISTING_CONFIG')).get('env',''))" 2>/dev/null)
+    ROAM_PRIOR_MODEL=$(${PYTHON_BIN:-python3} -c "import json; print(json.load(open('$EXISTING_CONFIG')).get('model',''))" 2>/dev/null)
+    ROAM_PRIOR_MODE=$(${PYTHON_BIN:-python3} -c "import json; print(json.load(open('$EXISTING_CONFIG')).get('mode',''))" 2>/dev/null)
+    export ROAM_PRIOR_ENV ROAM_PRIOR_MODEL ROAM_PRIOR_MODE
     export ROAM_RESUME_MODE
-    echo "  env=${ROAM_ENV} model=${ROAM_MODEL} mode=${ROAM_MODE}"
+    echo "  prior: env=${ROAM_PRIOR_ENV} model=${ROAM_PRIOR_MODEL} mode=${ROAM_PRIOR_MODE}"
+    echo "  → step 0a will fire 3-question batch with these as Recommended defaults"
     ;;
   fresh)
     : # default — proceed to 0a AskUserQuestion normally
@@ -187,10 +213,22 @@ case "$ROAM_RESUME_MODE" in
 esac
 
 export ROAM_RESUME_MODE
+
+# v2.42.9 HARD GATE: write resume-mode marker + emit telemetry. Step 1 entry
+# refuses to proceed unless this marker exists (or --non-interactive set).
+# Prevents AI from silently skipping the 4-option AskUserQuestion above.
+mkdir -p "${ROAM_DIR}/.tmp"
+echo "$(date +%s)|${ROAM_RESUME_MODE}" > "${ROAM_DIR}/.tmp/0aa-confirmed.marker"
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "roam.resume_mode_chosen" \
+  --actor "user" --outcome "INFO" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mode\":\"${ROAM_RESUME_MODE}\",\"had_prior_state\":${HAS_RUN_BEFORE}}" 2>/dev/null || true
+
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0aa_resume_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0aa_resume_check.done"
 ```
 
-**Step 0a behavior under resume:** If `$ROAM_RESUME_MODE ∈ {resume, aggregate-only}`, the env+model+mode AskUserQuestion is SKIPPED (config already loaded). Step 0a only fires its 3-question batch when `$ROAM_RESUME_MODE = fresh`.
+**Step 0a behavior under resume (v2.42.10):** Step 0a ALWAYS fires its 3-question batch, regardless of `$ROAM_RESUME_MODE`. Under resume, prior values are loaded as `ROAM_PRIOR_ENV/MODEL/MODE` and used as pre-fill (Recommended option in each question), but user must confirm. Silent skip was the v2.42.6-9 footgun: users wanted to change env mid-run but resume locked them in.
 
 **Subsequent steps under resume:** each step checks `$ROAM_RESUME_MODE`:
 
@@ -203,7 +241,7 @@ export ROAM_RESUME_MODE
 <step name="0a_env_model_mode_gate">
 ## Step 0a — env + model + mode gate (interactive, HARD gate)
 
-**Skip this entire step when** `$ROAM_RESUME_MODE ∈ {resume, aggregate-only}` — step 0aa already loaded env/model/mode from saved ROAM-CONFIG.json. Only fire AskUserQuestion when `$ROAM_RESUME_MODE = fresh`.
+**v2.42.10 — ALWAYS fires regardless of resume mode.** Prior runs (resume / aggregate-only) populate `ROAM_PRIOR_ENV/MODEL/MODE` which are surfaced as Recommended pre-fills in each question, but the user must still confirm. Removing this prompt under resume was the v2.42.6-9 footgun: users wanted to switch env/model/mode mid-stream but resume locked them in to the prior choice silently.
 
 **MANDATORY FIRST ACTION** of this step (before ANY other tool call) — invoke `AskUserQuestion` with the 3-question payload below to lock down where roam runs, which CLI executes, and whether to spawn or generate paste prompts.
 
@@ -211,6 +249,8 @@ export ROAM_RESUME_MODE
 - `${ARGUMENTS}` contains `--non-interactive`, OR
 - `VG_NON_INTERACTIVE=1`, OR
 - `${ARGUMENTS}` contains ALL THREE: `--target-env=<v>` (or `--local`/`--sandbox`/`--staging`/`--prod`), `--model=<v>`, AND `--mode=<v>`
+
+When pre-fills exist (resume mode), the AI MUST tag the matching option's label with " (Recommended — prior run)" so the user sees what was chosen last time. Order options so the prior choice appears first.
 
 ### Pre-prompt 1 — backfill `preferred_env_for` if scope ran before step 1b existed (v2.42.7+)
 
@@ -304,6 +344,85 @@ p.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 fi
 ```
 
+### Pre-prompt 1.5 — platform + tool availability check (v2.42.11)
+
+Roam shouldn't blindly assume web + codex CLI. Detect what platform the
+phase targets (web / mobile-native / desktop / api-only) from CONTEXT.md
++ surfaces. Check which executor tools are present. Filter the mode
+options below by availability — don't offer modes that will fail.
+
+```bash
+# Platform detection — heuristic from phase artifacts
+ROAM_PLATFORM="web"
+if [ -f "${PHASE_DIR}/CONTEXT.md" ]; then
+  CONTEXT_LOWER=$(tr '[:upper:]' '[:lower:]' < "${PHASE_DIR}/CONTEXT.md" 2>/dev/null)
+  echo "$CONTEXT_LOWER" | grep -qE 'react native|flutter|android sdk|ios simulator|maestro' && ROAM_PLATFORM="mobile-native"
+  echo "$CONTEXT_LOWER" | grep -qE 'electron|tauri|desktop app' && ROAM_PLATFORM="desktop"
+  if echo "$CONTEXT_LOWER" | grep -qE 'api[ -]only|backend[ -]only|no ui|server[ -]only|webhook'; then
+    if ! echo "$CONTEXT_LOWER" | grep -qE 'admin (ui|panel|dashboard)|merchant (ui|app)|vendor (ui|app)'; then
+      ROAM_PLATFORM="api-only"
+    fi
+  fi
+fi
+export ROAM_PLATFORM
+
+# Tool availability
+TOOL_PLAYWRIGHT_MCP="missing"
+grep -qE '"mcp__playwright[1-5]?__' .claude/settings.json .claude/settings.local.json 2>/dev/null && TOOL_PLAYWRIGHT_MCP="present"
+[ -f ~/.claude/settings.json ] && grep -q 'playwright' ~/.claude/settings.json 2>/dev/null && TOOL_PLAYWRIGHT_MCP="present"
+TOOL_MAESTRO=$(command -v maestro >/dev/null 2>&1 && echo "present" || echo "missing")
+TOOL_ADB=$(command -v adb >/dev/null 2>&1 && echo "present" || echo "missing")
+TOOL_CODEX=$(command -v codex >/dev/null 2>&1 && echo "present" || echo "missing")
+TOOL_GEMINI=$(command -v gemini >/dev/null 2>&1 && echo "present" || echo "missing")
+export TOOL_PLAYWRIGHT_MCP TOOL_MAESTRO TOOL_ADB TOOL_CODEX TOOL_GEMINI
+
+# Mode availability matrix per platform + tools
+declare -a MODES_AVAIL
+case "$ROAM_PLATFORM" in
+  web)
+    [ "$TOOL_PLAYWRIGHT_MCP" = "present" ] && MODES_AVAIL+=("self")
+    { [ "$TOOL_CODEX" = "present" ] || [ "$TOOL_GEMINI" = "present" ]; } && MODES_AVAIL+=("spawn")
+    MODES_AVAIL+=("manual")  # always available — user pastes elsewhere
+    ;;
+  mobile-native)
+    if [ "$TOOL_MAESTRO" = "present" ] && [ "$TOOL_ADB" = "present" ]; then
+      MODES_AVAIL+=("spawn-mobile")
+    fi
+    MODES_AVAIL+=("manual")
+    ;;
+  desktop|api-only)
+    [ "$TOOL_PLAYWRIGHT_MCP" = "present" ] && MODES_AVAIL+=("self")
+    MODES_AVAIL+=("manual")
+    ;;
+esac
+
+echo "▸ Platform: ${ROAM_PLATFORM}"
+echo "  Tools: playwright_mcp=${TOOL_PLAYWRIGHT_MCP} codex=${TOOL_CODEX} gemini=${TOOL_GEMINI} maestro=${TOOL_MAESTRO} adb=${TOOL_ADB}"
+echo "  Available modes: ${MODES_AVAIL[*]:-NONE}"
+
+if [ ${#MODES_AVAIL[@]} -eq 0 ]; then
+  echo ""
+  echo "⛔ No executor mode available for platform=${ROAM_PLATFORM} with current tools."
+  case "$ROAM_PLATFORM" in
+    mobile-native)
+      echo "   Run /vg:setup-mobile to install adb + Maestro + Android SDK + AVD."
+      ;;
+    *)
+      echo "   Install at least one of: codex CLI, gemini CLI, or enable Playwright MCP servers."
+      ;;
+  esac
+  exit 1
+fi
+
+# Persist for downstream use (mode question filtering, brief composer)
+echo "$ROAM_PLATFORM" > "${ROAM_DIR}/.tmp/platform.txt"
+printf '%s\n' "${MODES_AVAIL[@]}" > "${ROAM_DIR}/.tmp/modes-avail.txt"
+```
+
+When building the **mode question** (Q3 below), AI MUST read `.tmp/modes-avail.txt` and ONLY include the modes listed there. Do not present "self" if Playwright MCP is missing; do not present "spawn" if codex/gemini missing. If `manual` is the only available mode, still present the question (for user awareness) but mark it Recommended.
+
+When platform = `mobile-native` and Maestro/adb missing, AI MUST surface the `/vg:setup-mobile` install suggestion via AskUserQuestion BEFORE the env+model+mode batch (give user choice: install now / abort / fall back to manual).
+
 ### Pre-prompt 2 — enrich env options from DEPLOY-STATE (B2 wiring, v2.42.5+)
 
 After backfill (or if skipped), run the helper to read DEPLOY-STATE +
@@ -366,14 +485,19 @@ questions:
         description: "UI consistency + a11y mạnh, cùng giá. Output dir: roam/gemini/."
       - label: "Council (cả Codex + Gemini song song)"
         description: "Ship-critical phase only — 2× cost, 2 perspectives. Output dirs: roam/codex/ + roam/gemini/."
-  - question: "Mode — spawn tự động hay manual paste prompt?"
+  - question: "Mode — ai chạy executor?"
     header: "Mode"
     multiSelect: false
     options:
-      - label: "spawn — VG tự subprocess + capture stdout"
-        description: "Hands-off, tự chạy + tự gom log. Cần CLI authenticated trên máy này."
+      # ⚠ AI MUST filter by .tmp/modes-avail.txt — only show options for which
+      # tooling exists. Order: self first if available (cheapest, no subprocess),
+      # then spawn, then manual.
+      - label: "self — current Claude session là executor (Recommended cho web + MCP Playwright)"
+        description: "AI session hiện tại điều khiển Playwright MCP trực tiếp. Không subprocess, không Chromium permission. Login + protocol thực hiện trong session. Output JSONL drop vào model dir. Phù hợp web platform khi MCP Playwright sẵn."
+      - label: "spawn — VG tự subprocess CLI executor"
+        description: "Cần codex hoặc gemini CLI authenticated. AI bị chặn nếu CLI không có. Risk macOS XPC permission cho Chromium binary. Output dir: roam/{model}/."
       - label: "manual — VG sinh INSTRUCTION.md + PASTE-PROMPT.md"
-        description: "Copy đoạn paste-prompt sang CLI khác (Claude Code, Codex, Cursor, web ChatGPT, etc.). Tự chạy, drop JSONL về dir đã chỉ, VG verify."
+        description: "Copy đoạn paste-prompt sang CLI khác (Codex desktop, Cursor, web ChatGPT). User tự chạy, drop JSONL về dir đã chỉ, VG verify khi user signal continue."
 ```
 
 ### After answers (or CLI overrides), persist + branch
@@ -396,7 +520,7 @@ if [[ "$ARGUMENTS" =~ --mode=([a-z]+) ]]; then ROAM_MODE="${BASH_REMATCH[1]}"; f
 # Validate
 case "$ROAM_ENV" in local|sandbox|staging|prod) ;; *) echo "⛔ invalid env '$ROAM_ENV'"; exit 1 ;; esac
 case "$ROAM_MODEL" in codex|gemini|council) ;; *) echo "⛔ invalid model '$ROAM_MODEL'"; exit 1 ;; esac
-case "$ROAM_MODE" in spawn|manual) ;; *) echo "⛔ invalid mode '$ROAM_MODE'"; exit 1 ;; esac
+case "$ROAM_MODE" in self|spawn|manual) ;; *) echo "⛔ invalid mode '$ROAM_MODE' (allowed: self|spawn|manual)"; exit 1 ;; esac
 
 export ROAM_ENV ROAM_MODEL ROAM_MODE
 
@@ -459,6 +583,12 @@ ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
   --actor "orchestrator" --outcome "INFO" \
   --payload "{\"env\":\"${ROAM_ENV}\",\"model\":\"${ROAM_MODEL}\",\"mode\":\"${ROAM_MODE}\"}" 2>/dev/null || true
 
+# v2.42.9 HARD GATE: write env/model/mode marker. Step 1 entry refuses to
+# proceed unless this marker exists (or --non-interactive set). Marker
+# value embeds env+model+mode so downstream gates can verify non-empty.
+mkdir -p "${ROAM_DIR}/.tmp"
+echo "$(date +%s)|${ROAM_ENV}|${ROAM_MODEL}|${ROAM_MODE}" > "${ROAM_DIR}/.tmp/0a-confirmed.marker"
+
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0a_env_model_mode_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0a_env_model_mode_gate.done"
 ```
 </step>
@@ -469,6 +599,50 @@ ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
 Read PLAN.md + CONTEXT.md + RUNTIME-MAP.md (from /vg:review). Identify CRUD-bearing surfaces. Annotate each with URL, role, entity, expected operations.
 
 ```bash
+# v2.42.9 HARD GATE — refuse step 1 entry unless prior interactive prompts
+# fired this run. Closes silent-skip path: AI cannot bypass 0aa+0a question
+# batches and proceed to discover/compose/spawn. Bypass requires explicit
+# --non-interactive (logged as override-debt by harness via runtime_contract).
+RUN_MARK_DIR="${ROAM_DIR}/.tmp"
+if [[ ! "$ARGUMENTS" =~ --non-interactive ]]; then
+  for marker in 0aa-confirmed.marker 0a-confirmed.marker; do
+    f="${RUN_MARK_DIR}/${marker}"
+    if [ ! -f "$f" ]; then
+      # 0aa marker may legitimately be missing on first run (no prior state →
+      # 0aa skipped its 4-option prompt). Allow only if EXISTING_CONFIG was
+      # absent at 0aa entry AND no legacy artifacts triggered HAS_RUN_BEFORE.
+      if [ "$marker" = "0aa-confirmed.marker" ] && [ "${HAS_RUN_BEFORE:-false}" = "false" ]; then
+        continue
+      fi
+      echo "⛔ HARD GATE BREACH (v2.42.9): step 1 entered without ${marker}"
+      echo "   Prior interactive gate (0aa or 0a) did NOT fire its AskUserQuestion this run."
+      echo "   AI must invoke AskUserQuestion per skill spec — silent skip not permitted."
+      echo "   Override (NOT recommended, debt-logged): re-run with --non-interactive + explicit"
+      echo "   flags (--target-env=X --model=Y --mode=Z) to skip prompts intentionally."
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+        "roam.gate_breach" --actor "orchestrator" --outcome "FAIL" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"missing_marker\":\"${marker}\"}" 2>/dev/null || true
+      exit 1
+    fi
+    # Stale marker — must be from THIS run (< 30 min old)
+    AGE=$(( $(date +%s) - $(awk -F'|' '{print $1}' "$f" 2>/dev/null || echo 0) ))
+    if [ "$AGE" -gt 1800 ]; then
+      echo "⛔ HARD GATE BREACH: ${marker} stale (${AGE}s old)"
+      echo "   Marker must be written THIS run, not reused from prior session."
+      echo "   Delete ${RUN_MARK_DIR}/ and re-invoke /vg:roam to refire prompts."
+      exit 1
+    fi
+  done
+  # Sanity: env/model/mode resolved to non-empty values (catches AI writing
+  # marker but leaving vars empty)
+  if [ -z "${ROAM_ENV:-}" ] || [ -z "${ROAM_MODEL:-}" ] || [ -z "${ROAM_MODE:-}" ]; then
+    echo "⛔ HARD GATE BREACH: marker present but ROAM_ENV/MODEL/MODE empty"
+    echo "   env='${ROAM_ENV:-}' model='${ROAM_MODEL:-}' mode='${ROAM_MODE:-}'"
+    echo "   Step 0a did not actually resolve the 3-question batch."
+    exit 1
+  fi
+fi
+
 # Resume guard (v2.42.6+): skip when aggregate-only mode, OR when resuming + SURFACES.md already exists
 if [ "${ROAM_RESUME_MODE:-fresh}" = "aggregate-only" ]; then
   echo "▸ aggregate-only mode — skipping step 1 (discover_surfaces)"
@@ -598,7 +772,32 @@ print(f'{brief_count * 0.08:.2f}')
 SOFT_CAP=${VG_MAX_COST_USD:-10}
 if [[ "$ARGUMENTS" =~ --max-cost-usd=([0-9.]+) ]]; then SOFT_CAP="${BASH_REMATCH[1]}"; fi
 
-if [ "$ROAM_MODE" = "spawn" ]; then
+if [ "$ROAM_MODE" = "self" ]; then
+  # v2.42.11 — current Claude session is the executor via MCP Playwright.
+  # No subprocess, no Chromium permission issue, login works because the
+  # current model is authed via the MCP servers. Sequential per-brief.
+  echo "▸ Self mode — current Claude session executes ${BRIEF_COUNT} brief(s) via MCP Playwright"
+  echo ""
+  echo "AI INSTRUCTIONS (verbatim — follow exactly):"
+  echo "  1. For each INSTRUCTION-*.md in ${ROAM_MODEL_DIRS[*]} (lexical order):"
+  echo "     a. Skip if observe-{surface}-{lens}.jsonl already exists with ≥1 line."
+  echo "     b. Read the brief's Pre-flight section. Login FIRST via mcp__playwright1__browser_navigate"
+  echo "        to login URL, mcp__playwright1__browser_fill_form with creds, submit, wait."
+  echo "     c. Emit login confirmation event (JSON, single line) into observe file."
+  echo "     d. Run lens protocol steps verbatim using mcp__playwright[1-5]__browser_* tools."
+  echo "     e. Emit one JSON line per step. Each line MUST be valid JSON (no markdown)."
+  echo "     f. Final event: {\"surface\":\"S##\",\"step\":\"complete\",\"total_events\":N}"
+  echo "  2. After all briefs done, fall through to step 4 aggregate."
+  echo ""
+  echo "  Bound: ~3-5 min per brief × 19 briefs / parallel cap 1 (Playwright lock) = ~60-90 min."
+  echo "  Per-brief skip handled by AI checking observe-*.jsonl existence before login."
+
+  # Sanity ping: verify Playwright MCP responds
+  if ! grep -q 'mcp__playwright' .claude/settings.json .claude/settings.local.json 2>/dev/null; then
+    echo "  ⚠ Could not detect Playwright MCP in settings.json — AI may need to fall back to manual."
+  fi
+
+elif [ "$ROAM_MODE" = "spawn" ]; then
   echo "▸ Spawn mode — estimated cost: \$${EST_USD} (soft cap: \$${SOFT_CAP})"
   if (( $(echo "$EST_USD > $SOFT_CAP" | bc -l 2>/dev/null) )); then
     [[ ! "$ARGUMENTS" =~ --non-interactive ]] && echo "⚠ Cost > soft cap — confirm via AskUserQuestion before proceeding."
