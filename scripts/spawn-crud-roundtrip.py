@@ -126,7 +126,8 @@ def build_worker_prompt(kit_text: str, resource: dict, role: str, role_token: di
     )
 
 
-def spawn_worker(prompt: str, model: str, mcp_server: str, timeout: int) -> dict:
+def spawn_worker(prompt: str, model: str, mcp_server: str, timeout: int,
+                 debug_log_path: Path | None = None) -> dict:
     cmd = [
         "gemini",
         "-p", prompt,
@@ -137,6 +138,14 @@ def spawn_worker(prompt: str, model: str, mcp_server: str, timeout: int) -> dict
     started = time.time()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if debug_log_path:
+            debug_log_path.write_text(
+                f"=== CMD ===\n{' '.join(cmd[:5])} [PROMPT REDACTED {len(prompt)} chars]\n"
+                f"=== EXIT {result.returncode} duration={round(time.time()-started,1)}s ===\n"
+                f"=== STDOUT (full, {len(result.stdout)} chars) ===\n{result.stdout}\n"
+                f"=== STDERR (full, {len(result.stderr)} chars) ===\n{result.stderr}\n",
+                encoding="utf-8",
+            )
         return {
             "exit_code": result.returncode,
             "stdout_tail": (result.stdout or "")[-2000:],
@@ -166,6 +175,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--debug", action="store_true",
+                    help="Capture full stdout/stderr + resolved prompt to runs/.debug-{run_id}.log")
     args = ap.parse_args()
 
     phase_dir = Path(args.phase_dir).resolve()
@@ -173,9 +184,15 @@ def main() -> int:
         print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
         return 2
 
+    if args.debug:
+        print("DEBUG MODE active — would write logs to runs/.debug-*.log")
+
     surfaces = load_crud_surfaces(phase_dir)
     resources = surfaces.get("resources") or []
     if not resources:
+        if args.dry_run:
+            print(f"  (no resources declared in {phase_dir}/CRUD-SURFACES.md)")
+            return 0
         print(f"⛔ No resources in {phase_dir}/CRUD-SURFACES.md", file=sys.stderr)
         return 1
 
@@ -238,7 +255,8 @@ def main() -> int:
         )
 
         spawn_started = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        spawn_result = spawn_worker(prompt, args.model, args.mcp_server, args.timeout)
+        debug_path = (runs_dir / f".debug-{run_id}.log") if args.debug else None
+        spawn_result = spawn_worker(prompt, args.model, args.mcp_server, args.timeout, debug_path)
         spawn_completed = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         artifact_present = Path(output_path).is_file()
