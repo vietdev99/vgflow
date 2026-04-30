@@ -458,6 +458,26 @@ review:
     concurrency: 5
     timeout_seconds: 5
 
+  # ── v2.39.0 Contract completeness gate (closes Codex critique #1) ──
+  # Diffs runtime/code inventory against CRUD-SURFACES.md. Flags hidden
+  # routes, undeclared resources, background jobs, webhooks not in contract.
+  contract_completeness:
+    severity: "warn"                    # warn first release for dogfood; promote to block
+
+  # ── v2.39.0 Env contract preflight (closes Codex critique #6) ─────
+  # Required artifact ENV-CONTRACT.md with preflight_checks. Verifies
+  # app reachable + seed data + login works BEFORE worker spawn.
+  env_contract:
+    severity: "block"                   # mandatory for kit:crud-roundtrip / approval-flow / bulk-action
+    timeout_seconds: 10
+
+  # ── v2.39.0 Manager adversarial challenge (closes Codex critique #7) ──
+  # Samples N% of run artifacts post-findings, downgrades pass-with-empty-
+  # evidence steps. Catches "artifact-driven theater" pattern.
+  challenge:
+    sample_rate: 25                     # percent of runs to challenge (1-100)
+    severity: "warn"                    # warn first release; promote to block after dogfood
+
 # === Design System (v1.10.0 R4 — NEW) ==========================
 # Integrates getdesign.md ecosystem DESIGN.md (58 brand variants: Stripe,
 # Linear, Vercel, Apple, Ferrari, BMW, Claude, Cursor, ...).

@@ -30,6 +30,15 @@ Rules:
       "name": "Campaign",
       "domain_owner": "Marketing",
       "operations": ["list", "detail", "create", "update", "delete"],
+      "scope": "owner-only",
+      "expected_behavior": {
+        "object_level": {
+          "cross_owner_read": "403",
+          "cross_tenant_read": "403",
+          "cross_owner_mutation": "403",
+          "state_lock": {"archived": "read-only", "published": "editable"}
+        }
+      },
       "base": {
         "roles": ["admin", "advertiser"],
         "business_flow": {

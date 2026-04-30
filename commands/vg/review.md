@@ -2778,6 +2778,55 @@ fi
 ```
 </step>
 
+<step name="phase2c_pre_dispatch_gates" profile="web-fullstack,web-frontend-only">
+## Phase 2c-pre — Contract completeness + env preflight (v2.39.0+)
+
+Two pre-dispatch gates close Codex critiques #1 (contract validity not gated) + #6 (env state implicit):
+
+1. `verify-contract-completeness.py` diffs runtime/code inventory against CRUD-SURFACES.md declared resources. Flags hidden routes, undeclared resources, background jobs, webhooks.
+2. `verify-env-contract.py` reads ENV-CONTRACT.md preflight_checks and verifies each (app reachable, seed data present, login works).
+
+If contract incomplete OR env preflight fails → review aborts BEFORE spawning expensive workers (Gemini Flash workers can run $0.30-1.00 per phase; aborting pre-spawn saves token cost when env is broken).
+
+```bash
+echo ""
+echo "━━━ Phase 2c-pre — Contract completeness + env preflight ━━━"
+
+# Contract completeness gate (severity warn first release for dogfood)
+COMPLETE_SEV=$(vg_config_get "review.contract_completeness.severity" "warn" 2>/dev/null || echo "warn")
+${PYTHON_BIN:-python3} .claude/scripts/verify-contract-completeness.py \
+  --phase-dir "$PHASE_DIR" \
+  --code-root "${REPO_ROOT}" \
+  --severity "$COMPLETE_SEV"
+COMPLETE_RC=$?
+if [ "$COMPLETE_RC" -ne 0 ] && [ "$COMPLETE_SEV" = "block" ]; then
+  echo "⛔ Contract completeness BLOCK — see CONTRACT-COMPLETENESS.json"
+  exit 1
+fi
+
+# Env contract preflight (mandatory if any kit:crud-roundtrip declared, optional for kit:static-sast)
+if grep -q '"kit"\s*:\s*"crud-roundtrip"\|"kit"\s*:\s*"approval-flow"\|"kit"\s*:\s*"bulk-action"' "${PHASE_DIR}/CRUD-SURFACES.md" 2>/dev/null; then
+  ENV_SEV=$(vg_config_get "review.env_contract.severity" "block" 2>/dev/null || echo "block")
+  if [[ "$ARGUMENTS" =~ --skip-env-contract=\"([^\"]*)\" ]]; then
+    ENV_REASON="${BASH_REMATCH[1]}"
+    echo "  ⚠ ENV-CONTRACT skipped: $ENV_REASON (logged to OVERRIDE-DEBT)"
+  else
+    ${PYTHON_BIN:-python3} .claude/scripts/verify-env-contract.py \
+      --phase-dir "$PHASE_DIR"
+    ENV_RC=$?
+    if [ "$ENV_RC" -ne 0 ] && [ "$ENV_SEV" = "block" ]; then
+      echo "⛔ ENV-CONTRACT preflight FAIL — fix env or pass --skip-env-contract=\"<reason>\""
+      exit 1
+    fi
+  fi
+fi
+
+emit_telemetry_v2 "review_phase2c_pre_gates" "${PHASE_NUMBER}" \
+  "review.2c-pre" "pre_dispatch_gates" "PASS" \
+  "{\"contract_complete_rc\":${COMPLETE_RC:-0}}" 2>/dev/null || true
+```
+</step>
+
 <step name="phase2d_crud_roundtrip_dispatch" profile="web-fullstack,web-frontend-only">
 ## Phase 2d — CRUD round-trip lens dispatch (v2.35.0+, closes #51)
 
@@ -2860,6 +2909,43 @@ if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/n
   fi
 else
   echo "  (no run artifacts to derive — skipping)"
+fi
+```
+</step>
+
+<step name="phase2e_post_challenge" profile="web-fullstack,web-frontend-only">
+## Phase 2e-post — Manager adversarial challenge (v2.39.0+, closes Codex critique #7)
+
+Workers report `coverage.passed`. This step asks: "do these passes actually imply coverage?". Heuristic adversarial reducer samples N% of run artifacts and challenges each pass step:
+- `pass` with empty `evidence_ref` → downgrade to `weak-pass`
+- `pass` with empty `observed` block → downgrade to `weak-pass`
+- `pass` with observed status mismatching expected → flagged `false-pass` (severity DEGRADED)
+
+Output: `${PHASE_DIR}/COVERAGE-CHALLENGE.json` with downgrades + warnings. v2.40 may add LLM-driven challenge for ambiguous claims.
+
+```bash
+echo ""
+echo "━━━ Phase 2e-post — Manager adversarial challenge ━━━"
+
+if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/null | grep -v INDEX.json)" ]; then
+  CHALLENGE_RATE=$(vg_config_get "review.challenge.sample_rate" "25" 2>/dev/null || echo "25")
+  CHALLENGE_SEV=$(vg_config_get "review.challenge.severity" "warn" 2>/dev/null || echo "warn")
+
+  ${PYTHON_BIN:-python3} .claude/scripts/challenge-coverage.py \
+    --phase-dir "$PHASE_DIR" \
+    --sample-rate "$CHALLENGE_RATE" \
+    --severity "$CHALLENGE_SEV"
+  CHALLENGE_RC=$?
+
+  if [ "$CHALLENGE_RC" -ne 0 ] && [ "$CHALLENGE_SEV" = "block" ]; then
+    echo "⛔ Coverage challenge: false-pass steps detected. See COVERAGE-CHALLENGE.json"
+    emit_telemetry_v2 "review_phase2e_post_challenge_failed" "${PHASE_NUMBER}" \
+      "review.2e-post" "coverage_challenge" "BLOCK" "{}" 2>/dev/null || true
+    exit 1
+  fi
+  emit_telemetry_v2 "review_phase2e_post_challenge" "${PHASE_NUMBER}" \
+    "review.2e-post" "coverage_challenge" "PASS" \
+    "{\"sample_rate\":${CHALLENGE_RATE}}" 2>/dev/null || true
 fi
 ```
 </step>

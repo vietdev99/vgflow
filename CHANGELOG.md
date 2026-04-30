@@ -1,5 +1,120 @@
 # Changelog
 
+## v2.39.0 (2026-04-30) — Charter-violation closer (Codex review v2.38)
+
+After v2.34→v2.38 arc, asked Codex GPT-5 for adversarial review against VG's specific charter (contract-driven white-box, NOT Strix-style black-box pentest). Verdict was sharp: **"not adequate for first dogfood yet — risk of artifact-driven theater"**. 7 charter violations identified.
+
+This release closes the top 5. No new transition kits — Codex prescribed dogfood-driven hardening only.
+
+### Codex critique #1 — Contract validity not gated → `verify-contract-completeness.py`
+
+Charter says contract-driven, but CRUD-SURFACES.md was treated as ground truth without proof it reflects the actual app domain. If planner missed a sensitive resource, every downstream review passes while reviewing the wrong system.
+
+NEW `scripts/verify-contract-completeness.py` diffs runtime/code inventory against declared resources:
+- HTTP routes from `routes-static.json` (v2.35) not mapped to any declared resource → flagged
+- DB model class names (Mongoose / SQLAlchemy / Prisma / Django / TypeORM) not in contract → flagged
+- Background job patterns (BullMQ Queue, Celery task, cron schedule, agenda) → flagged for explicit declaration
+- Webhook handlers (`/webhooks/*`, `/callbacks/*`) → flagged
+
+Wired into `review.md` as new Phase 2c-pre (before worker dispatch — saves token cost when contract obviously incomplete).
+
+### Codex critique #6 — No env contract → `ENV-CONTRACT.md` + preflight gate
+
+Workers spawn against environments with implicit state. Empty seed data → empty list views render gracefully → review passes. Tokens valid but for wrong tenant. Mutations succeed but third-party callbacks live-fired into prod.
+
+NEW required artifact `commands/vg/_shared/templates/ENV-CONTRACT-template.md` declares:
+- `target.base_url` + health endpoint
+- `seed_users` (with stable user_id + tenant_id for cross-resource auth tests)
+- `seed_data` expectations (count_min per resource, must_include_states)
+- `feature_flags` expected ON/OFF
+- `third_party_stubs` (stripe/sendgrid/s3 mode: stubbed | live | not_used)
+- `runtime_state` (migrations applied, search indexes, message queues)
+- `preflight_checks[]` — concrete probes verified before workers spawn
+- `out_of_scope[]` — explicit exclusions
+
+NEW `scripts/verify-env-contract.py` runs preflight probes pre-spawn. Mandatory for kits crud-roundtrip / approval-flow / bulk-action. Optional for static-sast (no UI runtime).
+
+Override path: `--skip-env-contract="<reason>"` logs OVERRIDE-DEBT critical entry.
+
+### Codex critique #5 — Artifacts pass without reproducibility → replay manifest + `replay-finding.py`
+
+Findings could pass review but couldn't be re-executed during human triage. First dogfood findings would be disputed or impossible to rerun.
+
+UPDATED `crud-roundtrip.md` kit prompt — every finding now MUST include `replay` block:
+
+```json
+"replay": {
+  "commit_sha": "...",
+  "worker_prompt_version": "crud-roundtrip.md@<mtime>",
+  "env": {"base_url": "...", "phase_dir": "..."},
+  "fixtures_used": {"role": "...", "user_id": "...", "tenant_id": "..."},
+  "seed_payload_pattern": "vg-review-{run_id}-create",
+  "request_sequence": [{"step": "...", "method": "...", "url": "...", "headers": {}, "body": {}, "expected_status": 201, "observed_status": 201, "response_excerpt": "..."}]
+}
+```
+
+NEW `scripts/replay-finding.py --finding-id F-001` re-executes the recorded request sequence with fresh tokens (substitutes `${TOKEN}` from `tokens.local.yaml`) and reports REPRODUCES vs DOES_NOT_REPRODUCE. Detects commit drift between recording and replay.
+
+### Codex critique #3 — Auth model too role-table-shaped → object-level steps
+
+"admin/user" matrices miss ownership / tenancy / record state / delegation. PrintwayV3 will likely break here.
+
+UPDATED `crud-roundtrip.md` kit with 4 mandatory steps for `scope: owner-only` / `tenant-scoped` resources:
+
+- **Step 9** — Cross-owner read (IDOR): user_b GETs entity owned by user_a → expect 403/404
+- **Step 10** — Cross-tenant read (tenant leakage): user_other_tenant GETs entity → expect 403/404 (THE worst bug class for multi-tenant SaaS)
+- **Step 11** — Cross-owner mutation (privilege escalation): user_b PATCH/DELETEs user_a's entity → expect 403/404. Also checks audit log captures correct actor.
+- **Step 12** — State-locked operation: mutate entity in `published`/`archived` state → expect 403/409 if state declared read-only
+
+UPDATED `CRUD-SURFACES-template.md` schema — new `expected_behavior.object_level` block declares per-scope expected behavior. UPDATED `spawn-crud-roundtrip.py` injects `lifecycle_states` + `object_level_auth` into worker context.
+
+### Codex critique #7 — Manager synthesis under-specified → `challenge-coverage.py`
+
+Many workers, but no adversarial reducer challenging worker claims. Workers can mark step-3 (read-after-create) PASS because something new appeared in list, without proving it's the just-created entity with submitted values.
+
+NEW `scripts/challenge-coverage.py` — heuristic challenger:
+- Samples 25% of run artifacts (configurable)
+- Per pass step: requires non-empty `evidence_ref` AND non-empty `observed` block
+- Cross-checks observed status numerically against expected status — mismatch → flagged `false-pass`
+- Empty evidence/observed → downgraded to `weak-pass`
+- Output: `COVERAGE-CHALLENGE.json` + per-run verdict (STRONG / WEAK / DEGRADED)
+
+Wired into `review.md` as Phase 2e-post (after findings derive, before auto-fix routing).
+
+v2.40 may extend with LLM-driven challenge for ambiguous claims (cheap Sonnet pass).
+
+### Charter compliance — what this DOESN'T fix
+
+Codex critiques #2 (negative-space verification beyond routes) and #4 (data lifecycle coverage: audit logs, soft deletes, orphan files, background job side effects) are partially addressed:
+
+- #2: contract completeness checks routes + DB models + jobs + webhooks. Does NOT yet check: feature-flag-gated paths, server-rendered SSR routes, GraphQL schema, gRPC services.
+- #4: object-level Step 9-12 catch some side-effect classes (audit log actor mismatch, state lock). Does NOT yet check: orphan file cleanup, search index invalidation, billing counter drift, queue consumer lag.
+
+These are **opt-in v2.40+** territory — first dogfood data on PrintwayV3 should drive priority.
+
+### Files
+
+- **NEW** `scripts/verify-contract-completeness.py`
+- **NEW** `scripts/verify-env-contract.py`
+- **NEW** `scripts/replay-finding.py`
+- **NEW** `scripts/challenge-coverage.py`
+- **NEW** `commands/vg/_shared/templates/ENV-CONTRACT-template.md`
+- **MODIFIED** `commands/vg/_shared/transition-kits/crud-roundtrip.md` — Steps 9–12 + replay manifest schema
+- **MODIFIED** `commands/vg/_shared/templates/CRUD-SURFACES-template.md` — `expected_behavior.object_level` schema
+- **MODIFIED** `scripts/spawn-crud-roundtrip.py` — inject lifecycle_states + object_level_auth
+- **MODIFIED** `commands/vg/review.md` — new Phase 2c-pre + Phase 2e-post
+- **MODIFIED** `vg.config.template.md` — 3 new gate config blocks
+
+### Sequence
+
+- v2.34–v2.38: 5-release "review hời hợt" arc (closes #49, #50, #51, #52)
+- **v2.39.0 (this)**: Codex charter-violation closer (5 of 7 critiques addressed)
+- v2.40+: dogfood-driven (negative-space verification, data lifecycle, LLM-challenge)
+
+This release puts review at "ready for first dogfood on PrintwayV3" per Codex's verdict criteria.
+
+---
+
 ## v2.38.1 (2026-04-30) — fix changelog preview + GH release notes auto-extract
 
 User reported on a different machine running `/vg:update`:

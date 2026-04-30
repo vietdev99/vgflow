@@ -95,6 +95,65 @@ For each step, observe the actual response, compare to expected behavior for thi
 
 ---
 
+## Step 9–11 — Object-level auth matrix (v2.39.0+ MANDATORY for owner-scoped resources)
+
+Codex critique #3: per-resource × role matrix misses ownership / tenancy / record state. These steps catch it. Skip ONLY if `CRUD-SURFACES.scope == "global"` (resource is shared across all users).
+
+Resources with `scope: owner-only` or `scope: tenant-scoped` MUST run these steps. The kit reads `expected_behavior.object_level` from CRUD-SURFACES — if absent, defaults below apply.
+
+### Step 9 — Cross-owner read (IDOR)
+
+Setup: ENV-CONTRACT.md must declare 2 users in same tenant (`user_a`, `user_b`) plus 1 user in different tenant (`user_other_tenant`).
+
+- As `user_a`: create entity (use Step 2's payload pattern, capture entity ID).
+- Switch login to `user_b` (same tenant): try to GET the entity by ID directly.
+- Expected per `scope`:
+  - `owner-only`: 403 OR 404 (preference: 404 for info-disclosure resistance)
+  - `tenant-scoped`: 200 (same tenant can read peer entities)
+  - `self-service`: 403 (each user sees only own)
+- If `user_b` got 200 on `owner-only` resource → emit `critical` finding `idor_horizontal_read`.
+
+### Step 10 — Cross-tenant read (tenant leakage)
+
+- As `user_other_tenant`: try to GET the entity created in Step 9 by ID directly.
+- Expected: 403 OR 404 regardless of scope (tenant boundary is hard).
+- If 200 → emit `critical` finding `tenant_leakage_read`. This is THE worst bug class for multi-tenant SaaS.
+
+### Step 11 — Cross-owner mutation (privilege escalation)
+
+- As `user_b` (same tenant, different owner): try PATCH and DELETE on entity owned by `user_a`.
+- Expected: 403 OR 404.
+- If mutation succeeds → emit `critical` finding `idor_horizontal_mutation`.
+- Track: did audit log capture `user_b` as actor? If audit shows `user_a` (the owner) instead → emit additional `high` finding `audit_log_actor_mismatch`.
+
+### Step 12 — State-locked operation (record-state auth)
+
+If CRUD-SURFACES declares `lifecycle_states` for this resource (e.g. `[draft, published, archived]`):
+
+- As authorized role: create entity in `published` state (or transition to it).
+- Try `update` operation on `published` entity.
+- Expected per `expected_behavior.state_lock`:
+  - If declared `published: read-only`: 403 OR 409 Conflict
+  - If declared `published: editable`: 200 with mutation
+- If state-lock declared but mutation succeeds: emit `high` finding `state_lock_bypass`.
+
+Repeat for `archived` state.
+
+---
+
+## Updated severity matrix (post v2.39 object-level additions)
+
+| Finding | Severity | Why |
+|---|---|---|
+| Cross-owner read on owner-only resource (IDOR) | critical | privilege/authz |
+| Cross-tenant read (tenant leakage) | critical | multi-tenant boundary |
+| Cross-owner mutation (privilege escalation) | critical | data integrity + authz |
+| Audit log actor mismatch | high | compliance/forensics |
+| State-lock bypass (mutation on read-only state) | high | state machine |
+| All Step 1–8 findings | (as previously declared) | (unchanged) |
+
+---
+
 ## Cleanup (mandatory — runs even on failure)
 
 If the workflow created entities but didn't reach Step 7 successfully:
@@ -178,3 +237,61 @@ Write to `${OUTPUT_PATH}` exactly this shape (see `commands/vg/_shared/templates
 Findings are derived from steps with `status: fail`. Steps with `status: blocked` (couldn't execute due to upstream failure) do NOT emit findings — they document why coverage is incomplete.
 
 A clean pass produces zero findings and `coverage.passed == coverage.attempted`. The run artifact's existence proves execution; the verdict gate uses `coverage.attempted >= 1` and `evidence_ref` populated per non-skipped step.
+
+---
+
+## Replay manifest (v2.39.0+ MANDATORY for findings)
+
+Every emitted finding MUST include a `replay` block enabling deterministic
+re-execution by `scripts/replay-finding.py`. Without it, findings cannot
+be confirmed/disputed during human triage.
+
+```json
+"replay": {
+  "commit_sha": "<from git rev-parse HEAD at run start>",
+  "worker_prompt_version": "crud-roundtrip.md@<file mtime ISO>",
+  "env": {
+    "base_url": "<from ENV-CONTRACT.md target.base_url>",
+    "phase_dir": "<absolute path>"
+  },
+  "fixtures_used": {
+    "role": "<role>",
+    "user_id": "<from token>",
+    "tenant_id": "<from token>"
+  },
+  "seed_payload_pattern": "vg-review-{run_id}-create",
+  "request_sequence": [
+    {
+      "step": "step-2-create",
+      "method": "POST",
+      "url": "<full URL>",
+      "headers": {"Authorization": "Bearer ${TOKEN}", "Content-Type": "application/json"},
+      "body": {<exact JSON body submitted>},
+      "expected_status": 201,
+      "observed_status": 201,
+      "response_excerpt": "<first 500 chars>"
+    },
+    {
+      "step": "step-3-read-after-create",
+      "method": "GET",
+      "url": "<full URL>",
+      "headers": {"Authorization": "Bearer ${TOKEN}"},
+      "expected_status": 200,
+      "observed_status": 200,
+      "response_excerpt": "..."
+    }
+  ]
+}
+```
+
+Use `${TOKEN}` placeholder for auth — `replay-finding.py` substitutes
+from `.review-fixtures/tokens.local.yaml` at replay time. This decouples
+replay from token lifetime.
+
+For findings that require multi-step reproduction (e.g. step 2 creates
+entity, step 5 updates it, step 6 fails), include ALL preceding steps
+in `request_sequence` — replay must be self-contained.
+
+If a finding is UI-only (no API request), populate `request_sequence`
+with the network calls observed during that UI action (Playwright MCP
+captures these).

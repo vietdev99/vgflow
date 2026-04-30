@@ -113,6 +113,8 @@ def build_worker_prompt(kit_text: str, resource: dict, role: str, role_token: di
         "platforms_web": (resource.get("platforms") or {}).get("web") or {},
         "platforms_backend": (resource.get("platforms") or {}).get("backend") or {},
         "delete_policy": resource.get("base", {}).get("delete_policy") or {},
+        "lifecycle_states": (resource.get("base") or {}).get("business_flow", {}).get("lifecycle_states") or [],
+        "object_level_auth": (resource.get("expected_behavior") or {}).get("object_level") or {},
         "output_path": output_path,
     }
 
