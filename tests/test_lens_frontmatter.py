@@ -109,3 +109,21 @@ def test_bfla_lens_specific():
     fm = parse_frontmatter(lens.read_text(encoding="utf-8"))
     assert fm["name"] == "lens-bfla"
     assert fm["bug_class"] == "authz"
+
+
+def test_input_injection_lens_specific():
+    """lens-input-injection.md must use injection bug class and apply to form_trigger."""
+    lens = LENS_DIR / "lens-input-injection.md"
+    fm = parse_frontmatter(lens.read_text(encoding="utf-8"))
+    assert fm["name"] == "lens-input-injection"
+    assert fm["bug_class"] == "injection"
+    assert "form_trigger" in fm["applies_to_element_classes"]
+
+
+def test_mass_assignment_lens_specific():
+    """lens-mass-assignment.md must use injection bug class and apply to form_trigger."""
+    lens = LENS_DIR / "lens-mass-assignment.md"
+    fm = parse_frontmatter(lens.read_text(encoding="utf-8"))
+    assert fm["name"] == "lens-mass-assignment"
+    assert fm["bug_class"] == "injection"
+    assert "form_trigger" in fm["applies_to_element_classes"]
