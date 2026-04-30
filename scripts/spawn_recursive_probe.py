@@ -34,7 +34,9 @@ import datetime as _dt
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +47,30 @@ REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 ELIGIBLE_PROFILES: set[str] = {"feature", "feature-legacy", "hotfix"}
 ELIGIBLE_SURFACES: set[str] = {"ui", "ui-mobile"}
 VISUAL_ONLY_SURFACES: set[str] = {"visual", "visual-only"}
+
+# Element-class → list-of-lens mapping (design doc 2026-04-30-v2.40-recursive-lens-probe.md).
+LENS_MAP: dict[str, list[str]] = {
+    "mutation_button": ["lens-authz-negative", "lens-duplicate-submit", "lens-bfla"],
+    "form_trigger": ["lens-input-injection", "lens-mass-assignment", "lens-csrf"],
+    "row_action": ["lens-idor", "lens-tenant-boundary"],
+    "bulk_action": ["lens-duplicate-submit", "lens-bfla"],
+    "modal_trigger": ["lens-modal-state"],
+    "file_upload": ["lens-file-upload", "lens-input-injection", "lens-path-traversal"],
+    "redirect_url_param": ["lens-open-redirect"],
+    "url_fetch_param": ["lens-ssrf"],
+    "auth_endpoint": ["lens-auth-jwt", "lens-csrf"],
+    "payment_or_workflow": ["lens-business-logic", "lens-duplicate-submit"],
+    "error_response": ["lens-info-disclosure"],
+    "tab": [],            # no lens — descent only (Phase 2b-2 sub-walker)
+    "sub_view_link": [],  # no lens — descent only
+    "path_param": ["lens-path-traversal"],
+}
+
+# Worker-cap envelope per --mode (guard #1: hard cap on parallel spawns).
+MODE_WORKER_CAPS: dict[str, int] = {"light": 15, "deep": 40, "exhaustive": 100}
+
+# Round-robin pool of MCP playwright slots (matches ~/.gemini/settings.json).
+MCP_SLOTS: list[str] = [f"playwright{i}" for i in range(1, 6)]
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +253,174 @@ def log_override_debt(reason: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Plan composition (Task 19)
+# ---------------------------------------------------------------------------
+def build_plan(classification: list[dict[str, Any]], mode: str) -> list[dict[str, Any]]:
+    """Convert a classification list into a deduped, capped spawn plan.
+
+    Args:
+        classification: ``[{element_class, selector, view, resource, ...}, ...]``
+            shaped per ``identify_interesting_clickables.py``.
+        mode: ``light`` / ``deep`` / ``exhaustive`` (selects MODE_WORKER_CAPS).
+
+    Returns:
+        ``[{element, lens, scope_key}, ...]`` truncated to the mode cap with
+        guard #7 idempotency dedupe applied (same resource × role × lens once).
+    """
+    raw: list[dict[str, Any]] = []
+    for c in classification:
+        ec = c.get("element_class", "")
+        for lens in LENS_MAP.get(ec, []):
+            raw.append({
+                "element": c,
+                "lens": lens,
+                "scope_key": (
+                    c.get("resource", ""),
+                    c.get("role", "admin"),
+                    lens,
+                ),
+            })
+
+    seen: set[tuple[Any, Any, Any]] = set()
+    deduped: list[dict[str, Any]] = []
+    for entry in raw:
+        if entry["scope_key"] in seen:
+            continue
+        seen.add(entry["scope_key"])
+        deduped.append(entry)
+
+    cap = MODE_WORKER_CAPS.get(mode, MODE_WORKER_CAPS["light"])
+    return deduped[:cap]
+
+
+def _classify_phase(phase_dir: Path) -> list[dict[str, Any]]:
+    """Run identify_interesting_clickables.py → recursive-classification.json."""
+    scan_files = sorted(phase_dir.glob("scan-*.json"))
+    if not scan_files:
+        return []
+    out_path = phase_dir / "recursive-classification.json"
+    classifier = REPO_ROOT / "scripts" / "identify_interesting_clickables.py"
+    cmd: list[str] = [
+        sys.executable, str(classifier),
+        "--scan-files", *(str(p) for p in scan_files),
+        "--output", str(out_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    data = json.loads(out_path.read_text(encoding="utf-8"))
+    clickables = data.get("clickables", [])
+    return clickables if isinstance(clickables, list) else []
+
+
+def _output_basename(entry: dict[str, Any]) -> str:
+    """Stable filename component: ``recursive-{lens}-{selector_hash}-d{depth}``."""
+    elem = entry.get("element", {})
+    sh = elem.get("selector_hash") or elem.get("selector", "unknown")
+    sh = re.sub(r"[^a-zA-Z0-9_-]", "_", str(sh))[:24]
+    lens = str(entry.get("lens", "lens-unknown"))
+    return f"recursive-{lens}-{sh}-d1"
+
+
+def spawn_one_worker(entry: dict[str, Any], phase_dir: Path,
+                     mcp_slot: str, *, model: str = "gemini-2.5-flash",
+                     timeout: int = 600) -> dict[str, Any]:
+    """Spawn a single Gemini Flash worker for one (element × lens) probe.
+
+    Mirrors ``scripts/spawn-crud-roundtrip.py:spawn_worker`` — same shape, same
+    redaction discipline. Returns a result dict (exit_code + duration) but does
+    NOT raise; caller aggregates failures into an INDEX.json.
+    """
+    elem = entry.get("element", {})
+    lens = entry.get("lens", "lens-unknown")
+    runs_dir = phase_dir / "runs" / mcp_slot
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    output_path = runs_dir / f"{_output_basename(entry)}.json"
+
+    context_block = {
+        "element_class": elem.get("element_class"),
+        "selector": elem.get("selector"),
+        "view": elem.get("view"),
+        "resource": elem.get("resource"),
+        "lens": lens,
+        "metadata": elem.get("metadata", {}),
+        "output_path": str(output_path),
+    }
+    prompt = (
+        f"You are running the {lens} recursive-lens probe on a UI clickable.\n"
+        "Use the playwright MCP tools to interact with the target element and "
+        "record the network log + step trace.\n\n"
+        "## CONTEXT\n```json\n"
+        + json.dumps(context_block, indent=2)
+        + "\n```\nWrite the run artifact JSON to OUTPUT_PATH and return briefly."
+    )
+
+    cmd: list[str] = [
+        "gemini", "-p", prompt, "-m", model,
+        "--approval-mode", "yolo",
+        "--allowed-mcp-server-names", mcp_slot,
+    ]
+    started = time.time()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return {
+            "exit_code": result.returncode,
+            "duration_seconds": round(time.time() - started, 1),
+            "output_path": str(output_path),
+            "mcp_slot": mcp_slot,
+            "lens": lens,
+            "selector": elem.get("selector"),
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "exit_code": -1,
+            "duration_seconds": timeout,
+            "output_path": str(output_path),
+            "mcp_slot": mcp_slot,
+            "lens": lens,
+            "selector": elem.get("selector"),
+            "error": "timeout",
+        }
+    except FileNotFoundError:
+        return {
+            "exit_code": -2,
+            "duration_seconds": round(time.time() - started, 1),
+            "output_path": str(output_path),
+            "mcp_slot": mcp_slot,
+            "lens": lens,
+            "selector": elem.get("selector"),
+            "error": "gemini binary not on PATH",
+        }
+
+
+def dispatch_auto(plan: list[dict[str, Any]], phase_dir: Path) -> list[dict[str, Any]]:
+    """Spawn one worker per plan entry, round-robin across MCP slots."""
+    results: list[dict[str, Any]] = []
+    for i, entry in enumerate(plan):
+        slot = MCP_SLOTS[i % len(MCP_SLOTS)]
+        results.append(spawn_one_worker(entry, phase_dir, mcp_slot=slot))
+    return results
+
+
+def dispatch_manual(plan: list[dict[str, Any]], phase_dir: Path,
+                    mode: str) -> int:
+    """Hand the plan off to ``generate_recursive_prompts.py`` (Task 20)."""
+    generator = REPO_ROOT / "scripts" / "generate_recursive_prompts.py"
+    if not generator.is_file():
+        sys.stderr.write(
+            "manual mode requires scripts/generate_recursive_prompts.py (Task 20)\n"
+        )
+        return 1
+    r = subprocess.run([
+        sys.executable, str(generator),
+        "--phase-dir", str(phase_dir),
+        "--mode", mode,
+        "--plan-json", json.dumps(plan, default=list),
+    ], capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    return r.returncode
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def _build_argparser() -> argparse.ArgumentParser:
@@ -280,20 +474,64 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Recursive probe skipped: {', '.join(eligibility['reasons'])}")
         return 0
 
+    # ------------------------------------------------------------------
+    # Eligibility passed → classify + build plan (Task 19).
+    # ------------------------------------------------------------------
+    try:
+        classification = _classify_phase(phase_dir)
+    except subprocess.CalledProcessError as exc:
+        sys.stderr.write(
+            f"identify_interesting_clickables.py failed (rc={exc.returncode}):\n"
+            f"{exc.stderr or ''}\n"
+        )
+        return 1
+
+    plan = build_plan(classification, args.mode)
+    payload["planned_spawns"] = [
+        {
+            "element_class": entry["element"].get("element_class"),
+            "selector": entry["element"].get("selector"),
+            "view": entry["element"].get("view"),
+            "resource": entry["element"].get("resource"),
+            "lens": entry["lens"],
+        }
+        for entry in plan
+    ]
+
     if args.dry_run:
-        # Task 19 will append planned_spawns once the classifier wiring lands.
         if args.json:
             print(json.dumps(payload, indent=2))
         else:
-            print(f"Eligibility passed. mode={args.mode} probe-mode={args.probe_mode}")
+            print(
+                f"Eligibility passed. mode={args.mode} probe-mode={args.probe_mode} "
+                f"plan={len(plan)} spawns"
+            )
         return 0
 
-    # Real-run worker spawning lives in Task 19; for now the eligibility-only
-    # binary just prints a success line so callers can wire the pipeline.
-    print(
-        f"Eligibility passed. mode={args.mode} probe-mode={args.probe_mode}\n"
-        "  (worker dispatch lands in Task 19)"
+    # ------------------------------------------------------------------
+    # Real run — dispatch per probe-mode.
+    # ------------------------------------------------------------------
+    if args.probe_mode == "auto":
+        results = dispatch_auto(plan, phase_dir)
+        index_path = phase_dir / "runs" / "INDEX.json"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(
+            json.dumps({"plan": payload["planned_spawns"], "results": results}, indent=2),
+            encoding="utf-8",
+        )
+        print(f"Auto dispatch complete: {len(results)} workers, index={index_path}")
+        return 0
+
+    if args.probe_mode == "manual":
+        return dispatch_manual(plan, phase_dir, args.mode)
+
+    # hybrid: split via vg.config hybrid_routing — defer to Task 26 wiring;
+    # for now run auto for everything (safe default).
+    sys.stderr.write(
+        "hybrid probe-mode falls back to auto until Phase 1.D vg.config wiring lands.\n"
     )
+    results = dispatch_auto(plan, phase_dir)
+    print(f"Hybrid (auto-fallback) dispatch complete: {len(results)} workers")
     return 0
 
 
