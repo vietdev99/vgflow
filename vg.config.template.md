@@ -478,6 +478,72 @@ review:
     sample_rate: 25                     # percent of runs to challenge (1-100)
     severity: "warn"                    # warn first release; promote to block after dogfood
 
+  # ── v2.40.0 Recursive lens probe (Phase 2b-2.5) ───────────────────
+  # Manager dispatcher reads scan-*.json from Haiku scanner (2b-2),
+  # classifies clickables → 14 element classes, picks lenses per class
+  # via deterministic LENS_MAP, spawns workers (auto), generates prompt
+  # files (manual), or routes per-lens (hybrid). Goals discovered are
+  # merged single-writer into TEST-GOALS-DISCOVERED.md.
+  recursive_probe:
+    default_mode: "light"               # light=15, deep=40, exhaustive=100 worker cap
+    default_probe_mode: "auto"          # auto | manual | hybrid
+    worker_model: "gemini-2.5-flash"    # cheap model for lens probes
+    worker_concurrency: 5               # round-robin across playwright1..5 MCP slots
+    worker_timeout_seconds: 600         # per-lens probe timeout
+
+    # Per-mode max recursion depth (descent through tabs/sub-views).
+    # Override via --recursion=deep on CLI; depth controls "how deep
+    # the spider crawls", mode controls "how many lenses fire at each node".
+    max_depth_overrides:
+      light: 1
+      deep: 2
+      exhaustive: 3
+
+    # Hybrid routing — when probe-mode=hybrid, dispatcher picks per-lens
+    # whether to spawn worker (auto) or write prompt file (manual).
+    # Heuristic: lenses requiring browser context → auto; lenses needing
+    # human judgement (business-logic, payment) → manual.
+    hybrid_routing:
+      auto_lenses:
+        - "lens-authz-negative"
+        - "lens-tenant-boundary"
+        - "lens-bfla"
+        - "lens-input-injection"
+        - "lens-mass-assignment"
+        - "lens-csrf"
+        - "lens-idor"
+        - "lens-path-traversal"
+        - "lens-file-upload"
+        - "lens-open-redirect"
+        - "lens-ssrf"
+        - "lens-info-disclosure"
+        - "lens-modal-state"
+        - "lens-auth-jwt"
+      manual_lenses:
+        - "lens-business-logic"
+        - "lens-duplicate-submit"
+
+  # ── v2.40.0-bis Target environment (Task 26c) ─────────────────────
+  # spawn_recursive_probe.py + review_batch.py read this to enforce
+  # per-env constraints (mutation budget, allowed lenses, prod safety).
+  # Override via /vg:review --target-env=<env>.
+  target_env: "sandbox"                 # local | sandbox | staging | prod
+
+  # ── v2.40.0-bis Production safety (Task 26f) ──────────────────────
+  # When target_env=prod, additional hard gates kick in. require_reason
+  # forces operator to supply --i-know-this-is-prod="<reason>" or abort.
+  prod_safety:
+    require_reason: true                # block prod runs without explicit reason
+    read_only: true                     # forbid mutation lenses (overrides allowed_lenses)
+    mutation_budget: 0                  # absolute cap; ignored if read_only=true
+
+  # ── v2.40.0-bis Multi-phase batch orchestrator (Task 26d/26e) ─────
+  # /vg:review-batch reads this for parallelism + retry policy.
+  batch:
+    parallelism: 1                      # 1=sequential (safe default); >1 risks fixture races
+    continue_on_failure: true           # log + continue instead of aborting batch
+    aggregate_findings_path: "BATCH-FINDINGS-{date}.json"
+
 # === Design System (v1.10.0 R4 — NEW) ==========================
 # Integrates getdesign.md ecosystem DESIGN.md (58 brand variants: Stripe,
 # Linear, Vercel, Apple, Ferrari, BMW, Claude, Cursor, ...).
