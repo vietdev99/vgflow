@@ -75,9 +75,14 @@ def read_active_run(session_id: str | None = None) -> dict | None:
 
     Resolution order:
       1. .vg/active-runs/{session_id}.json (per-session state)
-      2. Legacy .vg/current-run.json — only when active-runs/ doesn't exist
-         (pre-v2.28.0 install) OR legacy file's session_id matches the
-         requested one (mid-migration safety).
+      2. Legacy .vg/current-run.json fallback — fires when the per-session
+         file is missing AND the legacy snapshot is compatible:
+            - legacy has no session_id (pre-v2.24 install), OR
+            - legacy session_id matches `sid` exactly, OR
+            - legacy session_id is the "unknown" sentinel (orphan run
+              written by a subshell with no CLAUDE_SESSION_ID; the Stop
+              hook must still be able to read + clean it up using the
+              real session_id).
       3. None.
     """
     sid = session_id or _session_id_from_env() or "unknown"
@@ -86,15 +91,22 @@ def read_active_run(session_id: str | None = None) -> dict | None:
     if run:
         return run
 
-    # Legacy fallback. Only when active-runs/ hasn't been populated yet, OR
-    # the legacy snapshot belongs to the same session (or has no session_id
-    # to compare against — pre-v2.24 install).
-    if not ACTIVE_RUNS_DIR.exists():
-        legacy = _read_json(LEGACY_CURRENT_RUN)
-        if legacy:
-            legacy_sid = legacy.get("session_id")
-            if not sid or not legacy_sid or sid == legacy_sid:
-                return legacy
+    # The pre-v2.28 guard `if not ACTIVE_RUNS_DIR.exists()` was too strict:
+    # once the per-session directory existed, orphan-written legacy
+    # snapshots became unreachable from any session that did not share
+    # their sid, even though they still represented a real active run.
+    # Symptom: Stop hook firing run-complete with the real Claude session_id
+    # reported "No active run to complete" while run-status (called from
+    # the same subshell that wrote the run with sid="unknown") saw the
+    # legacy snapshot via list_active_runs aggregation. Same physical
+    # file, divergent readers — the symmetry break blocked run-complete
+    # cleanup. Drop the directory guard; rely on the per-session lookup
+    # at line 85 to take precedence whenever the per-session file exists.
+    legacy = _read_json(LEGACY_CURRENT_RUN)
+    if legacy:
+        legacy_sid = legacy.get("session_id")
+        if not legacy_sid or legacy_sid == sid or legacy_sid == "unknown":
+            return legacy
 
     return None
 
@@ -112,7 +124,9 @@ def write_active_run(run: dict, session_id: str | None = None) -> None:
 
 def clear_active_run(session_id: str | None = None) -> None:
     """Clear per-session active run + the latest-snapshot mirror if it
-    belongs to that session (or session unknown — best-effort).
+    belongs to that session, or to an orphan (sid="unknown"), or has
+    no session_id (pre-v2.24 install). Symmetric with read_active_run
+    so a run that was readable from a given sid is also clearable.
     """
     sid = session_id or _session_id_from_env() or "unknown"
     try:
@@ -123,11 +137,18 @@ def clear_active_run(session_id: str | None = None) -> None:
     legacy = _read_json(LEGACY_CURRENT_RUN)
     if legacy:
         legacy_sid = legacy.get("session_id")
-        if not sid or not legacy_sid or legacy_sid == sid:
+        if not legacy_sid or legacy_sid == sid or legacy_sid == "unknown":
             try:
                 LEGACY_CURRENT_RUN.unlink()
             except FileNotFoundError:
                 pass
+            # Best-effort: orphan run also lives under active-runs/unknown.json
+            # if the per-session writer used "unknown" as sid. Clear it too.
+            if legacy_sid == "unknown" and sid != "unknown":
+                try:
+                    _active_run_path("unknown").unlink()
+                except FileNotFoundError:
+                    pass
 
 
 def list_active_runs() -> list[dict]:

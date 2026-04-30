@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.41.5 — surface-probe heading format tolerance + api endpoint fallback chain
+
+External dogfood (PrintwayV3) hit two surface-probe failures during `/vg:review` on a backend-heavy phase (14/21 backend goals routed through `surface-probe.sh`):
+
+### Fixed
+- **`_surface_probe_get_goal_block` strict format** — pre-fix matched only `^## Goal G-XX:` (vgflow canonical). Real-world `TEST-GOALS.md` files written from older templates use `## G-XX —` (em-dash, "Goal" word omitted) or `## G-XX -` (ASCII hyphen). Helper returned empty block → every backend goal classified `SKIPPED|goal_block_not_found` → review fell through to `NOT_SCANNED` → 4c-pre intermediate gate hard-blocked phase even though probes would have passed. Now matches `^## (Goal )?G-XX[^A-Za-z0-9_]` (optional "Goal " word, any non-word separator).
+- **`probe_api` regex too narrow for natural-language criteria** — pre-fix required explicit `<METHOD> <path>` pattern (e.g. `POST /api/v1/foo`) inside the goal's success-criteria bullet list. Real criteria are written in prose: "Endpoint /api/v1/credits/grant tạo credit" (path only) or "Backend trả về 403 với mã credit-overdue" (no endpoint at all). Both cases returned `SKIPPED|no_endpoint_pattern_in_criteria`. Now adds two fallbacks before SKIP:
+  - **Fallback 1** — extract path-only pattern (`/api/...`, `/internal/...`, `/public/...`) from criteria when method is absent. Synthesize `ANY <path>` so downstream frag-extraction stays unchanged.
+  - **Fallback 2** — when criteria has no path either, cross-reference `${phase_dir}/API-CONTRACTS.md` for lines mentioning the goal id (`-B2 -A4` window) and pick the first method+path emitted there. Most projects already declare endpoints in the contract artifact and reference goals by id in surrounding prose.
+- **Dispatcher signature** — `run_surface_probe` now forwards `phase_dir` to `probe_api` (was already forwarding to `probe_integration`); needed so Fallback 2 can locate `API-CONTRACTS.md`.
+
+### Behavior
+- Fully backward-compatible: existing strict-pattern criteria still match in the same code path; fallbacks only fire when the strict regex returns empty. Existing READY/BLOCKED outcomes unchanged.
+- New SKIP message: `SKIPPED|no_endpoint_in_criteria_or_contracts` (was `SKIPPED|no_endpoint_pattern_in_criteria`) — emitted only after all three layers fail.
+
+### Internal
+- Smoke-tested with all three heading formats (`## Goal G-XX:`, `## G-XX —`, `## G-XX -`); block-boundary detection between adjacent goals verified.
+- Smoke-tested both fallback chains with synthetic phases (path-only criteria + API-CONTRACTS cross-ref).
+- Credit: external dogfood report from @vietnhprintway (PrintwayV3 phase 03.4b-merchant-credit, 14 backend goals all SKIPPED before fix).
+
 ## v2.41.4 — Headed-mode preservation in playwright MCP repair (closes PR #56)
 
 ### Fixed

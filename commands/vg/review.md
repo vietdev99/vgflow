@@ -576,12 +576,13 @@ review['last_args'] = '''${ARGUMENTS}'''[:500]
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
 
-# 8. Emit telemetry — orchestrator gates on this event
+# 8. Emit telemetry — orchestrator gates on this event.
+# event_type is positional; --phase/--command are NOT valid args (orchestrator
+# infers phase from active run). Valid --actor values: orchestrator | hook |
+# validator | llm-claimed | user (the literal "skill" is rejected by argparse).
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-  --event-type "review.env_mode_confirmed" \
-  --phase "${PHASE_NUMBER}" \
-  --command "vg:review" \
-  --actor "skill" \
+  "review.env_mode_confirmed" \
+  --actor "orchestrator" \
   --outcome "INFO" \
   --payload "{\"env\":\"${VG_ENV}\",\"mode\":\"${VG_REVIEW_MODE}\",\"scanner\":\"${VG_SCANNER}\",\"profile\":\"${PHASE_PROFILE}\",\"interactive\":$([[ \"$ARGUMENTS\" =~ --non-interactive ]] && echo false || echo true)}" \
   2>/dev/null || true
