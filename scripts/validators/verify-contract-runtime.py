@@ -45,9 +45,13 @@ from _i18n import t  # noqa: E402 — B8.0: localized user-facing messages
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 
-# API-CONTRACTS.md endpoint header: `## POST /auth/register` (case-insensitive method)
+# API-CONTRACTS.md endpoint header: `## POST /auth/register` OR `### POST /...`
+# (case-insensitive method). v2.45 fail-closed PR: relaxed to accept ## / ### / ####
+# because Phase 3.2 dogfood used level-3 headers ("### POST /api/v1/...") under a
+# level-2 group header ("## Topup Endpoints"), and the previous level-2-only regex
+# parsed 0 endpoints + warned silently.
 ENDPOINT_HEADER_RE = re.compile(
-    r"^##\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S+)\s*$",
+    r"^#{2,4}\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S+)\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -284,7 +288,13 @@ def main() -> None:
 
         endpoints = parse_contract_endpoints(contracts_path)
         if not endpoints:
-            out.warn(Evidence(
+            # FAIL CLOSED (v2.45 PR fix/fail-closed-validators): API-CONTRACTS.md
+            # exists but no `## METHOD /path` / `### METHOD /path` headers parsed.
+            # Previously WARN — passed silently when contract format drifted.
+            # If the contract is genuinely empty (non-feature profile), the file
+            # shouldn't exist; the early return above handles that case. Reaching
+            # here means file exists but format is wrong → BLOCK.
+            out.add(Evidence(
                 type="empty_contract",
                 message=t("contract_runtime.empty_contract.message"),
                 actual=str(contracts_path.relative_to(REPO_ROOT)),
