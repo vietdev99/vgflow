@@ -342,6 +342,47 @@ def test_redact_adjacent_name_value_pattern(tmp_path):
     assert "alice" in diagnosis
 
 
+def test_redact_all_value_siblings_when_name_secret(tmp_path):
+    """Codex-R6-HIGH-1 reproducer: multiple value-like siblings should
+    ALL be redacted when the name field signals secret semantics."""
+    phase_dir = tmp_path / "phase"
+    phase_dir.mkdir()
+    echo = tmp_path / "echo.py"
+    echo.write_text(
+        "import json, sys\n"
+        "p = sys.argv[-1]\n"
+        "i = p.find('## Evidence')\n"
+        "ev = p[i:i+500] if i >= 0 else ''\n"
+        "print(json.dumps({\n"
+        "  'diagnosis': 'evidence: ' + ev,\n"
+        "  'proposed_fix': 'verify all secret siblings redacted above',\n"
+        "  'confidence': 0.5,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    evidence = {
+        "header": {
+            "name": "Authorization",
+            "content": "public-data",
+            "value": "Bearer leak-me-secret-token",
+            "data": "another-leak-attempt",
+        },
+    }
+    result = _run(
+        "--gate-id", "g", "--block-family", "f",
+        "--phase-dir", str(phase_dir),
+        "--evidence-json", json.dumps(evidence),
+        "--cli", f"{sys.executable} {echo}",
+    )
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    diagnosis = out["diagnosis"]
+    # ALL three value-like siblings must be redacted, not just first
+    assert "leak-me-secret-token" not in diagnosis
+    assert "public-data" not in diagnosis
+    assert "another-leak-attempt" not in diagnosis
+
+
 def test_redact_handles_key_field_alias(tmp_path):
     """Different scanners use 'key' instead of 'name'."""
     phase_dir = tmp_path / "phase"

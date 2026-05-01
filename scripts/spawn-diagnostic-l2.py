@@ -145,20 +145,24 @@ def _redact_secrets(value):
     """
     if isinstance(value, dict):
         # Detect adjacent-key shape first
-        name_field = None
-        value_field = None
+        name_field_secret = False
+        value_fields: set = set()
         for k in value:
-            if str(k).lower() in {"name", "key", "field", "header"} and name_field is None:
+            kl = str(k).lower()
+            if kl in {"name", "key", "field", "header"}:
                 if _is_secret_name_string(value[k]):
-                    name_field = k
-            if str(k).lower() in {"value", "val", "data", "content"} and value_field is None:
-                value_field = k
+                    name_field_secret = True
+            if kl in {"value", "val", "data", "content"}:
+                value_fields.add(k)
         out = {}
         for k, v in value.items():
             if _REDACT_KEYS_RE.search(str(k)):
                 out[k] = "[REDACTED]"
-            elif name_field and value_field and k == value_field:
-                # Sibling-secret pattern: redact paired value
+            elif name_field_secret and k in value_fields:
+                # Codex-R6-HIGH-1 fix: redact ALL value-like siblings,
+                # not just the first one. Previous code only caught the
+                # first match — `{name: Authorization, content: public,
+                # value: Bearer SECRET}` would leak `value`.
                 out[k] = "[REDACTED]"
             else:
                 out[k] = _redact_secrets(v)

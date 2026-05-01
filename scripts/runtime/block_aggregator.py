@@ -41,10 +41,15 @@ class AggregatedBlock:
     instances: list[BlockInstance]
     sample_evidence: list[dict[str, Any]]
     merged_context: str
+    threshold_used: int = 3  # Codex-MEDIUM follow-up: track threshold for routing decision
 
     @property
     def is_aggregated(self) -> bool:
-        return self.instance_count > 1
+        """True only when instance_count crosses the threshold the caller
+        used to build the aggregator. Codex MEDIUM fix: previously returned
+        True for instance_count > 1 unconditionally, which conflicted with
+        should_aggregate(threshold=3) semantics. Now both align."""
+        return self.instance_count >= self.threshold_used
 
 
 SEVERITY_RANK = {"block": 3, "warn": 2, "advisory": 1}
@@ -90,6 +95,7 @@ def aggregate(
             instances=capped,
             sample_evidence=[i.evidence for i in capped[:5]],
             merged_context=merged,
+            threshold_used=threshold,
         ))
     # Sort output: aggregated (size ≥ threshold) first, then singletons
     out.sort(key=lambda a: (

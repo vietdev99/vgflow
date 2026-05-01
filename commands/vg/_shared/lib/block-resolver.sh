@@ -230,10 +230,25 @@ _block_resolve_l2_architect() {
   local spawn_script="${REPO_ROOT:-.}/scripts/spawn-diagnostic-l2.py"
   if [ -f "$spawn_script" ] && [ -n "$phase_dir" ] && [ -d "$phase_dir" ] && \
      [ "${VG_DIAGNOSTIC_L2_DISABLE:-0}" != "1" ]; then
+    # Codex MEDIUM fix: block_family is the validator domain (provenance,
+    # traceability, content-depth, ...), NOT the gate_id prefix. Map known
+    # gate_id stems to families; default to "uncategorized" for unknown
+    # gates (architect still gets full context via evidence_json).
+    local block_family
+    case "$gate_id" in
+      *evidence*|*provenance*|*scanner*|*replay*) block_family="provenance" ;;
+      *trace*|*orphan*|*coverage*|*matrix*) block_family="traceability" ;;
+      *content*|*depth*|*skim*|*tbd*) block_family="content-depth" ;;
+      *fixture*|*recipe*|*invariant*) block_family="fixtures" ;;
+      *security*|*auth*|*secret*) block_family="security" ;;
+      *contract*|*api-index*|*envelope*) block_family="contract" ;;
+      *artifact*|*missing*|*prereq*) block_family="artifacts" ;;
+      *) block_family="uncategorized" ;;
+    esac
     local spawn_out
     spawn_out=$("${PYTHON_BIN:-python3}" "$spawn_script" \
       --gate-id "$gate_id" \
-      --block-family "${gate_id%%-*}" \
+      --block-family "$block_family" \
       --phase-dir "$phase_dir" \
       --gate-context "$gate_context" \
       --evidence-json "$evidence_json" \

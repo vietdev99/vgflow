@@ -42,12 +42,14 @@ def test_three_same_gate_aggregated():
 
 
 def test_below_threshold_not_aggregated():
+    """Codex MEDIUM fix: is_aggregated now respects threshold (was True
+    for any count > 1 — inconsistent with should_aggregate)."""
     instances = [_instance("missing-artifact", artifact=f"X{i}.md") for i in range(2)]
     out = aggregate(instances, threshold=3)
-    # Returns 1 group of 2 (still grouped by gate_id, but treated as singleton path)
     assert len(out) == 1
-    assert out[0].instance_count == 2  # is_aggregated property: True
-    assert out[0].is_aggregated is True  # > 1 — but caller decides routing
+    assert out[0].instance_count == 2
+    assert out[0].is_aggregated is False  # 2 < threshold 3 → not aggregated
+    assert out[0].threshold_used == 3
 
 
 def test_mixed_families_grouped_separately():
@@ -131,3 +133,11 @@ def test_sample_evidence_truncated_to_5():
 def test_invalid_input_raises():
     with pytest.raises(TypeError):
         aggregate(["not a BlockInstance"], threshold=3)
+
+
+def test_threshold_2_makes_count_2_aggregated():
+    """is_aggregated semantics depend on the threshold the aggregator was built with."""
+    instances = [_instance("g") for _ in range(2)]
+    out = aggregate(instances, threshold=2)
+    assert out[0].is_aggregated is True
+    assert out[0].threshold_used == 2
