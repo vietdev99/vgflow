@@ -6001,6 +6001,43 @@ except: print('?')
   fi
 fi
 
+# v2.46-wave3.2.3 (RFC v9 D10) — evidence provenance gate. Mutation steps
+# claiming success (action + 2xx network) MUST carry structured evidence:
+# {source, artifact_hash, captured_at, schema_version, scanner_run_id |
+# layer2_proposal_id}. Closes the trust hole where executor agents could
+# fabricate evidence to flip matrix-staleness bidirectional sync.
+#
+# Migration grace: provenance.enforcement=warn (default) emits findings
+# without blocking. Set provenance.enforcement=block in vg.config.md once
+# all phases have been migrated via /vg:fixture-backfill.
+PROV_VAL=".claude/scripts/validators/verify-evidence-provenance.py"
+if [ -f "$PROV_VAL" ]; then
+  # Resolve enforcement from config — env var wins, then grep config, default warn
+  PROV_MODE="${VG_PROVENANCE_ENFORCEMENT:-}"
+  if [ -z "$PROV_MODE" ] && [ -n "${CONFIG_RAW:-}" ]; then
+    PROV_MODE=$(echo "$CONFIG_RAW" | grep -A2 '^review:' | grep -E '^\s*provenance:' -A2 | \
+                grep -E '^\s*enforcement:' | head -1 | sed 's/.*enforcement:\s*//;s/[\"'\'']//g' | tr -d ' ')
+  fi
+  [ -z "$PROV_MODE" ] && PROV_MODE="warn"
+  PROV_FLAGS="--severity ${PROV_MODE}"
+  # During migration window, allow legacy phases without provenance
+  [[ "${ARGUMENTS}" =~ --allow-legacy-provenance ]] && PROV_FLAGS="$PROV_FLAGS --allow-legacy"
+  ${PYTHON_BIN:-python3} "$PROV_VAL" --phase "${PHASE_NUMBER}" $PROV_FLAGS
+  PROV_RC=$?
+  if [ "$PROV_RC" -ne 0 ] && [ "$PROV_MODE" = "block" ]; then
+    echo "⛔ Evidence provenance gate failed — mutation steps claim success without"
+    echo "   structured provenance object (RFC v9 D10). Possible fabricated evidence."
+    echo "   Fix path:"
+    echo "     1. Re-run scanner: /vg:review ${PHASE_NUMBER} --retry-failed"
+    echo "        (Haiku scanner records evidence.source=scanner with scanner_run_id)"
+    echo "     2. For legacy phases pre-RFC-v9: --allow-legacy-provenance"
+    echo "        (marks missing-evidence steps as legacy_pre_provenance, informational)"
+    echo "     3. Set review.provenance.enforcement: warn in vg.config.md to defer enforcement"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.evidence_provenance_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # v2.46 anti-performative-review: ép scanner phải submit mutation goals,
 # không được Cancel modal rồi mark passed. Phase 3.2 dogfood (2026-05-01) tìm
 # 5 false-pass goals (G-31/G-34/G-35/G-44/G-52) modal opened nhưng chưa bao giờ

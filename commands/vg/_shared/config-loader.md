@@ -165,6 +165,7 @@ declare -A CONFIG_V1_9_SECTIONS=(
   ["scope"]="Scope adversarial check (v1.9.1 R3) — adversarial_check, adversarial_model"
   ["models.review_fix_inline"]="Review fix inline model (v1.9.1 R2) — main tier for small MINOR fixes"
   ["models.review_fix_spawn"]="Review fix spawn model (v1.9.1 R2) — cheaper tier for MODERATE/large fixes"
+  ["review.provenance"]="Evidence provenance enforcement (v2.46-wave3.2.3 RFC v9 D10) — warn|block; warn during migration, block once /vg:fixture-backfill has run"
 )
 
 DRIFT_COUNT=0
