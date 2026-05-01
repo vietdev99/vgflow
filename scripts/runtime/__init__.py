@@ -15,6 +15,20 @@ Public surface (PR-A1):
 
 Stability: schema_version: "1.0" pinned. Major bump rejected at load time.
 """
+from .fixture_cache import (
+    CacheError,
+    LeaseError,
+    acquire_lease,
+    find_orphans,
+    get_captured,
+    load as cache_load,
+    reap_expired_leases,
+    reap_orphans,
+    recipe_hash,
+    release_lease,
+    save as cache_save,
+    write_captured,
+)
 from .recipe_loader import load_recipe, ValidationError
 from .recipe_capture import capture_paths, CaptureError
 from .recipe_interpolate import interpolate, InterpolationError
@@ -37,4 +51,16 @@ __all__ = [
     "AuthError",
     "RecipeRunner",
     "RecipeExecutionError",
+    "CacheError",
+    "LeaseError",
+    "acquire_lease",
+    "release_lease",
+    "write_captured",
+    "get_captured",
+    "find_orphans",
+    "reap_orphans",
+    "reap_expired_leases",
+    "recipe_hash",
+    "cache_load",
+    "cache_save",
 ]
