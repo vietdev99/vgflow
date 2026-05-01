@@ -29,6 +29,8 @@ Scanner output **MUST NOT** contain any of these tokens (case-insensitive). They
 | `fix`, `repair`, `patch` | Action recommendation | report observation, let commander prescribe |
 | `correct`, `correctly`, `properly` | Implies right/wrong judgment | `expected_per_lens: <spec>` vs `observed: <fact>` |
 | `obviously`, `clearly`, `apparently` | Speculation, not observation | drop the qualifier; state observation directly |
+| `expected security`, `as designed`, `expected behavior`, `working as intended` | Self-rationalization that hides bugs (e.g., scanner sees CSRF block on legit user flow → calls it "expected security check" → marks goal passed → real bug ships). Scanner CANNOT classify mismatch as expected — that's commander's call after cross-referencing TEST-GOALS success_criteria. | `expected_per_lens: 200 + ledger commit; observed: 403 AUTH_CSRF_MISSING; match: no` |
+| `cancel`, `cancelled`, `canceled` (when describing why mutation goal not submitted) | Performative review pattern — scanner avoids destructive action by Cancel-only path → never tests happy path → CSRF/auth/idempotency bugs slip through. Sandbox env exists FOR mutation; if disposable_seed_data declared, scanner MUST submit. | If goal has `mutation_evidence` declared: submit + capture full network chain. If commander truly wants Cancel-only path, scanner records `match: unknown, observed: scanner_skipped_submit_per_orchestrator_directive` — NEVER `match: yes`. |
 
 **Allowed words:**
 - `expected_per_lens`, `observed`, `match`, `mismatch`, `partial`, `unknown`

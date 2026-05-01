@@ -5828,6 +5828,33 @@ if [ -f "$MATRIX_LINK_VAL" ]; then
   fi
 fi
 
+# v2.46 anti-performative-review: ép scanner phải submit mutation goals,
+# không được Cancel modal rồi mark passed. Phase 3.2 dogfood (2026-05-01) tìm
+# 5 false-pass goals (G-31/G-34/G-35/G-44/G-52) modal opened nhưng chưa bao giờ
+# submit. Validator này check goal_sequences.steps[] có submit click + 2xx
+# network entry trước khi cho phép run-complete.
+MUT_SUBMIT_VAL=".claude/scripts/validators/verify-mutation-actually-submitted.py"
+if [ -f "$MUT_SUBMIT_VAL" ]; then
+  MUT_FLAGS="--severity block"
+  if [[ "${ARGUMENTS}" =~ --allow-cancel-only-mutations ]]; then
+    MUT_FLAGS="--severity block --allow-cancel-only-mutations"
+  fi
+  ${PYTHON_BIN:-python3} "$MUT_SUBMIT_VAL" --phase "${PHASE_NUMBER}" $MUT_FLAGS
+  MUT_RC=$?
+  if [ "$MUT_RC" -ne 0 ]; then
+    echo "⛔ Review mutation-actually-submitted gate failed."
+    echo "   Mutation goals marked passed without actual submit click + 2xx network."
+    echo "   This is the 'performative review' meta-bug: scanner Cancel modal → never test"
+    echo "   happy path → CSRF/auth/idempotency bugs slip through to user."
+    echo "   Fix path:"
+    echo "     1. Re-run /vg:review ${PHASE_NUMBER} với scanner prompt yêu cầu SUBMIT (sandbox = disposable seed)"
+    echo "     2. OR --allow-cancel-only-mutations override (logs OVERRIDE-DEBT — legitimate"
+    echo "        only nếu phase explicitly không muốn mutate)"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.mutation_submit_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
 RUN_RC=$?
 if [ $RUN_RC -ne 0 ]; then

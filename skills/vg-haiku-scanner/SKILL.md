@@ -422,6 +422,12 @@ optional fields — no breaking change for web.
 - Fill and submit EVERY form you find.
 - **After EVERY form submit → run Persistence Probe (Layer 4). Record `persistence_probe: {persisted, pre, post, diff}`. No exceptions except read-only forms + final-step-of-wizard + file-upload (document skip reason).**
 - Test BOTH branches of EVERY confirm dialog (Cancel first, then OK).
+- **⛔ ANTI-CANCEL ENFORCEMENT (v2.46+ — closes Phase 3.2 dogfood meta-bug):**
+  - For ANY goal with `mutation_evidence` declared in TEST-GOALS — scanner MUST execute the OK/Submit path AT LEAST ONCE per goal. Cancelling without ever submitting = AUTOMATIC `match: no` for the goal step, NOT `match: yes`.
+  - Sandbox is a mutation environment by design (`disposable_seed_data: true` in ENV-CONTRACT). Refusing to submit because "destructive" or "modify real data" is a CONTRACT VIOLATION — sandbox seed regenerates per /vg:test run.
+  - If orchestrator (commander) prompt explicitly tells you "Cancel modals only" or "do not submit", you MUST still record `observations[].observed: "scanner_skipped_submit_per_orchestrator_directive"` with `match: unknown`. NEVER `match: yes` when submit was skipped — that fabricates passing evidence.
+  - On submit, capture FULL network chain (preflight CSRF/auth GET + mutation POST + post-mutation GET for persistence). Server errors (403 CSRF, 401 AUTH, 5xx) are FACTUAL OBSERVATIONS — record them with `match: no` + verbatim error code. NEVER classify them as "expected security check" or "as designed" (banned vocabulary per scanner-report-contract Section 1).
+  - Exception (only valid skip): goal explicitly declares `mutation_required: false` in TEST-GOALS frontmatter. Default for goals with `mutation_evidence` is `mutation_required: true`.
 - Record console errors after EVERY action.
 - Record network requests after EVERY action.
 - Re-snapshot after EVERY click and append new elements.
