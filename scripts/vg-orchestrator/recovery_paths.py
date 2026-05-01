@@ -6,21 +6,25 @@ users see BLOCK but don't know concrete next steps.
 
 Each violation type maps to ordered recovery paths (recommended first).
 Each path has:
-  - id:           short identifier
-  - label:        one-line description (with RECOMMENDED tag if primary)
-  - command:      shell command OR workflow instruction
-  - cost:         time + token estimate
-  - effect:       what changes after path runs
-  - when:         when this path is appropriate
+  - id:                short identifier
+  - label:             one-line description (with RECOMMENDED tag if primary)
+  - command:           shell command OR workflow instruction
+  - cost:              time + token estimate
+  - effect:            what changes after path runs
+  - when:              when this path is appropriate
+  - auto_executable:   true = AI can run autonomously (safe, logs debt only)
+                       false = needs user confirmation (expensive/destructive)
+  - auto_command:      shell command for auto-execution (if differs from `command`)
+
+Auto-execution policy (closes "BLOCK = stop" anti-pattern):
+- vg-recovery.py --auto picks FIRST auto_executable=true path, runs it, retries
+- Only safe operations: log OVERRIDE-DEBT, run migrate-state, retry validator
+- NEVER auto-runs: --retry-failed (token-expensive), code edits, matrix changes
 
 Usage from orchestrator:
     from recovery_paths import get_recovery_paths
     paths = get_recovery_paths(violation_type, command, phase)
     for p in paths: ...
-
-Validators may also embed recovery_paths in their JSON output via
-Output.add_recovery_path() — orchestrator merges those with the static
-table here.
 """
 from __future__ import annotations
 
@@ -39,6 +43,7 @@ RECOVERY_PATHS: dict[str, list[dict[str, str]]] = {
             "cost": "~30-45min wall, ~$3-5/goal tokens",
             "effect": "Refresh RUNTIME-MAP via Haiku per-goal rescan with v2.46+ scanner schema",
             "when": "ship-critical phase, want real mutation evidence",
+            "auto_executable": False,  # token-expensive; user must opt in
         },
         {
             "id": "skip-flag",
@@ -47,14 +52,17 @@ RECOVERY_PATHS: dict[str, list[dict[str, str]]] = {
             "cost": "0min, logs OVERRIDE-DEBT.md entry",
             "effect": "Bypass validator for this run; debt accumulates to /vg:accept",
             "when": "tactical bypass, will properly fix next session",
+            "auto_executable": True,
+            "auto_command": "python3 .claude/scripts/vg-orchestrator override --flag skip-runtime-map-crud-depth --reason 'auto-recovery: stale RUNTIME-MAP; debt to /vg:accept'",
         },
         {
             "id": "manual-reclassify",
-            "label": "Edit GOAL-COVERAGE-MATRIX.md (last resort)",
-            "command": "Change blocked goals from READY → INFRA_PENDING with reason='post-fix re-scan pending'",
+            "label": "Edit RUNTIME-MAP.json (last resort)",
+            "command": "Change goal_sequences[gid].result: passed → blocked with reason",
             "cost": "~5min manual edit",
-            "effect": "Validator skips because goal no longer claims READY",
-            "when": "accept matrix drift from reality",
+            "effect": "Validator skips because goal no longer claims passed",
+            "when": "data drift acceptable; document re-scan need",
+            "auto_executable": False,  # data integrity risk
         },
     ],
     "validator:mutation-actually-submitted": [
@@ -65,6 +73,7 @@ RECOVERY_PATHS: dict[str, list[dict[str, str]]] = {
             "cost": "~30-45min, ~$3-5/goal",
             "effect": "Scanner forced to submit (sandbox = disposable seed); records 2xx network",
             "when": "want real submit evidence, no shortcut",
+            "auto_executable": False,
         },
         {
             "id": "skip-flag",
@@ -73,6 +82,8 @@ RECOVERY_PATHS: dict[str, list[dict[str, str]]] = {
             "cost": "0min, logs OVERRIDE-DEBT",
             "effect": "Validator downgrades BLOCK → WARN this run",
             "when": "scanner truly cannot submit (env constraint)",
+            "auto_executable": True,
+            "auto_command": "python3 .claude/scripts/vg-orchestrator override --flag allow-cancel-only-mutations --reason 'auto-recovery: scanner did not submit; debt logged'",
         },
     ],
     "validator:matrix-evidence-link": [

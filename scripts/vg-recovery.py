@@ -131,10 +131,91 @@ def render_menu(violations: list[str], command: str, phase: str) -> None:
     print("Run the chosen command directly. (Interactive picker TBD — paste command into shell.)")
 
 
+def execute_auto_recovery(
+    violations: list[str],
+    command: str,
+    phase: str,
+    max_iterations: int = 3,
+) -> tuple[bool, list[dict]]:
+    """Auto-execute first auto_executable path per violation.
+
+    Closes "BLOCK = stop" anti-pattern: AI must autonomously try to fix
+    before giving up. Only runs SAFE paths (override flags + log debt) —
+    NEVER auto-runs token-expensive --retry-failed or destructive edits.
+
+    Returns (overall_success, action_log).
+    """
+    import subprocess
+
+    actions: list[dict] = []
+    for v_type in violations:
+        paths = get_recovery_paths(v_type, command, phase)
+        # Pick first auto_executable=True path
+        auto_path = next((p for p in paths if p.get("auto_executable")), None)
+        if not auto_path:
+            actions.append({
+                "violation": v_type,
+                "status": "no_auto_path",
+                "message": f"No auto_executable path for {v_type}; user must pick manually",
+            })
+            continue
+
+        cmd = auto_path.get("auto_command") or auto_path.get("command")
+        if not cmd:
+            actions.append({
+                "violation": v_type,
+                "status": "no_command",
+                "path_id": auto_path.get("id"),
+            })
+            continue
+
+        # Execute (only if it looks like a shell command — not a workflow instruction)
+        if cmd.startswith("/vg:") or cmd.startswith("Edit ") or cmd.startswith("Change "):
+            actions.append({
+                "violation": v_type,
+                "status": "skipped_workflow_instruction",
+                "command": cmd,
+                "reason": "Auto-executor only runs shell commands; workflow instructions need user",
+            })
+            continue
+
+        try:
+            r = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=60,
+                cwd=str(REPO_ROOT),
+            )
+            actions.append({
+                "violation": v_type,
+                "status": "executed",
+                "path_id": auto_path.get("id"),
+                "command": cmd,
+                "exit_code": r.returncode,
+                "stdout": (r.stdout or "")[:300],
+                "stderr": (r.stderr or "")[:300],
+            })
+        except subprocess.TimeoutExpired:
+            actions.append({
+                "violation": v_type,
+                "status": "timeout",
+                "command": cmd,
+            })
+
+    # Determine overall success: at least 1 executed AND none failed
+    executed = [a for a in actions if a.get("status") == "executed"]
+    failed = [a for a in executed if a.get("exit_code", 0) != 0]
+    success = bool(executed) and not failed
+    return success, actions
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Recovery path picker for VG BLOCKs")
     parser.add_argument("--phase", help="Filter by phase (latest if omitted)")
     parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Auto-execute first auto_executable path per violation (closes BLOCK=stop pattern)",
+    )
     args = parser.parse_args()
 
     run = find_latest_run(args.phase)
@@ -147,6 +228,41 @@ def main() -> int:
     run_id = run["run_id"]
 
     violations = detect_violations_for_run(run_id)
+
+    if args.auto:
+        if not violations:
+            if args.json:
+                print(json.dumps({"status": "no_violations"}))
+            else:
+                print("ℹ No active violations. Nothing to auto-recover.")
+            return 0
+        success, actions = execute_auto_recovery(violations, command, phase)
+        if args.json:
+            print(json.dumps({
+                "auto_recovery": "success" if success else "partial_or_fail",
+                "actions": actions,
+            }, indent=2))
+        else:
+            print(f"━━━ Auto-recovery {'SUCCESS' if success else 'PARTIAL/FAIL'} ━━━")
+            for a in actions:
+                status = a.get("status", "?")
+                v = a.get("violation", "?")
+                if status == "executed":
+                    rc = a.get("exit_code", "?")
+                    icon = "✓" if rc == 0 else "✗"
+                    print(f"  {icon} [{v}] {a.get('path_id')} → exit={rc}")
+                    if a.get("stderr"):
+                        print(f"      stderr: {a['stderr'][:120]}")
+                elif status == "no_auto_path":
+                    print(f"  ⚠ [{v}] no auto_executable path — manual fix needed")
+                elif status == "skipped_workflow_instruction":
+                    print(f"  ⏭ [{v}] {a.get('path_id', '?')} skipped (workflow, not shell)")
+                else:
+                    print(f"  ? [{v}] {status}")
+            if not success:
+                print("\nFalling through to manual recovery menu:")
+                render_menu(violations, command, phase)
+        return 0 if success else 2
 
     if args.json:
         result = {
