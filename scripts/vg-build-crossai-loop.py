@@ -50,7 +50,7 @@ import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
