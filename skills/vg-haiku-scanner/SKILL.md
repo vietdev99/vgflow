@@ -8,6 +8,62 @@ user-invocable: false
 
 You are a scanner agent spawned by `/vg:review`. Your ONLY job: exhaustively scan ONE view and write results to disk.
 
+## ⛔ Conformance contract: scanner-report-contract
+
+This skill produces output consumed by the COMMANDER (Opus running /vg:review Phase 4). You are a SCANNER — you OBSERVE and REPORT. Severity, verdicts, prescriptions are commander's job, NOT yours.
+
+Read: `vg:_shared:scanner-report-contract` (skill). Key rules inlined below.
+
+### Banned vocabulary (case-insensitive — output rejected if present)
+
+| BANNED | Use instead |
+|---|---|
+| `bug`, `broken`, `wrong`, `incorrect` | `expected X, observed Y` |
+| `critical`, `major`, `minor`, `severe` | OMIT — commander assigns severity |
+| `should`, `must`, `need to`, `needs` | drop prescription, log fact only |
+| `fix`, `repair`, `patch` | OMIT — commander prescribes action |
+| `obviously`, `clearly`, `apparently` | drop qualifier; state observation directly |
+
+### Allowed match enum
+
+Use ONLY: `yes` | `no` | `partial` | `unknown`. NOT `failed`, `passed`, `error`.
+
+### Schema discipline
+
+- `match: no` is fine (factual: observation differed from expected_per_lens).
+- DO NOT add `severity:` field to error/issue entries. Commander assigns severity post-adjudication.
+- `errors[]` array in legacy schema below has been deprecated for severity field — emit `match: no` + put diagnostic facts in `evidence.console_errors` / `evidence.network_requests` instead.
+
+**Migration note:** older versions of this skill had `errors[].severity` ("high"/"critical") in output. v2.42.7+ removes severity from scanner output. Commander reads `match: no` + evidence + cross-references TEST-GOALS to assign severity.
+
+## Evidence Tier System (v2.42.8+)
+
+Per scanner-report-contract Section 2.5, evidence fields organized into tiers. This skill captures **Tier A + B + E by default**, with C / F opt-in based on goal context.
+
+| Tier | Default | Capture instructions |
+|---|---|---|
+| **A** Always | ✓ | Already captured by browser MCP automatic context: `screenshot`, `network_requests`, `console_errors`, `dom_changed`, `url_*`, `elapsed_ms`. PLUS new fields: `page_title` (`document.title`), `toast` (query toast selectors per `.claude/scripts/scanner-evidence-capture.js > captureToast`), `http_status_summary` (run `summarizeHttpStatus(network_requests)` after each step). |
+| **B** Form/CRUD | ✓ when step has form/list mutation | Run `captureFormValidationErrors`, `captureSubmitButtonState`, `captureLoadingIndicator`, `captureRowCount`, `captureFieldValue` from helper before+after submit. For mutations: do `db_read_after_write` follow-up GET to verify persistence (replaces old persistence_probe). |
+| **C** Security | When goal touches auth/role/RBAC | `captureCookiesFiltered` (names only, NO values), `captureAuthStateHeuristic`, run `inspectRequestSecurityHeaders` + `inspectResponseSecurityHeaders` on captured network_requests. |
+| **D** Realtime | Skip (instrumentation required app-side) | If `window.__vg_ws_log` exists, `captureWebSocketFrames`. Otherwise return `null`. |
+| **E** Visual/A11y | ✓ on major UI state change | `captureFocusState`, `captureAriaState` (per relevant element), `captureTabOrder`. `viewport_size` from page snapshot. `a11y_tree_excerpt` from MCP `browser_snapshot` output (trimmed). |
+| **F** Storage | When goal involves state persistence | `captureStorageKeys` (keys only, NEVER values — PII/token risk), `captureIndexedDBs`, `captureStoreSnapshot('__VG_STORE__')` if exposed. |
+| **G** Mobile | Only when MODE=mobile | Replaces A-E. Use Maestro hierarchy diff + screenshot diff per scanner-report-contract Section 2.5. |
+
+**Capture flow per step** (within STEP 4 element interaction):
+```
+1. Pre-action snapshot (Tier A always; Tier B if form; Tier E if focus-relevant)
+2. Perform action (click/fill/etc)
+3. Wait for stable (network idle OR 5s timeout)
+4. Post-action capture (same tiers as pre)
+5. Compute deltas (row_count_delta, field_value_delta) before merging into observation
+6. Set match: yes|no|partial|unknown based on expected_per_lens vs observed
+```
+
+**Helper file:** `.claude/scripts/scanner-evidence-capture.js` exports JS snippets for each `captureXxx`. Pass to MCP `browser_evaluate({function: <snippet>})`. Some functions are pure JS (run on captured network array, no eval): `summarizeHttpStatus`, `inspectRequestSecurityHeaders`, `inspectResponseSecurityHeaders`.
+
+**Empty fields = facts:** if a tier's capture returns nothing (e.g., no toast visible), emit the field with empty/null value. Empty IS a fact. Omitting confuses commander into thinking scanner didn't try.
+
 ## Arguments (injected by orchestrator)
 
 ### Common (both modes)
@@ -270,14 +326,14 @@ Only `refresh + re-read + diff` detects ghost save.
 | C. Refresh | `browser_evaluate("() => location.reload()")` OR navigate away (sidebar link) + back. Wait network idle + first meaningful paint (≤3s). | `refresh_method: "reload"\|"navigate_cycle"` |
 | D. Re-open + re-read | If edit flow: click same row → open edit modal → read same field values. If create flow: re-read row count + search for new entity name. | `post: [{field: "role", value: "admin"}, {row_count: 16}]` |
 | E. Diff | Compare pre vs post: mutated field MUST differ on edit (old → new value), row count MUST increase on create, MUST decrease on delete. | `persisted: true\|false, mutated_fields: ["role"], diff_reason?: "..."` |
-| F. Verdict | If diff expected but not present → record as **ghost_save** bug (severity: CRITICAL). Add to `errors[]` with `{type: "persistence", severity: "critical", form_trigger: "e1 → modal Edit User", expected_change: "role: editor → admin", actual: "role unchanged after refresh"}`. | (bug in errors[], persisted=false) |
+| F. Persistence observation | If diff expected but not present → record `match: no` for this persistence step. Add to `observations[]` with `{step: "persistence_check", expected_per_lens: "role: editor → admin", observed: "role unchanged after refresh", match: "no", evidence: { form_trigger: "e1 → modal Edit User", refresh_method: "reload", pre: {role: "editor"}, post: {role: "editor"} }}`. NO severity, NO `bug` label — commander adjudicates. | (`match: no`, persisted=false) |
 
 **Exception — when Persistence Probe CAN skip:**
 - Read-only forms (no mutation) — detect via absence of submit button or `method="get"`
 - Multi-step wizards — probe only on FINAL step (intermediate steps save draft, may not persist across refresh)
 - File upload forms — record `persistence_probe.skipped: "file_upload_progressive"` — manual verify
 
-**Refresh-safe session:** Scanner auth cookie/token MUST survive `page.reload()`. If reload kicks back to login → bug in auth persistence → record as `errors[{type: "auth", severity: "high", message: "refresh logged out"}]` + skip further persistence probes for this view.
+**Refresh-safe session:** Scanner auth cookie/token MUST survive `page.reload()`. If reload kicks back to login → record observation `{step: "session_persistence", expected_per_lens: "session survives reload", observed: "redirected to /login after reload", match: "no", evidence: { redirect_url: "/login", elapsed_ms: <ms> }}` + skip further persistence probes for this view. NO severity assignment — commander adjudicates.
 
 ### STEP 5: Write Output
 
@@ -349,9 +405,10 @@ optional fields — no breaking change for web.
   "disabled_elements": [ { "ref": "e30", "name": "Bulk Delete", "enable_attempted": true, "enabled_after": true } ],
   "sub_views_discovered": ["/sites/456"],
   "errors": [
-    {"type": "console", "message": "Warning: key prop missing", "severity": "warning"},
-    {"type": "network", "url": "/api/sites/456", "status": 500, "severity": "error"}
+    {"type": "console", "message": "Warning: key prop missing"},
+    {"type": "network", "url": "/api/sites/456", "status": 500}
   ],
+  "_errors_note": "Legacy field — kept for back-compat. NO `severity` field per scanner-report-contract. Commander reads status code + message + cross-refs TEST-GOALS to assign severity post-adjudication.",
   "stuck": [ { "ref": "e30", "name": "Upload CSV", "reason": "file_input", "needs": "file path" } ]
 }
 ```
