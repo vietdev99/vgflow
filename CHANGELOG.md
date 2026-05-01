@@ -1,5 +1,48 @@
 # Changelog
 
+## v2.47.0 — RFC v9 implementation: test-data prerequisites + fixture runtime (PR #81 + Windows compat)
+
+Massive feature batch: full RFC v9 (PR #80) implementation across 16 logical sub-PRs bundled into PR #81. **14677 insertions, 7 deletions, 74 files.** Closes the meta-bug surfaced in v2.46.1 dogfood: 21/36 mutation goals SUSPECTED not because validators/scanners failed but because **sandbox seed lacked realistic application state** to verify mutations against.
+
+### Added (PR-pre-A) — Foundation schemas + provenance gates
+- `schemas/fixture-recipe.v1.json` — D2 recipe schema (allocation, lifecycle, retry, side_effect_risk, validate_after, idempotency-required for POST/PUT).
+- `schemas/data-invariants.v1.json` — D5 N-consumer schema (`consume_semantics: destructive|read_only`, `isolation: per_consumer|shared_when_read_only`).
+- `scripts/validators/verify-evidence-provenance.py` — D10 structured provenance gate.
+- `scripts/validators/verify-matrix-staleness.py` — D10 trustworthy provenance bidirectional sync (executor evidence cannot promote SUSPECTED→READY).
+- `scripts/migrate-legacy-provenance.py` — pre-v9 mutation step tagger.
+
+### Added (PR-A1+A2+A3) — Native Python recipe runtime
+- `scripts/runtime/recipe_loader.py` — YAML + jsonschema validation.
+- `scripts/runtime/recipe_capture.py` — JSONPath capture (jsonpath-ng + stdlib fallback) with cardinality enforcement.
+- `scripts/runtime/recipe_interpolate.py` — `${var}` interpolation, type-preserving whole-string match.
+- `scripts/runtime/recipe_safety.py` — D9 sandbox safety gate (X-VGFlow-Sandbox + sentinel markers).
+- `scripts/runtime/recipe_auth.py` — 4 auth handlers (cookie_login, api_key, bearer_jwt with refresh, command sandbox-only).
+- `scripts/runtime/recipe_executor.py` — RecipeRunner: role auth → interpolation → safety → idempotency-key → 401 refresh → capture → ${var} export.
+- `scripts/runtime/fixture_cache.py` — content-addressed cache by recipe hash + lease TTL + atomic rename on save.
+
+### Added (PR-B/C/D/E/F) — Skill wiring + diagnostic L2 + codegen
+- Wires fixture system into `/vg:specs`, `/vg:scope`, `/vg:blueprint`, `/vg:build`, `/vg:review`, `/vg:test`.
+- `scripts/spawn-diagnostic-l2.py` — adversarial sub-agent for blocked gates (D11 confidence-based remediation).
+- `scripts/codegen-fixture-inject.py` — emit `// VGFLOW_FIXTURE_INJECTED — DO NOT EDIT` block from FIXTURES/G-XX.yaml into Playwright specs.
+- `scripts/runtime/preflight_invariants.py` + `scripts/runtime/rcrurd_preflight.py` — pre-state assertion (data exists in shape needed) + post-state assertion (mutation actually changed shape).
+
+### Fixed (Windows compat shims for PR #81)
+External dogfood reporter shipped from macOS without Windows compat. v2.47.0 ships these on top:
+- `scripts/runtime/fixture_cache.py` — `fcntl` is POSIX-only; added `msvcrt.locking` fallback for Windows + no-op degradation if neither primitive available. Pre-fix: `ModuleNotFoundError: No module named 'fcntl'` blocked entire test suite collection on Windows.
+- `tests/test_recipe_auth.py` + `tests/test_spawn_diagnostic_l2.py` — `f"{sys.executable} {script}"` joins path-with-spaces (`C:\Users\Lionel Messi\...`) with bare space, breaking `shlex.split` round-trip. Replaced with `shlex.join([str(sys.executable), str(script)])`.
+- `tests/test_codegen_fixture_inject.py` + `tests/test_fixture_backfill.py` — `Path.read_text()` defaults to locale encoding (cp1252 on Windows en, cp1258 on VN), mojibake-decoding the em-dash in `VGFLOW_FIXTURE_INJECTED — DO NOT EDIT` sentinel. Added `encoding="utf-8"` to all read sites.
+
+### Internal
+- 628 tests pass (was 243 — PR #81 added ~385 new tests).
+- 4 skipped (pre-existing).
+- 8 tests skipped on Windows local due to WinError 10106 TCP socket flake (`test_preflight_invariants_runner.py`, `test_rcrurd_preflight_runner.py`) — runs clean in CI (Ubuntu) and reporter's macOS. Environmental, not code.
+- 70 codex skills (no new skill files; runtime is library-style).
+- `VGFLOW-VERSION` + `VERSION` synced to 2.47.0 (minor — large feature batch).
+- Credit: PR #81 from @vietnhprintway; Windows compat shims by maintainer.
+
+### Note on test count
+- 386 net tests added (243 → 628 + 8 windows-skipped). Coverage of recipe runtime, fixture cache, auth handlers, codegen injection, diagnostic L2 spawning, preflight runners, schema validation.
+
 ## v2.46.1 — Recovery paths + autonomous fix loop + matrix-staleness gate (PR #79)
 
 3-wave companion to v2.46.0 (anti-performative-review). Closes additional dogfood gaps surfaced while running `/vg:review 3.2` on PrintwayV3. 1274 insertions, 7 deletions, 8 files.

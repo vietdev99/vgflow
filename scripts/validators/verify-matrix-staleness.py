@@ -21,6 +21,11 @@ Output:
 When this validator passes (zero SUSPECTED), --retry-failed can trust matrix.
 When BLOCKs, user MUST run --retry-failed (which will now include SUSPECTED)
 to refresh evidence.
+
+v2.46-wave3.2.3 (RFC v9 D10): bidirectional sync (SUSPECTED → READY) now
+requires trustworthy provenance — only `evidence.source: scanner` (with
+scanner_run_id) or `evidence.source: diagnostic_l2` (with audit trail)
+can promote. Hand-written `executor`/`manual` evidence keeps SUSPECTED.
 """
 from __future__ import annotations
 
@@ -34,6 +39,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _common import Evidence, Output, emit_and_exit, find_phase_dir, timer  # noqa: E402
 
 MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# v2.46-wave3.2.3 (RFC v9 D10): only these sources are trustworthy enough
+# to flip SUSPECTED → READY. `executor`/`orchestrator`/`manual` evidence can
+# be hand-fabricated; bidirectional sync used to ping-pong on those.
+TRUSTWORTHY_PROVENANCE_SOURCES = {"scanner", "diagnostic_l2"}
 SUBMIT_TARGET_RE = re.compile(
     r"\b(submit|approve|confirm|save|create|update|delete|reject|send|"
     r"d[uồ]ng\s*[yý]|duy[eệ]t|x[aá]c\s*nh[aậ]n|g[uử]i|t[aạ]o|c[aậ]p\s*nh[aậ]t|"
@@ -109,6 +118,61 @@ def has_submit_step(seq: dict) -> bool:
         if SUBMIT_TARGET_RE.search(target) and not CANCEL_TARGET_RE.search(target):
             return True
     return False
+
+
+def trustworthy_submit_evidence(seq: dict) -> tuple[bool, str | None]:
+    """Walk seq for a submit/mutation step bearing trustworthy provenance.
+
+    RFC v9 D10: only `evidence.source: scanner` (with scanner_run_id) or
+    `evidence.source: diagnostic_l2` (with layer2_proposal_id audit trail)
+    can promote SUSPECTED → READY. Hand-written `executor` / `manual`
+    evidence is rejected — that was the wave-3.2.2 trust hole.
+
+    Returns (trustworthy, reason). When False, reason explains why so the
+    validator can surface it.
+    """
+    steps = seq.get("steps") or []
+    if not isinstance(steps, list):
+        return False, "steps not list"
+
+    submit_actions = {"click", "tap", "press", "submit"}
+    found_any_submit_step = False
+    weak_source: str | None = None
+
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        action = str(step.get("do") or step.get("action") or "").lower()
+        if action not in submit_actions:
+            continue
+        target_text = " ".join(
+            str(step.get(k, "")) for k in ("target", "label", "selector", "name")
+        )
+        if not SUBMIT_TARGET_RE.search(target_text):
+            continue
+        if CANCEL_TARGET_RE.search(target_text):
+            continue
+        # This is a submit-intent step. Check provenance.
+        found_any_submit_step = True
+        evidence = step.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        source = evidence.get("source")
+        if source not in TRUSTWORTHY_PROVENANCE_SOURCES:
+            if source:
+                weak_source = str(source)
+            continue
+        if source == "scanner" and not evidence.get("scanner_run_id"):
+            continue
+        if source == "diagnostic_l2" and not evidence.get("layer2_proposal_id"):
+            continue
+        return True, None
+
+    if not found_any_submit_step:
+        return False, "no submit step"
+    if weak_source:
+        return False, f"submit evidence.source={weak_source} not in {{scanner,diagnostic_l2}}"
+    return False, "submit step lacks structured evidence object"
 
 
 def has_mutation_network(seq: dict) -> bool:
@@ -226,14 +290,21 @@ def main() -> None:
             # to READY. Closes the workflow loop: retry-failed → re-record
             # evidence → matrix flips back. Without this, /vg:test sees
             # permanent SUSPECTED even after fix.
+            #
+            # v2.46-wave3.2.3 (RFC v9 D10): require trustworthy provenance.
+            # Without provenance check, an executor agent could hand-write a
+            # submit step + fake 2xx network entry to fabricate evidence.
+            # Only scanner (with scanner_run_id) or diagnostic_l2 (with
+            # layer2_proposal_id) can promote.
             if current_status == "SUSPECTED" and isinstance(seq, dict):
-                if has_submit_step(seq) and has_mutation_network(seq):
+                trustworthy, reason = trustworthy_submit_evidence(seq)
+                if has_submit_step(seq) and has_mutation_network(seq) and trustworthy:
                     out.add(
                         Evidence(
                             type="suspected_resolved",
                             message=(
                                 f"{gid} '{goal['title'][:60]}': SUSPECTED → READY "
-                                f"(real submit + 2xx evidence now present)"
+                                f"(scanner/diagnostic_l2 submit + 2xx evidence)"
                             ),
                         ),
                         escalate=False,
@@ -241,8 +312,23 @@ def main() -> None:
                     if args.apply_status_update:
                         matrix_text = update_matrix_status(
                             matrix_text, gid, "READY",
-                            note="resolved: submit+2xx evidence recorded",
+                            note="resolved: trustworthy submit+2xx evidence",
                         )
+                elif has_submit_step(seq) and has_mutation_network(seq) and not trustworthy:
+                    # Submit + 2xx exist but provenance is weak — surface so user
+                    # knows why SUSPECTED won't lift. Don't escalate; keep WARN.
+                    out.add(
+                        Evidence(
+                            type="suspected_kept_weak_provenance",
+                            message=(
+                                f"{gid} '{goal['title'][:60]}': has submit+2xx but "
+                                f"NOT promoted ({reason}). Re-run scanner via "
+                                f"/vg:review --re-scan-goals={gid}."
+                            ),
+                            file=str(matrix_path),
+                        ),
+                        escalate=False,
+                    )
                 continue  # Already SUSPECTED — don't re-flag, just resolve if applicable
 
             if current_status != "READY":

@@ -224,9 +224,69 @@ _block_resolve_l2_architect() {
   echo "$prompt_path" >&3 2>/dev/null || true
   echo "block-architect-prompt: $prompt_path (model=${architect_model})" >&2
 
-  # Fallback return when Task dispatch isn't hooked up in raw shell:
-  # emit a placeholder proposal so caller can decide L3/L4.
-  printf '{"type":"config-change","summary":"architect_unavailable — Task dispatch required","file_structure":"N/A","framework_choice":"N/A","decision_questions":[{"q":"Architect subagent could not be dispatched in this context. Proceed with manual direction?","recommendation":"Re-run command from Claude harness (Task tool available) or provide manual fix.","rationale":"Raw shell has no Task capability; orchestrator must substitute live Haiku call."}],"confidence":0.1}\n'
+  # RFC v9 PR-D3 stub-3 fix: try scripts/spawn-diagnostic-l2.py for live
+  # Haiku invocation. Falls back to placeholder if script unavailable, CLI
+  # not in PATH, or subagent fails.
+  local spawn_script="${REPO_ROOT:-.}/scripts/spawn-diagnostic-l2.py"
+  if [ -f "$spawn_script" ] && [ -n "$phase_dir" ] && [ -d "$phase_dir" ] && \
+     [ "${VG_DIAGNOSTIC_L2_DISABLE:-0}" != "1" ]; then
+    # Codex MEDIUM fix: block_family is the validator domain (provenance,
+    # traceability, content-depth, ...), NOT the gate_id prefix. Map known
+    # gate_id stems to families; default to "uncategorized" for unknown
+    # gates (architect still gets full context via evidence_json).
+    local block_family
+    case "$gate_id" in
+      *evidence*|*provenance*|*scanner*|*replay*) block_family="provenance" ;;
+      *trace*|*orphan*|*coverage*|*matrix*) block_family="traceability" ;;
+      *content*|*depth*|*skim*|*tbd*) block_family="content-depth" ;;
+      *fixture*|*recipe*|*invariant*) block_family="fixtures" ;;
+      *security*|*auth*|*secret*) block_family="security" ;;
+      *contract*|*api-index*|*envelope*) block_family="contract" ;;
+      *artifact*|*missing*|*prereq*) block_family="artifacts" ;;
+      *) block_family="uncategorized" ;;
+    esac
+    local spawn_out
+    spawn_out=$("${PYTHON_BIN:-python3}" "$spawn_script" \
+      --gate-id "$gate_id" \
+      --block-family "$block_family" \
+      --phase-dir "$phase_dir" \
+      --gate-context "$gate_context" \
+      --evidence-json "$evidence_json" \
+      ${VG_DIAGNOSTIC_L2_DRY_RUN:+--dry-run} \
+      2>/dev/null)
+    local spawn_rc=$?
+    if [ "$spawn_rc" -eq 0 ]; then
+      # Translate spawn-diagnostic-l2 output → architect proposal shape
+      ${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    out = {
+        'type': 'diagnostic-l2',
+        'summary': d.get('diagnosis', '')[:200],
+        'file_structure': 'N/A — proposal stored at .l2-proposals/{}.json'.format(d.get('proposal_id','')),
+        'framework_choice': 'diagnostic_l2 subagent',
+        'decision_questions': [{
+            'q': 'Apply proposed fix?',
+            'recommendation': d.get('proposed_fix', '')[:300],
+            'rationale': f'L2 audit trail: {d.get(\"proposal_id\",\"?\")}; confidence {d.get(\"confidence\",0):.2f}',
+        }],
+        'confidence': float(d.get('confidence', 0.0)),
+        'proposal_id': d.get('proposal_id'),
+    }
+    print(json.dumps(out))
+except Exception as e:
+    print(json.dumps({'type':'parse-error','summary':str(e),'file_structure':'','framework_choice':'','decision_questions':[],'confidence':0.0}))
+" "$spawn_out"
+      return 0
+    else
+      echo "  spawn-diagnostic-l2 exited rc=${spawn_rc} — falling back to placeholder" >&2
+    fi
+  fi
+
+  # Fallback return when spawn unavailable: emit placeholder proposal so
+  # caller (orchestrator/Claude harness) can decide L3/L4 manually.
+  printf '{"type":"config-change","summary":"architect_unavailable — Task dispatch required","file_structure":"N/A","framework_choice":"N/A","decision_questions":[{"q":"Architect subagent could not be dispatched in this context. Proceed with manual direction?","recommendation":"Re-run command from Claude harness (Task tool available) or provide manual fix.","rationale":"Raw shell has no Task capability; orchestrator must substitute live Haiku call. Set VG_DIAGNOSTIC_L2_DRY_RUN=1 to test plumbing without invoking CLI."}],"confidence":0.1}\n'
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -353,12 +413,43 @@ block_resolve_l2_handoff() {
   local phase_dir="${3:-${PHASE_DIR:-.}}"
   local brief="${phase_dir}/.block-resolver-l2-brief.md"
 
-  # Extract proposal fields from JSON result
-  local p_type=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('type','?'))" 2>/dev/null)
-  local p_summary=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('summary',''))" 2>/dev/null)
-  local p_confidence=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('confidence',0))" 2>/dev/null)
-  local p_rationale=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('rationale',''))" 2>/dev/null)
-  local p_actions=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('\n'.join('- ' + a for a in p.get('suggested_actions',[])))" 2>/dev/null)
+  # Codex-R7 fix: previously extracted only legacy `proposal.rationale` and
+  # `proposal.suggested_actions`. The diagnostic-L2 shape (built at line ~269)
+  # puts the actionable fix under `decision_questions[0].recommendation` and
+  # `decision_questions[0].rationale`. Extract from BOTH shapes so the brief
+  # always shows the architect's recommendation to L3.
+  local extract_py='
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    p = d.get("proposal") or {}
+    out = {
+        "type": p.get("type", "?"),
+        "summary": p.get("summary", ""),
+        "confidence": p.get("confidence", 0),
+        # Legacy shape paths
+        "rationale": p.get("rationale", ""),
+        "actions": p.get("suggested_actions") or [],
+    }
+    # Diagnostic-L2 shape — decision_questions array carries fix
+    dqs = p.get("decision_questions") or []
+    if dqs and isinstance(dqs[0], dict):
+        dq0 = dqs[0]
+        if not out["rationale"]:
+            out["rationale"] = dq0.get("rationale", "")
+        rec = dq0.get("recommendation", "")
+        if rec and rec not in out["actions"]:
+            out["actions"] = [rec] + list(out["actions"])
+    print(json.dumps(out))
+except Exception:
+    print("{}")
+'
+  local extracted=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "$extract_py" 2>/dev/null)
+  local p_type=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('type','?'))" 2>/dev/null)
+  local p_summary=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))" 2>/dev/null)
+  local p_confidence=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('confidence',0))" 2>/dev/null)
+  local p_rationale=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('rationale',''))" 2>/dev/null)
+  local p_actions=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print('\n'.join('- ' + str(a) for a in json.loads(sys.stdin.read()).get('actions',[])))" 2>/dev/null)
 
   # Write brief file for orchestrator Task tool
   cat > "$brief" <<EOF
@@ -475,6 +566,90 @@ JSON
   if type -t emit_telemetry_v2 >/dev/null 2>&1; then
     emit_telemetry_v2 "block_l3_prompt_emitted" "${VG_CURRENT_PHASE:-unknown}" "${VG_CURRENT_STEP:-unknown}" "$gate_id" "L3_PROMPT" \
       "{\"brief\":\"${brief//\"/\\\"}\",\"proposal_type\":\"${p_type//\"/\\\"}\"}"
+  fi
+
+  return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# block_resolve_l3_single_advisory — D26 single-advisory variant (RFC v9 PR-D3)
+# ═══════════════════════════════════════════════════════════════════════
+# When the architect's proposal has high confidence (typically ≥ 0.8) and
+# the right answer is clear, do NOT fabricate a 3-option menu. Lead with
+# the recommendation, ask Y/n. Override + abort remain reachable via [d]etails.
+#
+# RFC v9 D26 rule (user-stated): "khi có 1 đường đúng, đừng tạo menu giả định
+# người dùng có lựa chọn" — when there's a clear right path, advise straight.
+#
+# Args:
+#   $1 — gate_id (e.g., "missing-evidence")
+#   $2 — phase_dir (defaults to $PHASE_DIR)
+#   $3 — confidence (0.0 .. 1.0; default 0.8)
+#
+# Behavior:
+#   - confidence >= threshold (config.review.l3_single_advisory_min_confidence,
+#     default 0.7): emit single-advisory JSON (one primary action + [d]etails)
+#   - confidence < threshold: fall through to block_resolve_l3_present (3-option)
+#
+# Use when:
+#   - L2 architect surfaces high-confidence fix.
+#   - Recovery paths in vg:review/test/build where the alternative is just
+#     "do nothing" or "investigate manually" (not a real divergent decision).
+block_resolve_l3_single_advisory() {
+  local gate_id="$1"
+  local phase_dir="${2:-${PHASE_DIR:-.}}"
+  local confidence="${3:-0.8}"
+  local brief="${phase_dir}/.block-resolver-l2-brief.md"
+  local threshold="${CONFIG_REVIEW_L3_SINGLE_ADVISORY_MIN_CONFIDENCE:-0.7}"
+
+  if [ ! -f "$brief" ]; then
+    echo "⛔ block_resolve_l3_single_advisory: brief missing at ${brief}" >&2
+    return 1
+  fi
+
+  # Compare confidence vs threshold (POSIX bash arithmetic via awk for floats)
+  local should_advise
+  should_advise=$(awk "BEGIN { print ($confidence >= $threshold) ? 1 : 0 }")
+  if [ "$should_advise" != "1" ]; then
+    # Low confidence — fall back to 3-option menu (preserve audit trail)
+    echo "▸ confidence=$confidence < threshold=$threshold → falling back to multi-option L3" >&2
+    block_resolve_l3_present "$gate_id" "$phase_dir"
+    return $?
+  fi
+
+  local p_type=$(grep -E "^\- \*\*Type:\*\*" "$brief" | head -1 | sed 's/.*Type:\*\*\s*//')
+  local p_summary=$(grep -E "^\- \*\*Summary:\*\*" "$brief" | head -1 | sed 's/.*Summary:\*\*\s*//')
+  local p_rationale=$(grep -E "^\- \*\*Rationale:\*\*" "$brief" | head -1 | sed 's/.*Rationale:\*\*\s*//')
+
+  cat <<JSON
+{
+  "marker": "BLOCK_RESOLVER_L3_PROMPT_SINGLE_ADVISORY",
+  "gate_id": "${gate_id}",
+  "brief_path": "${brief}",
+  "confidence": ${confidence},
+  "ask_user_question_template": {
+    "question": "Áp dụng đề xuất sửa cho '${gate_id}'? ${p_summary}",
+    "header": "L3 single-advisory (confidence=${confidence})",
+    "multiSelect": false,
+    "options": [
+      {
+        "label": "Yes — apply now",
+        "description": "${p_rationale}"
+      },
+      {
+        "label": "No — show details",
+        "description": "Reveal full L2 brief at ${brief}; choose override/abort then"
+      }
+    ]
+  }
+}
+JSON
+
+  echo "▸ Orchestrator: invoke AskUserQuestion with the template above, then call block_resolve_l3_apply '${gate_id}' '<chosen_option>'" >&2
+
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "block_l3_single_advisory_emitted" "${VG_CURRENT_PHASE:-unknown}" "${VG_CURRENT_STEP:-unknown}" "$gate_id" "L3_SINGLE_ADVISORY" \
+      "{\"confidence\":${confidence},\"proposal_type\":\"${p_type//\"/\\\"}\"}"
   fi
 
   return 0

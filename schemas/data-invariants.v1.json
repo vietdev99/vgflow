@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vgflow.dev/schemas/data-invariants.v1.json",
+  "title": "VGFlow Data Invariants v1.0",
+  "description": "RFC v9 D5 — data_invariants block in ENV-CONTRACT.md. Per-consumer entity creation (no count generic). Closes preflight non-convergence ping-pong.",
+  "type": "object",
+  "required": ["data_invariants"],
+  "properties": {
+    "data_invariants": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/invariant" }
+    }
+  },
+  "$defs": {
+    "invariant": {
+      "type": "object",
+      "required": ["id", "resource", "where", "consumers"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Stable invariant identifier (e.g., tier2_topup_pending)"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Logical resource name (matches API-CONTRACTS.md resource block)"
+        },
+        "where": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Conjunction-only filter (AND across keys). OR via separate invariants."
+        },
+        "consumers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/consumer" },
+          "description": "List of goals depending on this invariant. Preflight counts destructive consumers, creates N entities."
+        },
+        "isolation": {
+          "type": "string",
+          "enum": ["per_consumer", "shared_when_read_only"],
+          "default": "per_consumer",
+          "description": "per_consumer = N entities for N destructive consumers. shared_when_read_only = 1 entity if all read_only."
+        }
+      }
+    },
+    "consumer": {
+      "type": "object",
+      "required": ["goal", "recipe", "consume_semantics"],
+      "properties": {
+        "goal": {
+          "type": "string",
+          "pattern": "^G-[A-Za-z0-9._-]+$"
+        },
+        "recipe": {
+          "type": "string",
+          "pattern": "^G-[A-Za-z0-9._-]+$",
+          "description": "Owning recipe goal_id (may differ from consumer goal — e.g., G-11 reuses G-10 recipe)"
+        },
+        "consume_semantics": {
+          "type": "string",
+          "enum": ["destructive", "read_only"],
+          "description": "destructive = scanner mutation removes/transitions entity (need own row). read_only = scanner observes only (can share row)."
+        }
+      }
+    }
+  }
+}

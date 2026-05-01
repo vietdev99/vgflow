@@ -1609,6 +1609,227 @@ fi
 </step>
 
 <step name="phase1_code_scan">
+## Phase 0.5: RFC v9 preflight (data invariants + RCRURD + cache hygiene)
+
+**RFC v9 PR-D1/D2/F integration.** Runs deterministic gates BEFORE the
+scanner so we fail fast on broken sandbox state instead of burning Haiku
+tokens on a doomed scan.
+
+```bash
+# RFC v9 preflight — Codex-HIGH-5-ter fix: outer guard checks scripts/runtime
+# only. The inner gates check their own artifacts (ENV-CONTRACT.md for
+# invariants, FIXTURES/ for RCRURD). Previously the outer guard required
+# BOTH scripts/runtime AND ENV-CONTRACT, so a phase with FIXTURES+lifecycle
+# but no ENV-CONTRACT skipped RCRURD entirely.
+PRE_OK=1
+if [ -d "${REPO_ROOT}/scripts/runtime" ]; then
+  RFC_V9_GATE_RAN=0
+  # Only echo the banner once when at least one gate has work to do
+  HAS_INVARIANTS_FILE=0
+  HAS_FIXTURES_DIR=0
+  [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ] && HAS_INVARIANTS_FILE=1
+  [ -d "${PHASE_DIR}/FIXTURES" ] && HAS_FIXTURES_DIR=1
+  if [ "$HAS_INVARIANTS_FILE" = "1" ] || [ "$HAS_FIXTURES_DIR" = "1" ]; then
+    echo ""
+    echo "━━━ Phase 0.5 — RFC v9 preflight ━━━"
+
+    # 1. Reap expired leases + orphans (PR-F) — only if FIXTURES exist
+    if [ "$HAS_FIXTURES_DIR" = "1" ] && [ -f "${REPO_ROOT}/scripts/fixture-prune.py" ]; then
+      "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/fixture-prune.py" \
+        --phase "$PHASE_NUMBER" --apply --skip-orphans 2>&1 | sed 's/^/  prune: /'
+    fi
+
+    # Codex-HIGH-1-ter fix: delete stale snapshot at entry. Otherwise post
+    # mode at run-complete may load a snapshot from a PRIOR run.
+    rm -f "${PHASE_DIR}/.rcrurd-pre-snapshot.json" 2>/dev/null || true
+  fi  # end OR guard (banner + prune + snapshot reset)
+
+  # 2. data_invariants N-consumer check (PR-C, live HTTP wiring stub-1 fix)
+  # Codex-HIGH-5-ter: guarded by ENV-CONTRACT.md only — independent of FIXTURES.
+  if [ -f "${REPO_ROOT}/scripts/preflight-invariants.py" ] && \
+     [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
+    # Codex-R4-HIGH-2 fix: PREVIOUSLY parsed step_env.sandbox_test from
+    # vg.config.md, but that's an ENV NAME like "local", not a URL. The
+    # actual URL lives in ENV-CONTRACT.md under `target.base_url`. Use
+    # that as canonical source; fall back to VG_BASE_URL env override.
+    PRE_BASE=$("${PYTHON_BIN:-python3}" -c "
+import re, sys
+text = open('${PHASE_DIR}/ENV-CONTRACT.md', encoding='utf-8').read()
+# Match \`target:\n  base_url: \"...\"\` block (handles single+double quotes)
+m = re.search(r'^target:\s*\n((?:[ \t].*\n)+)', text, re.MULTILINE)
+if m:
+    body = m.group(1)
+    bm = re.search(r'^\s*base_url:\s*[\"\\']?([^\"\\'\s#]+)', body, re.MULTILINE)
+    if bm: print(bm.group(1))
+" 2>/dev/null)
+    [ -z "$PRE_BASE" ] && PRE_BASE="${VG_BASE_URL:-}"
+    if [ -n "$PRE_BASE" ]; then
+      PRE_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/preflight-invariants.py" \
+        --phase "$PHASE_NUMBER" --base-url "$PRE_BASE" \
+        --severity "${VG_PREFLIGHT_SEVERITY:-block}" 2>&1)
+      PRE_RC=$?
+      echo "  preflight invariants: $(echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    v = d.get("verdict","?")
+    if v == "BLOCK":
+        print(f"BLOCK ({len(d.get(\"gaps\",[]))} gap(s))")
+    elif v == "WARN":
+        print(f"WARN ({len(d.get(\"gaps\",[]))} gap(s) — VG_PREFLIGHT_SEVERITY=warn override active)")
+    elif v == "PASS":
+        print(f"PASS (checked {d.get(\"invariants_checked\",\"?\")} invariants)")
+    elif v == "DRY_RUN":
+        print("DRY_RUN")
+    else:
+        print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
+except: print("parse-error")
+')"
+      # Codex-HIGH-5 fix: setup errors (RC=2) ALWAYS block, regardless of
+      # severity gate. Missing api_index, bad creds, or missing base_url
+      # mean we cannot proceed safely — silent skip would let scan run on
+      # broken sandbox state.
+      if [ "$PRE_RC" -eq 2 ]; then
+        echo "⛔ Phase 0.5 preflight setup error — cannot proceed (RFC v9 PR-C):"
+        echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(f"   {d.get(\"error\",\"unknown setup error\")[:300]}")
+except: print("   (could not parse error)")
+'
+        echo "   Fix path: ENV-CONTRACT.md must declare api_index for every"
+        echo "   resource referenced in data_invariants. Verify vg.config.md"
+        echo "   credentials_map covers all count_role values."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      if [ "$PRE_RC" -eq 1 ] && [ "${VG_PREFLIGHT_SEVERITY:-block}" = "block" ]; then
+        echo "⛔ Phase 0.5 preflight invariants gate BLOCK — fix path:"
+        echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+for g in d.get("gaps", []):
+    print("    " + g.get("fix_hint", ""))
+'
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_invariants_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+    else
+      # Codex-HIGH-5-bis fix: missing base_url WAS silent skip — that's
+      # the original "RFC v9 silently bypassed" failure mode. If
+      # ENV-CONTRACT.md declares data_invariants, missing base_url IS a
+      # setup error → block. If no invariants declared, this is a no-op
+      # phase and skip is fine.
+      HAS_INVARIANTS=$(grep -cE '^\s*data_invariants:' "${PHASE_DIR}/ENV-CONTRACT.md" 2>/dev/null || echo 0)
+      if [ "$HAS_INVARIANTS" -gt 0 ] && [ "${VG_PREFLIGHT_SEVERITY:-block}" = "block" ]; then
+        echo "⛔ Phase 0.5 preflight setup error — ENV-CONTRACT.md declares"
+        echo "   data_invariants but no sandbox base_url found."
+        echo "   Fix path: set step_env.sandbox_test in vg.config.md OR"
+        echo "             export VG_BASE_URL=https://your-sandbox/."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      echo "  preflight invariants: SKIPPED (no base_url + no data_invariants — no-op)"
+    fi
+  fi
+
+  # 3. RCRURD pre_state gate (PR-D2, live wiring stub-2 fix)
+  # Calls scripts/rcrurd-preflight.py: walks FIXTURES/*.yaml, runs pre_state
+  # GET + assert_jsonpath for each lifecycle block. Fail-fast before scan.
+  if [ -f "${REPO_ROOT}/scripts/rcrurd-preflight.py" ] && \
+     [ -d "${PHASE_DIR}/FIXTURES" ]; then
+    PRE_BASE_RC="${PRE_BASE:-${VG_BASE_URL:-}}"
+    if [ -n "$PRE_BASE_RC" ]; then
+      # Codex-HIGH-1-ter fix: capture snapshot in the SAME pre-mode call
+      # (not a follow-up). The snapshot is read by post-mode at run-complete
+      # to compute increased_by_at_least deltas against real pre-action state.
+      RCRURD_SNAP="${PHASE_DIR}/.rcrurd-pre-snapshot.json"
+      RCRURD_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
+        --phase "$PHASE_NUMBER" --base-url "$PRE_BASE_RC" \
+        --severity "${VG_RCRURD_SEVERITY:-block}" \
+        --capture-snapshot "$RCRURD_SNAP" 2>&1)
+      RCRURD_RC=$?
+      echo "  RCRURD pre_state: $(echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    v = d.get("verdict","?")
+    if v == "BLOCK":
+        print(f"BLOCK ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed)")
+    elif v == "WARN":
+        print(f"WARN ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed — VG_RCRURD_SEVERITY=warn override active)")
+    elif v == "PASS":
+        print(f"PASS (checked {d.get(\"checked\",0)} fixtures)")
+    else:
+        print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
+except: print("parse-error")
+')"
+      # Codex-HIGH-5 fix: RCRURD setup errors (RC=2) ALWAYS block.
+      if [ "$RCRURD_RC" -eq 2 ]; then
+        echo "⛔ Phase 0.5 RCRURD setup error — cannot proceed:"
+        echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(f"   {d.get(\"error\",\"unknown setup error\")[:300]}")
+except: print("   (could not parse error)")
+'
+        echo "   Fix path: vg.config.md credentials_map must cover every role"
+        echo "   referenced in FIXTURES/{G-XX}.yaml lifecycle.pre_state."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      if [ "$RCRURD_RC" -eq 1 ] && [ "${VG_RCRURD_SEVERITY:-block}" = "block" ]; then
+        echo "⛔ Phase 0.5 RCRURD gate BLOCK — fixture pre_state assertions failed."
+        echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+for r in d.get("results", []):
+    if r.get("passed") is False:
+        print(f"    {r[\"goal\"]}:")
+        for err in r.get("errors", [])[:3]:
+            print(f"      - {err[:200]}")
+'
+        echo "  Fix path: ensure sandbox seed data matches each fixture's lifecycle.pre_state assertions"
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_preflight_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+
+      # Codex-HIGH-1-ter fix: validate snapshot was captured. If pre-mode
+      # passed assertions but snapshot file missing, post-mode delta
+      # assertions will be wrong. Block if any fixture declares an
+      # increased_by_at_least assertion (those NEED snapshot).
+      if [ "$RCRURD_RC" -eq 0 ] && [ -d "${PHASE_DIR}/FIXTURES" ]; then
+        NEEDS_SNAPSHOT=$(grep -lE 'increased_by_at_least|decreased_by_at_least' \
+          "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$NEEDS_SNAPSHOT" -gt 0 ] && [ ! -f "$RCRURD_SNAP" ]; then
+          echo "⛔ Phase 0.5 RCRURD setup error — pre-state snapshot not"
+          echo "   captured but ${NEEDS_SNAPSHOT} fixture(s) declare delta"
+          echo "   assertions (increased_by_at_least / decreased_by_at_least)."
+          echo "   Without snapshot, post-mode would compare post-action to"
+          echo "   post-action → delta=0 false-fail."
+          "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+          exit 1
+        fi
+      fi
+    else
+      # Codex-HIGH-5-bis: missing base_url + FIXTURES with lifecycle = setup error
+      HAS_LIFECYCLE=$(grep -lE '^lifecycle:' "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$HAS_LIFECYCLE" -gt 0 ] && [ "${VG_RCRURD_SEVERITY:-block}" = "block" ]; then
+        echo "⛔ Phase 0.5 RCRURD setup error — FIXTURES declare ${HAS_LIFECYCLE}"
+        echo "   lifecycle blocks but no sandbox base_url found."
+        echo "   Fix path: set step_env.sandbox_test in vg.config.md OR"
+        echo "             export VG_BASE_URL=https://your-sandbox/."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      echo "  RCRURD pre_state: SKIPPED (no base_url + no lifecycle — no-op)"
+    fi
+  fi
+fi
+```
+
 ## Phase 1: CODE SCAN (automated, <10 sec)
 
 **If --skip-scan, skip this phase.**
@@ -5965,6 +6186,96 @@ if [ -f "$MATRIX_LINK_VAL" ]; then
   fi
 fi
 
+# RFC v9 PR-D2 Codex-HIGH-1 fix: post_state lifecycle gate AFTER scanner ran.
+# Pre_state checked at Phase 0.5 (pre-scanner); post_state must verify the
+# action actually mutated state correctly. Without this leg, RCRURD is half-
+# wired (Codex review found pre-only).
+# Re-resolve base URL from config (PRE_BASE local to Phase 0.5; not in scope).
+# Codex-R4-HIGH-2 fix: read base_url from ENV-CONTRACT.md (canonical),
+# not from vg.config.md step_env (env NAME, not URL).
+POST_BASE_RC=$("${PYTHON_BIN:-python3}" -c "
+import re
+try:
+    text = open('${PHASE_DIR}/ENV-CONTRACT.md', encoding='utf-8').read()
+    m = re.search(r'^target:\s*\n((?:[ \t].*\n)+)', text, re.MULTILINE)
+    if m:
+        bm = re.search(r'^\s*base_url:\s*[\"\\']?([^\"\\'\s#]+)', m.group(1), re.MULTILINE)
+        if bm: print(bm.group(1))
+except FileNotFoundError: pass
+" 2>/dev/null)
+[ -z "$POST_BASE_RC" ] && POST_BASE_RC="${VG_BASE_URL:-}"
+HAS_POST_LIFECYCLE=$(grep -lE '^\s*post_state:' "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+# Codex-HIGH-5-bis fix: post_state setup error blocks even without runner exec
+if [ "$HAS_POST_LIFECYCLE" -gt 0 ] && [ -z "$POST_BASE_RC" ] && \
+   [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
+  echo "⛔ RCRURD post_state setup error — FIXTURES declare post_state"
+  echo "   blocks but no sandbox base_url available at run-complete."
+  exit 1
+fi
+if [ -f "${REPO_ROOT}/scripts/rcrurd-preflight.py" ] && \
+   [ -d "${PHASE_DIR}/FIXTURES" ] && [ -n "$POST_BASE_RC" ]; then
+  # Codex-HIGH-1-ter fix: snapshot must exist when delta assertions present
+  POST_NEEDS_SNAP=$(grep -lE 'increased_by_at_least|decreased_by_at_least' \
+    "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$POST_NEEDS_SNAP" -gt 0 ] && [ ! -f "${PHASE_DIR}/.rcrurd-pre-snapshot.json" ] && \
+     [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
+    echo "⛔ RCRURD post_state — pre-snapshot missing but ${POST_NEEDS_SNAP}"
+    echo "   fixture(s) declare delta assertions. Pre-mode at Phase 0.5"
+    echo "   should have captured it. Re-run /vg:review from scratch."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  POST_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
+    --phase "$PHASE_NUMBER" --base-url "$POST_BASE_RC" \
+    --mode post --severity "${VG_RCRURD_POST_SEVERITY:-block}" \
+    --pre-snapshot "${PHASE_DIR}/.rcrurd-pre-snapshot.json" 2>&1)
+  POST_RC=$?
+  echo "▸ RCRURD post_state: $(echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    v = d.get("verdict","?")
+    if v == "BLOCK":
+        print(f"BLOCK ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} post-state assertions failed)")
+    elif v == "WARN":
+        print(f"WARN ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed)")
+    elif v == "PASS":
+        print(f"PASS ({d.get(\"checked\",0)} fixtures)")
+    else:
+        print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
+except: print("parse-error")
+')"
+  if [ "$POST_RC" -eq 2 ]; then
+    echo "⛔ RCRURD post_state setup error — cannot proceed:"
+    echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(f"   {d.get(\"error\",\"unknown\")[:300]}")
+except: print("   (could not parse error)")
+'
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  if [ "$POST_RC" -eq 1 ] && [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
+    echo "⛔ RCRURD post_state gate BLOCK — fixture lifecycle assertions failed"
+    echo "   after the scanner action. State did not transition as expected."
+    echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+for r in d.get("results", []):
+    if r.get("passed") is False:
+        print(f"    {r[\"goal\"]}:")
+        for err in r.get("errors", [])[:3]:
+            print(f"      - {err[:200]}")
+'
+    echo "   Fix path: re-run scanner if action genuinely succeeded; or fix"
+    echo "   the action's expected_network/post_state assertion drift."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_state_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # v2.46-wave3.2 matrix-staleness final gate: after matrix is BUILT (Phase 4),
 # re-run staleness validator at review-complete time. Step 0 entry pass catches
 # stale entries from PRIOR runs; this catches stale entries created by THIS run
@@ -5991,6 +6302,43 @@ except: print('?')
     echo "     3. /vg:review ${PHASE_NUMBER} --dogfood   (re-scan ALL mutation goals)"
     echo "     4. /vg:review ${PHASE_NUMBER} --allow-stale-matrix --override-reason=\"...\"  (debt)"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_staleness_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"suspected\":${SUSPECTED_N}}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# v2.46-wave3.2.3 (RFC v9 D10) — evidence provenance gate. Mutation steps
+# claiming success (action + 2xx network) MUST carry structured evidence:
+# {source, artifact_hash, captured_at, schema_version, scanner_run_id |
+# layer2_proposal_id}. Closes the trust hole where executor agents could
+# fabricate evidence to flip matrix-staleness bidirectional sync.
+#
+# Codex-HIGH-4 fix: default to BLOCK (was warn). Migration grace via
+# explicit `review.provenance.enforcement: warn` in vg.config.md OR
+# --allow-legacy-provenance flag for phases pre-dating RFC v9.
+PROV_VAL=".claude/scripts/validators/verify-evidence-provenance.py"
+if [ -f "$PROV_VAL" ]; then
+  # Resolve enforcement from config — env var wins, then grep config, default block
+  PROV_MODE="${VG_PROVENANCE_ENFORCEMENT:-}"
+  if [ -z "$PROV_MODE" ] && [ -n "${CONFIG_RAW:-}" ]; then
+    PROV_MODE=$(echo "$CONFIG_RAW" | grep -A2 '^review:' | grep -E '^\s*provenance:' -A2 | \
+                grep -E '^\s*enforcement:' | head -1 | sed 's/.*enforcement:\s*//;s/[\"'\'']//g' | tr -d ' ')
+  fi
+  [ -z "$PROV_MODE" ] && PROV_MODE="block"
+  PROV_FLAGS="--severity ${PROV_MODE}"
+  # During migration window, allow legacy phases without provenance
+  [[ "${ARGUMENTS}" =~ --allow-legacy-provenance ]] && PROV_FLAGS="$PROV_FLAGS --allow-legacy"
+  ${PYTHON_BIN:-python3} "$PROV_VAL" --phase "${PHASE_NUMBER}" $PROV_FLAGS
+  PROV_RC=$?
+  if [ "$PROV_RC" -ne 0 ] && [ "$PROV_MODE" = "block" ]; then
+    echo "⛔ Evidence provenance gate failed — mutation steps claim success without"
+    echo "   structured provenance object (RFC v9 D10). Possible fabricated evidence."
+    echo "   Fix path:"
+    echo "     1. Re-run scanner: /vg:review ${PHASE_NUMBER} --retry-failed"
+    echo "        (Haiku scanner records evidence.source=scanner with scanner_run_id)"
+    echo "     2. For legacy phases pre-RFC-v9: --allow-legacy-provenance"
+    echo "        (marks missing-evidence steps as legacy_pre_provenance, informational)"
+    echo "     3. Set review.provenance.enforcement: warn in vg.config.md to defer enforcement"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.evidence_provenance_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
 fi

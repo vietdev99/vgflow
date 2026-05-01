@@ -17,8 +17,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install test dependencies
-        run: pip install jsonschema pyyaml pytest
+      - name: Install all dependencies (RFC v9 needs requests + jsonpath-ng)
+        run: pip install -r requirements.txt
 
       - name: Validate JSON schemas
         run: |
@@ -65,6 +65,30 @@ jobs:
           else
             echo "(no negative tests yet)"
           fi
+
+      - name: RFC v9 runtime + validator suite (full)
+        run: |
+          # Run the entire pytest tree under tests/ — covers recipe runtime,
+          # fixture cache, preflight, RCRURD gate, content depth, pattern
+          # catalog, diagnostic L2, tester pro, schema golden tests, and the
+          # standalone runner subprocess tests.
+          python -m pytest tests/ -q --tb=short
+
+      - name: Shell test suite (block-resolver harness)
+        run: |
+          for t in tests/test_block_resolver_*.sh; do
+            [ -f "$t" ] || continue
+            echo "▸ $t"
+            bash "$t"
+          done
+
+      - name: Verify request-based tests did NOT skip (regression guard)
+        run: |
+          # Catch the silent-skip regression Codex flagged: if `requests` or
+          # `jsonpath-ng` go missing from requirements, every executor/auth/
+          # api_index test would skip via importorskip and CI would still
+          # be green. This step asserts those deps are importable.
+          python -c "import requests, jsonpath_ng, jsonschema; print('all RFC v9 deps importable')"
 
       - name: Stack health (if present)
         run: |

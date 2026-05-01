@@ -943,3 +943,32 @@ validators:
     runtime_target_ms: 800
     added_in: v2.35.0
     description: 'v2.35.0 closes #51 invariant 3. Every (resource × role) declared in CRUD-SURFACES.md kit:crud-roundtrip must have runs/{resource}-{role}.json with coverage.attempted >= 1 and evidence_ref populated per non-skipped step. Catches AI gaming via empty run artifacts.'
+
+  # ──── RFC v9 wave-3.2.3 — evidence provenance + matrix-staleness ────
+
+  - id: matrix-staleness
+    path: scripts/validators/verify-matrix-staleness.py
+    severity: block
+    phases_active: [review]
+    domain: evidence
+    runtime_target_ms: 600
+    added_in: v2.46
+    description: 'v2.46-wave3.2 — flag GOAL-COVERAGE-MATRIX rows with status=READY when goal_sequences[gid] has no submit click + 2xx mutation network. Wave-3.2.3 (RFC v9 D10): bidirectional sync (SUSPECTED → READY) only triggers on evidence.source ∈ {scanner, diagnostic_l2}.'
+
+  - id: evidence-provenance
+    path: scripts/validators/verify-evidence-provenance.py
+    severity: block
+    phases_active: [review]
+    domain: evidence
+    runtime_target_ms: 700
+    added_in: v2.46
+    description: 'RFC v9 D10 — every mutation step claiming success (action + 2xx network) must carry structured evidence object {source, artifact_hash, captured_at, schema_version, scanner_run_id|layer2_proposal_id}. Codex-HIGH-4 fix: default block. Override via review.provenance.enforcement: warn in vg.config.md OR --allow-legacy-provenance for legacy phases.'
+
+  - id: codegen-fixture-ref
+    path: scripts/validators/verify-codegen-fixture-ref.py
+    severity: block
+    phases_active: [test]
+    domain: evidence
+    runtime_target_ms: 500
+    added_in: v2.46
+    description: 'Codex-HIGH-3 regression guard. When goal has FIXTURES-CACHE.captured but its generated .spec.ts does not reference FIXTURE.* identifiers, codegen-fixture-inject did not run. Override via --allow-no-fixture-ref (override-debt logged).'
