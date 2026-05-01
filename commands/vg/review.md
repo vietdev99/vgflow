@@ -5808,6 +5808,26 @@ if [ "$COMP_RC" -ne 0 ] && [ "$COMP_SEV" = "block" ]; then
   exit 1
 fi
 
+# v2.45 fail-closed-validators PR: matrix↔runtime evidence cross-check.
+# Phase 3.2 dogfood found GOAL-COVERAGE-MATRIX.md fabricating READY status
+# even when goal_sequences[].result == "blocked" or sequence missing entirely.
+# This validator catches the fabrication BEFORE review exits, so /vg:test
+# never sees a lying matrix.
+MATRIX_LINK_VAL=".claude/scripts/validators/verify-matrix-evidence-link.py"
+if [ -f "$MATRIX_LINK_VAL" ]; then
+  ${PYTHON_BIN:-python3} "$MATRIX_LINK_VAL" --phase-dir "$PHASE_DIR" --severity block
+  MATRIX_LINK_RC=$?
+  if [ "$MATRIX_LINK_RC" -ne 0 ]; then
+    echo "⛔ Review matrix-evidence-link gate failed."
+    echo "   GOAL-COVERAGE-MATRIX.md asserts goal status that runtime evidence does not support."
+    echo "   Fix path:"
+    echo "     1. Re-run /vg:review ${PHASE_NUMBER} --retry-failed (record real sequences)"
+    echo "     2. OR reclassify goals to UNREACHABLE/INFRA_PENDING/DEFERRED with justification"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_evidence_link_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
 RUN_RC=$?
 if [ $RUN_RC -ne 0 ]; then

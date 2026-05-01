@@ -1659,15 +1659,35 @@ they use the `<goal>-<control>-{filter|pagination}-<group>` slug pattern
 established by `enumerateFilterFiles` / `enumeratePaginationFiles`. The
 manual codegen path emits `<phase>-goal-<group>.spec.ts` instead.
 
-**v2.32.1 CRUD structural fallback (fixes #47/#48 false pass):**
+**v2.32.1 CRUD structural fallback (fixes #47/#48 false pass) — DEPRECATED v2.45:**
+
+> ⛔ **v2.45 fail-closed-validators PR:** This fallback is no longer the
+> default. Phase 3.2 dogfood found that 40/67 goals trượt vào fallback path,
+> turning review coverage gaps (no goal_sequence recorded) into list-only
+> .spec.ts that passed test gate while production buttons (Approve/Reject/
+> Flag) crashed. The fallback hid the underlying review bug instead of
+> surfacing it.
+>
+> **New rule:** A `READY` matrix Status without a corresponding non-empty
+> `goal_sequences[G-XX]` MUST BLOCK codegen with the message:
+> `"Goal G-XX READY trong matrix nhưng RUNTIME-MAP không có sequence — re-run /vg:review --retry-failed hoặc reclassify goal."`
+>
+> The validator `matrix-evidence-link` runs at review-exit and now blocks
+> matrix↔runtime mismatches BEFORE the run reaches /vg:test, so this
+> fallback should rarely be reachable. If reached, it indicates the
+> matrix-evidence-link validator was skipped or overridden — investigate
+> rather than silently fall back.
+
+**Legacy fallback (preserved behind `--allow-structural-fallback` flag for
+emergency unblocks only; logs override-debt entry):**
 
 If a `READY` UI goal has no `RUNTIME-MAP.json.goal_sequences[G-XX]` but
-`CRUD-SURFACES.md` contains a matching resource, codegen MUST generate a
-non-skipped structural Playwright spec from the CRUD contract. This is the
-only allowed fallback for legacy/static review artifacts; never emit
-`test.skip()` for this case.
+`CRUD-SURFACES.md` contains a matching resource, codegen MAY generate a
+non-skipped structural Playwright spec from the CRUD contract. This is now
+opt-in — never emit `test.skip()` for this case but also never auto-trigger
+the fallback.
 
-Fallback rules:
+Fallback rules (when `--allow-structural-fallback` is set):
 - Applies only to non-mutation goals. Any goal with meaningful
   `Mutation evidence` still requires a real per-goal runtime sequence with
   POST/PUT/PATCH/DELETE + persistence proof.
@@ -1684,8 +1704,9 @@ Fallback rules:
   sequence exists: confirm dialog/sheet text and destructive affordance.
 - Header must include `// STRUCTURAL_FROM_CRUD_SURFACES: true` and
   `// Source: CRUD-SURFACES.md + TEST-GOALS.md`.
-- If no CRUD resource matches, BLOCK codegen with a clear message; do not
-  generate a skeleton.
+- Operator MUST acknowledge structural-fallback debt via override-debt entry
+  citing the goals being downgraded. Resolution: re-run /vg:review at next
+  pipeline pass to record real sequences.
 
 **Pre-codegen Gate — Dynamic ID scan (HARD BLOCK — tightened 2026-04-17):**
 
@@ -1776,12 +1797,14 @@ PY
 
 | Status | Action |
 |---|---|
-| `READY` | Sinh full spec happy path (logic existing bên dưới). |
-| `READY` + missing `goal_sequences[G-XX]` + CRUD match | Sinh structural spec from `CRUD-SURFACES.md`; never `.skip()`. Mutation goals excluded and blocked by CRUD depth gate. |
+| `READY` (+ non-empty `goal_sequences[G-XX]`) | Sinh full spec happy path (logic existing bên dưới). |
+| `READY` + missing `goal_sequences[G-XX]` | **⛔ BLOCK** — không tạo structural spec yếu. Báo error cho operator: "Goal G-XX READY trong matrix nhưng RUNTIME-MAP không có sequence. Re-run /vg:review --retry-failed hoặc reclassify goal. KHÔNG dùng /vg:test làm fallback cho review miss." Đây là điểm fail-closed thay cho fallback "structural spec from CRUD-SURFACES" cũ — fallback đó che dấu review coverage gap (phase 3.2 dogfood: 40 goals trượt vào fallback path mà không có mutation evidence). |
 | `MANUAL` | Sinh **skeleton** với `test.skip(...)` + comment "manual verify in UAT + verification_strategy: {strategy}". Có placeholder để user fill sau. |
 | `DEFERRED` | **Skip entirely** — không tạo file .spec.ts (phase target chưa deploy). Log `[skip-deferred] {gid} depends_on_phase: {X}`. |
 | `INFRA_PENDING` | Sinh skeleton `.skip()` với comment "requires infra {deps} — re-run --sandbox". |
 | `BLOCKED` / `UNREACHABLE` | KHÔNG tới đây — review 100% gate đã chặn. Nếu gặp → log error, skip goal. |
+
+**v2.45 fail-closed fix:** Trước đây `READY + missing seq + CRUD match` rơi vào fallback "structural spec from CRUD-SURFACES.md" — đường này dùng list metadata thay cho mutation evidence. Phase 3.2 dogfood cho thấy fallback này biến lỗ hổng review (40/67 goals chưa replay) thành .spec.ts list-render thuần — test PASS nhưng nút Approve/Reject vẫn lỗi production. Fix: bắt buộc re-review thay vì fallback yếu. Validator `matrix-evidence-link` chạy ở review-exit sẽ chặn matrix-runtime mismatch trước khi tới /vg:test.
 
 **Skeleton template cho MANUAL / INFRA_PENDING:**
 
