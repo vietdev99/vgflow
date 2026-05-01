@@ -530,6 +530,54 @@ def main() -> int:
                     f"   To skip the hint and fix now: python .claude/scripts/migrate-state.py {phase} --apply"
                 )
 
+        # v2.46-wave3 — autonomous recovery loop: try auto_executable paths
+        # before giving up to user. Closes "BLOCK = stop" anti-pattern.
+        # Only safe paths run (override flags + log debt). NEVER runs
+        # token-expensive --retry-failed or destructive code/data edits.
+        recovery_script = REPO_ROOT / ".claude" / "scripts" / "vg-recovery.py"
+        if recovery_script.exists():
+            log(f"v2.46-wave3 auto-recovery: attempting auto_executable paths for run_id={run_id[:12]}")
+            try:
+                ar = subprocess.run(
+                    [sys.executable, str(recovery_script), "--phase", phase, "--auto", "--json"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                log(f"auto-recovery rc={ar.returncode} stdout={ar.stdout[:300]!r}")
+                if ar.returncode == 0:
+                    # Auto-recovery success → retry run-complete
+                    rc3, sout3, serr3 = run_orchestrator_complete(session_id=session_id)
+                    log(f"post-auto-recovery run-complete rc={rc3}")
+                    if rc3 == 0:
+                        _emit_telemetry(
+                            "hook.auto_recovery_succeeded",
+                            {"run_id": run_id, "violations": sorted(violation_types)},
+                            session_id=session_id,
+                        )
+                        approve_msg = (
+                            f"✓ Auto-recovery succeeded (run_id={run_id[:12]}). "
+                            f"Override flags applied; debt logged to OVERRIDE-DEBT.md. "
+                            f"Review with /vg:doctor recovery for details."
+                        )
+                        log(f"APPROVED via auto-recovery: {approve_msg}")
+                        print(json.dumps({
+                            "decision": "approve",
+                            "reason": "auto-recovered-via-recovery-paths",
+                            "hookSpecificOutput": {
+                                "hookEventName": "Stop",
+                                "additionalContext": approve_msg,
+                            },
+                        }))
+                        return 0
+                    # Recovery ran but BLOCK still fires → fall through with new msg
+                    msg = serr3.strip() or sout3.strip() or msg
+                    log(f"auto-recovery insufficient — still BLOCKED, surfacing to user")
+                else:
+                    log(f"auto-recovery couldn't fully resolve (rc={ar.returncode}); falling through")
+            except subprocess.TimeoutExpired:
+                log("auto-recovery timeout 120s — falling through")
+            except Exception as e:
+                log(f"auto-recovery error: {e}")
+
         log(f"BLOCKED: {msg[:200]}")
         print(msg, file=sys.stderr)
         return 2

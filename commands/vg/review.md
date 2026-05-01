@@ -1,7 +1,7 @@
 ---
 name: vg:review
 description: Post-build review — code scan + browser discovery + fix loop + goal comparison → RUNTIME-MAP
-argument-hint: "<phase> [--target-env=local|staging|sandbox|prod | --local | --sandbox | --staging | --prod] [--mode=full|delta|regression|schema-verify|link-check|infra-smoke] [--scanner=haiku-only|codex-supplement|gemini-supplement|council-all] [--with-deepscan] [--non-interactive] [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--full-scan] [--allow-no-crud-surface]"
+argument-hint: "<phase> [--target-env=local|staging|sandbox|prod | --local | --sandbox | --staging | --prod] [--mode=full|delta|regression|schema-verify|link-check|infra-smoke] [--scanner=haiku-only|codex-supplement|gemini-supplement|council-all] [--with-deepscan] [--non-interactive] [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--re-scan-goals=G-XX,G-YY] [--dogfood] [--full-scan] [--allow-no-crud-surface]"
 allowed-tools:
   - Read
   - Write
@@ -296,10 +296,53 @@ Flags:
 - `--fix-only` — skip to Phase 3 (requires RUNTIME-MAP with errors). **Gated**: listed in `forbidden_without_override` (line 34) — must combine with `--override-reason="<text>"` to run, otherwise hard BLOCK. Entry logged to override-debt register.
 - `--skip-crossai` — skip CrossAI review at end
 - `--evaluate-only` — skip Phase 1 + 2 (discovery already done by Codex/Gemini), read existing scan JSONs from ${PHASE_DIR}, go directly to Phase 2b-3 (collect + merge) → Phase 3 (fix) → Phase 4 (goal comparison). Requires: nav-discovery.json + scan-*.json already exist.
-- `--retry-failed` — skip Phase 1 + Phase 2 navigator, re-scan ONLY views mapped to failed/blocked goals in GOAL-COVERAGE-MATRIX.md. Requires: GOAL-COVERAGE-MATRIX.md + RUNTIME-MAP.json already exist. Use when: review already ran but goals < 100%, code was fixed, need targeted re-scan without full re-discovery.
+- `--retry-failed` — skip Phase 1 + Phase 2 navigator, re-scan ONLY views mapped to failed/blocked/SUSPECTED goals in GOAL-COVERAGE-MATRIX.md. Requires: GOAL-COVERAGE-MATRIX.md + RUNTIME-MAP.json already exist. Use when: review already ran but goals < 100%, code was fixed, need targeted re-scan without full re-discovery. **v2.46-wave3.2:** SUSPECTED status (matrix=READY but no submit evidence) is now included in retry set automatically — closes Phase 3.2 staleness gap where matrix lied.
+- `--re-scan-goals=G-XX,G-YY,G-ZZ` — bypass matrix entirely; re-scan only the listed goal IDs. Resolves to start_views via RUNTIME-MAP.json goal_sequences. Use when: matrix-staleness validator surfaced specific suspected goals, OR you know exactly which goals need re-evidence. Mutually exclusive with `--retry-failed` (more precise overrides broader).
+- `--dogfood` — re-scan ALL mutation goals (any goal with non-empty `mutation_evidence` in TEST-GOALS.md) regardless of matrix status. Use when: you suspect systemic submit-evidence gaps. Slower than `--retry-failed` but catches the full surface.
 - `--full-scan` — disable sidebar suppression. Haiku agents see full page (sidebar/header/footer) in every snapshot. Use when: app has non-standard layout, geometry detection fails, or debugging suppression issues.
 - `--with-probes` — enable mutation probe variations (edit/boundary/repeat) in step 2b-3 step 9. Adds 1 Haiku per mutation goal. Default OFF — let /vg:test handle variations via Playwright codegen (deterministic, cheaper).
 - `--allow-no-crud-surface` — last-resort waiver for legacy phases missing CRUD-SURFACES.md. Logs debt via validator output; do not use for new CRUD work.
+
+**Flag parsing (v2.46-wave3.2 — explicit env vars used downstream):**
+```bash
+# Parse boolean + value flags from $ARGUMENTS into env vars consumed by later steps.
+# (Pre-wave3.2 the skill relied on AI interpretation; making it explicit closes
+# the gap where staleness check + retry-failed referenced unset variables.)
+ARGS_RAW="${ARGUMENTS:-}"
+RETRY_FAILED=""
+RE_SCAN_GOALS=""
+DOGFOOD=""
+SKIP_SCAN=""
+SKIP_DISCOVERY=""
+FIX_ONLY=""
+EVALUATE_ONLY=""
+FULL_SCAN=""
+WITH_PROBES=""
+SKIP_CROSSAI=""
+ALLOW_NO_CRUD_SURFACE=""
+NON_INTERACTIVE=""
+
+for tok in $ARGS_RAW; do
+  case "$tok" in
+    --retry-failed)            RETRY_FAILED=1 ;;
+    --re-scan-goals=*)         RE_SCAN_GOALS="${tok#--re-scan-goals=}" ;;
+    --dogfood)                 DOGFOOD=1 ;;
+    --skip-scan)               SKIP_SCAN=1 ;;
+    --skip-discovery)          SKIP_DISCOVERY=1 ;;
+    --fix-only)                FIX_ONLY=1 ;;
+    --evaluate-only)           EVALUATE_ONLY=1 ;;
+    --full-scan)               FULL_SCAN=1 ;;
+    --with-probes)             WITH_PROBES=1 ;;
+    --skip-crossai)            SKIP_CROSSAI=1 ;;
+    --allow-no-crud-surface)   ALLOW_NO_CRUD_SURFACE=1 ;;
+    --non-interactive)         NON_INTERACTIVE=1 ;;
+  esac
+done
+
+export RETRY_FAILED RE_SCAN_GOALS DOGFOOD SKIP_SCAN SKIP_DISCOVERY FIX_ONLY \
+       EVALUATE_ONLY FULL_SCAN WITH_PROBES SKIP_CROSSAI ALLOW_NO_CRUD_SURFACE \
+       NON_INTERACTIVE
+```
 
 **Phase profile detection (P5, v1.9.2) — FIRST ACTION before any blanket check:**
 
@@ -413,6 +456,82 @@ s['status'] = 'reviewing'; s['pipeline_step'] = 'review'
 s['updated_at'] = __import__('datetime').datetime.now().isoformat()
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
+```
+
+**Matrix staleness check (v2.46-wave3.2) — closes "matrix says READY but button still errors" gap.**
+
+Runs BEFORE `--retry-failed` short-circuit so SUSPECTED goals get folded into the retry set automatically. Cross-checks `goal_sequences[].steps[]` against each goal's `mutation_evidence` declaration:
+
+- `mutation_evidence` non-empty → goal expects submit click + 2xx mutation network
+- `goal_sequences[gid].result == 'passed'` AND no submit step → SUSPECTED
+- `goal_sequences[gid].result == 'passed'` AND no 2xx POST/PUT/PATCH/DELETE → SUSPECTED
+- `goal_sequences[gid].result == 'passed'` AND only cancel-only steps → SUSPECTED
+
+```bash
+# Only run if both artifacts exist (skip on first review where matrix not yet built)
+if [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ] && [ -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
+  STALENESS_VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-matrix-staleness.py"
+  if [ -f "$STALENESS_VALIDATOR" ]; then
+    echo "━━ Checking matrix staleness (matrix-vs-runtime evidence) ━━"
+    # --apply-status-update: rewrite matrix in place so retry-failed picks up SUSPECTED goals
+    STALENESS_OUT=$("${PYTHON_BIN:-python3}" "$STALENESS_VALIDATOR" \
+      --phase "$PHASE_NUMBER" \
+      --severity block \
+      --apply-status-update 2>&1)
+    STALENESS_RC=$?
+
+    SUSPECTED_COUNT=0
+    if [ -f "${PHASE_DIR}/.matrix-staleness.json" ]; then
+      SUSPECTED_COUNT=$("${PYTHON_BIN:-python3}" -c "
+import json
+try: print(json.load(open('${PHASE_DIR}/.matrix-staleness.json'))['suspected_count'])
+except: print(0)
+")
+    fi
+
+    if [ "$STALENESS_RC" -ne 0 ] && [ "$SUSPECTED_COUNT" -gt 0 ]; then
+      echo "⚠ ${SUSPECTED_COUNT} goal(s) marked SUSPECTED — matrix=READY but no submit evidence." >&2
+      # Auto-promote to --retry-failed if not already in a retry/scan-goals mode
+      if [ -z "$RETRY_FAILED" ] && [ -z "$RE_SCAN_GOALS" ] && [ -z "$DOGFOOD" ]; then
+        echo "   Auto-promoting to --retry-failed (SUSPECTED goals folded into retry set)." >&2
+        RETRY_FAILED=1
+        export RETRY_FAILED
+      fi
+    elif [ "$SUSPECTED_COUNT" -eq 0 ]; then
+      echo "✓ Matrix staleness OK — all READY goals have submit + 2xx mutation evidence."
+    fi
+  else
+    echo "⚠ verify-matrix-staleness.py not found — skipping staleness check (re-sync vgflow)." >&2
+  fi
+fi
+```
+
+**Validate `--re-scan-goals` flag (mutually exclusive with `--retry-failed`):**
+```bash
+if [ -n "$RE_SCAN_GOALS" ] && [ -n "$RETRY_FAILED" ]; then
+  echo "⛔ --re-scan-goals and --retry-failed are mutually exclusive (--re-scan-goals is more precise)." >&2
+  exit 1
+fi
+if [ -n "$RE_SCAN_GOALS" ]; then
+  # Validate each goal ID exists in RUNTIME-MAP.json goal_sequences
+  if [ ! -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
+    echo "⛔ --re-scan-goals requires RUNTIME-MAP.json (run /vg:review {phase} first)." >&2
+    exit 1
+  fi
+  INVALID_GOALS=$("${PYTHON_BIN:-python3}" -c "
+import json
+rt = json.load(open('${PHASE_DIR}/RUNTIME-MAP.json'))
+seqs = rt.get('goal_sequences') or {}
+asked = '${RE_SCAN_GOALS}'.split(',')
+missing = [g.strip() for g in asked if g.strip() and g.strip() not in seqs]
+print(','.join(missing))
+" 2>/dev/null)
+  if [ -n "$INVALID_GOALS" ]; then
+    echo "⛔ --re-scan-goals: unknown goal IDs: ${INVALID_GOALS}" >&2
+    echo "   Valid IDs are keys of goal_sequences in RUNTIME-MAP.json." >&2
+    exit 1
+  fi
+fi
 ```
 </step>
 
@@ -1977,17 +2096,41 @@ Ví dụ user thấy khi `/vg:review` chạy:
   Validate: ${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md AND ${PHASE_DIR}/RUNTIME-MAP.json exist.
   Missing → BLOCK: "Run `/vg:review {phase}` first to generate initial artifacts."
 
-  Parse GOAL-COVERAGE-MATRIX.md → collect all goals where status ≠ READY (BLOCKED, UNREACHABLE, FAILED, PARTIAL).
+  Parse GOAL-COVERAGE-MATRIX.md → collect all goals where status NOT IN (READY, INFRA_PENDING, DEFERRED, MANUAL).
+  This includes: BLOCKED, UNREACHABLE, FAILED, PARTIAL, NOT_SCANNED, **and SUSPECTED** (v2.46-wave3.2 — matrix=READY but no submit/2xx evidence; flagged by `verify-matrix-staleness.py` at step 0_parse_and_validate and folded in here).
   If none found → print "All goals already READY. Nothing to retry." → skip to Phase 4.
 
   Parse RUNTIME-MAP.json → for each failed goal_id:
     start_view = goal_sequences[goal_id].start_view
   RETRY_VIEWS[] = unique(all start_views), with roles from RUNTIME-MAP views[start_view].role
 
-  Print: "Retry mode: {N} failed goals → {M} views to re-scan: {RETRY_VIEWS[]}"
+  Print: "Retry mode: {N} failed/suspected goals → {M} views to re-scan: {RETRY_VIEWS[]}"
 
   Skip Phase 1 (code scan). Skip 2b-0 (seed). Skip 2b-1 (navigator — reuse existing nav-discovery.json).
   Go directly to 2b-2 using RETRY_VIEWS[] as view_assignments (NOT view-assignments.json).
+
+**If --re-scan-goals=G-XX,G-YY,G-ZZ (v2.46-wave3.2):**
+  Validate: ${PHASE_DIR}/RUNTIME-MAP.json exists (matrix not required — bypasses status filter).
+  Missing → BLOCK: "Run `/vg:review {phase}` first to generate RUNTIME-MAP.json."
+
+  Each goal ID validated already at step 0_parse_and_validate (unknown IDs → exit 1 there).
+
+  Parse RUNTIME-MAP.json → for each goal_id in $RE_SCAN_GOALS:
+    start_view = goal_sequences[goal_id].start_view
+  RETRY_VIEWS[] = unique(all start_views).
+
+  Print: "Re-scan mode: {N} explicit goals → {M} views: {RETRY_VIEWS[]}"
+
+  Skip Phase 1 + 2b-0 + 2b-1. Go directly to 2b-2 using RETRY_VIEWS[].
+  Marker: write `${PHASE_DIR}/.re-scan-goals.txt` with the list (consumed by 2b-3 to scope sequence recording to just these goals).
+
+**If --dogfood (v2.46-wave3.2):**
+  Validate: ${PHASE_DIR}/TEST-GOALS.md AND ${PHASE_DIR}/RUNTIME-MAP.json exist.
+
+  Parse TEST-GOALS.md → all goals with non-empty `**Mutation evidence:**` field (see verify-matrix-staleness.py `parse_goals` for parser).
+  RE_SCAN_GOALS := comma-join(those goal_ids), then proceed exactly as `--re-scan-goals` branch above.
+
+  Print: "Dogfood mode: re-scanning ALL {N} mutation goals (regardless of matrix status)."
 
 ### 2a: Deploy + Environment Prep
 
@@ -5824,6 +5967,36 @@ if [ -f "$MATRIX_LINK_VAL" ]; then
     echo "     1. Re-run /vg:review ${PHASE_NUMBER} --retry-failed (record real sequences)"
     echo "     2. OR reclassify goals to UNREACHABLE/INFRA_PENDING/DEFERRED with justification"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_evidence_link_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# v2.46-wave3.2 matrix-staleness final gate: after matrix is BUILT (Phase 4),
+# re-run staleness validator at review-complete time. Step 0 entry pass catches
+# stale entries from PRIOR runs; this catches stale entries created by THIS run
+# (e.g. scanner recorded sequence but skipped submit, then matrix wrote READY).
+# Phase 3.2 dogfood found 36/39 mutation goals stale despite verdict=PASS.
+MATRIX_STALE_VAL=".claude/scripts/validators/verify-matrix-staleness.py"
+if [ -f "$MATRIX_STALE_VAL" ]; then
+  STALE_SEV="block"
+  [[ "${ARGUMENTS}" =~ --allow-stale-matrix ]] && STALE_SEV="warn"
+  ${PYTHON_BIN:-python3} "$MATRIX_STALE_VAL" --phase "${PHASE_NUMBER}" --severity "$STALE_SEV"
+  STALE_RC=$?
+  if [ "$STALE_RC" -ne 0 ] && [ "$STALE_SEV" = "block" ]; then
+    SUSPECTED_N=$(${PYTHON_BIN:-python3} -c "
+import json
+try: print(json.load(open('${PHASE_DIR}/.matrix-staleness.json'))['suspected_count'])
+except: print('?')
+")
+    echo "⛔ Matrix-staleness gate failed — ${SUSPECTED_N} mutation goal(s) marked READY without submit/2xx evidence."
+    echo "   Matrix lying again: scanner navigated but never submitted, or submitted without successful network."
+    echo "   This is the meta-bug Phase 3.2 dogfood surfaced (matrix=PASS but real test fails)."
+    echo "   Fix path:"
+    echo "     1. /vg:review ${PHASE_NUMBER} --retry-failed   (auto-folds SUSPECTED into retry set)"
+    echo "     2. /vg:review ${PHASE_NUMBER} --re-scan-goals=G-XX,G-YY  (targeted; see .matrix-staleness.json)"
+    echo "     3. /vg:review ${PHASE_NUMBER} --dogfood   (re-scan ALL mutation goals)"
+    echo "     4. /vg:review ${PHASE_NUMBER} --allow-stale-matrix --override-reason=\"...\"  (debt)"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_staleness_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"suspected\":${SUSPECTED_N}}" >/dev/null 2>&1 || true
     exit 1
   fi
 fi

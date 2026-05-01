@@ -3750,6 +3750,15 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
 
 def _format_block_message(command: str, phase: str,
                           violations: list[dict]) -> str:
+    # v2.46-wave3: import recovery_paths for per-violation actionable fix paths.
+    # Closes UX dead-end where BLOCK gives generic options ("Run missing step")
+    # without telling user concrete commands to fix the specific validator.
+    try:
+        from recovery_paths import render_recovery_block
+        recovery_available = True
+    except ImportError:
+        recovery_available = False
+
     lines = [
         "⛔ VG runtime_contract violations — cannot complete run.",
         "",
@@ -3764,9 +3773,16 @@ def _format_block_message(command: str, phase: str,
                 lines.append(f"    - {m.get('path', m)} ({m.get('reason', '')})")
             else:
                 lines.append(f"    - {m}")
+        # v2.46-wave3 — per-violation recovery paths (★ marks RECOMMENDED)
+        if recovery_available:
+            recovery_lines = render_recovery_block(v["type"], command, phase)
+            if recovery_lines:
+                lines.append("")
+                lines.extend(recovery_lines)
+
     lines.extend([
         "",
-        "Fix options:",
+        "Generic fallback options (if no specific recovery path above):",
         "  1. Run missing step + produce artifacts + mark + emit",
         "  2. vg-orchestrator override --flag <f> --reason <text>",
         "       — logs OVERRIDE-DEBT.md entry ONLY. Does NOT bypass this",
@@ -3775,6 +3791,8 @@ def _format_block_message(command: str, phase: str,
         "       Use --skip-<validator> CLI flag at command invocation for",
         "       per-run bypass (e.g., /vg:build 3.1 --skip-build-crossai).",
         "  3. vg-orchestrator run-abort --reason <text> (gives up)",
+        "",
+        "Tip: Run `/vg:doctor recovery` to interactively pick + execute a recovery path.",
         "",
         "Log: .vg/events.db",
     ])
