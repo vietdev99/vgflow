@@ -18,12 +18,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import Evidence, Output, emit_and_exit, find_phase_dir, timer  # noqa: E402
+from _common import Evidence, Output, emit_and_exit, find_phase_dir, timer, read_active_run_id  # noqa: E402
 
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 DB_PATH = REPO_ROOT / ".vg" / "events.db"
-CURRENT_RUN_FILE = REPO_ROOT / ".vg" / "current-run.json"
 
 
 def _section_value(config: str, section: str, key: str, default: str = "") -> str:
@@ -76,10 +75,12 @@ def _graphify_importable() -> bool:
 
 
 def _read_current_run_id() -> str | None:
-    try:
-        return json.loads(CURRENT_RUN_FILE.read_text(encoding="utf-8"))["run_id"]
-    except Exception:
-        return None
+    """Resolve current /vg:build run_id with multi-session safety.
+
+    See _common.read_active_run_id for the 4-tier resolution; closes the
+    .vg/current-run.json overwrite race when concurrent sessions run /vg:*.
+    """
+    return read_active_run_id(repo_root=REPO_ROOT, command_filter="vg:build")
 
 
 def _count_graphify_events(run_id: str) -> int:

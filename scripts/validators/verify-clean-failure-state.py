@@ -45,13 +45,43 @@ def _resolve_repo_root() -> Path:
 
 
 def _load_current_run(repo_root: Path) -> Optional[dict]:
-    path = repo_root / ".vg" / "current-run.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    """Resolve current run with multi-session safety.
+
+    Order: per-session active-run file (CLAUDE_SESSION_ID env) → legacy
+    .vg/current-run.json (only when session matches or absent). Closes the
+    overwrite race when concurrent sessions emit run-start (e.g. session A
+    /vg:build while session B /vg:blueprint).
+    """
+    sid = (
+        os.environ.get("CLAUDE_SESSION_ID")
+        or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        or ""
+    )
+    safe_sid = "".join(c for c in sid if c.isalnum() or c in "-_") or ""
+
+    if safe_sid:
+        per = repo_root / ".vg" / "active-runs" / f"{safe_sid}.json"
+        if per.exists():
+            try:
+                return json.loads(per.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    legacy = repo_root / ".vg" / "current-run.json"
+    if legacy.exists():
+        try:
+            run = json.loads(legacy.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        legacy_sid = run.get("session_id") or ""
+        compatible = (
+            not sid
+            or not legacy_sid
+            or legacy_sid == sid
+            or legacy_sid == "unknown"
+        )
+        return run if compatible else None
+    return None
 
 
 def _check_lock(repo_root: Path, run_id: str) -> list[dict]:
