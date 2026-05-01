@@ -44,11 +44,14 @@ def _read(p: Path) -> str:
 
 def parse_goals(text: str) -> list[dict]:
     goals = []
-    # v2.46+: tolerate either ## Goal (legacy) OR ### Goal (newer phases
-    # like 3.3 which use deeper heading nesting).
+    # Accept any of these heading styles (varies across phase generations):
+    #   ## Goal G-01: title       (legacy template)
+    #   ### Goal G-01 — title     (phase 3.3 nested)
+    #   ## G-01 — title           (phase 3.4a/b shorthand)
+    # Stop pattern: next heading at SAME-or-shallower depth, OR end of file.
     for m in re.finditer(
-        r"^#{2,4}\s+Goal\s+(G-[\w.-]+):?\s*(.*?)$"
-        r"(?P<body>(?:(?!^#{2,4}\s+Goal\s+).)*)",
+        r"^#{2,4}\s+(?:Goal\s+)?(G-[\w.-]+)(?:[:\s—–-]+)\s*(.*?)$"
+        r"(?P<body>(?:(?!^#{2,4}\s+(?:Goal\s+)?G-).)*)",
         text,
         re.MULTILINE | re.DOTALL,
     ):

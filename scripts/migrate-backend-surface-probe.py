@@ -72,9 +72,19 @@ def parse_matrix_backend_ready(matrix_path: Path) -> list[dict]:
         r"^\|\s*(G-[\w.-]+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([A-Z_]+)\s*\|\s*(.+?)\s*\|",
         re.MULTILINE,
     )
-    # Accept READY (handler-grep verified) and MANUAL (deferred to /vg:test).
-    # Both classes lack RUNTIME-MAP replay traffic and are pre-RFC v9 patterns.
-    accept_statuses = {"READY", "MANUAL"}
+    # Accept three exemption classes:
+    #   - READY    (handler-grep verified, just needs replay-tag for v9)
+    #   - MANUAL   (deferred to /vg:test — still actionable in THIS phase)
+    #   - DEFERRED (explicitly punted to a future phase via depends_on_phase;
+    #              mutation cannot be exercised here because dependency not yet
+    #              built — e.g., Phase 1 mailer wired in Phase 3.5)
+    # All three lack RUNTIME-MAP replay traffic and are pre-RFC v9 patterns.
+    accept_statuses = {"READY", "MANUAL", "DEFERRED"}
+    kind_map = {
+        "READY": "surface-probe",
+        "MANUAL": "manual-deferred-to-test",
+        "DEFERRED": "deferred-cross-phase",
+    }
     for m in row_re.finditer(text):
         gid, priority, surface, status, evidence = m.groups()
         if status not in accept_statuses:
@@ -86,6 +96,7 @@ def parse_matrix_backend_ready(matrix_path: Path) -> list[dict]:
             "priority": priority.strip(),
             "surface": surface.strip(),
             "status": status,
+            "kind": kind_map[status],
             "matrix_evidence": evidence.strip(),
         })
     return out
@@ -174,10 +185,13 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "tool": "migrate-backend-surface-probe.py",
         "rationale": (
-            "Pre-RFC v9 phase: backend goals achieved READY via static "
-            "handler-grep + route-registration probe. No RUNTIME-MAP replay "
-            "traffic recorded. Validator verify-backend-mutation-evidence "
-            "should accept these goals via --allow-legacy-surface-probe."
+            "Pre-RFC v9 phase: backend goals exempt from replay-evidence gate. "
+            "Three kinds: 'surface-probe' (READY via static handler-grep), "
+            "'manual-deferred-to-test' (MANUAL — exercised by /vg:test), "
+            "'deferred-cross-phase' (DEFERRED — depends on a future phase, "
+            "mutation cannot be exercised here). Validator "
+            "verify-backend-mutation-evidence accepts all three via "
+            "--allow-legacy-surface-probe."
         ),
         "goals": candidates,
     }
