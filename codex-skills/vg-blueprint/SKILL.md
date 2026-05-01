@@ -167,12 +167,23 @@ Sub-steps:
 **Config:** Read .claude/commands/vg/_shared/config-loader.md first.
 
 <step name="0_design_discovery">
-## Step 0 (Phase 20 D-12): Design discovery pre-flight
+## Step 0 (Phase 20 D-12 + v2.43.6 AI semantic detection): Design discovery pre-flight
 
 Before any planning work, verify FE phases have mockup ground truth.
 Without mockups, the entire L1-L6 stack from Phase 19 SKIPs via Form B
 and the executor ships AI-imagined UI (the L-002 anti-pattern this
 whole stack was built to prevent).
+
+**v2.43.6 — UI scope detection upgraded from grep heuristic to AI semantic.**
+Retro from a real BE-only sub-phase: SPECS line 5 ("Phase này CHỈ build backend
+APIs ... UI portal Ở Phase 6/7/8") was misclassified `has_ui=true` because
+keyword grep matched "UI" inside the EXCLUSION clause. Haiku 4.5 semantic
+analysis distinguishes scope-inclusion vs scope-exclusion ("UI deferred to
+Phase X"). Result is cached at `${PHASE_DIR}/.ui-scope.json` as authoritative
+ground truth consumed by:
+  - this step's scaffold/extract gating
+  - validators/verify-ui-scope-coherence.py (cross-checks PLAN.md FE-task count)
+  - downstream UI steps 2b6_ui_spec / 2b6b / 2b6c
 
 Blueprint owns this. It must not rely on the operator remembering a
 separate `/vg:design-scaffold` command. If the phase has UI:
@@ -192,6 +203,47 @@ elif [[ "$ARGUMENTS" =~ --skip-design-discovery ]]; then
   echo "⚠ --skip-design-discovery set — Form B 'no-asset:greenfield-explicit-skip' will trigger /vg:accept critical block"
 else
   mkdir -p "${PHASE_DIR}/.tmp"
+
+  # v2.43.6 — AI semantic UI scope detection (replaces grep heuristic)
+  UI_SCOPE_JSON="${PHASE_DIR}/.ui-scope.json"
+  AI_SCOPE_DETECT_ENABLED=$(vg_config_get ui_scope.ai_detect_enabled true 2>/dev/null || echo true)
+
+  if [ "$AI_SCOPE_DETECT_ENABLED" = "true" ] && { [ ! -f "$UI_SCOPE_JSON" ] || [[ "$ARGUMENTS" =~ --redetect-ui-scope ]]; }; then
+    echo "▸ Detecting UI scope via Haiku semantic analysis..."
+    DETECT_FLAGS=()
+    [[ "$ARGUMENTS" =~ --redetect-ui-scope ]] && DETECT_FLAGS+=( --force )
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/preflight/detect-ui-scope.py" \
+      --phase-dir "${PHASE_DIR}" \
+      --output ".ui-scope.json" \
+      "${DETECT_FLAGS[@]}" >/dev/null 2>&1
+    UI_SCOPE_RC=$?
+
+    case "$UI_SCOPE_RC" in
+      0) echo "✓ UI scope auto-applied (confidence ≥ 0.8). See $UI_SCOPE_JSON" ;;
+      2)
+        echo "⚠ UI scope tie-break needed (confidence 0.5-0.8). Accept low-confidence result with debt log."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "blueprint.ui_scope_tie_break" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+        ;;
+      3)
+        echo "⛔ UI scope confidence < 0.5 — operator must answer 'Phase này có UI không?'"
+        echo "   Edit ${UI_SCOPE_JSON} manually (set has_ui + confidence + method=user-confirmed) or improve SPECS clarity then re-run with --redetect-ui-scope."
+        if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+          exit 1
+        fi
+        ;;
+      *) echo "⚠ detect-ui-scope.py exit=${UI_SCOPE_RC} — falling back to legacy grep heuristic" ;;
+    esac
+  fi
+
+  # Read authoritative UI scope decision from .ui-scope.json (AI cache)
+  HAS_UI=""
+  if [ -f "$UI_SCOPE_JSON" ]; then
+    HAS_UI=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('has_ui') else '0')" "$UI_SCOPE_JSON")
+    UI_SCOPE_METHOD=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print(d.get('method','unknown'))" "$UI_SCOPE_JSON")
+    UI_SCOPE_DEFERRED=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print(d.get('deferred_to') or 'none')" "$UI_SCOPE_JSON")
+    echo "  has_ui=${HAS_UI} (method=${UI_SCOPE_METHOD}, deferred_to=${UI_SCOPE_DEFERRED})"
+  fi
+
   BLUEPRINT_DESIGN_PREFLIGHT_JSON="${PHASE_DIR}/.tmp/blueprint-design-preflight.json"
   # v2.42.3 — forward --allow-shared-mockup-reuse from blueprint args.
   # Use this when phase legitimately reuses unchanged Phase 1 slugs
@@ -199,6 +251,8 @@ else
   # per-phase mockups otherwise (closes silent-pass gap on UI phases).
   PREFLIGHT_EXTRA=()
   [[ "$ARGUMENTS" =~ --allow-shared-mockup-reuse ]] && PREFLIGHT_EXTRA+=( --allow-shared-mockup-reuse )
+  # Legacy preflight still runs to import mockups + report needs_scaffold/needs_extract.
+  # We trust HAS_UI from .ui-scope.json (AI) over its keyword-grep field of the same name.
   "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/blueprint-design-preflight.py" \
     --phase-dir "${PHASE_DIR}" \
     --repo-root "${REPO_ROOT}" \
@@ -207,7 +261,11 @@ else
     --output "${BLUEPRINT_DESIGN_PREFLIGHT_JSON}" \
     "${PREFLIGHT_EXTRA[@]}" >/dev/null
 
-  HAS_UI=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('has_ui') else '0')" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
+  # Fallback: if .ui-scope.json missing (AI detect disabled/unavailable), use legacy grep result.
+  if [ -z "${HAS_UI}" ]; then
+    HAS_UI=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('has_ui') else '0')" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
+    echo "ℹ HAS_UI from legacy grep heuristic (.ui-scope.json not generated): ${HAS_UI}"
+  fi
   IMPORTED_COUNT=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print(d.get('imported_count',0))" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
   NEEDS_SCAFFOLD=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('needs_scaffold') else '0')" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
   NEEDS_EXTRACT=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('needs_extract') else '0')" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
@@ -3212,6 +3270,33 @@ if [ -x "$TS_VAL" ]; then
   esac
 fi
 
+# Gate E (v2.43.6): ui-scope-coherence — cross-check .ui-scope.json (AI semantic
+# detection from step 0_design_discovery) against PLAN.md FE-task count.
+# BLOCK on (a) has_ui=true + 0 FE tasks (silent UI gap, L-002 class) OR
+#         (b) has_ui=false + ≥1 FE task (scope leak into BE-only phase).
+US_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-ui-scope-coherence.py"
+if [ -x "$US_VAL" ]; then
+  ${PYTHON_BIN} "$US_VAL" --phase "${PHASE_NUMBER}" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/ui-scope-coherence.json" 2>&1 || true
+  US_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/ui-scope-coherence.json" 2>/dev/null)
+  case "$US_V" in
+    PASS|WARN) echo "✓ ui-scope-coherence: $US_V" ;;
+    BLOCK)
+      echo "⛔ ui-scope-coherence: BLOCK — see ${VG_TMP}/ui-scope-coherence.json" >&2
+      echo "   Mismatch between .ui-scope.json (AI scope decision) and PLAN.md FE-task count." >&2
+      echo "   Either re-plan to match scope, edit SPECS to match PLAN, or override:" >&2
+      echo "     --override-reason='<issue-id>' (logs OVERRIDE-DEBT, not recommended)" >&2
+      echo "     --skip-ui-scope-coherence (downgrade gate)" >&2
+      echo "     ${PYTHON_BIN} ${US_VAL} --phase ${PHASE_NUMBER} --allow-mismatch (downgrade BLOCK→WARN)" >&2
+      if [[ ! "$ARGUMENTS" =~ --override-reason ]] && [[ ! "$ARGUMENTS" =~ --skip-ui-scope-coherence ]]; then
+        exit 1
+      fi
+      ;;
+    *) echo "ℹ ui-scope-coherence: $US_V" ;;
+  esac
+fi
+
 # Gate D: crossai-output (gated on --crossai flag — only audits diff if a
 # cross-AI enrichment actually ran)
 if [[ "$ARGUMENTS" =~ --crossai ]]; then
@@ -3651,6 +3736,54 @@ git commit -m "blueprint({phase}): plans + contracts + goals — CrossAI {verdic
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3_complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_complete.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 3_complete 2>/dev/null || true
+
+# v2.46 Phase 6 traceability gates — closes "AI bịa goal/decision" gap.
+# Migration: VG_TRACEABILITY_MODE=warn for pre-2026-05-01 phases.
+TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
+
+# v2.46 L6a — goal frontmatter completeness (spec_ref + decisions + business_rules + expected_assertion)
+TRACE_VAL=".claude/scripts/validators/verify-goal-traceability.py"
+if [ -f "$TRACE_VAL" ]; then
+  TRACE_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-traceability-gaps ]] && TRACE_FLAGS="$TRACE_FLAGS --allow-traceability-gaps"
+  ${PYTHON_BIN:-python3} "$TRACE_VAL" --phase "${PHASE_NUMBER}" $TRACE_FLAGS
+  TRACE_RC=$?
+  if [ "$TRACE_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Goal traceability gate failed at blueprint."
+    echo "   Goals must cite: spec_ref, decisions, business_rules, expected_assertion, goal_class."
+    echo "   See: commands/vg/_shared/templates/TEST-GOAL-enriched-template.md (v2.46 Phase 6 enrichment)"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "blueprint.traceability_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# v2.46 — D-XX → tasks coverage
+DTASK_VAL=".claude/scripts/validators/verify-decisions-to-tasks.py"
+if [ -f "$DTASK_VAL" ]; then
+  DTASK_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-uncovered-decisions ]] && DTASK_FLAGS="$DTASK_FLAGS --allow-uncovered-decisions"
+  ${PYTHON_BIN:-python3} "$DTASK_VAL" --phase "${PHASE_NUMBER}" $DTASK_FLAGS
+  DTASK_RC=$?
+  if [ "$DTASK_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Decisions → tasks coverage gate failed at blueprint."
+    echo "   Every D-XX in CONTEXT must be referenced in ≥1 PLAN*.md task."
+    exit 1
+  fi
+fi
+
+# v2.46 — D-XX → goals coverage
+DGOAL_VAL=".claude/scripts/validators/verify-decisions-to-goals.py"
+if [ -f "$DGOAL_VAL" ]; then
+  DGOAL_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-uncovered-decisions ]] && DGOAL_FLAGS="$DGOAL_FLAGS --allow-uncovered-decisions"
+  ${PYTHON_BIN:-python3} "$DGOAL_VAL" --phase "${PHASE_NUMBER}" $DGOAL_FLAGS
+  DGOAL_RC=$?
+  if [ "$DGOAL_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Decisions → goals coverage gate failed at blueprint."
+    echo "   Every D-XX must be cited by ≥1 goal in TEST-GOALS.md (decisions: [D-XX])."
+    exit 1
+  fi
+fi
 
 # v2.2 — terminal emit + run-complete. Validators fire here; BLOCK on violations.
 PLAN_COUNT=$(ls "${PHASE_DIR}"/PLAN*.md 2>/dev/null | wc -l | tr -d ' ')

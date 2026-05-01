@@ -64,6 +64,63 @@ verification: automated | manual | deferred | skipped
 tests: [TS-XX, TS-YY]         # bind to test files via TS-XX markers
 
 # ─────────────────────────────────────────────────────────────────────
+# v2.46 Phase 6 enrichment — Business traceability (REQUIRED post-2026-05-01)
+# ─────────────────────────────────────────────────────────────────────
+# Closes "AI bịa goal/decision" gap surfaced in Phase 3.2 dogfood. Goals
+# missing these fields → BLOCK at /vg:blueprint via verify-goal-traceability.py.
+# Migration: pre-2026-05-01 phases run validators in WARN mode (set
+# VG_TRACEABILITY_MODE=warn). New phases default BLOCK.
+
+spec_ref: <SPECS.md#section-anchor>
+  # REQUIRED. Cite the SPECS.md section that drives this goal. Validator
+  # greps SPECS.md for the heading.
+  # e.g. "SPECS.md#suspicious-topup-detection"
+
+decisions: [P3.D-46, P3.D-15]
+  # REQUIRED if goal cites any decision. Each entry must exist in
+  # CONTEXT.md. Validator (verify-decisions-to-goals.py) cross-checks.
+  # Convention: <PHASE>.D-<NUMBER> for cross-phase, D-<NUMBER> for same-phase.
+
+business_rules: [BR-S-01, BR-S-02]
+  # REQUIRED for business-logic goals. Each entry must exist in
+  # DISCUSSION-LOG.md as "BR-NN: <rule statement>".
+  # Empty list = goal has no business-rule semantics (e.g. pure UI render goal).
+
+flow_ref: <FLOW-SPEC.md#flow-anchor>
+  # REQUIRED if surface=ui AND goal involves multi-step flow.
+  # Validator greps FLOW-SPEC.md for the anchor.
+
+api_contracts: [topup-flag-endpoint, topup-list-endpoint]
+  # REQUIRED if surface=api OR goal touches network mutations.
+  # Each entry must match an endpoint heading in API-CONTRACTS.md.
+
+expected_assertion: |
+  # REQUIRED. Verbatim quote of business rule statement that scanner/test
+  # must verify. Used by:
+  #   - verify-business-rule-implemented.py (build): grep code for
+  #     constants matching this assertion
+  #   - verify-asserted-rule-match.py (review): scanner steps[].asserted_quote
+  #     must match this text >= 80% similarity
+  #   - verify-test-traces-to-rule.py (test): .spec.ts header must cite
+  #
+  # Example:
+  #   "Topup count >= SUSPICIOUS_COUNT_THRESHOLD (5) trong 24h sliding window
+  #    → flagged_suspicious=true; AND amount sum >= AMOUNT_THRESHOLD ($100)
+  #    in same window → flagged_suspicious=true (count OR amount triggers)"
+
+goal_class: mutation | readonly | crud-roundtrip | wizard | approval | webhook
+  # REQUIRED. Drives min_steps validator threshold.
+  # readonly: ≥3 steps (navigate → snapshot → assert)
+  # mutation: ≥6 steps (pre-snapshot → submit → wait → refresh → re-read → diff)
+  # approval: ≥8 (read pending → drawer → click approve → confirm modal → submit
+  #              → wait → refresh → assert status flip)
+  # crud-roundtrip: ≥14 (Read empty → Create [4 steps] → Read populated →
+  #                      Update [4 steps] → Read updated → Delete [3 steps] →
+  #                      Read empty)
+  # wizard: ≥10 (multi-step form, capture each step transition)
+  # webhook: ≥4 (trigger event → wait → query downstream state → assert)
+
+# ─────────────────────────────────────────────────────────────────────
 # v2.5 Phase B enrichment — Security + Performance
 # ─────────────────────────────────────────────────────────────────────
 # Optional but REQUIRED for critical_goal_domains (auth/payment/billing).

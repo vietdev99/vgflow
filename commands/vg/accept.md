@@ -2248,6 +2248,22 @@ Force-advance (NOT RECOMMENDED): /vg:next --allow-deferred
 ```
 
 ```bash
+# v2.46 Phase 6 — final traceability chain check (scanner → goal → decision → spec)
+TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
+ATRACE_VAL=".claude/scripts/validators/verify-acceptance-traceability.py"
+if [ -f "$ATRACE_VAL" ]; then
+  ATRACE_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-traceability-gaps ]] && ATRACE_FLAGS="$ATRACE_FLAGS --allow-traceability-gaps"
+  ${PYTHON_BIN:-python3} "$ATRACE_VAL" --phase "${PHASE_NUMBER}" $ATRACE_FLAGS
+  ATRACE_RC=$?
+  if [ "$ATRACE_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Acceptance traceability chain broken — phase cannot ship."
+    echo "   At least one link missing: scanner → goal → decision → spec."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.traceability_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # v2.2 — terminal emit + run-complete for /vg:accept
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "7_post_accept_actions" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/7_post_accept_actions.done"

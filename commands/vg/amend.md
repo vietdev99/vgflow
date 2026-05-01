@@ -263,6 +263,41 @@ Decisions changed: ${changed_decision_ids}
 Rollback: git checkout vg-amend-${PHASE_NUMBER}-pre-${NEXT_AMENDMENT}
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# v2.46 Phase 6 — cascade cross-phase validity check
+# When this phase amends decisions, walk ALL downstream phases to mark
+# goals citing revoked D-XX as STALE so user knows what to re-review.
+CROSS_VAL=".claude/scripts/validators/verify-cross-phase-decision-validity.py"
+if [ -f "$CROSS_VAL" ] && [ -d ".vg/phases" ]; then
+  echo ""
+  echo "🔄 v2.46 amend cascade: checking dependent phases for stale D-XX references..."
+  STALE_PHASES=()
+  for phase_dir in .vg/phases/*/; do
+    other_phase_name=$(basename "$phase_dir")
+    other_phase_num=$(echo "$other_phase_name" | sed 's/^0*//' | grep -oE '^[0-9]+(\.[0-9]+)?')
+    if [ -z "$other_phase_num" ] || [ "$other_phase_num" = "$PHASE_NUMBER" ]; then
+      continue
+    fi
+    OUT=$(${PYTHON_BIN:-python3} "$CROSS_VAL" --phase "$other_phase_num" --severity warn 2>/dev/null)
+    BAD=$(echo "$OUT" | python3 -c "import json,sys
+try:
+  d = json.load(sys.stdin)
+  bad = [e for e in d.get('evidence', []) if str(e.get('type','')).startswith('cross_phase')]
+  print(len(bad))
+except Exception:
+  print(0)" 2>/dev/null || echo 0)
+    if [ "${BAD:-0}" -gt 0 ]; then
+      STALE_PHASES+=("$other_phase_num ($BAD stale)")
+    fi
+  done
+  if [ ${#STALE_PHASES[@]} -gt 0 ]; then
+    echo "  ⚠ Stale references in downstream phase(s):"
+    for p in "${STALE_PHASES[@]}"; do echo "     - $p"; done
+    echo "  Run /vg:review on each to refresh, OR /vg:amend to update goal references."
+  else
+    echo "  ✓ No downstream phases reference revoked decisions."
+  fi
+fi
 ```
 
 Display:

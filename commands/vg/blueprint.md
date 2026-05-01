@@ -3691,6 +3691,54 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3_complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_complete.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 3_complete 2>/dev/null || true
 
+# v2.46 Phase 6 traceability gates — closes "AI bịa goal/decision" gap.
+# Migration: VG_TRACEABILITY_MODE=warn for pre-2026-05-01 phases.
+TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
+
+# v2.46 L6a — goal frontmatter completeness (spec_ref + decisions + business_rules + expected_assertion)
+TRACE_VAL=".claude/scripts/validators/verify-goal-traceability.py"
+if [ -f "$TRACE_VAL" ]; then
+  TRACE_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-traceability-gaps ]] && TRACE_FLAGS="$TRACE_FLAGS --allow-traceability-gaps"
+  ${PYTHON_BIN:-python3} "$TRACE_VAL" --phase "${PHASE_NUMBER}" $TRACE_FLAGS
+  TRACE_RC=$?
+  if [ "$TRACE_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Goal traceability gate failed at blueprint."
+    echo "   Goals must cite: spec_ref, decisions, business_rules, expected_assertion, goal_class."
+    echo "   See: commands/vg/_shared/templates/TEST-GOAL-enriched-template.md (v2.46 Phase 6 enrichment)"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "blueprint.traceability_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# v2.46 — D-XX → tasks coverage
+DTASK_VAL=".claude/scripts/validators/verify-decisions-to-tasks.py"
+if [ -f "$DTASK_VAL" ]; then
+  DTASK_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-uncovered-decisions ]] && DTASK_FLAGS="$DTASK_FLAGS --allow-uncovered-decisions"
+  ${PYTHON_BIN:-python3} "$DTASK_VAL" --phase "${PHASE_NUMBER}" $DTASK_FLAGS
+  DTASK_RC=$?
+  if [ "$DTASK_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Decisions → tasks coverage gate failed at blueprint."
+    echo "   Every D-XX in CONTEXT must be referenced in ≥1 PLAN*.md task."
+    exit 1
+  fi
+fi
+
+# v2.46 — D-XX → goals coverage
+DGOAL_VAL=".claude/scripts/validators/verify-decisions-to-goals.py"
+if [ -f "$DGOAL_VAL" ]; then
+  DGOAL_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-uncovered-decisions ]] && DGOAL_FLAGS="$DGOAL_FLAGS --allow-uncovered-decisions"
+  ${PYTHON_BIN:-python3} "$DGOAL_VAL" --phase "${PHASE_NUMBER}" $DGOAL_FLAGS
+  DGOAL_RC=$?
+  if [ "$DGOAL_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Decisions → goals coverage gate failed at blueprint."
+    echo "   Every D-XX must be cited by ≥1 goal in TEST-GOALS.md (decisions: [D-XX])."
+    exit 1
+  fi
+fi
+
 # v2.2 — terminal emit + run-complete. Validators fire here; BLOCK on violations.
 PLAN_COUNT=$(ls "${PHASE_DIR}"/PLAN*.md 2>/dev/null | wc -l | tr -d ' ')
 ENDPOINT_COUNT=$(grep -c '^## ' "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || echo 0)

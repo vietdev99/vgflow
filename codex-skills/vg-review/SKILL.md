@@ -5822,6 +5822,126 @@ if [ -f "$MATRIX_LINK_VAL" ]; then
   fi
 fi
 
+# v2.46 anti-performative-review: ép scanner phải submit mutation goals,
+# không được Cancel modal rồi mark passed. Phase 3.2 dogfood (2026-05-01) tìm
+# 5 false-pass goals (G-31/G-34/G-35/G-44/G-52) modal opened nhưng chưa bao giờ
+# submit. Validator này check goal_sequences.steps[] có submit click + 2xx
+# network entry trước khi cho phép run-complete.
+MUT_SUBMIT_VAL=".claude/scripts/validators/verify-mutation-actually-submitted.py"
+if [ -f "$MUT_SUBMIT_VAL" ]; then
+  MUT_FLAGS="--severity block"
+  if [[ "${ARGUMENTS}" =~ --allow-cancel-only-mutations ]]; then
+    MUT_FLAGS="--severity block --allow-cancel-only-mutations"
+  fi
+  ${PYTHON_BIN:-python3} "$MUT_SUBMIT_VAL" --phase "${PHASE_NUMBER}" $MUT_FLAGS
+  MUT_RC=$?
+  if [ "$MUT_RC" -ne 0 ]; then
+    echo "⛔ Review mutation-actually-submitted gate failed."
+    echo "   Mutation goals marked passed without actual submit click + 2xx network."
+    echo "   This is the 'performative review' meta-bug: scanner Cancel modal → never test"
+    echo "   happy path → CSRF/auth/idempotency bugs slip through to user."
+    echo "   Fix path:"
+    echo "     1. Re-run /vg:review ${PHASE_NUMBER} với scanner prompt yêu cầu SUBMIT (sandbox = disposable seed)"
+    echo "     2. OR --allow-cancel-only-mutations override (logs OVERRIDE-DEBT — legitimate"
+    echo "        only nếu phase explicitly không muốn mutate)"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.mutation_submit_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# v2.46 Phase 6 enrichment: traceability + RCRURD enforcement.
+# Closes "AI bịa goal/decision/business-rule" + "scanner stops too early".
+# Migration: VG_TRACEABILITY_MODE=warn for pre-2026-05-01 phases (set in
+# vg.config.md). New phases default to block.
+TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
+
+# v2.46 L4 — RCRURD step depth (per goal_class threshold)
+RCRURD_VAL=".claude/scripts/validators/verify-rcrurd-depth.py"
+if [ -f "$RCRURD_VAL" ]; then
+  RCRURD_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-shallow-scans ]] && RCRURD_FLAGS="$RCRURD_FLAGS --allow-shallow-scans"
+  ${PYTHON_BIN:-python3} "$RCRURD_VAL" --phase "${PHASE_NUMBER}" $RCRURD_FLAGS
+  RCRURD_RC=$?
+  if [ "$RCRURD_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ RCRURD depth gate failed — scanner stopped too early on mutation goals."
+    echo "   See scanner-report-contract.md 'RCRURD Lifecycle Protocol'. Goal class drives min steps."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_depth_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# v2.46 L4 — asserted_quote vs business rule similarity
+ASSERTED_VAL=".claude/scripts/validators/verify-asserted-rule-match.py"
+if [ -f "$ASSERTED_VAL" ]; then
+  ASSERTED_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-asserted-drift ]] && ASSERTED_FLAGS="$ASSERTED_FLAGS --allow-asserted-drift"
+  ${PYTHON_BIN:-python3} "$ASSERTED_VAL" --phase "${PHASE_NUMBER}" $ASSERTED_FLAGS
+  ASSERTED_RC=$?
+  if [ "$ASSERTED_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Asserted-rule-match gate failed — scanner asserted_quote drifts from BR-NN text."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.asserted_drift_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# v2.46 L4 — replay-evidence (structural + optional curl replay)
+REPLAY_VAL=".claude/scripts/validators/verify-replay-evidence.py"
+if [ -f "$REPLAY_VAL" ]; then
+  REPLAY_FLAGS="--severity warn"  # default warn — auth fixture not always available
+  [[ "${ARGUMENTS}" =~ --enable-replay ]] && REPLAY_FLAGS="--severity ${TRACE_MODE} --enable-replay"
+  ${PYTHON_BIN:-python3} "$REPLAY_VAL" --phase "${PHASE_NUMBER}" $REPLAY_FLAGS
+  REPLAY_RC=$?
+  if [ "$REPLAY_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ] && [[ "${ARGUMENTS}" =~ --enable-replay ]]; then
+    echo "⛔ Replay-evidence gate failed — scanner network claims can't be verified."
+    exit 1
+  fi
+fi
+
+# v2.46 L4 — cross-phase decision validity (D-XX from earlier phase still active)
+CROSS_VAL=".claude/scripts/validators/verify-cross-phase-decision-validity.py"
+if [ -f "$CROSS_VAL" ]; then
+  CROSS_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-stale-decisions ]] && CROSS_FLAGS="$CROSS_FLAGS --allow-stale-decisions"
+  ${PYTHON_BIN:-python3} "$CROSS_VAL" --phase "${PHASE_NUMBER}" $CROSS_FLAGS
+  CROSS_RC=$?
+  if [ "$CROSS_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Cross-phase decision validity failed — goal cites revoked/missing D-XX."
+    exit 1
+  fi
+fi
+
+# v2.46 L6 — adversarial scanner-business-alignment verifier
+# Two-phase: emit prompts → orchestrator spawns Haiku verifier per prompt →
+# re-run validator with --verifier-results to gate.
+ALIGN_VAL=".claude/scripts/validators/verify-scanner-business-alignment.py"
+if [ -f "$ALIGN_VAL" ]; then
+  PROMPTS_FILE="${PHASE_DIR}/.tmp/business-alignment-prompts.jsonl"
+  RESULTS_FILE="${PHASE_DIR}/.tmp/business-alignment-results.jsonl"
+  mkdir -p "$(dirname "$PROMPTS_FILE")" 2>/dev/null
+  ${PYTHON_BIN:-python3} "$ALIGN_VAL" --phase "${PHASE_NUMBER}" --prompts-out "$PROMPTS_FILE" 2>&1 | head -3
+  PROMPT_COUNT=$(wc -l < "$PROMPTS_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+
+  if [ "$PROMPT_COUNT" -gt 0 ]; then
+    echo ""
+    echo "📋 Business alignment verifier needs ${PROMPT_COUNT} adversarial check(s)."
+    echo "   Orchestrator should spawn isolated Haiku per prompt + write JSONL results to:"
+    echo "     ${RESULTS_FILE}"
+    echo "   Then re-run review with --verifier-results=${RESULTS_FILE}"
+    echo ""
+    # If results file exists from prior orchestrator pass, gate now
+    if [ -f "$RESULTS_FILE" ]; then
+      ALIGN_FLAGS="--severity ${TRACE_MODE} --verifier-results ${RESULTS_FILE}"
+      [[ "${ARGUMENTS}" =~ --allow-business-drift ]] && ALIGN_FLAGS="$ALIGN_FLAGS --allow-business-drift"
+      ${PYTHON_BIN:-python3} "$ALIGN_VAL" --phase "${PHASE_NUMBER}" $ALIGN_FLAGS
+      ALIGN_RC=$?
+      if [ "$ALIGN_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+        echo "⛔ Business alignment gate failed — adversarial verifier flagged drift."
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
 RUN_RC=$?
 if [ $RUN_RC -ne 0 ]; then

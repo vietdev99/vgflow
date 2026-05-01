@@ -4000,6 +4000,23 @@ No way to skip via "promise" — events.db evidence required (OHOK-7/8).
 ## Step 12: Run-complete (validators fire, BLOCK on violations)
 
 ```bash
+# v2.46 Phase 6 — business rule constants in code
+# Closes "code drift from D-XX values" gap (e.g., D-46 says 5 but code has 3).
+TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
+BIZRULE_VAL=".claude/scripts/validators/verify-business-rule-implemented.py"
+if [ -f "$BIZRULE_VAL" ]; then
+  BIZRULE_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-rule-not-implemented ]] && BIZRULE_FLAGS="$BIZRULE_FLAGS --allow-rule-not-implemented"
+  ${PYTHON_BIN:-python3} "$BIZRULE_VAL" --phase "${PHASE_NUMBER:-${PHASE_ARG}}" $BIZRULE_FLAGS
+  BIZRULE_RC=$?
+  if [ "$BIZRULE_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Business-rule-implemented gate failed: code constants drift from CONTEXT decisions."
+    echo "   Verify expected_assertion values appear as constants in apps/packages/infra source."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.bizrule_blocked" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # Emit final completion telemetry only after the CrossAI loop has reached an
 # accepted terminal state. run-complete validates this event in the same call.
 SUMMARY_COUNT=$(ls "${PHASE_DIR}"/SUMMARY*.md 2>/dev/null | wc -l | tr -d " ")

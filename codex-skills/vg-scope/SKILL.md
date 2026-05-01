@@ -1391,6 +1391,23 @@ git add "${PHASE_DIR}/CONTEXT.md" "${PHASE_DIR}/DISCUSSION-LOG.md" \
   git add "${PHASE_DIR}/.contract-pins.json"
 git commit -m "scope(${PHASE_NUMBER}): ${DECISION_COUNT} decisions, ${ENDPOINT_COUNT} endpoints, ${TEST_SCENARIO_COUNT} test scenarios"
 
+# v2.46 Phase 6 — D-XX trace to user answer in DISCUSSION-LOG
+# Closes "AI paraphrases user answer wrongly into D-XX" gap.
+TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
+DTRACE_VAL=".claude/scripts/validators/verify-decisions-trace.py"
+if [ -f "$DTRACE_VAL" ]; then
+  DTRACE_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-decisions-untraced ]] && DTRACE_FLAGS="$DTRACE_FLAGS --allow-decisions-untraced"
+  ${PYTHON_BIN:-python3} "$DTRACE_VAL" --phase "${PHASE_NUMBER}" $DTRACE_FLAGS
+  DTRACE_RC=$?
+  if [ "$DTRACE_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Decisions-trace gate failed: D-XX statements drift from DISCUSSION-LOG user answers."
+    echo "   Add 'Quote source: DISCUSSION-LOG.md#round-N' field to each D-XX in CONTEXT.md."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "scope.decisions_trace_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # v2.2: mark final step + emit completion event + invoke run-complete.
 # Orchestrator runs phase-exists + context-structure validators, emits
 # run.completed or run.blocked based on contract check. No bash catch-up

@@ -3772,6 +3772,22 @@ esac
 ```
 
 ```bash
+# v2.46 Phase 6 — test traces to goal + business_rule
+TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
+TTRACE_VAL=".claude/scripts/validators/verify-test-traces-to-rule.py"
+if [ -f "$TTRACE_VAL" ]; then
+  TTRACE_FLAGS="--severity ${TRACE_MODE}"
+  [[ "${ARGUMENTS}" =~ --allow-test-untraced ]] && TTRACE_FLAGS="$TTRACE_FLAGS --allow-test-untraced"
+  ${PYTHON_BIN:-python3} "$TTRACE_VAL" --phase "${PHASE_NUMBER}" $TTRACE_FLAGS
+  TTRACE_RC=$?
+  if [ "$TTRACE_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ Test-traces-to-rule gate failed: .spec.ts files don't cite goal_id + BR-NN."
+    echo "   Header format required: '// Goal: G-XX | Rule: BR-NN | Assertion: <verbatim quote>'"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.trace_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # v2.2 — terminal emit + run-complete for /vg:test
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/complete.done"
