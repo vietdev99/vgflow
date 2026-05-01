@@ -32,14 +32,18 @@ def _run(*args: str, env_extra: dict | None = None) -> subprocess.CompletedProce
 def _make_stub_cli(tmp_path: Path, response: str) -> str:
     """Create a python script that, when run, prints `response` on stdout.
 
-    Returns the shlex-joined command for --cli override.
+    Returns the shlex-joined command for --cli override. On Windows,
+    `sys.executable` and `tmp_path` typically contain spaces (e.g.
+    `C:\\Users\\Lionel Messi\\...\\python.exe`); joining with a bare space
+    breaks `shlex.split` round-tripping. `shlex.join` quotes each token
+    so the downstream split reconstructs the original 2-element argv.
     """
     stub = tmp_path / "stub_cli.py"
     stub.write_text(
         f"import sys\nprint({response!r})\n",
         encoding="utf-8",
     )
-    return f"{sys.executable} {stub}"
+    return shlex.join([str(sys.executable), str(stub)])
 
 
 def test_dry_run_emits_stub_proposal(tmp_path):
@@ -182,7 +186,7 @@ def test_subagent_nonzero_exit_fails(tmp_path):
     phase_dir.mkdir()
     failing = tmp_path / "fail.py"
     failing.write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
-    cli_cmd = f"{sys.executable} {failing}"
+    cli_cmd = shlex.join([str(sys.executable), str(failing)])
     result = _run(
         "--gate-id", "g", "--block-family", "f",
         "--phase-dir", str(phase_dir),
@@ -232,7 +236,7 @@ def test_env_scrubbed_secrets_not_passed_to_subagent(tmp_path):
         "}))\n",
         encoding="utf-8",
     )
-    cli_cmd = f"{sys.executable} {dump_env}"
+    cli_cmd = shlex.join([str(sys.executable), str(dump_env)])
     result = _run(
         "--gate-id", "g", "--block-family", "f",
         "--phase-dir", str(phase_dir),
@@ -271,7 +275,7 @@ def test_evidence_secrets_redacted_before_prompt(tmp_path):
         "}))\n",
         encoding="utf-8",
     )
-    cli_cmd = f"{sys.executable} {echo_prompt}"
+    cli_cmd = shlex.join([str(sys.executable), str(echo_prompt)])
     evidence = {
         "user_id": "real-user-123",
         "auth_token": "Bearer sk-secret-bearer-456",
@@ -315,7 +319,7 @@ def test_redact_adjacent_name_value_pattern(tmp_path):
         "}))\n",
         encoding="utf-8",
     )
-    cli_cmd = f"{sys.executable} {echo_prompt}"
+    cli_cmd = shlex.join([str(sys.executable), str(echo_prompt)])
     evidence = {
         "scanner_request_headers": [
             {"name": "Content-Type", "value": "application/json"},
@@ -372,7 +376,7 @@ def test_redact_all_value_siblings_when_name_secret(tmp_path):
         "--gate-id", "g", "--block-family", "f",
         "--phase-dir", str(phase_dir),
         "--evidence-json", json.dumps(evidence),
-        "--cli", f"{sys.executable} {echo}",
+        "--cli", shlex.join([str(sys.executable), str(echo)]),
     )
     assert result.returncode == 0
     out = json.loads(result.stdout)
@@ -410,7 +414,7 @@ def test_redact_handles_key_field_alias(tmp_path):
         "--gate-id", "g", "--block-family", "f",
         "--phase-dir", str(phase_dir),
         "--evidence-json", json.dumps(evidence),
-        "--cli", f"{sys.executable} {echo_prompt}",
+        "--cli", shlex.join([str(sys.executable), str(echo_prompt)]),
     )
     assert result.returncode == 0
     out = json.loads(result.stdout)
@@ -437,7 +441,7 @@ def test_env_passthrough_opt_in(tmp_path):
         "--gate-id", "g", "--block-family", "f",
         "--phase-dir", str(phase_dir),
         "--evidence-json", "{}",
-        "--cli", f"{sys.executable} {dump_env}",
+        "--cli", shlex.join([str(sys.executable), str(dump_env)]),
         env_extra={
             "PROJECT_API_BASE": "https://sandbox.example.com",
             "VG_DIAGNOSTIC_L2_ENV_PASSTHROUGH": "PROJECT_API_BASE",

@@ -51,7 +51,7 @@ def test_injects_fixture_into_simple_spec(tmp_path):
     assert len(out["injected"]) == 1
     assert out["injected"][0]["action"] == "injected"
 
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     assert "VGFLOW_FIXTURE_INJECTED" in text
     assert 'pending_id: "p7"' in text
     assert "amount: 0.01" in text
@@ -72,7 +72,7 @@ def test_idempotent_replace_existing_block(tmp_path):
     # First inject
     r1 = _run(tmp_path, "--phase", "1.0", "--goal", "G-10", "--spec", str(spec))
     assert r1.returncode == 0
-    text1 = spec.read_text()
+    text1 = spec.read_text(encoding="utf-8")
 
     # Update cache, second inject — should REPLACE not stack
     _phase_with_cache(tmp_path, "01.0-x", {
@@ -82,7 +82,7 @@ def test_idempotent_replace_existing_block(tmp_path):
     out2 = json.loads(r2.stdout)
     assert out2["injected"][0]["action"] == "replaced"
 
-    text2 = spec.read_text()
+    text2 = spec.read_text(encoding="utf-8")
     # Only one block (count sentinels)
     assert text2.count("VGFLOW_FIXTURE_INJECTED — DO NOT EDIT") == 1
     assert 'pending_id: "p2"' in text2
@@ -103,7 +103,7 @@ def test_inject_after_imports_not_at_very_top(tmp_path):
         encoding="utf-8",
     )
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10", "--spec", str(spec))
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     # The fixture block should appear AFTER the imports
     sentinel_pos = text.index("VGFLOW_FIXTURE_INJECTED")
     last_import_pos = text.rindex("import")
@@ -121,7 +121,7 @@ def test_skip_when_no_captured_store(tmp_path):
     assert out["injected"] == []
     assert len(out["skipped"]) == 1
     assert "no captured store" in out["skipped"][0]["reason"]
-    assert "VGFLOW_FIXTURE_INJECTED" not in spec.read_text()
+    assert "VGFLOW_FIXTURE_INJECTED" not in spec.read_text(encoding="utf-8")
 
 
 def test_dry_run_does_not_modify_file(tmp_path):
@@ -134,7 +134,7 @@ def test_dry_run_does_not_modify_file(tmp_path):
     result = _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
                    "--spec", str(spec), "--dry-run")
     assert result.returncode == 0
-    assert spec.read_text() == original
+    assert spec.read_text(encoding="utf-8") == original
 
 
 def test_sweep_mode_finds_specs(tmp_path):
@@ -154,7 +154,7 @@ def test_sweep_mode_finds_specs(tmp_path):
     out = json.loads(result.stdout)
     assert len(out["injected"]) == 2
     for spec in (e2e / "1.0-G-10.spec.ts", e2e / "1.0-G-11.spec.ts"):
-        assert "VGFLOW_FIXTURE_INJECTED" in spec.read_text()
+        assert "VGFLOW_FIXTURE_INJECTED" in spec.read_text(encoding="utf-8")
 
 
 def test_sweep_skips_unrelated_specs(tmp_path):
@@ -168,7 +168,7 @@ def test_sweep_skips_unrelated_specs(tmp_path):
     result = _run(tmp_path, "--phase", "1.0", "--sweep", str(e2e))
     out = json.loads(result.stdout)
     assert out["injected"] == []
-    assert "VGFLOW_FIXTURE_INJECTED" not in spec_other.read_text()
+    assert "VGFLOW_FIXTURE_INJECTED" not in spec_other.read_text(encoding="utf-8")
 
 
 def test_typescript_safe_key_quoting(tmp_path):
@@ -182,7 +182,7 @@ def test_typescript_safe_key_quoting(tmp_path):
     spec = tmp_path / "test.spec.ts"
     spec.write_text("test('x', async () => {});\n", encoding="utf-8")
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10", "--spec", str(spec))
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     assert "valid_id:" in text  # unquoted valid identifier
     assert '"kebab-key":' in text  # quoted invalid identifier
     assert '"with space":' in text
@@ -239,7 +239,7 @@ def test_substitute_replaces_quoted_string_with_fixture_ref(tmp_path):
     # 3 whole-string quoted matches: 'X', 'X', "X"
     assert out["injected"][0]["substitutions"] == 3, out
 
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     assert "FIXTURE.pending_id" in text
     assert "p7e9-2026-05-02-abc-uuid" in text  # still in FIXTURE block
     # Body no longer has the bare quoted literal outside the const block
@@ -260,7 +260,7 @@ def test_substitute_skips_short_values(tmp_path):
     )
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
           "--spec", str(spec), "--substitute")
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     # 'ok' should NOT be substituted (too short, ambiguous)
     assert "expect(result).toBe('ok')" in text
     assert "FIXTURE.status" not in text.split("VGFLOW_FIXTURE_INJECTED_END", 1)[1]
@@ -278,7 +278,7 @@ def test_substitute_picks_up_sentinel_prefixed_short_strings(tmp_path):
     )
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
           "--spec", str(spec), "--substitute")
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     assert "FIXTURE.merchant" in text
     body = text.split("VGFLOW_FIXTURE_INJECTED_END", 1)[1]
     assert '"VG_FIXTURE_M1"' not in body  # substituted
@@ -297,7 +297,7 @@ def test_substitute_does_not_modify_inside_fixture_block(tmp_path):
     )
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
           "--spec", str(spec), "--substitute")
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     # FIXTURE block content unchanged (still has the literal)
     fixture_block = text.split("VGFLOW_FIXTURE_INJECTED")[1].split(
         "VGFLOW_FIXTURE_INJECTED_END")[0]
@@ -333,7 +333,7 @@ def test_substitute_disabled_by_default(tmp_path):
         encoding="utf-8",
     )
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10", "--spec", str(spec))
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     body = text.split("VGFLOW_FIXTURE_INJECTED_END", 1)[1]
     assert "'p7e9-distinct-uuid-value'" in body  # NOT substituted
 
@@ -352,7 +352,7 @@ def test_sweep_finds_url_state_interactive_specs(tmp_path):
     result = _run(tmp_path, "--phase", "1.0", "--sweep", str(e2e))
     out = json.loads(result.stdout)
     assert len(out["injected"]) == 1
-    assert "VGFLOW_FIXTURE_INJECTED" in (e2e / "g-10.url-state.spec.ts").read_text()
+    assert "VGFLOW_FIXTURE_INJECTED" in (e2e / "g-10.url-state.spec.ts").read_text(encoding="utf-8")
 
 
 def test_sweep_finds_lowercase_goal_id_in_filename(tmp_path):
@@ -387,7 +387,7 @@ def test_substitute_uses_bracket_notation_for_non_identifier_keys(tmp_path):
     )
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
           "--spec", str(spec), "--substitute")
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     body = text.split("VGFLOW_FIXTURE_INJECTED_END", 1)[1]
     # Non-identifier → bracket notation
     assert 'FIXTURE["pending-id"]' in body
@@ -414,7 +414,7 @@ def test_substitute_handles_keys_with_special_chars(tmp_path):
     )
     _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
           "--spec", str(spec), "--substitute")
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     body = text.split("VGFLOW_FIXTURE_INJECTED_END", 1)[1]
     assert 'FIXTURE["with space"]' in body
     assert 'FIXTURE["1leading-digit"]' in body

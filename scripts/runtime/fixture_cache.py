@@ -33,7 +33,6 @@ acts as a lease watchdog so a crashed session can't hold a fixture forever.
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -42,6 +41,21 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+# v2.47.0 — fcntl is POSIX-only (macOS/Linux). On Windows, fall back to
+# msvcrt.locking (single-byte advisory lock at offset 0). Reporter shipped
+# RFC v9 implementation from macOS without a Windows compat shim, breaking
+# the entire test suite on Windows installs.
+try:
+    import fcntl  # type: ignore[import]
+    _HAVE_FCNTL = True
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
+    _HAVE_FCNTL = False
+    try:
+        import msvcrt  # type: ignore[import]
+    except ImportError:
+        msvcrt = None  # type: ignore[assignment]
 
 
 SCHEMA_VERSION = "1.0"
@@ -65,23 +79,57 @@ def cache_path(phase_dir: Path) -> Path:
 
 @contextmanager
 def _exclusive_lock(path: Path, timeout_s: float = 5.0) -> Iterator[None]:
-    """fcntl-based exclusive lock on a sidecar .lock file.
+    """Exclusive lock on a sidecar .lock file.
 
-    POSIX-only. Times out after `timeout_s` to avoid hangs from crashed
-    sessions that left the lock acquired (rare — fcntl release on process
-    exit, but defensive).
+    POSIX (macOS/Linux): uses ``fcntl.flock`` (the strict primitive — process
+    exit auto-releases). Windows: falls back to ``msvcrt.locking`` advisory
+    lock on byte 0. Both time out after ``timeout_s`` to avoid hangs from
+    crashed sessions that left the lock acquired.
+
+    If neither primitive is available (extremely rare runtime), the
+    contextmanager degrades to a no-op lock with a printed warning — the
+    cache is still safe under single-writer access; concurrent writers
+    risk last-write-wins clobbering.
     """
     lock_path = path.with_suffix(path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     deadline = time.time() + timeout_s
+
+    def _try_lock_posix() -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _try_lock_windows() -> None:
+        # msvcrt.locking acquires/blocks on the current file pointer + N bytes.
+        # Seek to 0 and lock 1 byte (advisory; cooperating processes only).
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+    if _HAVE_FCNTL:
+        try_lock = _try_lock_posix
+    elif msvcrt is not None:
+        try_lock = _try_lock_windows
+    else:
+        # Neither lock primitive available — degrade to no-op + warn.
+        import sys
+        sys.stderr.write(
+            "⚠ fixture_cache: no fcntl/msvcrt available; cache lock is no-op. "
+            "Concurrent writers risk last-write-wins clobbering.\n"
+        )
+        try:
+            yield
+        finally:
+            os.close(fd)
+        return
+
     try:
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try_lock()
                 break
             except OSError as e:
-                if e.errno not in (errno.EAGAIN, errno.EACCES):
+                # POSIX: EAGAIN/EACCES; Windows: EDEADLK (errno 36) or just OSError.
+                if e.errno not in (errno.EAGAIN, errno.EACCES, errno.EDEADLK, 36):
                     raise
                 if time.time() > deadline:
                     raise CacheError(
@@ -91,7 +139,11 @@ def _exclusive_lock(path: Path, timeout_s: float = 5.0) -> Iterator[None]:
         yield
     finally:
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if _HAVE_FCNTL:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         finally:
             os.close(fd)
 

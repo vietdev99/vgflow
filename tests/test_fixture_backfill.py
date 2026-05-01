@@ -54,7 +54,7 @@ def test_high_confidence_when_body_captured(tmp_path):
     assert result.returncode == 0, result.stderr
     fixture = phase_dir / "FIXTURES" / "G-10.yaml"
     assert fixture.exists()
-    content = fixture.read_text()
+    content = fixture.read_text(encoding="utf-8")
     assert "confidence: HIGH" in content
     assert "approver_note: ok" in content
     assert "method: POST" in content
@@ -81,7 +81,7 @@ def test_medium_confidence_when_body_missing(tmp_path):
     phase_dir = _phase_with_runtime(tmp_path, "01.0-foo", runtime)
     result = _run(tmp_path, "--phase", "1.0", "--apply")
     assert result.returncode == 0, result.stderr
-    content = (phase_dir / "FIXTURES" / "G-10.yaml").read_text()
+    content = (phase_dir / "FIXTURES" / "G-10.yaml").read_text(encoding="utf-8")
     assert "confidence: MEDIUM" in content
     # Body skeleton with TODO sentinel
     assert "TODO" in content
@@ -149,7 +149,7 @@ def test_existing_yaml_not_clobbered(tmp_path):
     assert result.returncode == 0
     # Original file unchanged
     assert "# user-authored content — keep me\n" == (
-        (fixtures / "G-10.yaml").read_text()
+        (fixtures / "G-10.yaml").read_text(encoding="utf-8")
     )
     # Backfill goes to .backfill-draft
     assert (fixtures / "G-10.yaml.backfill-draft").exists()
@@ -162,7 +162,7 @@ def test_writes_backfill_report(tmp_path):
     result = _run(tmp_path, "--phase", "1.0", "--apply")
     assert result.returncode == 0
     report = phase_dir / "FIXTURES" / ".backfill-report.json"
-    data = json.loads(report.read_text())
+    data = json.loads(report.read_text(encoding="utf-8"))
     assert data["phase"] == "1.0"
     assert len(data["goals"]) == 1
     assert data["goals"][0]["goal_id"] == "G-10"
@@ -174,7 +174,7 @@ def test_post_step_has_idempotency_key(tmp_path):
         "goal_sequences": _mutation_seq_with_body(),
     })
     result = _run(tmp_path, "--phase", "1.0", "--apply")
-    content = (phase_dir / "FIXTURES" / "G-10.yaml").read_text()
+    content = (phase_dir / "FIXTURES" / "G-10.yaml").read_text(encoding="utf-8")
     assert "idempotency_key:" in content
 
 

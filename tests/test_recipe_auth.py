@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import shlex
 import socket
 import sys
 import threading
@@ -226,7 +227,7 @@ def test_command_auth_invokes_script_and_sets_headers(tmp_path):
     )
     ctx = auth_command(
         "http://x",
-        {"command": f"{sys.executable} {script}"},
+        {"command": shlex.join([str(sys.executable), str(script)])},
         sandbox=True,
     )
     assert ctx.session.headers["X-Custom"] == "value-from-cmd"
@@ -241,7 +242,7 @@ def test_command_auth_cookies_kind(tmp_path):
     )
     ctx = auth_command(
         "http://x",
-        {"command": f"{sys.executable} {script}"},
+        {"command": shlex.join([str(sys.executable), str(script)])},
         sandbox=True,
     )
     assert ctx.session.cookies.get("sid") == "cmd-sid"
@@ -252,7 +253,7 @@ def test_command_auth_non_zero_exit_raises(tmp_path):
     script.write_text("import sys; print('boom', file=sys.stderr); sys.exit(1)\n")
     with pytest.raises(AuthError, match="exited 1"):
         auth_command(
-            "http://x", {"command": f"{sys.executable} {script}"}, sandbox=True,
+            "http://x", {"command": shlex.join([str(sys.executable), str(script)])}, sandbox=True,
         )
 
 
@@ -261,7 +262,7 @@ def test_command_auth_invalid_json_raises(tmp_path):
     script.write_text("print('not json')\n")
     with pytest.raises(AuthError, match="not JSON"):
         auth_command(
-            "http://x", {"command": f"{sys.executable} {script}"}, sandbox=True,
+            "http://x", {"command": shlex.join([str(sys.executable), str(script)])}, sandbox=True,
         )
 
 
@@ -282,7 +283,7 @@ def test_command_auth_scrubs_secret_env_vars(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     ctx = auth_command(
-        "http://x", {"command": f"{sys.executable} {script}"}, sandbox=True,
+        "http://x", {"command": shlex.join([str(sys.executable), str(script)])}, sandbox=True,
     )
     assert ctx.session.headers["X-Test"] == "ok"
 
@@ -303,7 +304,7 @@ def test_command_auth_env_passthrough_opt_in(tmp_path, monkeypatch):
     ctx = auth_command(
         "http://x",
         {
-            "command": f"{sys.executable} {script}",
+            "command": shlex.join([str(sys.executable), str(script)]),
             "env_passthrough": ["PROJECT_AUTH_BASE"],
         },
         sandbox=True,
@@ -327,7 +328,7 @@ def test_command_auth_env_passthrough_string_form(tmp_path, monkeypatch):
     ctx = auth_command(
         "http://x",
         {
-            "command": f"{sys.executable} {script}",
+            "command": shlex.join([str(sys.executable), str(script)]),
             "env_passthrough": "VAR_A,VAR_B",
         },
         sandbox=True,
