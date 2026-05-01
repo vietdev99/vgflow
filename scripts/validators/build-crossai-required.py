@@ -30,11 +30,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _common import Evidence, Output, timer, emit_and_exit, find_phase_dir  # noqa: E402
+from _common import Evidence, Output, timer, emit_and_exit, find_phase_dir, read_active_run_id  # noqa: E402
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 DB_PATH = REPO_ROOT / ".vg" / "events.db"
-CURRENT_RUN_FILE = REPO_ROOT / ".vg" / "current-run.json"
 
 TERMINAL_EVENTS = {
     "build.crossai_loop_complete",
@@ -44,11 +43,16 @@ TERMINAL_EVENTS = {
 
 
 def _read_current_run_id() -> str | None:
-    try:
-        return json.loads(CURRENT_RUN_FILE.read_text(encoding="utf-8")
-                          )["run_id"]
-    except Exception:
-        return None
+    """Resolve the current /vg:build run_id with multi-session safety.
+
+    Pre-fix: read .vg/current-run.json directly, racing with concurrent
+    sessions (issue: validator saw foreign run_id when another session
+    overwrote the global pointer mid-loop). Now defers to the shared
+    helper that prefers per-session active-run file > matching legacy
+    snapshot > SQLite events.db query for an open vg:build row in this
+    session.
+    """
+    return read_active_run_id(repo_root=REPO_ROOT, command_filter="vg:build")
 
 
 def _count_events_in_run(run_id: str, event_types: set[str]) -> dict[str, int]:

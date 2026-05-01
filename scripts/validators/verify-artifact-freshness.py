@@ -214,18 +214,51 @@ def main() -> int:
 
     repo_root = _resolve_repo_root()
 
-    # Resolve run_id from current-run.json if not supplied
+    # Resolve run_id with multi-session safety: prefer per-session active-run
+    # file (.vg/active-runs/{session_id}.json) over the global current-run.json
+    # snapshot when CLAUDE_SESSION_ID is set. Without this guard, a concurrent
+    # session's run-start will have overwritten the global pointer and we'd
+    # validate the wrong run_id.
     run_id = args.run_id
     if not run_id:
-        current = repo_root / ".vg" / "current-run.json"
-        if current.exists():
-            try:
-                run_id = json.loads(current.read_text(encoding="utf-8")).get("run_id")
-            except json.JSONDecodeError:
-                pass
+        sid = (
+            os.environ.get("CLAUDE_SESSION_ID")
+            or os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or ""
+        )
+        safe_sid = "".join(c for c in sid if c.isalnum() or c in "-_") or ""
+        # 1. Per-session
+        if safe_sid:
+            per = repo_root / ".vg" / "active-runs" / f"{safe_sid}.json"
+            if per.exists():
+                try:
+                    run_id = json.loads(per.read_text(encoding="utf-8")).get("run_id")
+                except (json.JSONDecodeError, OSError):
+                    pass
+        # 2. Legacy snapshot — trust only when session matches or is absent
+        if not run_id:
+            current = repo_root / ".vg" / "current-run.json"
+            if current.exists():
+                try:
+                    snap = json.loads(current.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    snap = None
+                if snap:
+                    legacy_sid = snap.get("session_id") or ""
+                    compatible = (
+                        not sid
+                        or not legacy_sid
+                        or legacy_sid == sid
+                        or legacy_sid == "unknown"
+                    )
+                    if compatible:
+                        run_id = snap.get("run_id")
     if not run_id:
-        print("⛔ No --run-id and .vg/current-run.json unavailable.",
-              file=sys.stderr)
+        print(
+            "⛔ No --run-id and no per-session/legacy run pointer "
+            "(.vg/active-runs/{session_id}.json or .vg/current-run.json).",
+            file=sys.stderr,
+        )
         return 2
 
     paths = [args.path] if args.path else [

@@ -125,3 +125,112 @@ def find_phase_dir(phase: str):
                 return bare_norm
 
     return None
+
+
+def read_active_run_id(repo_root=None, command_filter: str | None = None) -> str | None:
+    """Resolve the active run_id for the CURRENT session.
+
+    Closes the multi-session current-run.json race: when two Claude sessions
+    run /vg:* commands concurrently (e.g. session A doing /vg:build 3.3 while
+    session B starts /vg:blueprint 3.5), each `vg-orchestrator run-start`
+    overwrites .vg/current-run.json. Validators that read that file raw end up
+    seeing the OTHER session's run_id and report "no evidence" / "no active
+    run" / wrong-phase outcomes during run-complete.
+
+    Resolution mirrors vg-orchestrator.state.read_active_run +
+    vg-build-crossai-loop._resolve_active_run (4-tier, in order):
+
+      1. Per-session file: ``.vg/active-runs/{session_id}.json`` keyed by
+         CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID env. Authoritative.
+      2. Legacy snapshot: ``.vg/current-run.json``. Trusted only when its
+         session_id matches the env, is empty, or is the "unknown" sentinel
+         (orphan run from a subshell with no session env). Stale-pointer
+         from foreign session falls through to step 3.
+      3. SQLite ``runs`` table: most recent open row whose session_id matches
+         the env, optionally filtered by ``command_filter`` prefix
+         (e.g. "vg:build" / "vg:review"). This handles run-abort + chicken-
+         and-egg cases where current-run.json was cleared mid-flow.
+      4. None.
+
+    Args:
+      repo_root:        Path to repo root. Defaults to $VG_REPO_ROOT or cwd.
+      command_filter:   Optional command prefix for DB fallback (no LIKE wildcards
+                        needed; the function appends ``%``). When set, only matches
+                        runs whose ``command`` column starts with this string.
+
+    Returns:
+      run_id string, or None when nothing matches the current session.
+    """
+    import os
+    import sqlite3
+    from pathlib import Path as _Path
+
+    if repo_root is None:
+        repo_root = _Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+    else:
+        repo_root = _Path(repo_root)
+
+    sid = (
+        os.environ.get("CLAUDE_SESSION_ID")
+        or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        or ""
+    )
+    safe_sid = "".join(c for c in sid if c.isalnum() or c in "-_") or ""
+
+    # 1. Per-session active-run file
+    if safe_sid:
+        per = repo_root / ".vg" / "active-runs" / f"{safe_sid}.json"
+        if per.exists():
+            try:
+                run = json.loads(per.read_text(encoding="utf-8"))
+                rid = run.get("run_id")
+                if rid:
+                    return rid
+            except Exception:
+                pass
+
+    # 2. Legacy snapshot — trust only when compatible with the current session
+    legacy = repo_root / ".vg" / "current-run.json"
+    if legacy.exists():
+        try:
+            run = json.loads(legacy.read_text(encoding="utf-8"))
+            legacy_sid = run.get("session_id") or ""
+            compatible = (
+                not sid
+                or not legacy_sid
+                or legacy_sid == sid
+                or legacy_sid == "unknown"
+            )
+            if compatible:
+                rid = run.get("run_id")
+                if rid:
+                    return rid
+        except Exception:
+            pass
+
+    # 3. SQLite fallback — most recent open run for this session
+    if sid:
+        try:
+            db_path = repo_root / ".vg" / "events.db"
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path), timeout=2.0)
+                try:
+                    where = ["session_id = ?", "completed_at IS NULL"]
+                    params: list[Any] = [sid]
+                    if command_filter:
+                        where.append("command LIKE ?")
+                        params.append(f"{command_filter}%")
+                    row = conn.execute(
+                        "SELECT run_id FROM runs WHERE "
+                        + " AND ".join(where)
+                        + " ORDER BY started_at DESC LIMIT 1",
+                        params,
+                    ).fetchone()
+                    if row:
+                        return row[0]
+                finally:
+                    conn.close()
+        except Exception:
+            pass
+
+    return None
