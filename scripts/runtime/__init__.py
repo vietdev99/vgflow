@@ -29,6 +29,14 @@ from .fixture_cache import (
     save as cache_save,
     write_captured,
 )
+from .preflight import (
+    InvariantGap,
+    PreflightError,
+    fix_hint,
+    parse_env_contract,
+    required_count,
+    verify_invariants,
+)
 from .recipe_loader import load_recipe, ValidationError
 from .recipe_capture import capture_paths, CaptureError
 from .recipe_interpolate import interpolate, InterpolationError
@@ -63,4 +71,10 @@ __all__ = [
     "recipe_hash",
     "cache_load",
     "cache_save",
+    "InvariantGap",
+    "PreflightError",
+    "parse_env_contract",
+    "required_count",
+    "verify_invariants",
+    "fix_hint",
 ]
