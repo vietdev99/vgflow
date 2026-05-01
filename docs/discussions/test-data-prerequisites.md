@@ -1,6 +1,6 @@
 # RFC: Test-data prerequisites for review/test workflow
 
-**Status:** Direction chosen 2026-05-02, design questions remain
+**Status:** Direction + design decisions chosen 2026-05-02, ready to split into implementation PRs
 **Surfaced by:** PrintwayV3 Phase 3.2 dogfood (2026-05-01) on wave-3.2.x dogfood run
 **Related:** PR #79 (recovery paths + matrix-staleness), PR #74 (anti-performative-review)
 
@@ -94,107 +94,160 @@ This bars option A (extend seed.ts) as the primary mechanism — that's Printway
 
 ---
 
-## What still needs design (open questions)
+## Design decisions (Q1-Q8 resolved 2026-05-02)
 
-These are genuine unknowns the chosen direction surfaces. Each blocks some part of implementation.
+The 8 questions surfaced after Decisions 1-4 are now answered. Each decision below has rationale + immediate implication for implementation.
 
-### Q1 — Recipe schema specifics
+### D1 (was Q3) — Runtime architecture: vgflow ships generic runner, pluggable auth via YAML
+
+Vgflow ships `scripts/run-fixture.py` (or equivalent — language TBD at PR-A time but Python likely) that reads recipe YAML, performs HTTP calls, captures responses. Project supplies only YAML content; no project-side runner code.
+
+Auth pluggability is **YAML-declarative**, not Python entrypoints. Project declares in `vg.config.environments.{env}.auth`:
 
 ```yaml
-# Strawman shape, not final
+auth:
+  kind: cookie       # or: bearer, session, api-key
+  login_endpoint: /api/v1/auth/login
+  body_template:
+    email: "{role.email}"
+    password: "{role.password}"
+  capture:
+    cookie: connect.sid          # for kind=cookie
+    # or token_path: $.token     # for kind=bearer
+```
+
+Runner supports 4 auth kinds covering ~90% of stacks (cookie session, bearer JWT, header api-key, OAuth client-credentials). Project with exotic auth → upstream contribution to runner.
+
+**Rationale:** matches "public framework" (Decision 4). Python entrypoints would couple recipes to vgflow's language choice. Sub-shell would be portable but ugly to debug.
+
+**Rejected alternatives:**
+- (b) project-side runner — duplicates HTTP+auth+capture code per project; defeats framework adoption
+- Python entrypoints — coupling vgflow language to recipe consumers
+
+### D2 (was Q1) — Recipe schema
+
+```yaml
 goal: G-10
-description: Admin approves tier2 topup → row must exist in pending tier2 state
-setup:
-  - kind: api_call
-    role: merchant-owner
+description: Admin approves tier2 topup — row must exist in pending tier2 state
+steps:
+  - id: create_tier2_topup
+    kind: api_call
+    role: merchant-owner                 # lookup into vg.config.credentials[env]
     method: POST
-    endpoint: /api/v1/wallet/topup-requests
+    endpoint: /api/v1/wallet/topup-requests   # relative; runner resolves base from config
     body:
       amount: 100
       currency: USD
       gateway: sunrate
-      reference: "vgflow-fixture-G10-{run_id}"
+      reference: "vgflow-fixture-{run_id}-{step.id}"
     capture:
-      request_id: $.id
+      request_id: $.id                   # JSONPath syntax (RFC 9535)
 expects:
-  invariant: "topup_requests.where(status=pending, tier=tier2).count >= 1"
   capture_into:
-    EXPECTED_ROW_ID: $request_id
+    EXPECTED_ROW_ID: "{steps.create_tier2_topup.request_id}"
 ```
 
-Open: should `endpoint` be relative (vgflow resolves base URL from env) or absolute? Should `role` be a string lookup into `vg.config.credentials[env]` (current pattern) or a typed enum? How are auth tokens captured/refreshed inside multi-step recipes? Does `capture` use JSONPath, jq syntax, or YAML-native? Each impacts portability.
+**Decisions baked in:**
+- `endpoint`: **relative**, runner resolves `api_base` from `vg.config.environments.{env}.api_base`. Portable across local/sandbox/staging.
+- `role`: **string lookup** into existing `vg.config.credentials[env]` array. No new typed enum — reuses established pattern.
+- `capture`: **JSONPath** (RFC 9535 standard). Not jq — that's a project-side tool dependency we won't ship.
+- `body` template variables: `{run_id}`, `{step.id}`, `{steps.<step_id>.<capture_name>}`, `{role.email}` — minimal interpolation, no full templating engine.
+- Auth tokens: **handled by runtime, not in recipe**. Recipe declares `role: merchant-owner`; runner logs in once per role per session, attaches creds to subsequent calls.
+- Multi-step: `steps: [...]` array, each step has `id`, later steps reference prior captures via `{steps.<id>.<name>}`.
 
-### Q2 — Multi-step recipe support
+**Rejected alternatives:** absolute URLs (breaks portability), typed role enums (premature abstraction), jq syntax (tool dep), in-recipe secrets (security smell).
 
-Some goals need 2+ steps to set up state — G-23 admin reset cooling period needs (a) merchant exists, (b) merchant performed N failed withdraws, (c) cooling-period flag was raised. Three sequential API calls, each capturing IDs the next uses. Recipe schema must support `steps: [...]` not just one `setup:`.
+### D3 (was Q2) — Multi-step failure: no rollback, log orphans
 
-But chained recipes have failure modes — if step 2 fails, what happens to step 1's created entity? With "no cleanup" rule (Decision 2), nothing — leave the orphan. Is that acceptable, or do we need at least best-effort cleanup on partial recipe failure?
+Step N fails → recipe overall fails → goal marked BLOCKED in matrix with reason `fixture step N/M failed: <error>`. Steps 1..N-1 already executed leave their entities behind (per Decision 2 "no cleanup").
 
-### Q3 — Recipe runtime — vgflow-side or project-side?
+One concession to debugging: orphan IDs captured before failure get logged to `runs/G-{XX}.fixture-orphans.json`. `/vg:fixture-prune` (D8) reads this when cleaning up.
 
-Two architectures:
+**Rationale:** transactional rollback would require compensating-call infrastructure per entity type — engineering cost too high for sandbox-disposable model. Logging orphans is ~10 lines, gives prune the data it needs.
 
-**(a) vgflow ships a generic recipe runner** (`scripts/run-fixture.py`) that reads YAML, makes HTTP calls, captures IDs. Project provides only the YAML content. Most portable — projects don't write code.
+### D4 (was Q4) — Time-driven goals deferred to separate RFC
 
-**(b) vgflow ships only the schema; projects provide their own runner** in their `scripts/fixtures/` dir. Projects can use whatever language/HTTP lib fits their stack.
+Goals requiring backdated timestamps or fast-forward (cooling period, 7-day chargeback deadline, BullMQ retry-attempt-N) are NOT solved by recipes in v1. They need backend cooperation (test-only headers, sandbox-only env detection) — a separate multi-week design.
 
-Option (a) means vgflow has to handle every project's auth pattern (cookie? JWT header? SSO? OAuth? mTLS?). Option (b) duplicates runner code across projects but keeps vgflow language-agnostic.
+**For now:** affected goals declare `requires_time_travel: true` in TEST-GOALS frontmatter. Surface filter in `/vg:review` classifies them as **DEFERRED** (not SUSPECTED, not BLOCKED) with reason "needs time-travel infra (separate RFC)". Matrix verdict treats DEFERRED as a valid endpoint per existing v1.14.0+ scope-tag model.
 
-Probably (a) with a pluggable auth strategy. But pluggable how — Python entrypoints? Sub-shell scripts? YAML-declarative auth blocks?
+**Affected from Phase 3.2 dogfood:** G-22 (withdraw cooling period), G-42 (chargeback 7d auto-suspend), G-58 (BullMQ retry + DLQ). 3 of 36, ~8%.
 
-### Q4 — Time-driven state (option E re-entry)
+**Follow-up:** open `RFC: time-travel test infrastructure` once first non-Phase-3.2 phase blocks on this class.
 
-Decision rejected E (time-travel) for v1, but Phase 3.2 has goals like G-22 (cooling period blocks new withdraw — needs merchant with `last_failed_withdraw_at < 1h ago`), G-42 (7-day chargeback deadline), G-58 (BullMQ retry — needs job at retry attempt N).
-
-These cannot be solved by API calls alone. Either:
-- Backend exposes a `X-Sandbox-Time-Advance: 8d` header that fast-forwards
-- Recipe creates entity with backdated timestamp directly via raw DB write (bypasses domain logic)
-- Defer those goals — mark them "needs time-travel infrastructure", separate RFC, accept SUSPECTED for now
-
-Which path? If we defer, ~5 of 36 dogfood goals stay SUSPECTED indefinitely.
-
-### Q5 — `data_invariants` schema in ENV-CONTRACT.md
-
-Decision 3 says invariants live there. But the schema isn't designed yet. Strawman:
+### D5 (was Q5) — `data_invariants` schema with explicit owner
 
 ```yaml
+# In ENV-CONTRACT.md
 data_invariants:
-  - resource: topup_requests
-    where: { status: pending, tier: tier2 }
+  - id: tier2_topup_pending
+    resource: topup_requests
+    where:
+      status: pending
+      tier: tier2
     count: ">=1"
-    setup_recipe: G-10  # which goal's recipe creates this
+    setup_recipe: G-10                   # 1:1 case — single goal owns
+
+  - id: linked_account_exists
+    resource: linked_accounts
+    where: { status: active }
+    count: ">=1"
+    setup_recipe: [G-34]                 # list form — same syntax as multi-owner
+    # When multiple goals share: setup_recipe: [G-34, G-36]
+    # First entry = owner, rest declare `inherits: G-34` in their own FIXTURES/{G-XX}.yaml
 ```
 
-Multiple goals may share an invariant (G-10 and G-12 both need tier2 pending). Whose recipe is "owner"? First in alphabetical order? First declared in TEST-GOALS? Manual `owner: G-10` field?
+**Decisions baked in:**
+- Owner is **explicit**, not auto-derived. First entry in `setup_recipe` list owns the recipe; others reference via `inherits` field in their own fixture YAML.
+- `where` is conjunction-only (AND semantics across keys). Disjunction (OR) → multiple invariant entries. Keeps query simple.
+- `count` accepts `>=N`, `==N`, `>N` (string syntax — runner parses).
 
-### Q6 — `/vg:test` codegen consumption format
+**Rationale:** auto-derived ownership (alphabetical, declaration order, etc.) creates surprise when goals are reordered. Explicit field = grep-able, refactor-safe.
 
-Recipe is YAML. Playwright spec is TypeScript. Two paths:
+### D6 (was Q6) — Codegen emits `runFixture()` runtime call (option b)
 
-**(a) Codegen transpiles YAML → TS at codegen time** — every recipe becomes inline TS in the `.spec.ts` file. Spec is self-contained.
+`/vg:test` Playwright codegen emits:
 
-**(b) Codegen emits import + call** — `await runFixture('G-10')` in the spec, the runtime imports a TS helper that reads YAML at test-run time. Spec depends on runtime + YAML files at runtime.
+```typescript
+test.beforeEach(async ({ request }) => {
+  await runFixture(request, 'G-10');     // resolves to FIXTURES/G-10.yaml at test-run time
+});
+```
 
-Option (a) is simpler for users running the spec standalone. Option (b) is DRY — change YAML once, both review and test see new behavior. Probably (b) but adds runtime dependency.
+`runFixture` is a TS helper (~30 LOC) shipped with vgflow as `@vgflow/fixture-runtime` (or vendor-copied — packaging TBD at PR-E time). Reads YAML, makes HTTP calls via Playwright's `request` fixture, returns capture map.
 
-### Q7 — Preflight verifier architecture
+**Rationale:** option (a) transpile-to-inline-TS means changing YAML doesn't update emitted specs until codegen re-runs — drift waiting to happen. Option (b) keeps YAML as single source of truth; tests pick up changes on next run automatically.
 
-Phase 2c-pre already runs `verify-env-contract.py` (preflight checks for app reachable + login works). The new `data_invariants` check fits naturally there as a third check. But:
+**Trade-off accepted:** specs depend on a runtime helper + YAML files. For projects checking specs into a vendor folder, the helper vendors with them — minimal friction.
 
-- Current verifier is "smoke a thing, fail or pass" — invariant check is "query state, run recipe if missing, re-query, fail if still missing". Different shape.
-- If invariant fails AND its setup recipe also fails, what's the user-facing error? "Fixture for G-10 failed — see runs/G-10.fixture-error.json"?
-- Preflight runs once before all scanners. Should each scanner also run its own goal's recipe just-before-spawn (in case prior scanners' actions invalidated the invariant — e.g., G-11 reject removed the row G-10 needs)?
+### D7 (was Q7) — Preflight runs once, scanner reads cache
 
-### Q8 — `/vg:fixture-prune` cleanup command spec
+Phase 2c-pre adds `verify-data-invariants` step:
+1. Walk all `data_invariants` declared in ENV-CONTRACT.md
+2. Query sandbox state via API for each (read-only).
+3. For each invariant violated: lookup `setup_recipe` (the owning goal), run that goal's `FIXTURES/{G-XX}.yaml`, capture IDs into `${PHASE_DIR}/.fixture-cache.json`.
+4. Re-query each violated invariant. Still violated → BLOCK with actionable error referencing recipe path.
 
-Decision 2 puts cleanup in a separate command. Spec needed:
+Each Haiku scanner reads `${PHASE_DIR}/.fixture-cache.json` for its goal's `EXPECTED_ROW_ID` and other captures. Injects into prompt as env vars.
 
-- What does prune delete? Only entities tagged with `vgflow-fixture-{run_id}` reference? Anything older than N days? Anything matching naming convention?
-- When does user run it? Manual after each `/vg:accept`? Scheduled? Tied to sandbox-reset?
-- How does it know which entities are fixture-created vs real test data the user wants to keep?
-- Auth: which role runs the prune? Admin with hard-delete? Or a dedicated `fixture-cleanup` role to limit blast radius?
+**No re-check before each scanner spawn.** If prior scanner's mutation invalidated a later goal's invariant (e.g., G-11 rejects the only tier2 row that G-10 needed), G-10's scanner fails with clear error → matrix BLOCKED → next `/vg:review --retry-failed` re-runs preflight which re-creates the missing entity.
 
-This is its own mini-RFC. For now, accept that it's TBD.
+**Rationale:** N scanners × M invariants × API roundtrip = excessive cost for marginal correctness. Once-per-run preflight + retry-failed loop converges in 1-2 iterations for hostile cases.
+
+**Order matters:** the preflight check is a first-class verifier, not a soft-warn — invariant gap = BLOCK. This is what prevents the "scanner ran but had nothing to test" failure that started this RFC.
+
+### D8 (was Q8) — `/vg:fixture-prune` spec (own mini-RFC, contracts only)
+
+Full spec deferred to its own RFC, but commits to these contracts:
+
+- **Tag-based delete only.** Every fixture-created entity carries `vgflow_fixture_run_id` field (or analogous metadata per entity type). Prune matches by tag pattern, never deletes untagged entities.
+- **Manual trigger for v1** — user runs `/vg:fixture-prune` on their cadence. No cron. Default age threshold: 7 days (configurable).
+- **Scoped role** — dedicated `vgflow-fixture-cleaner` credential with hard-delete privilege scoped to fixture-tagged entities only. NOT admin role — limits blast radius if cleaner script bugs out.
+- **Includes orphan list** — reads `runs/G-{XX}.fixture-orphans.json` (from D3) to clean partial-recipe-failure leftovers.
+
+These contracts unblock D2, D3, D5 — they don't have to predict prune behavior.
+
+**Follow-up:** `RFC: vg:fixture-prune cleanup command` after D1-D7 ship.
 
 ---
 
@@ -209,19 +262,60 @@ This is its own mini-RFC. For now, accept that it's TBD.
 
 ---
 
-## Implementation plan (after questions resolved)
+## Implementation plan
 
-Once Q1-Q8 are answered, split into PRs:
+D1-D8 resolved. Split into PRs in dependency order:
 
-1. **PR-A: Recipe schema + JSON-Schema validator** — write the canonical YAML schema, ship as `schemas/fixture-recipe.schema.yaml`, add validator script. No runtime yet.
-2. **PR-B: `/vg:build` fixture-write step** — executor writes `FIXTURES/{G-XX}.yaml` for every goal with `mutation_evidence`. New wave-verify validator: build incomplete if mutation goal lacks fixture.
-3. **PR-C: ENV-CONTRACT.md `data_invariants` block + preflight verifier** — declarative invariant schema, runner that reads recipes + queries state + reports gaps.
-4. **PR-D: `/vg:review` scanner preflight integration** — orchestrator runs invariant check, runs missing recipes, captures IDs, injects into Haiku prompt.
-5. **PR-E: `/vg:test` codegen integration** — Playwright spec emits `runFixture(G-XX)` calls in `beforeEach`, runtime helper reads YAML.
-6. **PR-F (separate)** — `/vg:fixture-prune` cleanup command (Q8).
-7. **PR-G (separate, future)** — time-travel test-mode infrastructure (Q4).
+1. **PR-A: Recipe schema + auth-pluggable runner skeleton** (D1, D2, D3)
+   - `schemas/fixture-recipe.schema.yaml` (JSON-Schema for validation)
+   - `scripts/run-fixture.py` skeleton — reads YAML, walks `steps[]`, captures via JSONPath, no-op when API base unreachable
+   - 4 auth-kind handlers: cookie, bearer, api-key, oauth-client-creds
+   - Unit tests on schema validation + JSONPath capture + multi-step variable resolution
+   - Orphan logger writes `runs/G-{XX}.fixture-orphans.json` on partial failure
+   - **No vgflow consumer yet** — runner runs standalone via `python3 run-fixture.py FIXTURES/G-10.yaml`. Validates the engine before wiring anything.
 
-Estimated 5-7 small PRs over 2-3 weeks once Q1-Q8 land.
+2. **PR-B: `/vg:build` fixture-write step** (D2 authoring side)
+   - New executor sub-step: after implementing a goal with `mutation_evidence`, write `FIXTURES/{G-XX}.yaml`
+   - New wave-verify validator: `verify-build-fixtures-present.py` — build wave not done if mutation goal lacks fixture YAML matching schema
+   - `requires_time_travel: true` recognition — skip fixture requirement, mark goal DEFERRED in matrix instead (D4)
+   - Build can no-op gracefully on phases with no mutation goals (backward compat)
+
+3. **PR-C: ENV-CONTRACT.md `data_invariants` + preflight verifier** (D5, D7)
+   - Schema for `data_invariants` block in ENV-CONTRACT.md
+   - `verify-data-invariants.py` — queries sandbox per invariant, runs `setup_recipe` if violated, re-queries, BLOCKs if still violated
+   - Hooks into `phase2c_pre_dispatch_gates` step in `/vg:review`
+   - Writes `${PHASE_DIR}/.fixture-cache.json` for downstream scanners
+
+4. **PR-D: `/vg:review` scanner preflight integration**
+   - Haiku scanner prompt extended: reads `.fixture-cache.json`, injects `EXPECTED_ROW_ID` etc. as env vars for scanner agent
+   - Matrix-staleness validator gets new `requires_time_travel` filter — those goals never flagged SUSPECTED, classified DEFERRED instead
+   - Recovery paths in `recovery_paths.py` extended with `validator:data-invariants` entries
+
+5. **PR-E: `/vg:test` codegen integration** (D6)
+   - Playwright codegen emits `await runFixture(request, 'G-XX')` in generated specs
+   - `@vgflow/fixture-runtime` package (or vendor copy) — TS helper that reads YAML at test-run time
+   - Validator: `verify-codegen-fixture-binding.py` — every codegen test for a mutation goal must include `runFixture()` call
+
+6. **PR-F (separate, after D1-E land)** — `RFC + impl: /vg:fixture-prune` cleanup command (D8)
+   - Tag-based scan + delete with `vgflow-fixture-cleaner` role
+   - Reads orphan logs from PR-A
+   - User-triggered, default 7-day age threshold
+
+7. **PR-G (separate, future)** — `RFC: time-travel test infrastructure` (D4)
+   - Backend `X-Sandbox-Time-*` headers contract
+   - Sandbox-only env detection
+   - Recipe extension: `time_advance:` step kind
+   - Lifts ~8% of dogfood goals from DEFERRED to testable
+
+**Sequencing rationale:**
+- PR-A is the foundation — runner works standalone, can be tested without other components
+- PR-B adds the upstream producer (build writes YAML)
+- PR-C adds the downstream consumer (preflight reads YAML)
+- PR-D wires preflight into review scanner spawn
+- PR-E extends to test layer
+- PR-F + PR-G are independent follow-ups
+
+**Estimate:** PR-A through PR-E in 2-3 weeks if no surprises. PR-F + PR-G open-ended.
 
 ---
 
