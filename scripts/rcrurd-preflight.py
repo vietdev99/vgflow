@@ -96,6 +96,15 @@ def main() -> int:
     ap.add_argument("--only", help="Comma-separated goal IDs to check")
     ap.add_argument("--repo-root", default=None)
     ap.add_argument("--vg-config", default=None)
+    ap.add_argument("--capture-snapshot", default=None,
+                    help="In --mode pre, persist payloads to this JSON path so "
+                         "--mode post can compute increased_by_at_least deltas "
+                         "against the actual pre-action state (Codex-HIGH-1-bis).")
+    ap.add_argument("--pre-snapshot", default=None,
+                    help="In --mode post, read pre-state payloads from this "
+                         "JSON path (written by an earlier --mode pre invocation "
+                         "with --capture-snapshot). Without it, increased_by_at_least "
+                         "deltas use post-action GET as 'pre' which is wrong.")
     args = ap.parse_args()
 
     repo = Path(args.repo_root or os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
@@ -207,6 +216,21 @@ def main() -> int:
         except Exception:
             return {}
 
+    # Codex-HIGH-1-bis: load pre-snapshot for post mode (real pre-action state)
+    pre_snapshot: dict[str, dict] = {}
+    if args.mode == "post" and args.pre_snapshot:
+        snap_path = Path(args.pre_snapshot)
+        if snap_path.exists():
+            try:
+                pre_snapshot = json.loads(snap_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pre_snapshot = {}
+
+    # Codex-HIGH-1-bis: capture pre-snapshot in pre mode for downstream post mode
+    capture_snapshot: dict[str, dict] = {} if (
+        args.mode == "pre" and args.capture_snapshot
+    ) else {}
+
     results = []
     failed_count = 0
     for entry in plan:
@@ -226,16 +250,32 @@ def main() -> int:
                 })
                 if not res.pre_state_passed and res.skipped_reason is None:
                     failed_count += 1
+                # Capture for downstream post mode (Codex-HIGH-1-bis)
+                if args.capture_snapshot:
+                    pre_block = entry["lifecycle"].get("pre_state") or {}
+                    if pre_block.get("endpoint") and pre_block.get("role"):
+                        try:
+                            capture_snapshot[entry["goal"]] = get_fn(
+                                pre_block["role"], pre_block["endpoint"],
+                            )
+                        except Exception:
+                            pass  # best-effort
             else:  # post
-                # Capture pre_payload for increased_by_at_least delta checks
-                pre_payload = None
-                pre_block = entry["lifecycle"].get("pre_state") or {}
-                if pre_block.get("endpoint") and pre_block.get("role"):
-                    try:
-                        pre_payload = get_fn(pre_block["role"],
-                                              pre_block["endpoint"])
-                    except Exception:
-                        pre_payload = None  # best-effort
+                # Codex-HIGH-1-bis fix: prefer the pre-snapshot from
+                # before the action ran. Falling back to a fresh GET
+                # would sample post-action state, breaking
+                # increased_by_at_least delta semantics.
+                pre_payload = pre_snapshot.get(entry["goal"]) if pre_snapshot else None
+                if pre_payload is None:
+                    # Fallback: best-effort live read (may be wrong for
+                    # delta assertions; equality assertions still work).
+                    pre_block = entry["lifecycle"].get("pre_state") or {}
+                    if pre_block.get("endpoint") and pre_block.get("role"):
+                        try:
+                            pre_payload = get_fn(pre_block["role"],
+                                                  pre_block["endpoint"])
+                        except Exception:
+                            pre_payload = None
                 res = run_post_state_with_retry(
                     entry["goal"], entry["lifecycle"], get_fn,
                     pre_payload=pre_payload,
@@ -245,6 +285,8 @@ def main() -> int:
                     "passed": res.post_state_passed,
                     "skipped": res.skipped_reason,
                     "errors": res.post_state_failures,
+                    "pre_snapshot_used": pre_payload is not None and
+                        pre_snapshot.get(entry["goal"]) is not None,
                 })
                 if not res.post_state_passed and res.skipped_reason is None:
                     failed_count += 1
@@ -253,6 +295,15 @@ def main() -> int:
                              "errors": [str(e)]})
             failed_count += 1
 
+    # Persist pre-snapshot for downstream post mode (Codex-HIGH-1-bis)
+    if args.mode == "pre" and args.capture_snapshot and capture_snapshot:
+        snap_path = Path(args.capture_snapshot)
+        snap_path.parent.mkdir(parents=True, exist_ok=True)
+        snap_path.write_text(
+            json.dumps(capture_snapshot, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
     if failed_count == 0:
         print(json.dumps({
             "verdict": "PASS",
@@ -260,6 +311,8 @@ def main() -> int:
             "phase": args.phase,
             "checked": len(plan),
             "results": results,
+            "snapshot_captured": bool(args.mode == "pre" and capture_snapshot),
+            "pre_snapshot_loaded": bool(args.mode == "post" and pre_snapshot),
         }, indent=2))
         return 0
 

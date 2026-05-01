@@ -1472,69 +1472,16 @@ Display:
 
 Generate Playwright test files from VERIFIED goals. Assertions come from TEST-GOALS success criteria, navigation paths come from RUNTIME-MAP.json observations, and CRUD list/form/delete/security expectations come from CRUD-SURFACES.md when present.
 
-**RFC v9 PR-E — fixture-aware codegen (Codex-HIGH-3 fix — REAL injection):**
+**RFC v9 PR-E — fixture-aware codegen (Codex-HIGH-3 fix):**
 
-After codegen writes `.spec.ts` files, invoke
-`scripts/codegen-fixture-inject.py` in sweep mode. For every goal in
-`FIXTURES-CACHE.json` with a `captured` store, the script walks the
-generated tests dir, finds matching `*-{G-XX}.spec.ts` files, and
-prepends:
+The fixture inject + validator MUST run AFTER spec generation completes,
+not before. They're invoked at the END of step 5d_codegen (search for
+"RFC v9 codegen fixture inject (post-generation)").
 
-```ts
-// VGFLOW_FIXTURE_INJECTED — DO NOT EDIT BELOW UNTIL CLOSE
-// goal: G-10, phase: 3.2
-// Source: FIXTURES-CACHE.json captured store from last review run.
-// Edit FIXTURES/G-10.yaml + re-run /vg:review to regenerate.
-const FIXTURE = {
-  pending_id: "p7e9-2026-05-02",
-  amount: 0.01,
-} as const;
-// VGFLOW_FIXTURE_INJECTED_END
-```
-
-Idempotent: re-injecting REPLACES the existing block, never stacks.
-Drift detector `verify-codegen-fixture-ref.py` BLOCKs at /vg:test exit
-if a fixture-backed goal's spec doesn't reference `FIXTURE.*`.
-
-```bash
-if [ -f "${REPO_ROOT}/scripts/codegen-fixture-inject.py" ] && \
-   [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
-  echo "▸ RFC v9 codegen fixture inject (sweep mode)"
-  INJECT_OUT=$("${PYTHON_BIN:-python3}" \
-    "${REPO_ROOT}/scripts/codegen-fixture-inject.py" \
-    --phase "$PHASE_NUMBER" \
-    --sweep "${GENERATED_TESTS_DIR:-apps/web/e2e}" 2>&1)
-  echo "$INJECT_OUT" | "${PYTHON_BIN:-python3}" -c '
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    inj = len(d.get("injected", []))
-    skp = len(d.get("skipped", []))
-    err = len(d.get("errors", []))
-    print(f"  ✓ injected={inj}, skipped={skp}, errors={err}")
-except: print("  ⚠ inject parse-error")'
-fi
-```
-
-Then validate at run-complete:
-
-```bash
-CGFR_VAL=".claude/scripts/validators/verify-codegen-fixture-ref.py"
-if [ -f "$CGFR_VAL" ] && [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
-  CGFR_FLAGS="--severity ${VG_CODEGEN_FIXTURE_SEVERITY:-block}"
-  [[ "${ARGUMENTS}" =~ --allow-no-fixture-ref ]] && CGFR_FLAGS="$CGFR_FLAGS --allow-no-fixture-ref"
-  "${PYTHON_BIN:-python3}" "$CGFR_VAL" --phase "$PHASE_NUMBER" \
-    --tests-dir "${GENERATED_TESTS_DIR:-apps/web/e2e}" $CGFR_FLAGS
-  CGFR_RC=$?
-  if [ "$CGFR_RC" -ne 0 ] && [ "${VG_CODEGEN_FIXTURE_SEVERITY:-block}" = "block" ]; then
-    echo "⛔ Codegen fixture-ref gate failed — fixture-backed goals' specs"
-    echo "   are missing FIXTURE.* references. Re-run codegen + inject."
-    exit 1
-  fi
-fi
-```
-
-
+The injector emits a `FIXTURE = {...}` const block AND substitutes hard-coded
+literal occurrences of captured values with `FIXTURE.<name>` references.
+Drift detector `verify-codegen-fixture-ref.py` BLOCKs at /vg:test exit if
+a fixture-backed goal's spec doesn't reference `FIXTURE.*`.
 
 **For each goal group, generate 1 .spec.ts file:**
 
@@ -2094,6 +2041,62 @@ else
   echo "  (no DISCOVERED or EXPANDED goal files — review Phase 2c / blueprint Phase 2b5d either skipped or pre-v2.34/2.36 install)"
 fi
 ```
+
+### RFC v9 codegen fixture inject (post-generation)
+
+**Codex-HIGH-3-bis fix:** This block MUST run AFTER all generation paths
+above (manual codegen, auto-emitted skeletons, interactive_controls
+delegation). Earlier placement at step start meant fresh specs never got
+injected.
+
+The injector now does TWO passes:
+1. Prepend `FIXTURE = {...}` const block (idempotent, sentinel-bracketed).
+2. Substitute literal occurrences of captured STRING values in the spec
+   body with `FIXTURE.<name>` references, when safe to do so. "Safe" =
+   exact-string match of a captured value that looks like a fixture
+   identifier (UUID-like, sentinel-prefixed, or ≥ 8 chars unique).
+
+```bash
+if [ -f "${REPO_ROOT}/scripts/codegen-fixture-inject.py" ] && \
+   [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
+  echo "▸ RFC v9 codegen fixture inject (sweep mode, post-generation)"
+  INJECT_OUT=$("${PYTHON_BIN:-python3}" \
+    "${REPO_ROOT}/scripts/codegen-fixture-inject.py" \
+    --phase "$PHASE_NUMBER" \
+    --sweep "${GENERATED_TESTS_DIR:-apps/web/e2e}" \
+    --substitute 2>&1)
+  echo "$INJECT_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    inj = len(d.get("injected", []))
+    skp = len(d.get("skipped", []))
+    err = len(d.get("errors", []))
+    sub = sum(i.get("substitutions", 0) for i in d.get("injected", []))
+    print(f"  ✓ injected={inj}, substitutions={sub}, skipped={skp}, errors={err}")
+except: print("  ⚠ inject parse-error")'
+fi
+```
+
+Validate at run-complete:
+
+```bash
+CGFR_VAL=".claude/scripts/validators/verify-codegen-fixture-ref.py"
+if [ -f "$CGFR_VAL" ] && [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
+  CGFR_FLAGS="--severity ${VG_CODEGEN_FIXTURE_SEVERITY:-block}"
+  [[ "${ARGUMENTS}" =~ --allow-no-fixture-ref ]] && CGFR_FLAGS="$CGFR_FLAGS --allow-no-fixture-ref"
+  "${PYTHON_BIN:-python3}" "$CGFR_VAL" --phase "$PHASE_NUMBER" \
+    --tests-dir "${GENERATED_TESTS_DIR:-apps/web/e2e}" $CGFR_FLAGS
+  CGFR_RC=$?
+  if [ "$CGFR_RC" -ne 0 ] && [ "${VG_CODEGEN_FIXTURE_SEVERITY:-block}" = "block" ]; then
+    echo "⛔ Codegen fixture-ref gate failed — fixture-backed goals' specs"
+    echo "   are missing FIXTURE.* references after substitution pass."
+    echo "   Investigate: scripts/codegen-fixture-inject.py output above."
+    exit 1
+  fi
+fi
+```
+
 </step>
 
 <step name="5d_binding_gate" profile="web-fullstack,web-frontend-only">

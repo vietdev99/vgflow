@@ -397,6 +397,107 @@ def test_mode_post_dry_run_lists_post_state_endpoints(tmp_path):
     assert not any("/api/pre" in p["endpoint"] for p in out["would_check"])
 
 
+def test_capture_and_reuse_snapshot_for_increased_by_delta(tmp_path, server):
+    """Codex-HIGH-1-bis: post_state must use REAL pre-action snapshot for
+    increased_by_at_least, not a fresh post-action GET."""
+    base_url, routes = server
+    # Stage 1: pre_state runs against count=0
+    routes[("GET", "/api/balance")] = {
+        "status": 200, "body": {"balance": 100},
+    }
+    _phase(tmp_path, {
+        "G-10": {
+            "schema_version": "1.0", "goal": "G-10",
+            "description": "x" * 50,
+            "fixture_intent": {"declared_in": "x", "validates": "x" * 25},
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/x"}],
+            "lifecycle": {
+                "pre_state": {
+                    "role": "u", "method": "GET",
+                    "endpoint": "/api/balance",
+                    "assert_jsonpath": [{"path": "$.balance", "not_null": True}],
+                },
+                "action": {"surface": "ui_click",
+                           "expected_network": {"method": "POST",
+                                                  "endpoint": "/api/topup",
+                                                  "status_range": [200, 299]}},
+                "post_state": {
+                    "role": "u", "method": "GET",
+                    "endpoint": "/api/balance",
+                    "assert_jsonpath": [
+                        {"path": "$.balance", "increased_by_at_least": 50},
+                    ],
+                },
+            },
+        },
+    })
+    creds = json.dumps({"u": {"kind": "api_key", "key": "k"}})
+    snap = tmp_path / "pre-snapshot.json"
+
+    # Stage 1: --mode pre with --capture-snapshot
+    r1 = _run(tmp_path, "--phase", "1.0", "--base-url", base_url,
+               "--mode", "pre", "--capture-snapshot", str(snap),
+               env_extra={"VG_CREDENTIALS_JSON": creds})
+    assert r1.returncode == 0, f"stdout={r1.stdout}\nstderr={r1.stderr}"
+    assert snap.exists()
+    snap_data = json.loads(snap.read_text())
+    assert snap_data["G-10"] == {"balance": 100}
+
+    # Stage 2: simulate action — balance increases to 200
+    routes[("GET", "/api/balance")] = {
+        "status": 200, "body": {"balance": 200},
+    }
+
+    # Stage 3: --mode post with --pre-snapshot — delta = 200-100 = 100 >= 50 → PASS
+    r2 = _run(tmp_path, "--phase", "1.0", "--base-url", base_url,
+               "--mode", "post", "--pre-snapshot", str(snap),
+               env_extra={"VG_CREDENTIALS_JSON": creds})
+    assert r2.returncode == 0, f"stdout={r2.stdout}\nstderr={r2.stderr}"
+    out2 = json.loads(r2.stdout)
+    assert out2["verdict"] == "PASS"
+    assert out2.get("pre_snapshot_loaded") is True
+
+
+def test_post_without_snapshot_fails_delta_assertions(tmp_path, server):
+    """Without snapshot, post mode samples pre + post post-action — delta=0."""
+    base_url, routes = server
+    routes[("GET", "/api/balance")] = {
+        "status": 200, "body": {"balance": 200},
+    }
+    _phase(tmp_path, {
+        "G-10": {
+            "schema_version": "1.0", "goal": "G-10",
+            "description": "x" * 50,
+            "fixture_intent": {"declared_in": "x", "validates": "x" * 25},
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/x"}],
+            "lifecycle": {
+                "pre_state": {"role": "u", "method": "GET",
+                              "endpoint": "/api/balance",
+                              "assert_jsonpath": [{"path": "$.balance", "not_null": True}]},
+                "action": {"surface": "ui_click",
+                           "expected_network": {"method": "POST",
+                                                  "endpoint": "/api/topup",
+                                                  "status_range": [200, 299]}},
+                "post_state": {"role": "u", "method": "GET",
+                               "endpoint": "/api/balance",
+                               "assert_jsonpath": [
+                                   {"path": "$.balance", "increased_by_at_least": 50},
+                               ]},
+            },
+        },
+    })
+    creds = json.dumps({"u": {"kind": "api_key", "key": "k"}})
+    # No --pre-snapshot → fallback fetch reads same payload → delta=0
+    r = _run(tmp_path, "--phase", "1.0", "--base-url", base_url,
+              "--mode", "post",
+              env_extra={"VG_CREDENTIALS_JSON": creds})
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert out["verdict"] == "BLOCK"
+
+
 def test_default_severity_is_now_block(tmp_path, server):
     """Codex-HIGH-4: default severity changed from warn to block."""
     base_url, routes = server

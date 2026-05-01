@@ -297,3 +297,57 @@ def test_response_echo_custom_header_name():
         expected_header="X-Custom-Echo",
         expected_value="yes",
     )
+
+
+# ─── Codex-HIGH-7-bis: numeric sentinel hole regression ──────────────
+
+
+def test_numeric_zero_account_id_no_longer_passes_as_identity_sentinel():
+    """Codex review caught: {account_id: 0, amount: 1000} used to pass
+    because 0 ≤ DEFAULT_MAX_MONEY_AMOUNT made it a 'sentinel'.
+    Now identity sentinel requires string pattern only."""
+    from runtime.recipe_safety import assert_step_safe
+    step = {
+        "id": "x",
+        "method": "POST",
+        "endpoint": "/api/x",
+        "body": {"amount": 1000, "account_id": 0},  # 0 not a sentinel anymore
+    }
+    with pytest.raises(SandboxSafetyError, match="identity-bearing field"):
+        assert_step_safe(step, env="sandbox")
+
+
+def test_is_sentinel_value_identity_mode_rejects_numeric():
+    from runtime.recipe_safety import is_sentinel_value
+    # Identity sentinel: string-only
+    assert is_sentinel_value("VG_FIXTURE_M1", identity=True)
+    assert is_sentinel_value("alice@fixture.vgflow.test", identity=True)
+    assert not is_sentinel_value(0, identity=True)
+    assert not is_sentinel_value(0.01, identity=True)
+    assert not is_sentinel_value("real-merchant-x", identity=True)
+
+
+def test_is_sentinel_value_money_mode_keeps_numeric():
+    """Legacy money-amount detection: under-threshold int passes."""
+    from runtime.recipe_safety import is_sentinel_value
+    assert is_sentinel_value(0.01)
+    assert is_sentinel_value(0)
+    assert not is_sentinel_value(1000)
+
+
+def test_numeric_sentinel_in_non_identity_field_does_not_auto_satisfy():
+    """Even with sentinel string in a non-identity field, the gate fails
+    because identity-fields walk needs identity field to carry sentinel."""
+    from runtime.recipe_safety import assert_step_safe
+    step = {
+        "id": "x",
+        "method": "POST",
+        "endpoint": "/api/x",
+        "body": {
+            "amount": 1000,
+            "merchant_id": 42,  # numeric — NOT sentinel
+            "note": "VG_FIXTURE_NOTE",  # string sentinel but in note, not identity
+        },
+    }
+    with pytest.raises(SandboxSafetyError):
+        assert_step_safe(step, env="sandbox")

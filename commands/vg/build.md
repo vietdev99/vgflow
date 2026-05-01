@@ -2845,6 +2845,13 @@ for e in d.get('parse_errors', [])[:3]:
         FAILED_GATE="fixture-wave-verify"
         echo "wave-${N}: FAILED (fixture-wave-verify, retries: ${RETRY_COUNT})" \
           >> "${PHASE_DIR}/build-state.log"
+        # Codex-HIGH-2-bis fix: hard exit immediately. The retry/exit
+        # handler at line ~2611 already ran by the time we reach here, so
+        # setting FAILED_GATE alone wouldn't trigger debugger retry. The
+        # only correct behavior is fail-fast: missing fixtures = build broken.
+        echo "⛔ Build cannot proceed — fixture wave-verify failed and no override."
+        echo "   Re-run with --allow-missing-fixtures only after explicit review."
+        exit 1
       else
         type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
           "--allow-missing-fixtures" "$PHASE_NUMBER" "build.wave-${N}.fixture-verify" \

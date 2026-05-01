@@ -54,11 +54,25 @@ DEFAULT_IDENTITY_FIELDS = (
 )
 
 
-def is_sentinel_value(value: Any) -> bool:
-    """True if value carries an obvious VG fixture sentinel."""
+def is_sentinel_value(value: Any, *, identity: bool = False) -> bool:
+    """True if value carries an obvious VG fixture sentinel.
+
+    Codex-HIGH-7-bis fix: identity=True restricts to string patterns only
+    (VG_FIXTURE_*, @fixture.vgflow.test). Without this, an `account_id: 0`
+    field passes the gate because 0 ≤ DEFAULT_MAX_MONEY_AMOUNT, which is
+    a false positive — numeric values cannot prove the row is disposable
+    without a fixture-ID registry.
+
+    identity=False (legacy/money path) keeps the under-threshold-numeric
+    rule for amount fields, where ≤0.01 IS meaningful.
+    """
     if isinstance(value, str):
         return bool(SENTINEL_EMAIL_RE.search(value)) \
             or bool(SENTINEL_PREFIX_RE.search(value))
+    if identity:
+        # Identity sentinel must be a string pattern. Numeric IDs (e.g.,
+        # account_id: 0) do NOT qualify — they prove nothing about fixture-ness.
+        return False
     if isinstance(value, bool):
         return False  # bool subclasses int — reject early
     if isinstance(value, (int, float)):
@@ -122,7 +136,8 @@ def _has_sentinel_on_identity_field(
             for k, v in value.items():
                 if k in identity_fields:
                     seen_fields.append(k)
-                    if is_sentinel_value(v):
+                    # Codex-HIGH-7-bis: identity=True forbids numeric "sentinels"
+                    if is_sentinel_value(v, identity=True):
                         return True
                 if walk(v, k):
                     return True

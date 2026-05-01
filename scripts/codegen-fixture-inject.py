@@ -103,8 +103,96 @@ def render_block(captured: dict, *, goal_id: str, phase: str) -> str:
     )
 
 
-def inject_into_spec(spec_path: Path, block: str) -> str:
-    """Idempotent inject. Returns 'injected' | 'replaced' | 'unchanged'."""
+def _is_safe_to_substitute(value: str) -> bool:
+    """A captured STRING value qualifies for body substitution only when
+    it's distinctive enough that an exact-string match in the spec body
+    is overwhelmingly likely to be the captured value, not a coincidence.
+
+    Codex-HIGH-3-bis safety guard:
+    - Length ≥ 8 (avoids matching short tokens like 'pending').
+    - OR sentinel-prefixed (VG_FIXTURE_*, *@fixture.vgflow.test).
+    - UUID-like, or contains hyphens/underscores typical of identifiers.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if "VG_FIXTURE_" in value:
+        return True
+    if "@fixture.vgflow.test" in value.lower():
+        return True
+    if len(value) < 8:
+        return False
+    # UUID-like (8-4-4-4-12 hex chunks) or contains digits/hyphens
+    if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", value):
+        return True
+    if any(c.isdigit() for c in value) and re.search(r"[-_]", value):
+        return True
+    if len(value) >= 16:  # very long strings unlikely to coincide
+        return True
+    return False
+
+
+def substitute_literals(text: str, captured: dict) -> tuple[str, int]:
+    """Replace exact-quoted-string occurrences of captured values with
+    FIXTURE.<name> references.
+
+    Conservative: only substitutes inside quoted strings ("..." or '...'
+    or `...`), never bare identifiers. Skips substitution inside the
+    sentinel-bracketed FIXTURE const block itself.
+
+    Returns (new_text, substitution_count).
+    """
+    # Carve out the FIXTURE const block so we don't substitute inside it
+    sentinel_re = re.compile(
+        re.escape(SENTINEL_OPEN) + r".*?" + re.escape(SENTINEL_CLOSE),
+        re.DOTALL,
+    )
+    parts: list[str] = []
+    last_end = 0
+    fixture_blocks: list[str] = []
+    for m in sentinel_re.finditer(text):
+        parts.append(text[last_end:m.start()])
+        fixture_blocks.append(m.group(0))
+        last_end = m.end()
+    parts.append(text[last_end:])
+
+    count = 0
+    new_parts: list[str] = []
+    for part in parts:
+        for key, value in captured.items():
+            if not _is_safe_to_substitute(value):
+                continue
+            # Match value inside double, single, or backtick quotes
+            patterns = [
+                (re.compile('"' + re.escape(value) + '"'), f'FIXTURE.{key}'),
+                (re.compile("'" + re.escape(value) + "'"), f'FIXTURE.{key}'),
+                (re.compile('`' + re.escape(value) + '`'), f'String(FIXTURE.{key})'),
+            ]
+            for pat, repl in patterns:
+                part, n = pat.subn(repl, part)
+                count += n
+        new_parts.append(part)
+
+    # Stitch parts and untouched fixture blocks back together
+    out = []
+    for i, p in enumerate(new_parts):
+        out.append(p)
+        if i < len(fixture_blocks):
+            out.append(fixture_blocks[i])
+    return "".join(out), count
+
+
+def inject_into_spec(
+    spec_path: Path,
+    block: str,
+    *,
+    captured: dict | None = None,
+    substitute: bool = False,
+) -> tuple[str, int]:
+    """Idempotent inject. Returns (action, substitution_count).
+
+    action: 'injected' | 'replaced' | 'unchanged'
+    substitution_count: number of literal→FIXTURE.x replacements (0 unless substitute=True)
+    """
     text = spec_path.read_text(encoding="utf-8")
 
     # If sentinel block already present → replace it
@@ -114,26 +202,30 @@ def inject_into_spec(spec_path: Path, block: str) -> str:
     )
     if pattern.search(text):
         new_text = pattern.sub(block, text)
-        if new_text == text:
-            return "unchanged"
-        spec_path.write_text(new_text, encoding="utf-8")
-        return "replaced"
+        action = "replaced" if new_text != text else "unchanged"
+    else:
+        # Prepend after any leading comment/import block
+        lines = text.splitlines(keepends=True)
+        insert_idx = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == "" or stripped.startswith("//") or stripped.startswith("import ") \
+                    or stripped.startswith("/*") or stripped.startswith("*") \
+                    or stripped.startswith("*/"):
+                insert_idx = i + 1
+                continue
+            break
+        new_text = "".join(lines[:insert_idx] + [block + "\n"] + lines[insert_idx:])
+        action = "injected"
 
-    # Else: prepend after any leading comment/import block
-    # Find first non-comment, non-import line
-    lines = text.splitlines(keepends=True)
-    insert_idx = 0
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == "" or stripped.startswith("//") or stripped.startswith("import ") \
-                or stripped.startswith("/*") or stripped.startswith("*") \
-                or stripped.startswith("*/"):
-            insert_idx = i + 1
-            continue
-        break
-    new_lines = lines[:insert_idx] + [block + "\n"] + lines[insert_idx:]
-    spec_path.write_text("".join(new_lines), encoding="utf-8")
-    return "injected"
+    sub_count = 0
+    if substitute and captured:
+        new_text, sub_count = substitute_literals(new_text, captured)
+
+    if new_text != text:
+        spec_path.write_text(new_text, encoding="utf-8")
+
+    return action, sub_count
 
 
 def find_specs_for_phase(sweep_dir: Path, phase: str) -> list[tuple[str, Path]]:
@@ -159,6 +251,11 @@ def main() -> int:
     ap.add_argument("--repo-root", default=None)
     ap.add_argument("--dry-run", action="store_true",
                     help="Print plan; no writes")
+    ap.add_argument("--substitute", action="store_true",
+                    help="Codex-HIGH-3-bis: also substitute literal "
+                         "occurrences of captured values with FIXTURE.<name>. "
+                         "Conservative: only safe-distinctive strings "
+                         "(sentinel-prefixed, UUID-like, or ≥16 chars).")
     args = ap.parse_args()
 
     if not (args.spec or args.sweep):
@@ -216,15 +313,21 @@ def main() -> int:
                 "spec": str(spec_path),
                 "action": "dry-run",
                 "captured_keys": list(captured.keys()),
+                "substitutions": 0,
             })
             continue
         try:
-            action = inject_into_spec(spec_path, block)
+            action, sub_count = inject_into_spec(
+                spec_path, block,
+                captured=captured if args.substitute else None,
+                substitute=args.substitute,
+            )
             injected.append({
                 "goal": goal_id,
                 "spec": str(spec_path),
                 "action": action,
                 "captured_keys": list(captured.keys()),
+                "substitutions": sub_count,
             })
         except OSError as e:
             errors.append({"goal": goal_id, "spec": str(spec_path),

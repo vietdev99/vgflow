@@ -1696,7 +1696,21 @@ for g in d.get("gaps", []):
         exit 1
       fi
     else
-      echo "  preflight invariants: SKIPPED (no base_url in config + no VG_BASE_URL)"
+      # Codex-HIGH-5-bis fix: missing base_url WAS silent skip — that's
+      # the original "RFC v9 silently bypassed" failure mode. If
+      # ENV-CONTRACT.md declares data_invariants, missing base_url IS a
+      # setup error → block. If no invariants declared, this is a no-op
+      # phase and skip is fine.
+      HAS_INVARIANTS=$(grep -cE '^\s*data_invariants:' "${PHASE_DIR}/ENV-CONTRACT.md" 2>/dev/null || echo 0)
+      if [ "$HAS_INVARIANTS" -gt 0 ] && [ "${VG_PREFLIGHT_SEVERITY:-block}" = "block" ]; then
+        echo "⛔ Phase 0.5 preflight setup error — ENV-CONTRACT.md declares"
+        echo "   data_invariants but no sandbox base_url found."
+        echo "   Fix path: set step_env.sandbox_test in vg.config.md OR"
+        echo "             export VG_BASE_URL=https://your-sandbox/."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      echo "  preflight invariants: SKIPPED (no base_url + no data_invariants — no-op)"
     fi
   fi
 
@@ -1756,8 +1770,32 @@ for r in d.get("results", []):
         "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_preflight_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
         exit 1
       fi
+
+      # Codex-HIGH-1-bis fix: persist pre_state snapshot so post mode
+      # (final gate after Phase 4) can compute increased_by_at_least
+      # deltas correctly. Without this, post mode samples pre AFTER
+      # action ran → both reads are post-action → delta=0 false-fail.
+      if [ "$RCRURD_RC" -eq 0 ]; then
+        # Re-fetch pre_state payload and stash to .rcrurd-pre-snapshot.json
+        # for post-mode reuse. Best-effort; missing snapshot just means
+        # post mode will skip increased_by_at_least assertions.
+        "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
+          --phase "$PHASE_NUMBER" --base-url "$PRE_BASE_RC" \
+          --severity warn --capture-snapshot "${PHASE_DIR}/.rcrurd-pre-snapshot.json" \
+          >/dev/null 2>&1 || true
+      fi
     else
-      echo "  RCRURD pre_state: SKIPPED (no base_url)"
+      # Codex-HIGH-5-bis: missing base_url + FIXTURES with lifecycle = setup error
+      HAS_LIFECYCLE=$(grep -lE '^lifecycle:' "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$HAS_LIFECYCLE" -gt 0 ] && [ "${VG_RCRURD_SEVERITY:-block}" = "block" ]; then
+        echo "⛔ Phase 0.5 RCRURD setup error — FIXTURES declare ${HAS_LIFECYCLE}"
+        echo "   lifecycle blocks but no sandbox base_url found."
+        echo "   Fix path: set step_env.sandbox_test in vg.config.md OR"
+        echo "             export VG_BASE_URL=https://your-sandbox/."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      echo "  RCRURD pre_state: SKIPPED (no base_url + no lifecycle — no-op)"
     fi
   fi
 fi
@@ -6126,11 +6164,20 @@ fi
 # Re-resolve base URL from config (PRE_BASE local to Phase 0.5; not in scope).
 POST_BASE_RC=$(echo "${CONFIG_RAW:-}" | grep -A2 '^step_env:' | grep -E 'sandbox_test:|sandbox:' | head -1 | sed 's/.*: *//;s/[" ]//g')
 [ -z "$POST_BASE_RC" ] && POST_BASE_RC="${VG_BASE_URL:-}"
+HAS_POST_LIFECYCLE=$(grep -lE '^\s*post_state:' "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+# Codex-HIGH-5-bis fix: post_state setup error blocks even without runner exec
+if [ "$HAS_POST_LIFECYCLE" -gt 0 ] && [ -z "$POST_BASE_RC" ] && \
+   [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
+  echo "⛔ RCRURD post_state setup error — FIXTURES declare post_state"
+  echo "   blocks but no sandbox base_url available at run-complete."
+  exit 1
+fi
 if [ -f "${REPO_ROOT}/scripts/rcrurd-preflight.py" ] && \
    [ -d "${PHASE_DIR}/FIXTURES" ] && [ -n "$POST_BASE_RC" ]; then
   POST_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
     --phase "$PHASE_NUMBER" --base-url "$POST_BASE_RC" \
-    --mode post --severity "${VG_RCRURD_POST_SEVERITY:-block}" 2>&1)
+    --mode post --severity "${VG_RCRURD_POST_SEVERITY:-block}" \
+    --pre-snapshot "${PHASE_DIR}/.rcrurd-pre-snapshot.json" 2>&1)
   POST_RC=$?
   echo "▸ RCRURD post_state: $(echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
 import json, sys
