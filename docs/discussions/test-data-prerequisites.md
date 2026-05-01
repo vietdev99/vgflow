@@ -1,14 +1,16 @@
-# Discussion: Test-data prerequisites for review/test workflow
+# RFC: Test-data prerequisites for review/test workflow
 
-**Status:** RFC — discussion only, no code yet
+**Status:** Direction chosen 2026-05-02, design questions remain
 **Surfaced by:** PrintwayV3 Phase 3.2 dogfood (2026-05-01) on wave-3.2.x dogfood run
 **Related:** PR #79 (recovery paths + matrix-staleness), PR #74 (anti-performative-review)
+
+---
 
 ## The problem in one paragraph
 
 `/vg:review` and `/vg:test` need realistic application **state** to verify mutation goals. Phase 3.2 G-10 says "Admin approves tier2 topup request"; sandbox seed has 12 tier1 rows and 0 tier2 rows. Scanner navigates to `/billing/topup-queue`, sees only tier1 rows showing "Auto via webhook" placeholder, can't click an Approve button that doesn't exist for tier1, and reports `no_submit_step`. The matrix-staleness validator correctly flags SUSPECTED. But the **root cause is missing data**, not missing UI or missing code. We can re-run scanners forever without ever creating the data they need to exercise.
 
-This is the meta-bug behind ~21 of the 36 mutation goals flagged in the dogfood run: not "scanner missed it" but "nothing to scan because the trigger entity doesn't exist in seed".
+This is the meta-bug behind ~21 of 36 mutation goals flagged in the dogfood run: not "scanner missed it" but "nothing to scan because the trigger entity doesn't exist in seed".
 
 ## Concrete failure modes observed in Phase 3.2
 
@@ -16,9 +18,8 @@ This is the meta-bug behind ~21 of the 36 mutation goals flagged in the dogfood 
 |---|---|---|---|
 | G-10 admin approve tier2 topup | tier2 topup row in `pending` | only tier1 rows | scanner sees no Approve button → SUSPECTED |
 | G-19 merchant cancels pending withdraw | merchant has pending withdraw | empty wallet, no withdraws | route renders empty state → SUSPECTED |
-| G-20 admin approve withdraw | admin sees withdraw queue with rows | (TypeError on the route, separate bug) | unrelated infra fail |
 | G-23 admin resets cooling period | merchant currently cooling | no cooling-period state | reset button never appears → SUSPECTED |
-| G-31 admin transfer group CRUD | existing transfer group OR new-group flow | empty list, no groups | only "create" path testable, edit/delete dead → partial submit only |
+| G-31 admin transfer group CRUD | existing transfer group OR new-group flow | empty list | only "create" path testable → partial submit |
 | G-34 linked accounts CRUD | linked accounts exist | empty | edit/delete unreachable |
 | G-35 bank accounts CRUD | bank accounts exist | empty | edit/delete unreachable |
 | G-44 admin sets FX rate | rate exists for given gateway×currency | inconsistent seed | sometimes editable, sometimes not |
@@ -39,194 +40,209 @@ Not all "needs data" cases are equal. From the Phase 3.2 sample:
 
 Each needs a different setup mechanism. A "tier2 topup row" might be a single API POST as merchant. A "7-day chargeback timeout" may need time-travel or a fake-clock test mode. A "frozen wallet" needs prior chargeback webhook + freeze logic to have run.
 
-## Six options for the discussion
+---
 
-### Option A: Data factories baked into seed.ts
+## Direction chosen (2026-05-02)
 
-**Idea:** Extend `apps/api/src/modules/auth/seed/sampleUsers.seed.ts` (and add similar for other modules) so the sandbox seed creates ONE of every interesting state combination — 1 tier1 topup row in pending, 1 tier2 in pending, 1 approved, 1 rejected, 1 flagged; 1 merchant in cooling period; 1 frozen wallet; etc.
+After surveying 6 options (A through F — preserved at the bottom of this doc for context), the chosen path is:
 
-Pros:
-- Simple, runs once at deploy
-- Deterministic, scanner just reads what's there
-- Easy to debug ("why is row X like this? grep seed.ts")
+> **Recipes authored at `/vg:build` time, executed before `/vg:review` scanner spawn and reused by `/vg:test` Playwright codegen. No inline cleanup — sandbox accumulates data; cleanup is a separate command users run on their own cadence. Single source-of-truth recipe artifact per mutation goal, public-framework grade.**
 
-Cons:
-- Seed file balloons (one row per state × tier × role × edge case → hundreds of records)
-- Time-driven states still hard (a "1 hour ago" row needs the seed to backdate timestamps)
-- Cross-entity relationships fragile (delete one row → cascades break)
-- Test pollution: side-effects from other tests mutate seed; G-11 reject in this dogfood run rejected one of the 12 tier1 rows, leaving 11 — next run sees inconsistent state
+### Decision 1 — Authoring lives in `/vg:build`
 
-Verdict: works for static reference data, fails for dynamic/lifecycle states.
+Executor authors fixture recipe alongside the goal it implements, because that's the only point where the API shape is concrete (handler signed, routes registered, schemas final). Blueprint-time authoring would force the planner to predict API details it hasn't designed yet; review-time authoring would force the scanner to know API shapes it shouldn't care about.
 
-### Option B: Per-goal `**Required data:**` field in TEST-GOALS.md
+Concretely: when `/vg:build` finishes a goal that has `**Mutation evidence:**` declared in TEST-GOALS.md, an additional executor sub-step writes `FIXTURES/{G-XX}.yaml` next to the goal artifacts. Build is not "done" for a mutation goal until its fixture exists. This becomes a new wave-verify gate in `/vg:build`.
 
-**Idea:** Each mutation goal declares the data it needs as a setup recipe in TEST-GOALS.md frontmatter or body section:
+Cost: yes, `/vg:build` grows. We accept it because (a) recipes need API knowledge the executor already has, (b) duplicating this knowledge into a separate `/vg:fixture` step would reorder pipeline and add a new artifact dependency, and (c) tests authored at build-time match the implementation they describe — drift is harder.
 
-```markdown
-## Goal G-10: Admin approve tier2 topup request
+### Decision 2 — Cleanup is external, not inline
 
-**Surface:** ui
-**Required data:**
+Sandbox is "richer = easier". A sandbox with 200 rows across all states is more useful for review than one with 12 rows that get rejected and disappear. We don't transactional-cleanup after each scanner run.
+
+Implication: scanner runs are NOT idempotent in the sense of "matrix returns to identical state". Re-running `/vg:review --retry-failed` on the same goal will keep creating new tier2 rows. That's fine — they're cheap. The state space we care about is "≥1 tier2 in pending exists at any given moment", not "exactly 1".
+
+Cleanup is a separate command — call it `/vg:fixture-prune` for now — that runs on user's cadence (after a milestone? Weekly via cron? At sandbox-reset?). It reads run logs, finds fixtures created by VGFlow, deletes them. Out of scope for this RFC; tracked as a follow-up.
+
+This decision **massively simplifies recipe schema** — every recipe is one-shot setup, no rollback, no compensating transaction. We lose nothing real because sandbox = disposable seed by env contract.
+
+### Decision 3 — Recipe runtime serves both `/vg:review` and `/vg:test`
+
+One artifact, two consumers:
+
+- **`/vg:review` scanner preflight** — orchestrator runs the recipe before spawning Haiku for that goal's view. Captures created entity IDs into env vars, injects them into Haiku prompt as `EXPECTED_ROW_ID=...` so scanner targets the right row.
+- **`/vg:test` Playwright codegen** — generates `test.beforeEach()` block in the spec file that runs the same recipe (transpiled from YAML to TypeScript at codegen time, OR called via shared HTTP harness — TBD in question 1).
+
+Single recipe = no drift between review's scanner expectations and test's codegen output. If recipe wrong, both fail same way; fix once.
+
+### Decision 4 — Public-framework grade
+
+VGFlow is positioned as a heavy framework other projects will adopt. Implications for this RFC:
+
+- Schema must be portable — no PrintwayV3-isms, no hardcoded auth assumptions
+- Recipe runtime must be language-agnostic at the boundary — YAML in, HTTP/CLI calls out, no project-specific Python imports
+- Failure modes must be load-bearing — a recipe failure must produce an actionable error, not a silent SUSPECTED
+- Every artifact must have a reason to exist — no `FIXTURE.md` doc that just narrates what `FIXTURES.{G-XX}.yaml` already says
+
+This bars option A (extend seed.ts) as the primary mechanism — that's PrintwayV3-specific seed code we can't ship in vgflow. Option F (data_invariants in ENV-CONTRACT.md) survives because it's declarative + portable.
+
+### Final shape: B + F
+
+- **B (per-goal recipes, build-time authored)** is primary
+- **F (data_invariants preflight gate)** is the cheap declarative wrapper — phase declares "≥1 tier2 pending must exist before scanner spawns" in ENV-CONTRACT.md; preflight verifier walks recipes from all goals in the phase, computes whether invariant is met, runs missing recipes
+- A, C, D, E **rejected for v1** — A is project-specific, C is premature abstraction (revisit after 10+ phases), D is non-deterministic, E is orthogonal (separate time-travel RFC later)
+
+---
+
+## What still needs design (open questions)
+
+These are genuine unknowns the chosen direction surfaces. Each blocks some part of implementation.
+
+### Q1 — Recipe schema specifics
+
+```yaml
+# Strawman shape, not final
+goal: G-10
+description: Admin approves tier2 topup → row must exist in pending tier2 state
+setup:
   - kind: api_call
-    description: Create a pending tier2 topup as merchant
     role: merchant-owner
     method: POST
     endpoint: /api/v1/wallet/topup-requests
-    body: { amount: 100, currency: "USD", gateway: "sunrate", reference: "test-G-10-{run_id}" }
-    capture: { request_id: "$.id" }
-**Cleanup:**
-  - kind: api_call
-    description: Revert via admin reject (so re-runs don't accumulate)
-    role: admin
-    method: POST
-    endpoint: /api/v1/admin/topup-requests/{request_id}/reject
-    body: { reason: "test cleanup", internal_note: "G-10 cleanup" }
+    body:
+      amount: 100
+      currency: USD
+      gateway: sunrate
+      reference: "vgflow-fixture-G10-{run_id}"
+    capture:
+      request_id: $.id
+expects:
+  invariant: "topup_requests.where(status=pending, tier=tier2).count >= 1"
+  capture_into:
+    EXPECTED_ROW_ID: $request_id
 ```
 
-Before the Haiku scanner spawns for that goal, orchestrator runs the recipe → captures IDs → injects into Haiku prompt as `EXPECTED_ROW_ID=...`. After scanner completes, cleanup recipe runs.
+Open: should `endpoint` be relative (vgflow resolves base URL from env) or absolute? Should `role` be a string lookup into `vg.config.credentials[env]` (current pattern) or a typed enum? How are auth tokens captured/refreshed inside multi-step recipes? Does `capture` use JSONPath, jq syntax, or YAML-native? Each impacts portability.
 
-Pros:
-- Explicit, traceable, version-controlled with the goal
-- Goal-scoped — no global seed bloat
-- Cleanup keeps sandbox clean across runs
-- Recipes can chain (G-23 cooling period needs G-22 first)
+### Q2 — Multi-step recipe support
 
-Cons:
-- One more authoring burden per goal
-- Recipes need a runtime to execute (curl harness or thin Python lib)
-- Cross-goal dependencies (graph) must be tracked
-- If recipe is wrong, you get "scanner failed" but root cause is in TEST-GOALS
+Some goals need 2+ steps to set up state — G-23 admin reset cooling period needs (a) merchant exists, (b) merchant performed N failed withdraws, (c) cooling-period flag was raised. Three sequential API calls, each capturing IDs the next uses. Recipe schema must support `steps: [...]` not just one `setup:`.
 
-Verdict: most explicit; aligns with how /vg:test will eventually want recipes for codegen anyway.
+But chained recipes have failure modes — if step 2 fails, what happens to step 1's created entity? With "no cleanup" rule (Decision 2), nothing — leave the orphan. Is that acceptable, or do we need at least best-effort cleanup on partial recipe failure?
 
-### Option C: Persona-based data wallets
+### Q3 — Recipe runtime — vgflow-side or project-side?
 
-**Idea:** Define a small set of "personas" with prebuilt complete state — `merchant-cooling`, `merchant-frozen-wallet`, `admin-with-pending-tier2-queue`. Each persona is a seed package. Test goals declare which persona's state they need.
+Two architectures:
 
-```yaml
-personas:
-  admin-tier2-queue:
-    description: Admin role, sandbox has ≥1 pending tier2 topup, ≥1 approved, ≥1 rejected
-    setup: scripts/personas/admin-tier2-queue.sh
-    used_by: [G-10, G-11, G-12]
+**(a) vgflow ships a generic recipe runner** (`scripts/run-fixture.py`) that reads YAML, makes HTTP calls, captures IDs. Project provides only the YAML content. Most portable — projects don't write code.
 
-  merchant-cooling:
-    description: Merchant currently in cooling period, with prior failed withdraw
-    setup: scripts/personas/merchant-cooling.sh
-    used_by: [G-22, G-23]
-```
+**(b) vgflow ships only the schema; projects provide their own runner** in their `scripts/fixtures/` dir. Projects can use whatever language/HTTP lib fits their stack.
 
-Goals reference persona by name; setup runs once per persona per session.
+Option (a) means vgflow has to handle every project's auth pattern (cookie? JWT header? SSO? OAuth? mTLS?). Option (b) duplicates runner code across projects but keeps vgflow language-agnostic.
 
-Pros:
-- Reusable across goals
-- Mirrors real user states ("a merchant who is cooling")
-- Lower per-goal authoring burden than B
-- Can be hand-crafted realistic scenarios, not just minimum data
+Probably (a) with a pluggable auth strategy. But pluggable how — Python entrypoints? Sub-shell scripts? YAML-declarative auth blocks?
 
-Cons:
-- Personas overlap and conflict (admin-tier2-queue creates rows; merchant-cooling deletes them?)
-- Order matters — running personas in wrong sequence breaks state
-- Not goal-scoped — debugging "which persona broke G-10" indirect
+### Q4 — Time-driven state (option E re-entry)
 
-Verdict: good middle ground; closer to how QA teams actually structure test environments.
+Decision rejected E (time-travel) for v1, but Phase 3.2 has goals like G-22 (cooling period blocks new withdraw — needs merchant with `last_failed_withdraw_at < 1h ago`), G-42 (7-day chargeback deadline), G-58 (BullMQ retry — needs job at retry attempt N).
 
-### Option D: Just-in-time data generation via scanner self-help
+These cannot be solved by API calls alone. Either:
+- Backend exposes a `X-Sandbox-Time-Advance: 8d` header that fast-forwards
+- Recipe creates entity with backdated timestamp directly via raw DB write (bypasses domain logic)
+- Defer those goals — mark them "needs time-travel infrastructure", separate RFC, accept SUSPECTED for now
 
-**Idea:** Haiku scanner detects "empty state I need to test" (no tier2 rows on /billing/topup-queue), spawns a sub-helper agent that creates the missing row via API as the right role, then continues. No setup recipe declared — scanner figures it out from goal text.
+Which path? If we defer, ~5 of 36 dogfood goals stay SUSPECTED indefinitely.
 
-Pros:
-- Zero setup overhead per goal
-- Scanner handles new goals without recipe maintenance
-- Works for unanticipated states
+### Q5 — `data_invariants` schema in ENV-CONTRACT.md
 
-Cons:
-- Scanner needs to know API endpoints — couples scanner to API contract knowledge
-- Non-deterministic: "Haiku decided to call POST /topup with these fields" — hard to reproduce failure
-- No cleanup — sandbox accumulates trash across runs
-- LLM creativity = correctness risk (scanner POSTs wrong fields → 422 → flags fake bug)
-
-Verdict: too clever; loses determinism. Reserve for prototype-only paths.
-
-### Option E: Time-travel + fake-clock test mode
-
-**Idea:** Backend exposes a "test-mode time advance" header (`X-Test-Time: 2026-05-08T00:00:00Z`) only when `NODE_ENV=sandbox` (and never in prod). Scanner sets the header to push virtual clock past 7-day deadlines, cooling periods, etc.
-
-Pros:
-- Solves the time-driven state problem (G-22, G-42, G-58) elegantly
-- No data setup overhead — just rewinds clock
-- Real production code paths exercised
-
-Cons:
-- Backend has to support fake clocks everywhere (cron jobs, scheduled tasks, retry queues)
-- Sandbox-only header risk — if it leaks to prod, time bombs
-- Doesn't help for non-time states (frozen wallet, tier2 queue)
-
-Verdict: orthogonal complement to A/B/C, not a replacement. Probably needed eventually, but separate.
-
-### Option F: ENV-CONTRACT.md declares data invariants
-
-**Idea:** Each phase declares in `ENV-CONTRACT.md` what data invariants the sandbox must maintain:
+Decision 3 says invariants live there. But the schema isn't designed yet. Strawman:
 
 ```yaml
 data_invariants:
-  topup_requests:
-    - status: pending, tier: tier2, count: ">=1"
-    - status: pending, tier: tier1, count: ">=1"
-  withdraws:
-    - status: pending, role: merchant-owner, count: ">=1"
-  merchants:
-    - cooling_period_active: true, count: ">=1"
+  - resource: topup_requests
+    where: { status: pending, tier: tier2 }
+    count: ">=1"
+    setup_recipe: G-10  # which goal's recipe creates this
 ```
 
-Before review starts, a verifier checks these invariants against the running sandbox. If any miss → emit a clear error: "Data invariant 'topup pending tier2 ≥1' not met. Run: `pnpm seed:fixture topup-tier2-pending`". A separate `pnpm seed:fixture` script library (one fixture per invariant gap) lets dev or CI fill the gap.
+Multiple goals may share an invariant (G-10 and G-12 both need tier2 pending). Whose recipe is "owner"? First in alphabetical order? First declared in TEST-GOALS? Manual `owner: G-10` field?
 
-Pros:
-- Pre-flight gate, fails fast with actionable error
-- Decouples "what data must exist" (declared) from "how to create it" (fixture script)
-- Goal authors don't write API recipes; they declare data shape
-- Fixtures composable, reusable across phases
+### Q6 — `/vg:test` codegen consumption format
 
-Cons:
-- Two artifacts to maintain (invariants + fixtures) instead of one
-- "Run pnpm seed:fixture X" still manual unless wired into deploy
+Recipe is YAML. Playwright spec is TypeScript. Two paths:
 
-Verdict: closest to how mature QA frameworks work. Invariants are declarative; fixtures are procedural.
+**(a) Codegen transpiles YAML → TS at codegen time** — every recipe becomes inline TS in the `.spec.ts` file. Spec is self-contained.
 
-## Recommended direction (pre-discussion strawman)
+**(b) Codegen emits import + call** — `await runFixture('G-10')` in the spec, the runtime imports a TS helper that reads YAML at test-run time. Spec depends on runtime + YAML files at runtime.
 
-**Hybrid A + F + opt-in B**, in that order of priority:
+Option (a) is simpler for users running the spec standalone. Option (b) is DRY — change YAML once, both review and test see new behavior. Probably (b) but adds runtime dependency.
 
-1. **Baseline (A)** — extend seed.ts to cover the static reference set per phase: 1 row per status × tier combination at minimum. Solves ~50% of cases for low cost.
+### Q7 — Preflight verifier architecture
 
-2. **Phase-level invariants (F)** — every phase declares `data_invariants` block in ENV-CONTRACT.md. `/vg:review` pre-flight verifies them before spawning Haiku. If invariant miss → BLOCK with "run fixture X" hint, not silent SUSPECTED. This is the gate that prevents the "scanner ran but had nothing to test" failure.
+Phase 2c-pre already runs `verify-env-contract.py` (preflight checks for app reachable + login works). The new `data_invariants` check fits naturally there as a third check. But:
 
-3. **Goal-level recipes (B) for stateful goals only** — opt-in per goal where the static seed cannot represent the state (cooling period, frozen wallet, recently-failed payment). Recipe runs as preflight to that one goal's scanner spawn, with cleanup after.
+- Current verifier is "smoke a thing, fail or pass" — invariant check is "query state, run recipe if missing, re-query, fail if still missing". Different shape.
+- If invariant fails AND its setup recipe also fails, what's the user-facing error? "Fixture for G-10 failed — see runs/G-10.fixture-error.json"?
+- Preflight runs once before all scanners. Should each scanner also run its own goal's recipe just-before-spawn (in case prior scanners' actions invalidated the invariant — e.g., G-11 reject removed the row G-10 needs)?
 
-Time-travel (E) deferred to a separate RFC when we hit a goal that genuinely needs it.
+### Q8 — `/vg:fixture-prune` cleanup command spec
 
-Persona model (C) deferred — not needed yet at our scale; revisit when we have 10+ phases sharing setup.
+Decision 2 puts cleanup in a separate command. Spec needed:
 
-Just-in-time (D) rejected — too non-deterministic for a verification harness.
+- What does prune delete? Only entities tagged with `vgflow-fixture-{run_id}` reference? Anything older than N days? Anything matching naming convention?
+- When does user run it? Manual after each `/vg:accept`? Scheduled? Tied to sandbox-reset?
+- How does it know which entities are fixture-created vs real test data the user wants to keep?
+- Auth: which role runs the prune? Admin with hard-delete? Or a dedicated `fixture-cleanup` role to limit blast radius?
 
-## Open questions for discussion
+This is its own mini-RFC. For now, accept that it's TBD.
 
-1. **Where does the fixture script library live?** `scripts/fixtures/` per project? Or in vgflow as a generic harness with project-supplied recipes?
-2. **Is "ENV-CONTRACT.md data_invariants" a new section or replaces CRUD-SURFACES.md `state_matrix`?** They overlap.
-3. **Cleanup contract:** if a goal's setup creates a row, is cleanup MUST or SHOULD? What happens when scanner crashes mid-test?
-4. **Idempotency:** if `/vg:review --retry-failed` re-runs a goal whose previous setup row still exists from last run — skip, replace, or fail?
-5. **Who writes recipes?** Goal author at `/vg:blueprint` time, or executor at `/vg:build` time? Different incentives — author knows intent, executor knows implementation.
-6. **Backend test-mode boundary:** if we go (E) time-travel later, what's the contract for sandbox-only test endpoints? `X-Sandbox-*` header pattern? Allow-list of test-only routes?
-7. **Cost concern:** option B/F adds a recipe-runtime per goal scanner spawn. For Phase 3.2's 36 mutation goals × 1 setup + 1 cleanup = 72 extra API calls per `/vg:review` run. Acceptable?
-8. **Scope creep:** does this RFC also cover `/vg:test` codegen (fixture-aware Playwright tests) or just `/vg:review` scanner runs?
+---
 
-## What this RFC does NOT cover
+## Out of scope (explicit non-goals)
 
 - Production data — never. Sandbox only.
 - Performance testing fixtures (different shape — 100K rows, not 1 row per state).
 - Visual regression baselines (separate concern).
 - Migration test data (handled by schema-verify profile).
+- Time-travel infrastructure (deferred to separate RFC per Q4).
+- Sandbox reset / database snapshot mechanics — outside vgflow's responsibility, project's deploy pipeline handles.
 
-## Next step
+---
 
-Discuss the strawman + open questions, pick a direction, then split into implementation PRs (likely 3-4 small ones across vgflow + PrintwayV3).
+## Implementation plan (after questions resolved)
+
+Once Q1-Q8 are answered, split into PRs:
+
+1. **PR-A: Recipe schema + JSON-Schema validator** — write the canonical YAML schema, ship as `schemas/fixture-recipe.schema.yaml`, add validator script. No runtime yet.
+2. **PR-B: `/vg:build` fixture-write step** — executor writes `FIXTURES/{G-XX}.yaml` for every goal with `mutation_evidence`. New wave-verify validator: build incomplete if mutation goal lacks fixture.
+3. **PR-C: ENV-CONTRACT.md `data_invariants` block + preflight verifier** — declarative invariant schema, runner that reads recipes + queries state + reports gaps.
+4. **PR-D: `/vg:review` scanner preflight integration** — orchestrator runs invariant check, runs missing recipes, captures IDs, injects into Haiku prompt.
+5. **PR-E: `/vg:test` codegen integration** — Playwright spec emits `runFixture(G-XX)` calls in `beforeEach`, runtime helper reads YAML.
+6. **PR-F (separate)** — `/vg:fixture-prune` cleanup command (Q8).
+7. **PR-G (separate, future)** — time-travel test-mode infrastructure (Q4).
+
+Estimated 5-7 small PRs over 2-3 weeks once Q1-Q8 land.
+
+---
+
+## Appendix: 6 options surveyed (rejected)
+
+For context — preserved from initial RFC.
+
+### Option A: Data factories baked into seed.ts
+**Rejected** — project-specific, can't ship in vgflow framework.
+
+### Option B: Per-goal `**Required data:**` recipes in TEST-GOALS.md
+**Adopted as primary** (with build-time authoring per Decision 1).
+
+### Option C: Persona-based data wallets
+**Rejected for v1** — premature abstraction. Revisit when 10+ phases share setup patterns.
+
+### Option D: Just-in-time scanner self-help
+**Rejected** — non-deterministic. Scanner inventing API calls = correctness risk.
+
+### Option E: Time-travel + fake-clock test mode
+**Deferred** — orthogonal to recipes. Separate RFC when first goal genuinely blocks (Q4).
+
+### Option F: ENV-CONTRACT.md `data_invariants` + fixture library
+**Adopted as preflight gate wrapper** around B.
