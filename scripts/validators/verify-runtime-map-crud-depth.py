@@ -31,10 +31,35 @@ from _common import Evidence, Output, emit_and_exit, find_phase_dir, timer  # no
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Mutation verb vocabulary. Expanded by v2.45 fail-closed-validators PR after
+# Phase 3.2 dogfood: G-10 "Admin clicks Approve", G-11 "Admin clicks Reject",
+# G-23 "Admin resets cooling period", G-26 "Admin enables withdraw permission"
+# all bypassed the depth gate because the verbs were not listed.
+# When adding new verbs, prefer state-transition language (approve/reject/flag/
+# reset/enable) over generic CRUD (create/update/delete) — admin actions
+# rarely use plain CRUD wording.
 MUTATION_WORD_RE = re.compile(
-    r"\b(create|created|update|updated|delete|deleted|submit|submitted|"
-    r"save|saved|edit|edited|remove|removed|"
-    r"tao|cap\s*nhat|xoa|sua|luu|gui)\b",
+    r"\b("
+    # Generic CRUD
+    r"create|created|update|updated|delete|deleted|submit|submitted|"
+    r"save|saved|edit|edited|remove|removed|add|added|insert|inserted|"
+    # State-transition (admin actions, workflow gates)
+    r"approve|approved|approving|reject|rejected|rejecting|"
+    r"flag|flagged|flagging|unflag|unflagged|"
+    r"enable|enabled|enabling|disable|disabled|disabling|"
+    r"activate|activated|deactivate|deactivated|"
+    r"reset|resetting|cancel|cancelled|cancelling|"
+    r"archive|archived|restore|restored|publish|published|unpublish|"
+    r"lock|locked|unlock|unlocked|freeze|frozen|unfreeze|unfrozen|"
+    r"suspend|suspended|resume|resumed|"
+    r"verify|verified|confirm|confirmed|deny|denied|"
+    r"assign|assigned|unassign|unassigned|transfer|transferred|"
+    r"upload|uploaded|download|downloaded|"
+    # Vietnamese
+    r"tao|cap\s*nhat|xoa|sua|luu|gui|"
+    r"duyet|tu\s*choi|danh\s*dau|mo\s*khoa|khoa|"
+    r"kich\s*hoat|vo\s*hieu|huy|chuyen"
+    r")\b",
     re.IGNORECASE,
 )
 CRUD_WORD_RE = re.compile(
