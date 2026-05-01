@@ -218,9 +218,36 @@ def main() -> None:
             if not goal["needs_submit"]:
                 continue
             gid = goal["id"]
-            if matrix_status.get(gid) != "READY":
-                continue  # Already not READY, no staleness check needed
+            current_status = matrix_status.get(gid)
             seq = sequences.get(gid)
+
+            # v2.46-wave3.2.2: bidirectional sync — if matrix=SUSPECTED but
+            # goal_sequence now has real submit + 2xx evidence, promote back
+            # to READY. Closes the workflow loop: retry-failed → re-record
+            # evidence → matrix flips back. Without this, /vg:test sees
+            # permanent SUSPECTED even after fix.
+            if current_status == "SUSPECTED" and isinstance(seq, dict):
+                if has_submit_step(seq) and has_mutation_network(seq):
+                    out.add(
+                        Evidence(
+                            type="suspected_resolved",
+                            message=(
+                                f"{gid} '{goal['title'][:60]}': SUSPECTED → READY "
+                                f"(real submit + 2xx evidence now present)"
+                            ),
+                        ),
+                        escalate=False,
+                    )
+                    if args.apply_status_update:
+                        matrix_text = update_matrix_status(
+                            matrix_text, gid, "READY",
+                            note="resolved: submit+2xx evidence recorded",
+                        )
+                continue  # Already SUSPECTED — don't re-flag, just resolve if applicable
+
+            if current_status != "READY":
+                continue  # Other non-READY (BLOCKED/INFRA/DEFERRED) — leave alone
+
             if not isinstance(seq, dict):
                 # Matrix says READY but no goal_sequence at all → fabricated
                 suspected.append({
@@ -276,15 +303,18 @@ def main() -> None:
             encoding="utf-8",
         )
 
-        # Optionally update matrix in place
-        if args.apply_status_update and suspected:
-            new_text = matrix_text
+        # Optionally update matrix in place. Handles BOTH directions:
+        # - Add SUSPECTED notes for newly-flagged goals (suspected[] list)
+        # - Preserve READY promotions already applied to matrix_text in loop
+        if args.apply_status_update:
+            new_text = matrix_text  # may already include SUSPECTED → READY resolutions
             for s in suspected:
                 new_text = update_matrix_status(
                     new_text, s["id"], "SUSPECTED",
                     note=f"stale: {s['evidence_class']}",
                 )
-            matrix_path.write_text(new_text, encoding="utf-8")
+            if new_text != _read(matrix_path):
+                matrix_path.write_text(new_text, encoding="utf-8")
 
         # Emit evidence + verdict
         for s in suspected:
