@@ -116,6 +116,9 @@ def extract_mutation_network(step: dict) -> list[dict]:
     return out
 
 
+_GOAL_ID_RE = re.compile(r"^G-[A-Za-z0-9._-]+$")
+
+
 def collect_goals(runtime: dict, only: set[str] | None) -> dict[str, GoalEvidence]:
     sequences = runtime.get("goal_sequences") or {}
     out: dict[str, GoalEvidence] = {}
@@ -123,6 +126,12 @@ def collect_goals(runtime: dict, only: set[str] | None) -> dict[str, GoalEvidenc
         if only and gid not in only:
             continue
         if not isinstance(seq, dict):
+            continue
+        # Codex-R4-HIGH-3 fix: validate goal_id matches G-XX pattern. RUNTIME-MAP
+        # is untrusted input — `gid="../../etc/x"` would write outside FIXTURES.
+        if not isinstance(gid, str) or not _GOAL_ID_RE.match(gid):
+            print(f"warning: skipping invalid goal_id (path-traversal risk): "
+                  f"{gid!r}", file=sys.stderr)
             continue
         steps = seq.get("steps") or []
         if not isinstance(steps, list):

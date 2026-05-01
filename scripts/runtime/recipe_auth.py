@@ -185,12 +185,27 @@ def auth_command(
     timeout = int(creds.get("timeout", 30))
 
     args = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+    # Codex-R4-HIGH-5 fix: scrub env so the project's auth-plugin command
+    # does NOT inherit caller's secrets (CLAUDE_API_KEY, AWS_*, etc.).
+    # Allowlist + opt-in passthrough via creds.env_passthrough.
+    _AUTH_CMD_ENV_ALLOW = {
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM",
+        "LANG", "LC_ALL", "TMPDIR", "PWD",
+    }
+    passthrough = creds.get("env_passthrough") or []
+    if isinstance(passthrough, str):
+        passthrough = [k.strip() for k in passthrough.split(",") if k.strip()]
+    scrubbed_env = {
+        k: v for k, v in os.environ.items()
+        if k in _AUTH_CMD_ENV_ALLOW or k in set(passthrough)
+    }
+    scrubbed_env["VGFLOW_RECIPE_RUNTIME"] = "1"
     proc = subprocess.run(
         args,
         capture_output=True,
         text=True,
         timeout=timeout,
-        env={**os.environ, "VGFLOW_RECIPE_RUNTIME": "1"},
+        env=scrubbed_env,
     )
     if proc.returncode != 0:
         raise AuthError(

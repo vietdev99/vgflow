@@ -187,3 +187,42 @@ def test_phase_not_found_returns_nonzero(tmp_path):
 def test_dry_run_or_apply_required(tmp_path):
     result = _run(tmp_path, "--phase", "1.0")
     assert result.returncode != 0
+
+
+def test_path_traversal_goal_id_rejected(tmp_path):
+    """Codex-R4-HIGH-3: RUNTIME-MAP is untrusted. goal_id with path
+    traversal must be rejected, not used as filename."""
+    runtime = {
+        "goal_sequences": {
+            "../../etc/passwd": _mutation_seq_with_body()["G-10"],
+            "G-10": _mutation_seq_with_body()["G-10"],  # legit one for control
+        },
+    }
+    phase_dir = _phase_with_runtime(tmp_path, "01.0-foo", runtime)
+    result = _run(tmp_path, "--phase", "1.0", "--apply")
+    assert result.returncode == 0
+    # Only the legit G-10 should be backfilled
+    assert (phase_dir / "FIXTURES" / "G-10.yaml").exists()
+    # No file written outside FIXTURES dir
+    assert not (tmp_path / ".." / ".." / "etc" / "passwd.yaml").exists()
+    # Stderr should mention skipping
+    assert "path-traversal" in result.stderr or "invalid goal_id" in result.stderr
+
+
+def test_invalid_goal_id_format_rejected(tmp_path):
+    """goal_id not matching G-XX pattern rejected."""
+    runtime = {
+        "goal_sequences": {
+            "not-a-goal": _mutation_seq_with_body()["G-10"],
+            "G_underscore": _mutation_seq_with_body()["G-10"],
+            "G-10": _mutation_seq_with_body()["G-10"],
+        },
+    }
+    phase_dir = _phase_with_runtime(tmp_path, "01.0-foo", runtime)
+    result = _run(tmp_path, "--phase", "1.0", "--apply")
+    assert result.returncode == 0
+    fixtures = list((phase_dir / "FIXTURES").iterdir()) if (phase_dir / "FIXTURES").exists() else []
+    fixture_names = {f.name for f in fixtures}
+    assert "G-10.yaml" in fixture_names
+    assert "not-a-goal.yaml" not in fixture_names
+    assert "G_underscore.yaml" not in fixture_names

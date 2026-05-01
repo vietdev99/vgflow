@@ -102,4 +102,76 @@ def load_recipe(path: Path | str) -> dict[str, Any]:
             f"Recipe at {p} failed schema validation at `{path_str}`: {e.message}"
         ) from e
 
+    # Codex-R4-HIGH-6 fix: pre-validate JSONPath expressions at load time.
+    # Schema only enforces `^$` regex; an invalid filter expression would
+    # blow up AT runtime AFTER the mutation already executed. Pre-compile
+    # so authoring errors surface before any HTTP traffic.
+    _validate_jsonpaths(recipe, p)
+
     return recipe
+
+
+def _validate_jsonpaths(recipe: dict[str, Any], source: Path) -> None:
+    """Walk recipe.steps[].capture and validate_after.assert_jsonpath plus
+    lifecycle.{pre,post}_state.assert_jsonpath. Compile each path; raise
+    ValidationError on any failure."""
+    try:
+        from jsonpath_ng.ext import parse as _jp_parse
+    except ImportError:
+        return  # jsonpath-ng absent; runtime fallback evaluator catches errors
+
+    paths_to_check: list[tuple[str, str]] = []  # (location, path)
+
+    def collect_step(step: Any, base: str) -> None:
+        if not isinstance(step, dict):
+            return
+        cap = step.get("capture")
+        if isinstance(cap, dict):
+            for name, spec in cap.items():
+                if isinstance(spec, dict) and isinstance(spec.get("path"), str):
+                    paths_to_check.append((f"{base}.capture[{name}].path",
+                                            spec["path"]))
+        va = step.get("validate_after")
+        if isinstance(va, dict):
+            for a in va.get("assert_jsonpath") or []:
+                if isinstance(a, dict) and isinstance(a.get("path"), str):
+                    paths_to_check.append(
+                        (f"{base}.validate_after.assert_jsonpath.path", a["path"])
+                    )
+        # Recurse into loop step `each`
+        each = step.get("each")
+        if isinstance(each, dict):
+            collect_step(each, f"{base}.each")
+
+    for i, step in enumerate(recipe.get("steps") or []):
+        collect_step(step, f"steps[{i}]")
+
+    lifecycle = recipe.get("lifecycle")
+    if isinstance(lifecycle, dict):
+        for leg in ("pre_state", "post_state"):
+            block = lifecycle.get(leg)
+            if isinstance(block, dict):
+                for a in block.get("assert_jsonpath") or []:
+                    if isinstance(a, dict) and isinstance(a.get("path"), str):
+                        paths_to_check.append(
+                            (f"lifecycle.{leg}.assert_jsonpath.path", a["path"])
+                        )
+        side = lifecycle.get("side_effects") or []
+        if isinstance(side, list):
+            for j, eff in enumerate(side):
+                if isinstance(eff, dict):
+                    for a in eff.get("assert_jsonpath") or []:
+                        if isinstance(a, dict) and isinstance(a.get("path"), str):
+                            paths_to_check.append(
+                                (f"lifecycle.side_effects[{j}].assert_jsonpath.path",
+                                 a["path"])
+                            )
+
+    for location, path in paths_to_check:
+        try:
+            _jp_parse(path)
+        except Exception as e:
+            raise ValidationError(
+                f"Recipe at {source} has invalid JSONPath at `{location}`: "
+                f"{path!r} — {e}"
+            ) from e

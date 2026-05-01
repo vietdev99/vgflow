@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import shlex
 import subprocess
@@ -93,6 +94,47 @@ def _default_cli() -> list[str]:
     return ["claude", "--model", "haiku", "-p"]
 
 
+# Codex-R4-HIGH-4: scrub env so spawned CLI does NOT inherit secrets.
+# Allowlist + project-specific passthrough via VG_DIAGNOSTIC_L2_ENV_PASSTHROUGH.
+_DEFAULT_ENV_ALLOWLIST = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL",
+    "TMPDIR", "PWD",
+    # CLI-specific tokens that the spawned CLI itself needs (NOT the parent's
+    # vendor secrets — claude/codex/gemini handle their own auth via OS keychain
+    # or per-CLI config files, NOT env vars by default).
+    "CLAUDE_HOME", "CODEX_HOME", "GEMINI_HOME",
+)
+
+# NB: no word boundaries — "auth_token", "api_key" must match too.
+_REDACT_KEYS_RE = re.compile(
+    r"(?i)(api[_-]?key|secret|token|password|passwd|authorization|"
+    r"bearer|access[_-]?key|private[_-]?key|cookie|credential)"
+)
+
+
+def _scrubbed_env() -> dict[str, str]:
+    """Return env dict with allowlist + opt-in passthrough."""
+    allow = set(_DEFAULT_ENV_ALLOWLIST)
+    passthrough = os.environ.get("VG_DIAGNOSTIC_L2_ENV_PASSTHROUGH", "")
+    for k in passthrough.split(","):
+        k = k.strip()
+        if k:
+            allow.add(k)
+    return {k: v for k, v in os.environ.items() if k in allow}
+
+
+def _redact_secrets(value):
+    """Recursively redact values whose KEY name matches secret patterns."""
+    if isinstance(value, dict):
+        return {
+            k: ("[REDACTED]" if _REDACT_KEYS_RE.search(str(k)) else _redact_secrets(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secrets(v) for v in value]
+    return value
+
+
 def invoke_subagent(
     prompt: str,
     *,
@@ -110,6 +152,7 @@ def invoke_subagent(
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            env=_scrubbed_env(),  # Codex-R4-HIGH-4: scrubbed env
         )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"subagent timed out after {timeout_s}s") from e
@@ -219,11 +262,15 @@ def main() -> int:
         }))
         return 0
 
+    # Codex-R4-HIGH-4: redact secret-keyed evidence fields before sending
+    # to the subagent. Keeps the diagnostic context useful but blocks
+    # accidental token leaks.
+    redacted_evidence = _redact_secrets(evidence)
     prompt = PROMPT_TEMPLATE.format(
         gate_id=args.gate_id,
         block_family=args.block_family,
         gate_context=args.gate_context or "(no context provided)",
-        evidence_json=json.dumps(evidence, indent=2, ensure_ascii=False),
+        evidence_json=json.dumps(redacted_evidence, indent=2, ensure_ascii=False),
     )
 
     cli_args = shlex.split(args.cli) if args.cli else None

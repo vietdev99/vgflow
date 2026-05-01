@@ -198,6 +198,11 @@ def run_post_state_with_retry(
             if "increased_by_at_least" in a and isinstance(pre_payload, (dict, list)):
                 _check_increase(a, pre_payload, payload, attempt_failures,
                                  endpoint=endpoint)
+            # Codex-R4-HIGH-1 fix: decreased_by_at_least was schema-declared
+            # but never evaluated → silent pass on failed decrease assertions.
+            if "decreased_by_at_least" in a and isinstance(pre_payload, (dict, list)):
+                _check_decrease(a, pre_payload, payload, attempt_failures,
+                                 endpoint=endpoint)
 
         if not attempt_failures:
             result.post_state_passed = True
@@ -255,5 +260,52 @@ def _check_increase(
     if delta < threshold:
         failures.append(
             f"increased_by_at_least {path}: delta={delta} < threshold={threshold} "
+            f"(pre={pre_n}, post={post_n} from {endpoint})"
+        )
+
+
+def _check_decrease(
+    assertion: dict[str, Any],
+    pre_payload: Any,
+    post_payload: Any,
+    failures: list[str],
+    *,
+    endpoint: str,
+) -> None:
+    """Codex-R4-HIGH-1 fix: mirror of _check_increase for decreases.
+    Threshold of 50 means post must be ≥ 50 LOWER than pre."""
+    path = assertion.get("path")
+    if not path:
+        return
+    try:
+        pre_v = capture_paths(
+            pre_payload,
+            {"_v": {"path": path, "cardinality": "array", "on_empty": "skip"}},
+        ).get("_v", [])
+        post_v = capture_paths(
+            post_payload,
+            {"_v": {"path": path, "cardinality": "array", "on_empty": "skip"}},
+        ).get("_v", [])
+    except CaptureError as e:
+        failures.append(f"decreased_by jsonpath eval error: {e}")
+        return
+    if not pre_v or not post_v:
+        failures.append(
+            f"decreased_by_at_least {path}: pre={pre_v} post={post_v}"
+        )
+        return
+    try:
+        pre_n = float(pre_v[0])
+        post_n = float(post_v[0])
+    except (TypeError, ValueError):
+        failures.append(
+            f"decreased_by_at_least {path}: not numeric pre={pre_v[0]!r} post={post_v[0]!r}"
+        )
+        return
+    delta = pre_n - post_n  # positive when value DECREASED
+    threshold = float(assertion["decreased_by_at_least"])
+    if delta < threshold:
+        failures.append(
+            f"decreased_by_at_least {path}: drop={delta} < threshold={threshold} "
             f"(pre={pre_n}, post={post_n} from {endpoint})"
         )

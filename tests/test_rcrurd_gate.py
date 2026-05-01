@@ -144,6 +144,61 @@ def test_post_state_increased_by_at_least():
     assert res.post_state_passed
 
 
+def test_post_state_decreased_by_at_least_passes():
+    """Codex-R4-HIGH-1: decreased_by_at_least was schema-declared but not
+    evaluated. Now must enforce drop ≥ threshold."""
+    lifecycle = {
+        "post_state": {
+            "role": "u",
+            "endpoint": "/api/balance",
+            "assert_jsonpath": [{"path": "$.balance", "decreased_by_at_least": 100}],
+        },
+    }
+    res = run_post_state_with_retry(
+        "G-1",
+        lifecycle,
+        _stub_get({("u", "/api/balance"): {"balance": 800}}),
+        pre_payload={"balance": 1000},
+    )
+    assert res.post_state_passed
+
+
+def test_post_state_decreased_below_threshold_fails():
+    lifecycle = {
+        "post_state": {
+            "role": "u",
+            "endpoint": "/api/balance",
+            "assert_jsonpath": [{"path": "$.balance", "decreased_by_at_least": 100}],
+        },
+    }
+    res = run_post_state_with_retry(
+        "G-1",
+        lifecycle,
+        _stub_get({("u", "/api/balance"): {"balance": 950}}),  # drop=50 < 100
+        pre_payload={"balance": 1000},
+    )
+    assert not res.post_state_passed
+    assert any("drop=50" in f or "decreased_by_at_least" in f for f in res.post_state_failures)
+
+
+def test_post_state_value_increased_when_decrease_expected_fails():
+    """Critical regression: balance went UP when assertion says DOWN."""
+    lifecycle = {
+        "post_state": {
+            "role": "u",
+            "endpoint": "/api/balance",
+            "assert_jsonpath": [{"path": "$.balance", "decreased_by_at_least": 100}],
+        },
+    }
+    res = run_post_state_with_retry(
+        "G-1",
+        lifecycle,
+        _stub_get({("u", "/api/balance"): {"balance": 1200}}),  # INCREASED
+        pre_payload={"balance": 1000},
+    )
+    assert not res.post_state_passed
+
+
 def test_post_state_increased_by_at_least_below_threshold():
     lifecycle = {
         "post_state": {

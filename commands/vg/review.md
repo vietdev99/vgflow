@@ -1654,8 +1654,20 @@ if [ -d "${REPO_ROOT}/scripts/runtime" ]; then
   # Codex-HIGH-5-ter: guarded by ENV-CONTRACT.md only — independent of FIXTURES.
   if [ -f "${REPO_ROOT}/scripts/preflight-invariants.py" ] && \
      [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
-    # Resolve base_url from config (sandbox env section)
-    PRE_BASE=$(echo "${CONFIG_RAW:-}" | grep -A2 '^step_env:' | grep -E 'sandbox_test:|sandbox:' | head -1 | sed 's/.*: *//;s/[" ]//g')
+    # Codex-R4-HIGH-2 fix: PREVIOUSLY parsed step_env.sandbox_test from
+    # vg.config.md, but that's an ENV NAME like "local", not a URL. The
+    # actual URL lives in ENV-CONTRACT.md under `target.base_url`. Use
+    # that as canonical source; fall back to VG_BASE_URL env override.
+    PRE_BASE=$("${PYTHON_BIN:-python3}" -c "
+import re, sys
+text = open('${PHASE_DIR}/ENV-CONTRACT.md', encoding='utf-8').read()
+# Match \`target:\n  base_url: \"...\"\` block (handles single+double quotes)
+m = re.search(r'^target:\s*\n((?:[ \t].*\n)+)', text, re.MULTILINE)
+if m:
+    body = m.group(1)
+    bm = re.search(r'^\s*base_url:\s*[\"\\']?([^\"\\'\s#]+)', body, re.MULTILINE)
+    if bm: print(bm.group(1))
+" 2>/dev/null)
     [ -z "$PRE_BASE" ] && PRE_BASE="${VG_BASE_URL:-}"
     if [ -n "$PRE_BASE" ]; then
       PRE_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/preflight-invariants.py" \
@@ -6185,7 +6197,18 @@ fi
 # action actually mutated state correctly. Without this leg, RCRURD is half-
 # wired (Codex review found pre-only).
 # Re-resolve base URL from config (PRE_BASE local to Phase 0.5; not in scope).
-POST_BASE_RC=$(echo "${CONFIG_RAW:-}" | grep -A2 '^step_env:' | grep -E 'sandbox_test:|sandbox:' | head -1 | sed 's/.*: *//;s/[" ]//g')
+# Codex-R4-HIGH-2 fix: read base_url from ENV-CONTRACT.md (canonical),
+# not from vg.config.md step_env (env NAME, not URL).
+POST_BASE_RC=$("${PYTHON_BIN:-python3}" -c "
+import re
+try:
+    text = open('${PHASE_DIR}/ENV-CONTRACT.md', encoding='utf-8').read()
+    m = re.search(r'^target:\s*\n((?:[ \t].*\n)+)', text, re.MULTILINE)
+    if m:
+        bm = re.search(r'^\s*base_url:\s*[\"\\']?([^\"\\'\s#]+)', m.group(1), re.MULTILINE)
+        if bm: print(bm.group(1))
+except FileNotFoundError: pass
+" 2>/dev/null)
 [ -z "$POST_BASE_RC" ] && POST_BASE_RC="${VG_BASE_URL:-}"
 HAS_POST_LIFECYCLE=$(grep -lE '^\s*post_state:' "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
 # Codex-HIGH-5-bis fix: post_state setup error blocks even without runner exec

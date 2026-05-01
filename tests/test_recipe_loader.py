@@ -132,3 +132,134 @@ def test_yaml_parse_error_wrapped_as_validation_error(tmp_path):
 def test_file_not_found_propagates(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_recipe(tmp_path / "missing.yaml")
+
+
+# ─── Codex-R4-HIGH-6: JSONPath pre-validation at load time ────────
+
+
+def test_invalid_capture_jsonpath_rejected_at_load(tmp_path):
+    """Codex-R4-HIGH-6: invalid JSONPath used to blow up AT runtime
+    (after the mutation already ran). Pre-validate at load."""
+    pytest.importorskip("jsonpath_ng")
+    content = """
+schema_version: "1.0"
+goal: G-01
+description: Capture path with bad filter expression for pre-validation test
+fixture_intent:
+  declared_in: TEST-GOALS.md#G-01
+  validates: pre-validation regression test goal
+steps:
+  - id: x
+    kind: api_call
+    role: u
+    method: POST
+    endpoint: /api/x
+    idempotency_key: k1
+    body:
+      a: 1
+    capture:
+      bad:
+        path: "$..[?(@invalid_filter syntax!!)]"
+""".lstrip()
+    p = _write(tmp_path, content)
+    with pytest.raises(ValidationError, match="JSONPath"):
+        load_recipe(p)
+
+
+def test_invalid_validate_after_jsonpath_rejected(tmp_path):
+    pytest.importorskip("jsonpath_ng")
+    content = """
+schema_version: "1.0"
+goal: G-01
+description: validate_after with bad path for regression test
+fixture_intent:
+  declared_in: TEST-GOALS.md#G-01
+  validates: pre-validation regression on validate_after
+steps:
+  - id: x
+    kind: api_call
+    role: u
+    method: POST
+    endpoint: /api/x
+    idempotency_key: k1
+    body: {a: 1}
+    validate_after:
+      kind: api_call
+      method: GET
+      endpoint: /api/x
+      assert_jsonpath:
+        - path: "$.[?($invalid)]"
+""".lstrip()
+    p = _write(tmp_path, content)
+    with pytest.raises(ValidationError, match="JSONPath"):
+        load_recipe(p)
+
+
+def test_invalid_lifecycle_jsonpath_rejected(tmp_path):
+    pytest.importorskip("jsonpath_ng")
+    content = """
+schema_version: "1.0"
+goal: G-01
+description: lifecycle with bad path for regression test
+fixture_intent:
+  declared_in: TEST-GOALS.md#G-01
+  validates: pre-validation regression on lifecycle
+steps:
+  - id: x
+    kind: api_call
+    role: u
+    method: GET
+    endpoint: /api/x
+lifecycle:
+  pre_state:
+    role: u
+    method: GET
+    endpoint: /api/state
+    assert_jsonpath:
+      - path: "$..[?(this is broken)]"
+  action:
+    surface: ui_click
+    expected_network:
+      method: POST
+      endpoint: /api/x
+      status_range: [200, 299]
+  post_state:
+    role: u
+    method: GET
+    endpoint: /api/state
+    assert_jsonpath:
+      - path: "$.count"
+        equals: 1
+""".lstrip()
+    p = _write(tmp_path, content)
+    with pytest.raises(ValidationError, match="JSONPath"):
+        load_recipe(p)
+
+
+def test_valid_jsonpath_with_filter_passes(tmp_path):
+    """Valid filter expressions should pass pre-validation."""
+    pytest.importorskip("jsonpath_ng")
+    content = """
+schema_version: "1.0"
+goal: G-01
+description: Recipe with valid jsonpath filter expression for runtime tests
+fixture_intent:
+  declared_in: TEST-GOALS.md#G-01
+  validates: jsonpath filter syntax acceptance regression test
+steps:
+  - id: x
+    kind: api_call
+    role: u
+    method: POST
+    endpoint: /api/x
+    idempotency_key: k1
+    body:
+      a: 1
+    capture:
+      first_active:
+        path: "$.items[?(@.status == 'active')].id"
+        cardinality: optional_scalar
+""".lstrip()
+    p = _write(tmp_path, content)
+    recipe = load_recipe(p)
+    assert recipe["goal"] == "G-01"

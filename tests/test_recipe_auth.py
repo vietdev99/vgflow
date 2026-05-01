@@ -268,6 +268,74 @@ def test_command_auth_invalid_json_raises(tmp_path):
 # ─── dispatcher ───────────────────────────────────────────────────────
 
 
+def test_command_auth_scrubs_secret_env_vars(tmp_path, monkeypatch):
+    """Codex-R4-HIGH-5: auth_command must NOT inherit secrets."""
+    monkeypatch.setenv("CLAUDE_API_KEY", "sk-test-secret-DO-NOT-LEAK")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret-DO-NOT-LEAK")
+    script = tmp_path / "leak_check.py"
+    script.write_text(
+        "import json, os\n"
+        "leaked = [k for k in os.environ if 'CLAUDE_API_KEY' in k or 'AWS_' in k]\n"
+        "if leaked:\n"
+        "  raise SystemExit(f'LEAK: {leaked}')\n"
+        "print(json.dumps({'kind': 'header', 'headers': {'X-Test': 'ok'}}))\n",
+        encoding="utf-8",
+    )
+    ctx = auth_command(
+        "http://x", {"command": f"{sys.executable} {script}"}, sandbox=True,
+    )
+    assert ctx.session.headers["X-Test"] == "ok"
+
+
+def test_command_auth_env_passthrough_opt_in(tmp_path, monkeypatch):
+    """Project can opt specific env vars in via creds.env_passthrough."""
+    monkeypatch.setenv("PROJECT_AUTH_BASE", "https://sandbox.x.com")
+    monkeypatch.setenv("CLAUDE_API_KEY", "sk-secret")  # NOT in passthrough
+    script = tmp_path / "check.py"
+    script.write_text(
+        "import json, os\n"
+        "if 'CLAUDE_API_KEY' in os.environ:\n"
+        "  raise SystemExit('LEAK: CLAUDE_API_KEY')\n"
+        "v = os.environ.get('PROJECT_AUTH_BASE', '')\n"
+        "print(json.dumps({'kind': 'header', 'headers': {'X-Auth-Base': v}}))\n",
+        encoding="utf-8",
+    )
+    ctx = auth_command(
+        "http://x",
+        {
+            "command": f"{sys.executable} {script}",
+            "env_passthrough": ["PROJECT_AUTH_BASE"],
+        },
+        sandbox=True,
+    )
+    assert ctx.session.headers["X-Auth-Base"] == "https://sandbox.x.com"
+
+
+def test_command_auth_env_passthrough_string_form(tmp_path, monkeypatch):
+    """env_passthrough as comma-separated string also works."""
+    monkeypatch.setenv("VAR_A", "val-a")
+    monkeypatch.setenv("VAR_B", "val-b")
+    script = tmp_path / "ck.py"
+    script.write_text(
+        "import json, os\n"
+        "print(json.dumps({\n"
+        "  'kind': 'header',\n"
+        "  'headers': {'X-A': os.environ.get('VAR_A', ''), 'X-B': os.environ.get('VAR_B', '')},\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    ctx = auth_command(
+        "http://x",
+        {
+            "command": f"{sys.executable} {script}",
+            "env_passthrough": "VAR_A,VAR_B",
+        },
+        sandbox=True,
+    )
+    assert ctx.session.headers["X-A"] == "val-a"
+    assert ctx.session.headers["X-B"] == "val-b"
+
+
 def test_authenticate_dispatcher_unknown_kind_raises():
     with pytest.raises(AuthError, match="Unknown auth kind"):
         authenticate("magic", "http://x", {}, sandbox=True)

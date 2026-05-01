@@ -215,6 +215,117 @@ def test_invalid_evidence_json_returns_2(tmp_path):
     assert result.returncode == 2
 
 
+def test_env_scrubbed_secrets_not_passed_to_subagent(tmp_path):
+    """Codex-R4-HIGH-4: spawned CLI must NOT inherit secrets via env.
+    Confirm CLAUDE_API_KEY etc. don't reach the subagent's env."""
+    phase_dir = tmp_path / "phase"
+    phase_dir.mkdir()
+    # Stub CLI that dumps its env to stdout
+    dump_env = tmp_path / "dump_env.py"
+    dump_env.write_text(
+        "import json, os, sys\n"
+        "envs = sorted(os.environ)\n"
+        "print(json.dumps({\n"
+        "  'diagnosis': 'env keys: ' + str(envs[:5]) + '... long enough text',\n"
+        "  'proposed_fix': 'inspect env keys: ' + str(envs[:5]),\n"
+        "  'confidence': 0.5,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    cli_cmd = f"{sys.executable} {dump_env}"
+    result = _run(
+        "--gate-id", "g", "--block-family", "f",
+        "--phase-dir", str(phase_dir),
+        "--evidence-json", "{}",
+        "--cli", cli_cmd,
+        env_extra={
+            "CLAUDE_API_KEY": "sk-secret-test-key-12345",
+            "AWS_SECRET_ACCESS_KEY": "aws-secret-test",
+        },
+    )
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    diagnosis = out["diagnosis"]
+    # Subagent saw HOME / PATH / etc. but NOT CLAUDE_API_KEY or AWS_SECRET
+    assert "CLAUDE_API_KEY" not in diagnosis
+    assert "AWS_SECRET_ACCESS_KEY" not in diagnosis
+
+
+def test_evidence_secrets_redacted_before_prompt(tmp_path):
+    """Codex-R4-HIGH-4: secret-keyed evidence fields redacted before
+    going into the prompt sent to the subagent."""
+    phase_dir = tmp_path / "phase"
+    phase_dir.mkdir()
+    # Stub CLI that echoes the prompt back so we can see what was sent
+    echo_prompt = tmp_path / "echo.py"
+    echo_prompt.write_text(
+        "import json, sys\n"
+        "prompt = sys.argv[-1]\n"
+        "# Look at the EVIDENCE section specifically\n"
+        "ev_start = prompt.find('## Evidence')\n"
+        "ev_section = prompt[ev_start:ev_start + 800] if ev_start >= 0 else ''\n"
+        "print(json.dumps({\n"
+        "  'diagnosis': 'evidence section: ' + ev_section,\n"
+        "  'proposed_fix': 'review the prompt content above for leaks',\n"
+        "  'confidence': 0.5,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    cli_cmd = f"{sys.executable} {echo_prompt}"
+    evidence = {
+        "user_id": "real-user-123",
+        "auth_token": "Bearer sk-secret-bearer-456",
+        "api_key": "real-api-key-789",
+        "request_body": {"password": "p@ssw0rd"},
+    }
+    result = _run(
+        "--gate-id", "g", "--block-family", "f",
+        "--phase-dir", str(phase_dir),
+        "--evidence-json", json.dumps(evidence),
+        "--cli", cli_cmd,
+    )
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    diagnosis = out["diagnosis"]
+    # user_id was passed verbatim (not a secret-keyed field)
+    assert "real-user-123" in diagnosis
+    # Secrets redacted
+    assert "[REDACTED]" in diagnosis
+    assert "sk-secret-bearer-456" not in diagnosis
+    assert "real-api-key-789" not in diagnosis
+    assert "p@ssw0rd" not in diagnosis
+
+
+def test_env_passthrough_opt_in(tmp_path):
+    """VG_DIAGNOSTIC_L2_ENV_PASSTHROUGH allowlists project-specific keys."""
+    phase_dir = tmp_path / "phase"
+    phase_dir.mkdir()
+    dump_env = tmp_path / "dump.py"
+    dump_env.write_text(
+        "import json, os\n"
+        "v = os.environ.get('PROJECT_API_BASE', 'NOT_SET')\n"
+        "print(json.dumps({\n"
+        "  'diagnosis': 'PROJECT_API_BASE=' + v + ' check this passthrough',\n"
+        "  'proposed_fix': 'inspect PROJECT_API_BASE value above for passthrough',\n"
+        "  'confidence': 0.5,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        "--gate-id", "g", "--block-family", "f",
+        "--phase-dir", str(phase_dir),
+        "--evidence-json", "{}",
+        "--cli", f"{sys.executable} {dump_env}",
+        env_extra={
+            "PROJECT_API_BASE": "https://sandbox.example.com",
+            "VG_DIAGNOSTIC_L2_ENV_PASSTHROUGH": "PROJECT_API_BASE",
+        },
+    )
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    assert "https://sandbox.example.com" in out["diagnosis"]
+
+
 def test_proposal_persisted_with_evidence_round_trip(tmp_path):
     phase_dir = tmp_path / "phase"
     phase_dir.mkdir()
