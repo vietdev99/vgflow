@@ -420,6 +420,55 @@ def test_delete_carries_idempotency_key(http_server):
 # ─── Codex-A-MEDIUM: AuthDegradedError typed exception ──────────────
 
 
+def test_loop_validate_after_sees_per_iteration_capture(http_server):
+    """Codex-R5-HIGH-2: with from_each: true, the loop iteration's
+    captured value used to skip self.store. validate_after couldn't
+    interpolate it. Now per-iteration value is exposed in store."""
+    base_url, routes, log = http_server
+    routes[("POST", "/api/x")] = {"status": 200, "body": {"id": "x-1"}}
+    # validate_after path matches whichever id was just captured
+    routes[("GET", "/api/x/x-1")] = {"status": 200, "body": {"verified": True}}
+    routes[("GET", "/api/x/x-2")] = {"status": 200, "body": {"verified": True}}
+
+    routes[("POST", "/api/iter1")] = {"status": 200, "body": {"id": "x-1"}}
+    routes[("POST", "/api/iter2")] = {"status": 200, "body": {"id": "x-2"}}
+
+    runner = RecipeRunner(
+        base_url=base_url, env="sandbox",
+        credentials_map={"u": {"kind": "api_key", "key": "k"}},
+    )
+    runner.run({
+        "schema_version": "1.0", "goal": "G-X",
+        "steps": [{
+            "id": "loop", "kind": "loop",
+            "over": ["iter1", "iter2"],
+            "each": {
+                "id": "create", "kind": "api_call", "role": "u",
+                "method": "POST", "endpoint": "/api/${_value}",
+                "idempotency_key": "k-${_index}",
+                "body": {"amount": 0.01},
+                "capture": {
+                    "current_id": {"path": "$.id", "from_each": True},
+                },
+                "validate_after": {
+                    "kind": "api_call", "method": "GET",
+                    "endpoint": "/api/x/${current_id}",
+                    "expect_status": 200,
+                    "assert_jsonpath": [
+                        {"path": "$.verified", "equals": True},
+                    ],
+                },
+            },
+        }],
+    })
+    # After loop: current_id is the accumulated array
+    assert runner.store["current_id"] == ["x-1", "x-2"]
+    # Both validate_after GETs hit the right per-iteration URLs
+    paths = [e["path"] for e in log if e["method"] == "GET"]
+    assert "/api/x/x-1" in paths
+    assert "/api/x/x-2" in paths
+
+
 def test_auth_degraded_when_refresh_then_401(http_server):
     """Bearer JWT: refresh succeeds but second response is also 401 →
     refresh-token expired, surface as AuthDegradedError so caller can

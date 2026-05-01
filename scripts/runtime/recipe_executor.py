@@ -258,11 +258,15 @@ class RecipeRunner:
                     f"step '{step.get('id', '?')}' capture failed: {e}"
                 ) from e
             if _loop_accum is not None:
+                # Codex-R5-HIGH-2 fix: per-iteration captures with from_each
+                # used to skip self.store entirely → validate_after couldn't
+                # interpolate them. Now we ALSO write to self.store for the
+                # current iteration's lifetime; loop teardown overwrites with
+                # the accumulated array (preserving prior post-loop semantics).
                 for k, v in captured.items():
                     if k in _loop_accum:
                         _loop_accum[k].append(v)
-                    else:
-                        self.store[k] = v
+                    self.store[k] = v
             else:
                 self.store.update(captured)
 

@@ -296,6 +296,87 @@ def test_evidence_secrets_redacted_before_prompt(tmp_path):
     assert "p@ssw0rd" not in diagnosis
 
 
+def test_redact_adjacent_name_value_pattern(tmp_path):
+    """Codex-R5-HIGH-1: scanner-shape headers list
+    `[{name: "Authorization", value: "Bearer ..."}]` must redact value
+    even though `value` key isn't itself a secret-name."""
+    phase_dir = tmp_path / "phase"
+    phase_dir.mkdir()
+    echo_prompt = tmp_path / "echo.py"
+    echo_prompt.write_text(
+        "import json, sys\n"
+        "prompt = sys.argv[-1]\n"
+        "ev_start = prompt.find('## Evidence')\n"
+        "ev_section = prompt[ev_start:ev_start + 600] if ev_start >= 0 else ''\n"
+        "print(json.dumps({\n"
+        "  'diagnosis': 'evidence section: ' + ev_section,\n"
+        "  'proposed_fix': 'review the prompt content above for leaks',\n"
+        "  'confidence': 0.5,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    cli_cmd = f"{sys.executable} {echo_prompt}"
+    evidence = {
+        "scanner_request_headers": [
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "Authorization", "value": "Bearer secret-token-12345"},
+            {"name": "X-Cookie", "value": "sess=stealable"},
+        ],
+        "user": "alice",
+    }
+    result = _run(
+        "--gate-id", "g", "--block-family", "f",
+        "--phase-dir", str(phase_dir),
+        "--evidence-json", json.dumps(evidence),
+        "--cli", cli_cmd,
+    )
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    diagnosis = out["diagnosis"]
+    # Authorization header value must NOT leak
+    assert "secret-token-12345" not in diagnosis
+    assert "stealable" not in diagnosis
+    # Innocent header value (Content-Type) preserved
+    assert "application/json" in diagnosis
+    # Identity field preserved
+    assert "alice" in diagnosis
+
+
+def test_redact_handles_key_field_alias(tmp_path):
+    """Different scanners use 'key' instead of 'name'."""
+    phase_dir = tmp_path / "phase"
+    phase_dir.mkdir()
+    echo_prompt = tmp_path / "echo2.py"
+    echo_prompt.write_text(
+        "import json, sys\n"
+        "prompt = sys.argv[-1]\n"
+        "ev_start = prompt.find('## Evidence')\n"
+        "ev_section = prompt[ev_start:ev_start + 500] if ev_start >= 0 else ''\n"
+        "print(json.dumps({\n"
+        "  'diagnosis': 'sees: ' + ev_section,\n"
+        "  'proposed_fix': 'check redaction worked above',\n"
+        "  'confidence': 0.5,\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    evidence = {
+        "form_fields": [
+            {"key": "username", "value": "alice"},
+            {"key": "password", "value": "p@ssw0rd"},
+        ],
+    }
+    result = _run(
+        "--gate-id", "g", "--block-family", "f",
+        "--phase-dir", str(phase_dir),
+        "--evidence-json", json.dumps(evidence),
+        "--cli", f"{sys.executable} {echo_prompt}",
+    )
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    assert "p@ssw0rd" not in out["diagnosis"]
+    assert "alice" in out["diagnosis"]  # username key not secret → kept
+
+
 def test_env_passthrough_opt_in(tmp_path):
     """VG_DIAGNOSTIC_L2_ENV_PASSTHROUGH allowlists project-specific keys."""
     phase_dir = tmp_path / "phase"

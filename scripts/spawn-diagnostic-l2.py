@@ -123,13 +123,46 @@ def _scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k in allow}
 
 
+def _is_secret_name_string(value: object) -> bool:
+    """True if `value` is a string that looks like a secret-bearing field name.
+
+    Catches the {name: "Authorization", value: "Bearer …"} shape — the
+    name field's VALUE itself is a secret-related label, signaling that
+    sibling `value` is the actual secret.
+    """
+    if not isinstance(value, str):
+        return False
+    return bool(_REDACT_KEYS_RE.search(value))
+
+
 def _redact_secrets(value):
-    """Recursively redact values whose KEY name matches secret patterns."""
+    """Recursively redact values whose KEY name matches secret patterns.
+
+    Codex-R5-HIGH-1 fix: also handle adjacent-key shape. When a dict has
+    a `name` (or `key`/`field`) whose VALUE matches a secret pattern,
+    AND a sibling `value` (or `data`/`val`) field, redact the sibling.
+    Common scanner shape: {name: "Authorization", value: "Bearer …"}.
+    """
     if isinstance(value, dict):
-        return {
-            k: ("[REDACTED]" if _REDACT_KEYS_RE.search(str(k)) else _redact_secrets(v))
-            for k, v in value.items()
-        }
+        # Detect adjacent-key shape first
+        name_field = None
+        value_field = None
+        for k in value:
+            if str(k).lower() in {"name", "key", "field", "header"} and name_field is None:
+                if _is_secret_name_string(value[k]):
+                    name_field = k
+            if str(k).lower() in {"value", "val", "data", "content"} and value_field is None:
+                value_field = k
+        out = {}
+        for k, v in value.items():
+            if _REDACT_KEYS_RE.search(str(k)):
+                out[k] = "[REDACTED]"
+            elif name_field and value_field and k == value_field:
+                # Sibling-secret pattern: redact paired value
+                out[k] = "[REDACTED]"
+            else:
+                out[k] = _redact_secrets(v)
+        return out
     if isinstance(value, list):
         return [_redact_secrets(v) for v in value]
     return value
