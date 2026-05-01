@@ -38,7 +38,7 @@ VERB=""
 FWD_ARGS=""
 for arg in $ARGUMENTS; do
   case "$arg" in
-    health|integrity|gate-stats|recover|stack|wired|dist|ohok|help)
+    health|integrity|gate-stats|recover|recovery|stack|wired|dist|ohok|help)
       [ -z "$VERB" ] && VERB="$arg" || FWD_ARGS="${FWD_ARGS} ${arg}"
       ;;
     --dist|--distribution)
@@ -87,6 +87,7 @@ The shell block above resolves `VERB` and `FWD_ARGS`. The outer model reads the 
 | `wired`       | run `python .claude/scripts/vg-wired-check.py ${FWD_ARGS}` inline — WIRED-OR-NOTHING 3-check for validators/hooks/commands (OHOK v2 Day 6) |
 | `dist`        | run `python .claude/scripts/distribution-check.py --verify ${FWD_ARGS}` inline — compare script+validator hashes vs `.distribution-manifest.json` baseline (detects local drift / tampering). Use `--generate` to rewrite baseline after intentional edits. |
 | `ohok`        | run `python .claude/scripts/vg-ohok-metrics.py ${FWD_ARGS}` inline — **behavioral truth measurement** (OHOK-4). Reads events.db, computes true OHOK rate (% runs finishing PASS with 0 overrides + 0 manual promotions), per-command breakdown, override pressure top-N, promote-manual quota usage, validator BLOCK distribution. Accepts `--since 30d`, `--command build`, `--json`. |
+| `recovery`    | run `python .claude/scripts/vg-recovery.py ${FWD_ARGS}` inline — **recovery path picker** (v2.46-wave3). Reads latest run from events.db, detects validator BLOCKs, prints actionable recovery paths per violation. Closes UX dead-end where BLOCK gives generic options. Accepts `--phase 3.2` (filter), `--json` (machine-readable). |
 | `help` / ""   | print menu below, exit 0 |
 
 For `stack` verb: executes the v2.2 stack diagnostic — orchestrator reachable, events.db integrity, schemas valid, validators present, hooks wired, bootstrap consistent. Exit 0 healthy, 1 warnings, 2 blocking issues.
@@ -107,6 +108,7 @@ This command is a thin dispatcher. Use the sub-commands directly for clarity:
   /vg:doctor wired                WIRED-OR-NOTHING validators/hooks/commands check
   /vg:doctor dist [--generate]    Distribution integrity (sha256 manifest drift)
   /vg:doctor ohok [--since 30d]   Behavioral OHOK rate from events.db
+  /vg:doctor recovery [--phase X] Recovery path picker for current BLOCK
 
 Legacy flags (DEPRECATED, still routed):
   /vg:doctor --integrity          → /vg:integrity
@@ -118,6 +120,18 @@ HELP
 fi
 
 echo "→ Routing to /vg:${VERB}${FWD_ARGS}"
+
+# Inline verbs (not Skill subroutes) — execute Python script directly
+case "$VERB" in
+  recovery)
+    python3 .claude/scripts/vg-recovery.py ${FWD_ARGS}
+    exit $?
+    ;;
+  stack|wired|dist|ohok)
+    # Other inline verbs handled per matrix above (already in this file's older revisions)
+    ;;
+esac
+
 # Model side: now invoke Skill(skill="vg:${VERB}", args="${FWD_ARGS}")
 ```
 </step>
