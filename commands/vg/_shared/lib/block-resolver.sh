@@ -481,6 +481,90 @@ JSON
 }
 
 # ═══════════════════════════════════════════════════════════════════════
+# block_resolve_l3_single_advisory — D26 single-advisory variant (RFC v9 PR-D3)
+# ═══════════════════════════════════════════════════════════════════════
+# When the architect's proposal has high confidence (typically ≥ 0.8) and
+# the right answer is clear, do NOT fabricate a 3-option menu. Lead with
+# the recommendation, ask Y/n. Override + abort remain reachable via [d]etails.
+#
+# RFC v9 D26 rule (user-stated): "khi có 1 đường đúng, đừng tạo menu giả định
+# người dùng có lựa chọn" — when there's a clear right path, advise straight.
+#
+# Args:
+#   $1 — gate_id (e.g., "missing-evidence")
+#   $2 — phase_dir (defaults to $PHASE_DIR)
+#   $3 — confidence (0.0 .. 1.0; default 0.8)
+#
+# Behavior:
+#   - confidence >= threshold (config.review.l3_single_advisory_min_confidence,
+#     default 0.7): emit single-advisory JSON (one primary action + [d]etails)
+#   - confidence < threshold: fall through to block_resolve_l3_present (3-option)
+#
+# Use when:
+#   - L2 architect surfaces high-confidence fix.
+#   - Recovery paths in vg:review/test/build where the alternative is just
+#     "do nothing" or "investigate manually" (not a real divergent decision).
+block_resolve_l3_single_advisory() {
+  local gate_id="$1"
+  local phase_dir="${2:-${PHASE_DIR:-.}}"
+  local confidence="${3:-0.8}"
+  local brief="${phase_dir}/.block-resolver-l2-brief.md"
+  local threshold="${CONFIG_REVIEW_L3_SINGLE_ADVISORY_MIN_CONFIDENCE:-0.7}"
+
+  if [ ! -f "$brief" ]; then
+    echo "⛔ block_resolve_l3_single_advisory: brief missing at ${brief}" >&2
+    return 1
+  fi
+
+  # Compare confidence vs threshold (POSIX bash arithmetic via awk for floats)
+  local should_advise
+  should_advise=$(awk "BEGIN { print ($confidence >= $threshold) ? 1 : 0 }")
+  if [ "$should_advise" != "1" ]; then
+    # Low confidence — fall back to 3-option menu (preserve audit trail)
+    echo "▸ confidence=$confidence < threshold=$threshold → falling back to multi-option L3" >&2
+    block_resolve_l3_present "$gate_id" "$phase_dir"
+    return $?
+  fi
+
+  local p_type=$(grep -E "^\- \*\*Type:\*\*" "$brief" | head -1 | sed 's/.*Type:\*\*\s*//')
+  local p_summary=$(grep -E "^\- \*\*Summary:\*\*" "$brief" | head -1 | sed 's/.*Summary:\*\*\s*//')
+  local p_rationale=$(grep -E "^\- \*\*Rationale:\*\*" "$brief" | head -1 | sed 's/.*Rationale:\*\*\s*//')
+
+  cat <<JSON
+{
+  "marker": "BLOCK_RESOLVER_L3_PROMPT_SINGLE_ADVISORY",
+  "gate_id": "${gate_id}",
+  "brief_path": "${brief}",
+  "confidence": ${confidence},
+  "ask_user_question_template": {
+    "question": "Áp dụng đề xuất sửa cho '${gate_id}'? ${p_summary}",
+    "header": "L3 single-advisory (confidence=${confidence})",
+    "multiSelect": false,
+    "options": [
+      {
+        "label": "Yes — apply now",
+        "description": "${p_rationale}"
+      },
+      {
+        "label": "No — show details",
+        "description": "Reveal full L2 brief at ${brief}; choose override/abort then"
+      }
+    ]
+  }
+}
+JSON
+
+  echo "▸ Orchestrator: invoke AskUserQuestion with the template above, then call block_resolve_l3_apply '${gate_id}' '<chosen_option>'" >&2
+
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "block_l3_single_advisory_emitted" "${VG_CURRENT_PHASE:-unknown}" "${VG_CURRENT_STEP:-unknown}" "$gate_id" "L3_SINGLE_ADVISORY" \
+      "{\"confidence\":${confidence},\"proposal_type\":\"${p_type//\"/\\\"}\"}"
+  fi
+
+  return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════
 # block_resolve_l3_apply — telemetry helper when user accepts proposal
 # ═══════════════════════════════════════════════════════════════════════
 block_resolve_l3_apply() {

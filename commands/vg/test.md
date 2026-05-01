@@ -1472,6 +1472,56 @@ Display:
 
 Generate Playwright test files from VERIFIED goals. Assertions come from TEST-GOALS success criteria, navigation paths come from RUNTIME-MAP.json observations, and CRUD list/form/delete/security expectations come from CRUD-SURFACES.md when present.
 
+**RFC v9 PR-E — fixture-aware codegen (NEW, 2026-05-02):**
+
+When `FIXTURES/{G-XX}.yaml` exists for a goal, the codegen wraps the
+spec with a beforeAll hook that loads the captured store from
+`FIXTURES-CACHE.json` and injects values into the test as constants.
+This means deterministic IDs (`pending_id`, `merchant_id`, etc.) flow
+from the recipe's last successful run into the Playwright assertion
+without re-running mutations that the recipe already exercised.
+
+```bash
+# Best-effort: skip when scripts/runtime/ not present (v2.46 phases)
+if [ -d "${REPO_ROOT}/scripts/runtime" ]; then
+  CACHE_PATH="${PHASE_DIR}/FIXTURES-CACHE.json"
+  if [ -f "$CACHE_PATH" ]; then
+    "${PYTHON_BIN:-python3}" - <<'INJECT' || true
+import json, os, sys
+from pathlib import Path
+cache_path = Path(os.environ["PHASE_DIR"]) / "FIXTURES-CACHE.json"
+try:
+    data = json.loads(cache_path.read_text(encoding="utf-8"))
+    entries = data.get("entries") or {}
+    n = len([g for g in entries if entries[g].get("captured")])
+    print(f"  ✓ FIXTURES-CACHE: {n} goal(s) carry captured store for codegen injection")
+except Exception as e:
+    print(f"  ⚠ FIXTURES-CACHE parse error: {e}")
+INJECT
+  fi
+fi
+```
+
+Codegen template emits (when goal has fixture-cache entry):
+
+```ts
+// Generated from FIXTURES-CACHE.json — recipe-captured values
+const FIXTURE = {
+  pending_id: "p7e9-2026-05-02",
+  amount: 0.01,
+};
+test("G-10 approve topup", async ({ page }) => {
+  await page.goto(`/admin/topup/${FIXTURE.pending_id}`);
+  // ...
+});
+```
+
+Validators check that codegen output for a fixture-backed goal references
+`FIXTURE.*` constants, not hard-coded IDs from RUNTIME-MAP — drift between
+recipe and test is now a CI-detectable signal.
+
+
+
 **For each goal group, generate 1 .spec.ts file:**
 
 Write to `${GENERATED_TESTS_DIR}/{phase}-goal-{group}.spec.ts`

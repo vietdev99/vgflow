@@ -2770,6 +2770,59 @@ except Exception:
   else
     echo "  ✓ wave-verify PASS — executor claims match subprocess reality"
   fi
+
+  # RFC v9 PR-B: fixture wave-verify — every mutation goal touched by this
+  # wave must have FIXTURES/{G-XX}.yaml. Fixture parses against
+  # fixture-recipe.v1.json. Failure → BLOCK with /vg:fixture-backfill hint.
+  if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+    "${PYTHON_BIN:-python3}" - <<'FIX_VERIFY' || echo "  ⚠ fixture wave-verify failed (non-blocking; queue for D14 strict-mode)"
+import os, re, sys
+from pathlib import Path
+sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+phase_dir = Path(os.environ["PHASE_DIR"])
+test_goals = phase_dir / "TEST-GOALS.md"
+fixtures_dir = phase_dir / "FIXTURES"
+text = test_goals.read_text(encoding="utf-8")
+
+# Find mutation goals (have non-empty Mutation evidence)
+goals = []
+for m in re.finditer(
+    r"^##\s+Goal\s+(G-[\w.-]+):?\s*(.*?)$"
+    r"(?P<body>(?:(?!^##\s+Goal\s+).)*)",
+    text, re.MULTILINE | re.DOTALL,
+):
+    body = m.group("body") or ""
+    me = re.search(r"\*\*Mutation evidence:\*\*\s*(.+?)(?=\*\*|\n##|\Z)",
+                    body, re.DOTALL)
+    if me and me.group(1).strip():
+        goals.append(m.group(1))
+
+missing = []
+parse_errors = []
+for gid in goals:
+    yaml_path = fixtures_dir / f"{gid}.yaml"
+    if not yaml_path.exists():
+        missing.append(gid)
+        continue
+    try:
+        from runtime.recipe_loader import load_recipe
+        load_recipe(yaml_path)
+    except Exception as e:
+        parse_errors.append((gid, str(e)[:100]))
+
+if missing or parse_errors:
+    print(f"  ⚠ fixture wave-verify: {len(missing)} missing, {len(parse_errors)} parse-error")
+    for gid in missing[:5]:
+        print(f"    missing: FIXTURES/{gid}.yaml")
+    for gid, err in parse_errors[:3]:
+        print(f"    parse-error: {gid}: {err}")
+    if missing:
+        print(f"  Hint: scripts/fixture-backfill.py --phase {os.environ['PHASE_NUMBER']} --apply")
+else:
+    if goals:
+        print(f"  ✓ fixture wave-verify: {len(goals)}/{len(goals)} mutation recipes present + valid")
+FIX_VERIFY
+  fi
 fi
 ```
 

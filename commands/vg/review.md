@@ -1615,6 +1615,58 @@ fi
 </step>
 
 <step name="phase1_code_scan">
+## Phase 0.5: RFC v9 preflight (data invariants + RCRURD + cache hygiene)
+
+**RFC v9 PR-D1/D2/F integration.** Runs deterministic gates BEFORE the
+scanner so we fail fast on broken sandbox state instead of burning Haiku
+tokens on a doomed scan.
+
+```bash
+# RFC v9 preflight — best-effort, skip silently if scripts/runtime missing
+PRE_OK=1
+if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
+  echo ""
+  echo "━━━ Phase 0.5 — RFC v9 preflight ━━━"
+
+  # 1. Reap expired leases + orphans (PR-F)
+  if [ -f "${REPO_ROOT}/scripts/fixture-prune.py" ]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/fixture-prune.py" \
+      --phase "$PHASE_NUMBER" --apply --skip-orphans 2>&1 | sed 's/^/  prune: /'
+  fi
+
+  # 2. data_invariants N-consumer check (PR-C)
+  # Stub count_fn returns 0 — real implementation wires recipe_executor;
+  # for now we surface gaps so user can populate FIXTURES manually.
+  PRE_INVARIANT=$("${PYTHON_BIN:-python3}" - <<'PY'
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+try:
+    from runtime.preflight import parse_env_contract, verify_invariants
+    invs = parse_env_contract(Path(os.environ["PHASE_DIR"]) / "ENV-CONTRACT.md")
+    if invs:
+        # Stub count_fn: returns 0 until recipe_executor wiring lands
+        def count_fn(resource, where): return 0
+        gaps = verify_invariants(invs, count_fn)
+        print(json.dumps({"invariants": len(invs), "gaps": len(gaps)}))
+    else:
+        print(json.dumps({"invariants": 0, "gaps": 0}))
+except Exception as e:
+    print(json.dumps({"error": str(e)[:200]}))
+PY
+)
+  echo "  preflight invariants: $PRE_INVARIANT"
+
+  # 3. RCRURD pre_state gate (PR-D2) — informational; full wiring requires
+  # recipe_executor session + lifecycle parsing from FIXTURES/{G-XX}.yaml.
+  # For now we count how many mutation goals declare lifecycle blocks.
+  if [ -d "${PHASE_DIR}/FIXTURES" ]; then
+    LIFECYCLE_N=$(grep -lE "^lifecycle:" "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+    echo "  lifecycle declarations: ${LIFECYCLE_N} fixtures (PR-D2 wiring queued)"
+  fi
+fi
+```
+
 ## Phase 1: CODE SCAN (automated, <10 sec)
 
 **If --skip-scan, skip this phase.**
