@@ -396,36 +396,50 @@ def main() -> int:
         run_session and hook_session and run_session != hook_session
     )
 
-    if cross_session:
+    # OHOK-9 fix (2026-05-02): when run was registered without session_id
+    # (orchestrator bug — env var CLAUDE_SESSION_ID missing at run-start)
+    # AND current hook session is known, the run is ORPHAN — it cannot
+    # belong to this session because this session has its own session_id.
+    # Previously this case fell through to "is_stale → BLOCK" which trapped
+    # parallel sessions on infinite stop-hook loops while another session
+    # was actively running the skill.
+    #
+    # Treatment: same as cross-session — fresh orphan = leave alone +
+    # approve; stale orphan = auto-abort + approve.
+    orphan_run = bool(
+        not run_session and hook_session and current.get("run_id")
+    )
+
+    if cross_session or orphan_run:
         run_id = current.get("run_id", "?")
+        kind = "cross-session" if cross_session else "orphan-null-session"
+        owner_label = (run_session[:12] if run_session else "<null>")
         if is_stale(current):
-            log(f"cross-session stale zombie {command} phase={phase} "
-                f"from session={run_session[:12]}; auto-abort + approve")
-            # v2.28.0: pass run_session (the OWNER session of the zombie),
-            # not hook_session — we want orchestrator to clear that
-            # session's active-run slot, not the current one's.
+            log(f"{kind} stale {command} phase={phase} "
+                f"owner={owner_label}; auto-abort + approve")
             auto_abort_run(
-                f"cross-session-auto-abort: zombie from session "
-                f"{run_session[:12] if run_session else '?'}, "
+                f"{kind}-auto-abort: run owner session={owner_label}, "
                 f"current session={hook_session[:12] if hook_session else '?'}",
                 session_id=run_session,
             )
             print(json.dumps({
                 "decision": "approve",
-                "reason": "cross-session-stale-zombie-cleared",
+                "reason": f"{kind}-stale-cleared",
                 "aborted_run": run_id[:12] if run_id else "?",
             }))
             return 0
-        # Fresh run from a parallel session — don't abort it, just approve
-        # this Stop. Other session is responsible for completing its run.
-        log(f"cross-session fresh run {command} phase={phase} "
-            f"from session={run_session[:12]}; approve without touching")
+        # Fresh orphan/cross-session — don't touch, approve this Stop.
+        # Either the other session is still working, OR a recent run-start
+        # without session_id is in flight; let it complete naturally.
+        log(f"{kind} fresh run {command} phase={phase} "
+            f"owner={owner_label}; approve without touching")
         print(json.dumps({
             "decision": "approve",
-            "reason": "cross-session-fresh-no-action",
+            "reason": f"{kind}-fresh-no-action",
             "other_session_run": run_id[:12] if run_id else "?",
         }))
         return 0
+
 
     if is_stale(current):
         # OHOK-6 (Gemini P1): previously auto-cleared + approved. That was
