@@ -777,6 +777,15 @@ validators:
     runtime_target_ms: 1500
     added_in: v2.12.0-phase-16
     description: P16 D-02 — classify PLAN tasks as xml/heading/mixed format. mode=legacy (default) PASS heading; mode=structured BLOCK heading; mode=both WARN heading. XML tasks require frontmatter `acceptance:` ≥1 entry. Migration enforcement.
+
+  - id: ui-scope-coherence
+    path: .claude/scripts/validators/verify-ui-scope-coherence.py
+    severity: block
+    phases_active: [blueprint]
+    domain: artifact
+    runtime_target_ms: 1000
+    added_in: v2.43.6
+    description: Cross-check `.ui-scope.json` (AI semantic detection from preflight/detect-ui-scope.py) vs PLAN.md FE-task count. BLOCK on mismatch — declares has_ui=true but PLAN has 0 FE tasks (silent UI gap, L-002 class) OR declares has_ui=false but PLAN has FE tasks (scope leak). Replaces grep heuristic in blueprint step 0_design_discovery.
   - id: crossai-output
     path: .claude/scripts/validators/verify-crossai-output.py
     severity: block
