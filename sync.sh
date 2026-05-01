@@ -197,6 +197,11 @@ sync_tree "$SCRIPT_DIR/skills" "$TARGET_ROOT/.claude/skills" "claude-skill"
 sync_tree "$SCRIPT_DIR/scripts" "$TARGET_ROOT/.claude/scripts" "claude-script"
 sync_tree "$SCRIPT_DIR/schemas" "$TARGET_ROOT/.claude/schemas" "claude-schema"
 sync_tree "$SCRIPT_DIR/templates/vg" "$TARGET_ROOT/.claude/templates/vg" "claude-template"
+# RFC v9 PR-research-augment: catalog/ holds the local edge-case pattern store
+# consumed by scripts/runtime/pattern_catalog.py. Skip silently when source
+# absent (older vgflow versions don't ship it).
+[ -d "$SCRIPT_DIR/catalog" ] && \
+  sync_tree "$SCRIPT_DIR/catalog" "$TARGET_ROOT/.claude/catalog" "claude-catalog"
 compare "$SCRIPT_DIR/VGFLOW-VERSION" "$TARGET_ROOT/.claude/VGFLOW-VERSION" "claude-version"
 if [ "$MODE_CHECK" = "false" ]; then
   chmod +x "$TARGET_ROOT/.claude/commands/vg/_shared/lib/"*.sh 2>/dev/null || true
