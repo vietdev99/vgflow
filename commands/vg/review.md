@@ -726,14 +726,20 @@ review['last_args'] = '''${ARGUMENTS}'''[:500]
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
 
-# 8. Emit telemetry — orchestrator gates on this event
+# 8. Emit telemetry — orchestrator gates on this event.
+# v2.47.1 (Issue #83) — emit-event signature: event_type is positional;
+# --phase/--command are NOT valid args (orchestrator infers phase from
+# active run; command is recorded by run-start). Valid --actor enum:
+# orchestrator | hook | validator | llm-claimed | user. The literal
+# "skill" is rejected by argparse, silently failing the call when stderr
+# is redirected via 2>&1 || true. Pre-fix: review.env_mode_confirmed
+# events never recorded. Phase + command moved into payload JSON.
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-  --event-type "review.env_mode_confirmed" \
-  --phase "${PHASE_NUMBER}" \
-  --command "vg:review" \
-  --actor "skill" \
+  "review.env_mode_confirmed" \
+  --step "0a_env_mode_gate" \
+  --actor "llm-claimed" \
   --outcome "INFO" \
-  --payload "{\"env\":\"${VG_ENV}\",\"mode\":\"${VG_REVIEW_MODE}\",\"scanner\":\"${VG_SCANNER}\",\"method\":\"${VG_METHOD}\",\"profile\":\"${PHASE_PROFILE}\",\"interactive\":$([[ \"$ARGUMENTS\" =~ --non-interactive ]] && echo false || echo true)}" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"command\":\"vg:review\",\"env\":\"${VG_ENV}\",\"mode\":\"${VG_REVIEW_MODE}\",\"scanner\":\"${VG_SCANNER}\",\"method\":\"${VG_METHOD}\",\"profile\":\"${PHASE_PROFILE}\",\"interactive\":$([[ \"$ARGUMENTS\" =~ --non-interactive ]] && echo false || echo true)}" \
   2>/dev/null || true
 
 # 9. Mark step

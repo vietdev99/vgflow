@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.47.1 — 3 dogfood-found schema-violations (Issues #82 #83 #84)
+
+Patch release fixing 3 of 4 v2.47.0 schema_violation issues filed by PrintwayV3 dogfood. Issue #85 (matrix-evidence-link non-UI goals schema gap) deferred — reporter shipped a workaround in PR #86 (currently CI-red); upstream fix is follow-up. PR #86 itself NOT merged yet — `test_bypass_negative.py` 7/10 fails because orphan-run-blocking fix changed run-complete exit code semantics, needs test alignment.
+
+### Fixed (Issue #82) — phase-profile false positive on "migration" word
+- `commands/vg/_shared/lib/phase-profile.sh` Rule 5 was over-eager: any SPECS.md mention of "migration" tripped the migration profile, even when it referred to "deferred destructive-migration notes" or "data migration plan in Phase 6" inside a feature spec. PrintwayV3 Phase 3.2 (topup/withdraw payment gateway) was mis-detected → required ROLLBACK.md (didn't exist) → user forced manual override at every `/vg:review`.
+- Fix: 3-tier detection.
+  - **Tier 1 (strongest):** `migration_plan:` frontmatter in SPECS → trust without further checks.
+  - **Tier 2:** SPECS mentions migration words AND PLAN.md lists ≥2 file-paths matching `migrations|schema|.sql` (was: 1 path).
+  - **Tier 3 (fallback):** SPECS explicitly references migration tooling commands (`prisma migrate`, `sqlx migrate`, `knex migrate`, `alembic upgrade`, `django ... makemigrations`). Pre-fix the bare prose mention of `migrations/` or `.sql` was enough — root cause of the false positive.
+
+### Fixed (Issue #83) — emit-event signature drift in review.md
+- `commands/vg/review.md:730` step `0a_env_mode_gate` called `emit-event --event-type X --phase Y --command Z --actor skill --outcome INFO --payload {...}` but argparse schema is `emit-event [--payload P] [--step S] [--actor {orchestrator,hook,validator,llm-claimed,user}] [--outcome {PASS,BLOCK,WARN,INFO}] EVENT_TYPE_POSITIONAL`. Drift: (a) `--event-type` flag instead of positional, (b) `--phase`/`--command` flags not in schema, (c) `--actor=skill` not in enum.
+- Result: every emit-event call failed with `unrecognized arguments` OR `invalid choice: skill`. stderr redirected via `2>&1 || true` masked the failure → `review.env_mode_confirmed` events never recorded → telemetry contract silently broken.
+- Fix: positional event_type, `--actor llm-claimed` (closest enum match for skill-driven calls), phase + command moved into payload JSON. Verified no other broken sites in review.md/build.md/test.md/blueprint.md/scope.md via sweep grep.
+
+### Fixed (Issue #84) — `verify-matrix-evidence-link.py` BLOCKED status gap
+- `STATUSES_WITHOUT_RUNTIME = {INFRA_PENDING, UNREACHABLE, DEFERRED}` excluded BLOCKED. When matrix Status=BLOCKED matched runtime `goal_sequences[gid].result='blocked'` (semantically aligned, both saying "this failed"), validator still flagged `matrix_status_contradicts_runtime_result` with confusing message "matrix wrote a success status" (it didn't — it wrote BLOCKED).
+- Workaround was: use DEFERRED instead of BLOCKED, losing the "I observed a real failure" semantics.
+- Fix: (a) BLOCKED added to STATUSES_WITHOUT_RUNTIME for the steps-empty branch; (b) explicit alignment short-circuit `if status == "BLOCKED" and result in {blocked, failed, error}: continue` before the contradiction-flag branch.
+
+### Triaged
+- **Issue #85** stays open as tracker — reporter shipped a workaround tool (`migrate-backend-surface-probe.py`) in PR #86 for legacy-phase migration; the underlying schema gap (non-UI goals don't appear in `goal_sequences[]`) is deferred. Two paths discussed: (a) Phase 2b-3 collect step writes synthetic `goal_sequences[gid] = {result: 'verified-via-surface-probe', ...}` for non-UI goals, OR (b) extend validator to read `.surface-probe-results.json` as second evidence source. Option (a) preferred per single-file ground truth principle.
+- **PR #86** (RFC v9 follow-up) NOT merged — CI red on bypass tests. Held until reporter aligns tests or refactors run-complete exit-code semantics. Comment posted on PR #86.
+
+### Internal
+- 628 tests pass (4 pre-existing skip; 8 Windows-local TCP socket flakes still skipped — not affected by this release).
+- 70 codex skills.
+- `VGFLOW-VERSION` + `VERSION` → 2.47.1 (patch — fixes only).
+- Credit: Issues #82–#85 from @vietnhprintway (PrintwayV3 Phase 3.2 dogfood, 2026-05-02).
+
 ## v2.47.0 — RFC v9 implementation: test-data prerequisites + fixture runtime (PR #81 + Windows compat)
 
 Massive feature batch: full RFC v9 (PR #80) implementation across 16 logical sub-PRs bundled into PR #81. **14677 insertions, 7 deletions, 74 files.** Closes the meta-bug surfaced in v2.46.1 dogfood: 21/36 mutation goals SUSPECTED not because validators/scanners failed but because **sandbox seed lacked realistic application state** to verify mutations against.
