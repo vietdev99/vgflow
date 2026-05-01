@@ -638,6 +638,23 @@ def cmd_run_start(args) -> int:
         except Exception:
             lock_token = None
 
+    # OHOK-9 fix (2026-05-02): when CLAUDE_SESSION_ID env var missing,
+    # the run was previously stored with session_id=null which caused
+    # Stop hook in OTHER parallel sessions to mistake it for their own
+    # run and BLOCK with infinite contract-violation loop. Synthesize
+    # a placeholder session_id so cross-session detection always works.
+    # Format: "session-unknown-{run_id_prefix}" — distinguishable from
+    # real Claude Code session_ids (UUIDs without "unknown-" prefix).
+    if not session_id:
+        session_id = f"session-unknown-{run_id[:8]}"
+        print(
+            f"⚠ run-start: CLAUDE_SESSION_ID env var missing — tagged "
+            f"run_id={run_id[:12]} with synthetic session={session_id}. "
+            f"Cross-session detection still works, but parent caller "
+            f"should propagate CLAUDE_SESSION_ID via env for full audit.",
+            file=sys.stderr,
+        )
+
     current_run_entry = {
         "run_id": run_id,
         "command": args.command,
