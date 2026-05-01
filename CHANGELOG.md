@@ -1,6 +1,37 @@
 # Changelog
 
-## v2.45.0 — fail-closed validators + matrix-evidence-link (PR fix/fail-closed-validators-coverage-fabrication)
+## v2.45.0 — `/vg:debug` skill + scanner Tier A-G + fail-closed validators + multi-session race fix (PRs #68–#71)
+
+Bundles 4 dogfood-driven PRs from @vietnhprintway into a single minor release: 2957 insertions, 73 deletions, 22 files. PRs shipped within ~1 hour after v2.44.0 hit `latest`.
+
+| PR | Lines | Summary |
+|---|---|---|
+| #68 | +1/-1 | `crossai-loop` `timezone` import (`NameError` since v2.28.0) |
+| #69 | +344/-29 | Multi-session `run_id` race fix in 4 validators + 9 new tests |
+| #70 | +551/-38 | Fail-closed validators (closes Phase 3.2 dogfood gap — false-PASS) |
+| #71 | +2081/-5 | NEW `/vg:debug` skill + scanner-report-contract + Tier A-G + ÉP enforcement |
+
+### Added — `/vg:debug` skill (PR #71, commit 1)
+Lightweight bug-fix loop alternative to `/vg:review` (3-5 min vs 15-30 min). Natural-language input → auto-classify (static / runtime_ui / network / infra / spec_gap) → fix loop with `AskUserQuestion` (fixed / retry / more-info). Spec gap → auto-routes to `/vg:amend`.
+
+### Added — Scanner-report-contract + Tier A-G capability matrix (PR #71, commit 2)
+NEW `commands/vg/_shared/scanner-report-contract.md` (8 sections: banned vocab, JSON schema with 30+ fields, Tier A-G capability matrix, per-lens defaults). Codifies **discover-only principle**: scanners (CLI/Haiku) report observations only — NEVER verdicts, severity, or prescriptions. Verdict assignment is downstream (orchestrator). Updates `roam.md` + `skills/vg-haiku-scanner/SKILL.md` to consume contract.
+
+### Added — ÉP enforcement (PR #71, commit 3)
+- `scripts/scanner-evidence-capture.js` — captures evidence at scanner output boundary.
+- `scripts/verify-scanner-evidence-completeness.py` — validator that scanner outputs include all required Tier A-G fields per lens.
+
+### Fixed (PR #68) — `crossai-loop` `timezone` import
+- `scripts/vg-build-crossai-loop.py:577` calls `datetime.now(timezone.utc)` but line 53 only imported `datetime` → `NameError: name 'timezone' is not defined` on first invocation.
+- Bug shipped in v2.28.0 when `_resolve_active_run` was added; persisted through v2.44.0. 1-line import fix.
+
+### Fixed (PR #69) — Multi-session `run_id` resolution + `current-run.json` race
+- 4 validators (`build-crossai-required`, `build-graphify-required`, `verify-clean-failure-state`, `verify-artifact-freshness`) read `.vg/current-run.json` raw to determine which `run_id` to evaluate.
+- v2.28.0 introduced `.vg/active-runs/{session_id}.json` as per-session authority; only `vg-build-crossai-loop._resolve_active_run` + `vg-orchestrator.state.read_active_run` had been migrated.
+- Concurrent `/vg:*` sessions: every `run-start` overwrote `current-run.json` → validators evaluated FOREIGN session's `run_id` during `run-complete` → spurious BLOCK on healthy runs.
+- Fix: shared `_resolve_active_run` helper used by all 4 validators; `current-run.json` becomes legacy fallback only. New `tests/test_validator_active_run_resolver.py` (9 tests).
+
+### Fixed (PR #70) — Fail-closed validators
 
 Closes the largest dogfood-found false-positive class to date: validators
 silently passing on format mismatch / regex miss / parse failure. PrintwayV3
