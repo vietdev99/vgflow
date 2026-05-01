@@ -413,12 +413,43 @@ block_resolve_l2_handoff() {
   local phase_dir="${3:-${PHASE_DIR:-.}}"
   local brief="${phase_dir}/.block-resolver-l2-brief.md"
 
-  # Extract proposal fields from JSON result
-  local p_type=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('type','?'))" 2>/dev/null)
-  local p_summary=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('summary',''))" 2>/dev/null)
-  local p_confidence=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('confidence',0))" 2>/dev/null)
-  local p_rationale=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print(p.get('rationale',''))" 2>/dev/null)
-  local p_actions=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "import json,sys; d=json.loads(sys.stdin.read()); p=d.get('proposal',{}); print('\n'.join('- ' + a for a in p.get('suggested_actions',[])))" 2>/dev/null)
+  # Codex-R7 fix: previously extracted only legacy `proposal.rationale` and
+  # `proposal.suggested_actions`. The diagnostic-L2 shape (built at line ~269)
+  # puts the actionable fix under `decision_questions[0].recommendation` and
+  # `decision_questions[0].rationale`. Extract from BOTH shapes so the brief
+  # always shows the architect's recommendation to L3.
+  local extract_py='
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    p = d.get("proposal") or {}
+    out = {
+        "type": p.get("type", "?"),
+        "summary": p.get("summary", ""),
+        "confidence": p.get("confidence", 0),
+        # Legacy shape paths
+        "rationale": p.get("rationale", ""),
+        "actions": p.get("suggested_actions") or [],
+    }
+    # Diagnostic-L2 shape — decision_questions array carries fix
+    dqs = p.get("decision_questions") or []
+    if dqs and isinstance(dqs[0], dict):
+        dq0 = dqs[0]
+        if not out["rationale"]:
+            out["rationale"] = dq0.get("rationale", "")
+        rec = dq0.get("recommendation", "")
+        if rec and rec not in out["actions"]:
+            out["actions"] = [rec] + list(out["actions"])
+    print(json.dumps(out))
+except Exception:
+    print("{}")
+'
+  local extracted=$(echo "$br_result" | ${PYTHON_BIN:-python3} -c "$extract_py" 2>/dev/null)
+  local p_type=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('type','?'))" 2>/dev/null)
+  local p_summary=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))" 2>/dev/null)
+  local p_confidence=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('confidence',0))" 2>/dev/null)
+  local p_rationale=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('rationale',''))" 2>/dev/null)
+  local p_actions=$(echo "$extracted" | ${PYTHON_BIN:-python3} -c "import json,sys; print('\n'.join('- ' + str(a) for a in json.loads(sys.stdin.read()).get('actions',[])))" 2>/dev/null)
 
   # Write brief file for orchestrator Task tool
   cat > "$brief" <<EOF
