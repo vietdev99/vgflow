@@ -61,12 +61,13 @@ runtime_contract:
 
 <rules>
 1. **Run AFTER /vg:test confirmed PASS.** Roam is a janitor, not a primary verifier. Failed-review or failed-test phases skip roam (no point exploring broken app).
-2. **Executor CLI logs only — never judges.** All bug classification happens in step 5 (commander analysis). HARD rule embedded in every CLI brief.
+2. **Executor CLI logs only — never judges.** All bug classification happens in step 5 (commander analysis). HARD rule embedded in every CLI brief. **Conformance contract:** every brief MUST inject `vg:_shared:scanner-report-contract` (banned vocab + report schema). Briefs without the contract block REJECTED at compose time.
 3. **Lens auto-pick by phase profile + entity types** (Q9 default). Manual override via `--lens=`.
 4. **Spec auto-merge is staged** (Q10): roam writes proposed-specs/ but does NOT merge into test suite without `--merge-specs` confirmation.
 5. **Cost guards**: hard cap 50 surfaces × 1 CLI default. Soft cap $10/session via `roam.max_cost_usd` config. Pre-spawn estimator warns + asks confirm if soft cap exceeded.
 6. **Council mode default OFF** (Q8). Enable via `--council` for ship-critical phases.
 7. **Security lens skipped by default** (Q13). `/vg:review` Phase 2.5 owns security probes. Enable via `--include-security` for double-coverage.
+8. **Vocabulary validator** (v2.42.7+): post-aggregate step (4_aggregate_logs) runs grep on observe-*.jsonl for banned tokens (`bug`, `broken`, `critical`, `should fix`, etc — full list in scanner-report-contract.md). Hits → tag report `vocabulary_violation: true`, commander deprioritizes during step 5 analysis but still consumes (partial signal > no signal).
 </rules>
 
 <step name="0_parse_and_validate">
@@ -956,6 +957,31 @@ done
 EVENT_COUNT=$(wc -l < "${ROAM_DIR}/RAW-LOG.jsonl" 2>/dev/null | tr -d ' ' || echo 0)
 EXEC_COUNT=$(find "${ROAM_MODEL_DIRS[@]}" -maxdepth 1 -name "observe-*.jsonl" 2>/dev/null | wc -l | tr -d ' ')
 echo "▸ Aggregated ${EVENT_COUNT} events from ${EXEC_COUNT} executor output(s) across ${#ROAM_MODEL_DIRS[@]} model dir(s)"
+
+# v2.42.9+ — Evidence completeness validator (HARD gate per scanner-report-contract)
+# Rejects observations missing required tier fields. Output tagged for commander.
+echo ""
+echo "▸ Evidence completeness check (rule: REQUIRED fields per tier — empty/null OK, missing = reject)"
+COMPLIANCE_OUT="${ROAM_DIR}/evidence-compliance.json"
+for MODEL_DIR in "${ROAM_MODEL_DIRS[@]}"; do
+  "${PYTHON_BIN:-python3}" .claude/scripts/verify-scanner-evidence-completeness.py \
+    --jsonl-glob "${MODEL_DIR}/observe-*.jsonl" \
+    --lens-from-filename \
+    --threshold "${ROAM_EVIDENCE_THRESHOLD:-80}" \
+    --output "${COMPLIANCE_OUT}" 2>&1 | tail -10
+  COMPL_RC=$?
+  if [ $COMPL_RC -eq 1 ]; then
+    echo "⛔ Evidence completeness BLOCK — see ${COMPLIANCE_OUT}"
+    if [[ ! "${ARGUMENTS}" =~ --skip-evidence-completeness ]]; then
+      echo "   Override (NOT recommended): /vg:roam ${PHASE_NUMBER} --skip-evidence-completeness"
+      echo "   Recommended: re-run scanner — it produced too many incomplete observations."
+      exit 1
+    fi
+    echo "⚠ --skip-evidence-completeness set — proceeding with partial evidence"
+  elif [ $COMPL_RC -eq 2 ]; then
+    echo "⚠ Evidence completeness WARN — partial coverage, commander will deprioritize"
+  fi
+done
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "4_aggregate_logs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/4_aggregate_logs.done"
 ```

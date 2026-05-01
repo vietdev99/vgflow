@@ -341,6 +341,71 @@ review:
     escalate_on_critical_domain: true   # touches critical_goal_domains → always escalate
     max_iterations: 3                   # max fix iterations before giving up (3-strike rule)
 
+# === Scanner evidence config (v2.42.8+) ========================
+# Per scanner-report-contract.md (vg:_shared:scanner-report-contract).
+# Project-specific selectors for evidence capture by Haiku scanners,
+# roam workers, /vg:debug discovery agent. Defaults apply if unset.
+#
+# Helper file: .claude/scripts/scanner-evidence-capture.js (21 snippets)
+scanner_evidence:
+  # ─── Tier A — Toast detection ─────────────────────────────────────────
+  # Selectors used by captureToast to detect toast/notification banners.
+  # Scanner picks first match. Defaults cover Sonner, react-hot-toast,
+  # react-toastify, Radix, Shadcn, antd, MUI. Add project-specific
+  # selectors here (highest priority — overrides library defaults).
+  toast:
+    selectors: []
+      # - "[data-testid=app-toast]"
+      # - ".my-toast-container > div"
+
+  # ─── Tier B — Form / row count selectors ─────────────────────────────
+  form:
+    submit_button_selector: "button[type=submit], [data-action=submit]"
+    list_row_selectors:
+      - "table tbody tr"
+      - "[role=grid] [role=row]"
+      - "[data-list-row]"
+
+  # ─── Tier C — Auth state heuristic ───────────────────────────────────
+  # Selectors that, if present, indicate authenticated session.
+  # captureAuthStateHeuristic checks each in order.
+  auth:
+    user_menu_selectors:
+      - "[data-user-menu]"
+      - "[data-testid=user-menu]"
+      - ".user-avatar"
+      - "[aria-label*=account i]"
+    login_url_pattern: "/login"
+
+  # ─── Tier D — Realtime instrumentation key ───────────────────────────
+  realtime:
+    ws_log_window_key: "__vg_ws_log"     # window.<key> = [] for app to populate
+    polling_url_patterns:                # endpoints scanner treats as polling
+      - "/api/v1/me/notifications/unread-count"
+      - "/api/v1/health"
+
+  # ─── Tier E — A11y limits ────────────────────────────────────────────
+  a11y:
+    snapshot_max_lines: 100              # trim browser_snapshot to N lines
+    tab_order_max: 30                    # capture first N focusable
+
+  # ─── Tier F — Storage / store snapshot ───────────────────────────────
+  storage:
+    store_window_key: "__VG_STORE__"     # Zustand/Redux dev-exposed store key
+    storage_keys_only: true              # MUST stay true — never log values
+
+  # ─── Per-platform tier defaults ──────────────────────────────────────
+  platform:
+    web:
+      tier_default: "A,B,E"              # Haiku scanner default
+      tier_optin: "C,F"                  # via lens config
+    mobile:
+      tier_default: "A,G"                # Maestro
+      tier_optin: "E"
+    api_only:
+      tier_default: "A,C"                # curl scanner
+      tier_optin: ""
+
 # === Design System (v1.10.0 R4 — NEW) ==========================
 # Integrates getdesign.md ecosystem DESIGN.md (58 brand variants: Stripe,
 # Linear, Vercel, Apple, Ferrari, BMW, Claude, Cursor, ...).
