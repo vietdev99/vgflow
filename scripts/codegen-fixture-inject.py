@@ -131,9 +131,21 @@ def _is_safe_to_substitute(value: str) -> bool:
     return False
 
 
+_VALID_TS_IDENT_RE = re.compile(r"^[a-zA-Z_$][\w$]*$")
+
+
+def _fixture_ref(key: str) -> str:
+    """Render `FIXTURE.<key>` or `FIXTURE["<key>"]` depending on whether
+    `key` is a valid TS identifier (Codex-MEDIUM-2 fix)."""
+    if _VALID_TS_IDENT_RE.match(key):
+        return f"FIXTURE.{key}"
+    # Non-identifier (hyphen, space, starts with digit, etc.) → bracket notation
+    return f'FIXTURE[{json.dumps(key)}]'
+
+
 def substitute_literals(text: str, captured: dict) -> tuple[str, int]:
     """Replace exact-quoted-string occurrences of captured values with
-    FIXTURE.<name> references.
+    FIXTURE.<name> (or FIXTURE["<name>"] for non-identifier keys) refs.
 
     Conservative: only substitutes inside quoted strings ("..." or '...'
     or `...`), never bare identifiers. Skips substitution inside the
@@ -161,11 +173,12 @@ def substitute_literals(text: str, captured: dict) -> tuple[str, int]:
         for key, value in captured.items():
             if not _is_safe_to_substitute(value):
                 continue
+            ref = _fixture_ref(str(key))  # Codex-MEDIUM-2: bracket if non-identifier
             # Match value inside double, single, or backtick quotes
             patterns = [
-                (re.compile('"' + re.escape(value) + '"'), f'FIXTURE.{key}'),
-                (re.compile("'" + re.escape(value) + "'"), f'FIXTURE.{key}'),
-                (re.compile('`' + re.escape(value) + '`'), f'String(FIXTURE.{key})'),
+                (re.compile('"' + re.escape(value) + '"'), ref),
+                (re.compile("'" + re.escape(value) + "'"), ref),
+                (re.compile('`' + re.escape(value) + '`'), f'String({ref})'),
             ]
             for pat, repl in patterns:
                 part, n = pat.subn(repl, part)
@@ -229,16 +242,31 @@ def inject_into_spec(
 
 
 def find_specs_for_phase(sweep_dir: Path, phase: str) -> list[tuple[str, Path]]:
-    """Return [(goal_id, spec_path)] for all specs naming a goal under sweep_dir."""
+    """Return [(goal_id, spec_path)] for all specs naming a goal under sweep_dir.
+
+    Recognized filename patterns (case-insensitive on goal_id):
+    - {anything}-{G-XX}.spec.ts                   — goal-based codegen
+    - {anything}-{g-xx}.spec.ts                   — interactive codegen lowercase
+    - {anything}-{G-XX}.url-state.spec.ts         — interactive subtype
+    - auto-{g-xx-slug}.spec.ts                    — auto-emitted skeletons
+    """
     out: list[tuple[str, Path]] = []
     if not sweep_dir.exists():
         return out
-    # Common patterns: {phase}-goal-{G-XX}.spec.ts, {G-XX}.spec.ts, {phase}.{G-XX}.spec.ts
-    pattern = re.compile(r"(G-[\w.-]+)\.spec\.ts$")
+    # Codex-MEDIUM-1 fix: case-insensitive G- prefix + tolerate
+    # `.url-state.spec.ts` and other suffix variants.
+    pattern = re.compile(
+        r"(?i)\b(G-[\w.-]+?)(?:\.url-state)?\.spec\.ts$",
+    )
     for spec in sorted(sweep_dir.rglob("*.spec.ts")):
         m = pattern.search(spec.name)
         if m:
-            out.append((m.group(1), spec))
+            # Normalize goal_id to canonical uppercase form so cache lookup
+            # works regardless of filename casing.
+            goal_id = m.group(1)
+            head, _, tail = goal_id.partition("-")
+            normalized = head.upper() + ("-" + tail if tail else "")
+            out.append((normalized, spec))
     return out
 
 

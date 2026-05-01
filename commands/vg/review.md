@@ -1622,22 +1622,36 @@ scanner so we fail fast on broken sandbox state instead of burning Haiku
 tokens on a doomed scan.
 
 ```bash
-# RFC v9 preflight — best-effort, skip silently if scripts/runtime missing
+# RFC v9 preflight — Codex-HIGH-5-ter fix: outer guard checks scripts/runtime
+# only. The inner gates check their own artifacts (ENV-CONTRACT.md for
+# invariants, FIXTURES/ for RCRURD). Previously the outer guard required
+# BOTH scripts/runtime AND ENV-CONTRACT, so a phase with FIXTURES+lifecycle
+# but no ENV-CONTRACT skipped RCRURD entirely.
 PRE_OK=1
-if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
-  echo ""
-  echo "━━━ Phase 0.5 — RFC v9 preflight ━━━"
+if [ -d "${REPO_ROOT}/scripts/runtime" ]; then
+  RFC_V9_GATE_RAN=0
+  # Only echo the banner once when at least one gate has work to do
+  HAS_INVARIANTS_FILE=0
+  HAS_FIXTURES_DIR=0
+  [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ] && HAS_INVARIANTS_FILE=1
+  [ -d "${PHASE_DIR}/FIXTURES" ] && HAS_FIXTURES_DIR=1
+  if [ "$HAS_INVARIANTS_FILE" = "1" ] || [ "$HAS_FIXTURES_DIR" = "1" ]; then
+    echo ""
+    echo "━━━ Phase 0.5 — RFC v9 preflight ━━━"
 
-  # 1. Reap expired leases + orphans (PR-F)
-  if [ -f "${REPO_ROOT}/scripts/fixture-prune.py" ]; then
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/fixture-prune.py" \
-      --phase "$PHASE_NUMBER" --apply --skip-orphans 2>&1 | sed 's/^/  prune: /'
-  fi
+    # 1. Reap expired leases + orphans (PR-F) — only if FIXTURES exist
+    if [ "$HAS_FIXTURES_DIR" = "1" ] && [ -f "${REPO_ROOT}/scripts/fixture-prune.py" ]; then
+      "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/fixture-prune.py" \
+        --phase "$PHASE_NUMBER" --apply --skip-orphans 2>&1 | sed 's/^/  prune: /'
+    fi
+
+    # Codex-HIGH-1-ter fix: delete stale snapshot at entry. Otherwise post
+    # mode at run-complete may load a snapshot from a PRIOR run.
+    rm -f "${PHASE_DIR}/.rcrurd-pre-snapshot.json" 2>/dev/null || true
+  fi  # end OR guard (banner + prune + snapshot reset)
 
   # 2. data_invariants N-consumer check (PR-C, live HTTP wiring stub-1 fix)
-  # Calls scripts/preflight-invariants.py which authenticates per credentials_map
-  # and counts entities via api_index. BLOCK exits the skill so we don't burn
-  # Haiku tokens on a doomed scan.
+  # Codex-HIGH-5-ter: guarded by ENV-CONTRACT.md only — independent of FIXTURES.
   if [ -f "${REPO_ROOT}/scripts/preflight-invariants.py" ] && \
      [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
     # Resolve base_url from config (sandbox env section)
@@ -1721,9 +1735,14 @@ for g in d.get("gaps", []):
      [ -d "${PHASE_DIR}/FIXTURES" ]; then
     PRE_BASE_RC="${PRE_BASE:-${VG_BASE_URL:-}}"
     if [ -n "$PRE_BASE_RC" ]; then
+      # Codex-HIGH-1-ter fix: capture snapshot in the SAME pre-mode call
+      # (not a follow-up). The snapshot is read by post-mode at run-complete
+      # to compute increased_by_at_least deltas against real pre-action state.
+      RCRURD_SNAP="${PHASE_DIR}/.rcrurd-pre-snapshot.json"
       RCRURD_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
         --phase "$PHASE_NUMBER" --base-url "$PRE_BASE_RC" \
-        --severity "${VG_RCRURD_SEVERITY:-block}" 2>&1)
+        --severity "${VG_RCRURD_SEVERITY:-block}" \
+        --capture-snapshot "$RCRURD_SNAP" 2>&1)
       RCRURD_RC=$?
       echo "  RCRURD pre_state: $(echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
 import json, sys
@@ -1771,18 +1790,22 @@ for r in d.get("results", []):
         exit 1
       fi
 
-      # Codex-HIGH-1-bis fix: persist pre_state snapshot so post mode
-      # (final gate after Phase 4) can compute increased_by_at_least
-      # deltas correctly. Without this, post mode samples pre AFTER
-      # action ran → both reads are post-action → delta=0 false-fail.
-      if [ "$RCRURD_RC" -eq 0 ]; then
-        # Re-fetch pre_state payload and stash to .rcrurd-pre-snapshot.json
-        # for post-mode reuse. Best-effort; missing snapshot just means
-        # post mode will skip increased_by_at_least assertions.
-        "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
-          --phase "$PHASE_NUMBER" --base-url "$PRE_BASE_RC" \
-          --severity warn --capture-snapshot "${PHASE_DIR}/.rcrurd-pre-snapshot.json" \
-          >/dev/null 2>&1 || true
+      # Codex-HIGH-1-ter fix: validate snapshot was captured. If pre-mode
+      # passed assertions but snapshot file missing, post-mode delta
+      # assertions will be wrong. Block if any fixture declares an
+      # increased_by_at_least assertion (those NEED snapshot).
+      if [ "$RCRURD_RC" -eq 0 ] && [ -d "${PHASE_DIR}/FIXTURES" ]; then
+        NEEDS_SNAPSHOT=$(grep -lE 'increased_by_at_least|decreased_by_at_least' \
+          "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$NEEDS_SNAPSHOT" -gt 0 ] && [ ! -f "$RCRURD_SNAP" ]; then
+          echo "⛔ Phase 0.5 RCRURD setup error — pre-state snapshot not"
+          echo "   captured but ${NEEDS_SNAPSHOT} fixture(s) declare delta"
+          echo "   assertions (increased_by_at_least / decreased_by_at_least)."
+          echo "   Without snapshot, post-mode would compare post-action to"
+          echo "   post-action → delta=0 false-fail."
+          "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+          exit 1
+        fi
       fi
     else
       # Codex-HIGH-5-bis: missing base_url + FIXTURES with lifecycle = setup error
@@ -6174,6 +6197,17 @@ if [ "$HAS_POST_LIFECYCLE" -gt 0 ] && [ -z "$POST_BASE_RC" ] && \
 fi
 if [ -f "${REPO_ROOT}/scripts/rcrurd-preflight.py" ] && \
    [ -d "${PHASE_DIR}/FIXTURES" ] && [ -n "$POST_BASE_RC" ]; then
+  # Codex-HIGH-1-ter fix: snapshot must exist when delta assertions present
+  POST_NEEDS_SNAP=$(grep -lE 'increased_by_at_least|decreased_by_at_least' \
+    "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$POST_NEEDS_SNAP" -gt 0 ] && [ ! -f "${PHASE_DIR}/.rcrurd-pre-snapshot.json" ] && \
+     [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
+    echo "⛔ RCRURD post_state — pre-snapshot missing but ${POST_NEEDS_SNAP}"
+    echo "   fixture(s) declare delta assertions. Pre-mode at Phase 0.5"
+    echo "   should have captured it. Re-run /vg:review from scratch."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
   POST_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
     --phase "$PHASE_NUMBER" --base-url "$POST_BASE_RC" \
     --mode post --severity "${VG_RCRURD_POST_SEVERITY:-block}" \

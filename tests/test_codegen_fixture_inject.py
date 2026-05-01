@@ -338,6 +338,88 @@ def test_substitute_disabled_by_default(tmp_path):
     assert "'p7e9-distinct-uuid-value'" in body  # NOT substituted
 
 
+def test_sweep_finds_url_state_interactive_specs(tmp_path):
+    """Codex-MEDIUM-1: interactive codegen emits g-10.url-state.spec.ts.
+    Sweep must detect those (lowercase + .url-state suffix)."""
+    _phase_with_cache(tmp_path, "01.0-x", {
+        "G-10": {"captured": {"id": "p1"}},
+    })
+    e2e = tmp_path / "e2e"
+    e2e.mkdir()
+    (e2e / "g-10.url-state.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n", encoding="utf-8",
+    )
+    result = _run(tmp_path, "--phase", "1.0", "--sweep", str(e2e))
+    out = json.loads(result.stdout)
+    assert len(out["injected"]) == 1
+    assert "VGFLOW_FIXTURE_INJECTED" in (e2e / "g-10.url-state.spec.ts").read_text()
+
+
+def test_sweep_finds_lowercase_goal_id_in_filename(tmp_path):
+    """Codex-MEDIUM-1: goal_id may appear lowercase in filename."""
+    _phase_with_cache(tmp_path, "01.0-x", {
+        "G-10": {"captured": {"id": "p1"}},
+    })
+    e2e = tmp_path / "e2e"
+    e2e.mkdir()
+    (e2e / "auto-g-10.spec.ts").write_text("test('x');\n", encoding="utf-8")
+    result = _run(tmp_path, "--phase", "1.0", "--sweep", str(e2e))
+    out = json.loads(result.stdout)
+    assert len(out["injected"]) == 1
+
+
+def test_substitute_uses_bracket_notation_for_non_identifier_keys(tmp_path):
+    """Codex-MEDIUM-2: 'pending-id' is not a valid TS identifier (hyphen).
+    Substitution must emit FIXTURE['pending-id'], not FIXTURE.pending-id."""
+    _phase_with_cache(tmp_path, "01.0-x", {
+        "G-10": {"captured": {
+            "pending-id": "p7e9-distinct-uuid-value",
+            "valid_id": "another-distinct-value",
+        }},
+    })
+    spec = tmp_path / "test.spec.ts"
+    spec.write_text(
+        "test('x', async () => {\n"
+        "  use('p7e9-distinct-uuid-value');\n"
+        "  use('another-distinct-value');\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
+          "--spec", str(spec), "--substitute")
+    text = spec.read_text()
+    body = text.split("VGFLOW_FIXTURE_INJECTED_END", 1)[1]
+    # Non-identifier → bracket notation
+    assert 'FIXTURE["pending-id"]' in body
+    # Identifier → dot notation
+    assert "FIXTURE.valid_id" in body
+    # Invalid TS does NOT appear
+    assert "FIXTURE.pending-id" not in body
+
+
+def test_substitute_handles_keys_with_special_chars(tmp_path):
+    _phase_with_cache(tmp_path, "01.0-x", {
+        "G-10": {"captured": {
+            "with space": "long-distinctive-string-value",
+            "1leading-digit": "another-long-string-value",
+        }},
+    })
+    spec = tmp_path / "test.spec.ts"
+    spec.write_text(
+        "test('x', async () => {\n"
+        "  use('long-distinctive-string-value');\n"
+        "  use('another-long-string-value');\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _run(tmp_path, "--phase", "1.0", "--goal", "G-10",
+          "--spec", str(spec), "--substitute")
+    text = spec.read_text()
+    body = text.split("VGFLOW_FIXTURE_INJECTED_END", 1)[1]
+    assert 'FIXTURE["with space"]' in body
+    assert 'FIXTURE["1leading-digit"]' in body
+
+
 def test_arg_validation(tmp_path):
     # Missing --goal/--spec/--sweep
     r1 = _run(tmp_path, "--phase", "1.0")

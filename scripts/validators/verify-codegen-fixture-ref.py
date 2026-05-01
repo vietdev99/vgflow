@@ -35,8 +35,13 @@ except ImportError:
     cache_load = None  # type: ignore[assignment]
 
 
-SPEC_PATTERN = re.compile(r"(G-[\w.-]+)\.spec\.ts$")
-FIXTURE_REF_RE = re.compile(r"\bFIXTURE\.[a-zA-Z_$][\w$]*\b")
+# Codex-MEDIUM-1 fix: support interactive (`.url-state.spec.ts`) and
+# lowercase goal IDs in spec filenames.
+SPEC_PATTERN = re.compile(r"(?i)\b(G-[\w.-]+?)(?:\.url-state)?\.spec\.ts$")
+# Codex-MEDIUM-2: also detect bracket-notation references (FIXTURE["x"])
+FIXTURE_REF_RE = re.compile(
+    r"\bFIXTURE(?:\.[a-zA-Z_$][\w$]*|\[(?:'[^']*'|\"[^\"]*\")\])"
+)
 
 
 def find_specs(tests_dir: Path) -> dict[str, Path]:
@@ -46,7 +51,11 @@ def find_specs(tests_dir: Path) -> dict[str, Path]:
     for spec in sorted(tests_dir.rglob("*.spec.ts")):
         m = SPEC_PATTERN.search(spec.name)
         if m:
-            out[m.group(1)] = spec
+            # Normalize to canonical uppercase G-XX
+            goal_id = m.group(1)
+            head, _, tail = goal_id.partition("-")
+            normalized = head.upper() + ("-" + tail if tail else "")
+            out[normalized] = spec
     return out
 
 

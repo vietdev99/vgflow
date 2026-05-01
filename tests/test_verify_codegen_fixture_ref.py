@@ -106,6 +106,30 @@ def test_warn_severity_does_not_block(tmp_path):
     assert "severity_downgraded" in types
 
 
+def test_url_state_spec_recognized(tmp_path):
+    """Codex-MEDIUM-1: validator must find interactive specs."""
+    _make_phase(tmp_path, {
+        "G-10": {"captured": {"id": "p1"}},
+    })
+    e2e = tmp_path / "apps" / "web" / "e2e"
+    _spec(e2e, "g-10.url-state.spec.ts",
+          "test('x', () => { console.log(FIXTURE.id); });\n")
+    result = _run(tmp_path, "--phase", "1.0", "--tests-dir", "apps/web/e2e")
+    assert result.returncode == 0  # interactive spec recognized + has FIXTURE.*
+
+
+def test_bracket_notation_recognized_as_fixture_ref(tmp_path):
+    """Codex-MEDIUM-2: FIXTURE['x'] should count as a fixture reference."""
+    _make_phase(tmp_path, {
+        "G-10": {"captured": {"id": "p1"}},
+    })
+    e2e = tmp_path / "apps" / "web" / "e2e"
+    _spec(e2e, "1.0-G-10.spec.ts",
+          'test("x", () => { use(FIXTURE["pending-id"]); });\n')
+    result = _run(tmp_path, "--phase", "1.0", "--tests-dir", "apps/web/e2e")
+    assert result.returncode == 0
+
+
 def test_allow_no_fixture_ref_override(tmp_path):
     _make_phase(tmp_path, {
         "G-10": {"captured": {"id": "p1"}},
