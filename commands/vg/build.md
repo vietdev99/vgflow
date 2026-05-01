@@ -2773,10 +2773,12 @@ except Exception:
 
   # RFC v9 PR-B: fixture wave-verify — every mutation goal touched by this
   # wave must have FIXTURES/{G-XX}.yaml. Fixture parses against
-  # fixture-recipe.v1.json. Failure → BLOCK with /vg:fixture-backfill hint.
+  # fixture-recipe.v1.json. Codex-HIGH-2 fix: BLOCKS on missing/parse-error
+  # (was non-blocking with `|| echo`). Override via --allow-missing-fixtures
+  # logs override-debt.
   if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
-    "${PYTHON_BIN:-python3}" - <<'FIX_VERIFY' || echo "  ⚠ fixture wave-verify failed (non-blocking; queue for D14 strict-mode)"
-import os, re, sys
+    FIX_VERIFY_OUT=$("${PYTHON_BIN:-python3}" - 2>&1 <<'FIX_VERIFY'
+import json, os, re, sys
 from pathlib import Path
 sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
 phase_dir = Path(os.environ["PHASE_DIR"])
@@ -2784,7 +2786,6 @@ test_goals = phase_dir / "TEST-GOALS.md"
 fixtures_dir = phase_dir / "FIXTURES"
 text = test_goals.read_text(encoding="utf-8")
 
-# Find mutation goals (have non-empty Mutation evidence)
 goals = []
 for m in re.finditer(
     r"^##\s+Goal\s+(G-[\w.-]+):?\s*(.*?)$"
@@ -2808,20 +2809,52 @@ for gid in goals:
         from runtime.recipe_loader import load_recipe
         load_recipe(yaml_path)
     except Exception as e:
-        parse_errors.append((gid, str(e)[:100]))
+        parse_errors.append((gid, str(e)[:120]))
 
-if missing or parse_errors:
-    print(f"  ⚠ fixture wave-verify: {len(missing)} missing, {len(parse_errors)} parse-error")
-    for gid in missing[:5]:
-        print(f"    missing: FIXTURES/{gid}.yaml")
-    for gid, err in parse_errors[:3]:
-        print(f"    parse-error: {gid}: {err}")
-    if missing:
-        print(f"  Hint: scripts/fixture-backfill.py --phase {os.environ['PHASE_NUMBER']} --apply")
-else:
-    if goals:
-        print(f"  ✓ fixture wave-verify: {len(goals)}/{len(goals)} mutation recipes present + valid")
+print(json.dumps({
+    "total": len(goals),
+    "missing": missing,
+    "parse_errors": [{"gid": g, "err": e} for g, e in parse_errors],
+}))
 FIX_VERIFY
+)
+    FIX_TOTAL=$(echo "$FIX_VERIFY_OUT" | "${PYTHON_BIN:-python3}" -c "import json,sys; print(json.loads(sys.stdin.read()).get('total',0))" 2>/dev/null || echo 0)
+    FIX_MISSING=$(echo "$FIX_VERIFY_OUT" | "${PYTHON_BIN:-python3}" -c "import json,sys; print(len(json.loads(sys.stdin.read()).get('missing',[])))" 2>/dev/null || echo 0)
+    FIX_PARSE_ERR=$(echo "$FIX_VERIFY_OUT" | "${PYTHON_BIN:-python3}" -c "import json,sys; print(len(json.loads(sys.stdin.read()).get('parse_errors',[])))" 2>/dev/null || echo 0)
+
+    if [ "$FIX_MISSING" -gt 0 ] || [ "$FIX_PARSE_ERR" -gt 0 ]; then
+      echo "  ⛔ fixture wave-verify: ${FIX_MISSING} missing, ${FIX_PARSE_ERR} parse-error"
+      echo "$FIX_VERIFY_OUT" | "${PYTHON_BIN:-python3}" -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+for gid in d.get('missing', [])[:5]:
+    print(f'    missing: FIXTURES/{gid}.yaml')
+for e in d.get('parse_errors', [])[:3]:
+    print(f'    parse-error: {e[\"gid\"]}: {e[\"err\"]}')"
+      echo "  Fix path:"
+      echo "    1. scripts/fixture-backfill.py --phase ${PHASE_NUMBER} --apply"
+      echo "    2. Review/edit FIXTURES/{G-XX}.yaml drafts"
+      echo "    3. Re-run /vg:build ${PHASE_NUMBER}"
+      echo "    4. Override (creates debt): /vg:build ${PHASE_NUMBER} --allow-missing-fixtures"
+
+      if [[ ! "$ARGUMENTS" =~ --allow-missing-fixtures ]]; then
+        type -t emit_telemetry_v2 >/dev/null 2>&1 && emit_telemetry_v2 \
+          "build_fixture_wave_verify_blocked" "$PHASE_NUMBER" "build.wave-${N}.fixture-verify" \
+          "fixture-wave-verify" "BLOCK" \
+          "{\"missing\":${FIX_MISSING},\"parse_errors\":${FIX_PARSE_ERR}}"
+        FAILED_GATE="fixture-wave-verify"
+        echo "wave-${N}: FAILED (fixture-wave-verify, retries: ${RETRY_COUNT})" \
+          >> "${PHASE_DIR}/build-state.log"
+      else
+        type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
+          "--allow-missing-fixtures" "$PHASE_NUMBER" "build.wave-${N}.fixture-verify" \
+          "missing/parse-error fixtures accepted by user" \
+          "build-wave-${N}-fixture-verify"
+        echo "  ⚠ override accepted via --allow-missing-fixtures"
+      fi
+    elif [ "$FIX_TOTAL" -gt 0 ]; then
+      echo "  ✓ fixture wave-verify: ${FIX_TOTAL}/${FIX_TOTAL} mutation recipes present + valid"
+    fi
   fi
 fi
 ```

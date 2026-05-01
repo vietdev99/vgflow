@@ -1472,53 +1472,67 @@ Display:
 
 Generate Playwright test files from VERIFIED goals. Assertions come from TEST-GOALS success criteria, navigation paths come from RUNTIME-MAP.json observations, and CRUD list/form/delete/security expectations come from CRUD-SURFACES.md when present.
 
-**RFC v9 PR-E — fixture-aware codegen (NEW, 2026-05-02):**
+**RFC v9 PR-E — fixture-aware codegen (Codex-HIGH-3 fix — REAL injection):**
 
-When `FIXTURES/{G-XX}.yaml` exists for a goal, the codegen wraps the
-spec with a beforeAll hook that loads the captured store from
-`FIXTURES-CACHE.json` and injects values into the test as constants.
-This means deterministic IDs (`pending_id`, `merchant_id`, etc.) flow
-from the recipe's last successful run into the Playwright assertion
-without re-running mutations that the recipe already exercised.
-
-```bash
-# Best-effort: skip when scripts/runtime/ not present (v2.46 phases)
-if [ -d "${REPO_ROOT}/scripts/runtime" ]; then
-  CACHE_PATH="${PHASE_DIR}/FIXTURES-CACHE.json"
-  if [ -f "$CACHE_PATH" ]; then
-    "${PYTHON_BIN:-python3}" - <<'INJECT' || true
-import json, os, sys
-from pathlib import Path
-cache_path = Path(os.environ["PHASE_DIR"]) / "FIXTURES-CACHE.json"
-try:
-    data = json.loads(cache_path.read_text(encoding="utf-8"))
-    entries = data.get("entries") or {}
-    n = len([g for g in entries if entries[g].get("captured")])
-    print(f"  ✓ FIXTURES-CACHE: {n} goal(s) carry captured store for codegen injection")
-except Exception as e:
-    print(f"  ⚠ FIXTURES-CACHE parse error: {e}")
-INJECT
-  fi
-fi
-```
-
-Codegen template emits (when goal has fixture-cache entry):
+After codegen writes `.spec.ts` files, invoke
+`scripts/codegen-fixture-inject.py` in sweep mode. For every goal in
+`FIXTURES-CACHE.json` with a `captured` store, the script walks the
+generated tests dir, finds matching `*-{G-XX}.spec.ts` files, and
+prepends:
 
 ```ts
-// Generated from FIXTURES-CACHE.json — recipe-captured values
+// VGFLOW_FIXTURE_INJECTED — DO NOT EDIT BELOW UNTIL CLOSE
+// goal: G-10, phase: 3.2
+// Source: FIXTURES-CACHE.json captured store from last review run.
+// Edit FIXTURES/G-10.yaml + re-run /vg:review to regenerate.
 const FIXTURE = {
   pending_id: "p7e9-2026-05-02",
   amount: 0.01,
-};
-test("G-10 approve topup", async ({ page }) => {
-  await page.goto(`/admin/topup/${FIXTURE.pending_id}`);
-  // ...
-});
+} as const;
+// VGFLOW_FIXTURE_INJECTED_END
 ```
 
-Validators check that codegen output for a fixture-backed goal references
-`FIXTURE.*` constants, not hard-coded IDs from RUNTIME-MAP — drift between
-recipe and test is now a CI-detectable signal.
+Idempotent: re-injecting REPLACES the existing block, never stacks.
+Drift detector `verify-codegen-fixture-ref.py` BLOCKs at /vg:test exit
+if a fixture-backed goal's spec doesn't reference `FIXTURE.*`.
+
+```bash
+if [ -f "${REPO_ROOT}/scripts/codegen-fixture-inject.py" ] && \
+   [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
+  echo "▸ RFC v9 codegen fixture inject (sweep mode)"
+  INJECT_OUT=$("${PYTHON_BIN:-python3}" \
+    "${REPO_ROOT}/scripts/codegen-fixture-inject.py" \
+    --phase "$PHASE_NUMBER" \
+    --sweep "${GENERATED_TESTS_DIR:-apps/web/e2e}" 2>&1)
+  echo "$INJECT_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    inj = len(d.get("injected", []))
+    skp = len(d.get("skipped", []))
+    err = len(d.get("errors", []))
+    print(f"  ✓ injected={inj}, skipped={skp}, errors={err}")
+except: print("  ⚠ inject parse-error")'
+fi
+```
+
+Then validate at run-complete:
+
+```bash
+CGFR_VAL=".claude/scripts/validators/verify-codegen-fixture-ref.py"
+if [ -f "$CGFR_VAL" ] && [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
+  CGFR_FLAGS="--severity ${VG_CODEGEN_FIXTURE_SEVERITY:-block}"
+  [[ "${ARGUMENTS}" =~ --allow-no-fixture-ref ]] && CGFR_FLAGS="$CGFR_FLAGS --allow-no-fixture-ref"
+  "${PYTHON_BIN:-python3}" "$CGFR_VAL" --phase "$PHASE_NUMBER" \
+    --tests-dir "${GENERATED_TESTS_DIR:-apps/web/e2e}" $CGFR_FLAGS
+  CGFR_RC=$?
+  if [ "$CGFR_RC" -ne 0 ] && [ "${VG_CODEGEN_FIXTURE_SEVERITY:-block}" = "block" ]; then
+    echo "⛔ Codegen fixture-ref gate failed — fixture-backed goals' specs"
+    echo "   are missing FIXTURE.* references. Re-run codegen + inject."
+    exit 1
+  fi
+fi
+```
 
 
 

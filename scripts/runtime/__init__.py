@@ -46,9 +46,16 @@ from .preflight import (
 from .recipe_loader import load_recipe, ValidationError
 from .recipe_capture import capture_paths, CaptureError
 from .recipe_interpolate import interpolate, InterpolationError
-from .recipe_safety import assert_step_safe, SandboxSafetyError, is_sentinel_value
+from .recipe_safety import (
+    SandboxEchoMissingError,
+    SandboxSafetyError,
+    assert_response_echo,
+    assert_step_safe,
+    assert_url_in_allowlist,
+    is_sentinel_value,
+)
 from .recipe_auth import authenticate, AuthContext, AuthError
-from .recipe_executor import RecipeRunner, RecipeExecutionError
+from .recipe_executor import AuthDegradedError, RecipeRunner, RecipeExecutionError
 
 __all__ = [
     "load_recipe",
@@ -58,8 +65,12 @@ __all__ = [
     "interpolate",
     "InterpolationError",
     "assert_step_safe",
+    "assert_url_in_allowlist",
+    "assert_response_echo",
     "SandboxSafetyError",
+    "SandboxEchoMissingError",
     "is_sentinel_value",
+    "AuthDegradedError",
     "authenticate",
     "AuthContext",
     "AuthError",

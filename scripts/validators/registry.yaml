@@ -957,9 +957,18 @@ validators:
 
   - id: evidence-provenance
     path: scripts/validators/verify-evidence-provenance.py
-    severity: warn
+    severity: block
     phases_active: [review]
     domain: evidence
     runtime_target_ms: 700
     added_in: v2.46
-    description: 'RFC v9 D10 — every mutation step claiming success (action + 2xx network) must carry structured evidence object {source, artifact_hash, captured_at, schema_version, scanner_run_id|layer2_proposal_id}. Default warn during migration; flip to block via review.provenance.enforcement once /vg:fixture-backfill has run.'
+    description: 'RFC v9 D10 — every mutation step claiming success (action + 2xx network) must carry structured evidence object {source, artifact_hash, captured_at, schema_version, scanner_run_id|layer2_proposal_id}. Codex-HIGH-4 fix: default block. Override via review.provenance.enforcement: warn in vg.config.md OR --allow-legacy-provenance for legacy phases.'
+
+  - id: codegen-fixture-ref
+    path: scripts/validators/verify-codegen-fixture-ref.py
+    severity: block
+    phases_active: [test]
+    domain: evidence
+    runtime_target_ms: 500
+    added_in: v2.46
+    description: 'Codex-HIGH-3 regression guard. When goal has FIXTURES-CACHE.captured but its generated .spec.ts does not reference FIXTURE.* identifiers, codegen-fixture-inject did not run. Override via --allow-no-fixture-ref (override-debt logged).'

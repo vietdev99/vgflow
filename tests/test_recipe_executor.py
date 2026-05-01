@@ -22,7 +22,9 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 # Skip everything if requests not available
 requests = pytest.importorskip("requests")
 
-from runtime.recipe_executor import RecipeRunner, RecipeExecutionError  # noqa: E402
+from runtime.recipe_executor import (  # noqa: E402
+    AuthDegradedError, RecipeRunner, RecipeExecutionError,
+)
 
 
 class RecordingHandler(http.server.BaseHTTPRequestHandler):
@@ -330,4 +332,114 @@ def test_sandbox_safety_blocks_money_without_sentinel(http_server):
                 "idempotency_key": "k1",
                 "body": {"amount": 1000, "merchant": "real-merchant"},
             }],
+        })
+
+
+# ─── Codex-HIGH-7: URL allowlist + response echo ─────────────────────
+
+
+def test_runner_rejects_url_outside_allowlist(http_server):
+    base_url, _, _ = http_server
+    with pytest.raises(RecipeExecutionError, match="NOT in sandbox_url_allowlist"):
+        RecipeRunner(
+            base_url=base_url, env="sandbox",
+            credentials_map={"u": {"kind": "api_key", "key": "k"}},
+            sandbox_url_allowlist=["sandbox.example.com"],  # base_url is 127.0.0.1
+        )
+
+
+def test_runner_accepts_url_in_allowlist(http_server):
+    base_url, _, _ = http_server
+    # base_url is http://127.0.0.1:PORT — allowlist permits 127.0.0.1
+    runner = RecipeRunner(
+        base_url=base_url, env="sandbox",
+        credentials_map={"u": {"kind": "api_key", "key": "k"}},
+        sandbox_url_allowlist=["127.0.0.1"],
+    )
+    assert runner.base_url == base_url
+
+
+def test_runner_response_echo_check_blocks_when_header_missing(http_server):
+    base_url, routes, _ = http_server
+    routes[("GET", "/api/x")] = {"status": 200, "body": {"ok": True}}
+    runner = RecipeRunner(
+        base_url=base_url, env="sandbox",
+        credentials_map={"u": {"kind": "api_key", "key": "k"}},
+        response_echo_check=True,
+    )
+    with pytest.raises(RecipeExecutionError, match="echo handshake"):
+        runner.run({
+            "schema_version": "1.0", "goal": "G-X",
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/api/x"}],
+        })
+
+
+# ─── Codex-B-MEDIUM: PATCH/DELETE idempotency-key ────────────────────
+
+
+def test_patch_carries_idempotency_key(http_server):
+    base_url, routes, log = http_server
+    routes[("PATCH", "/api/x")] = {"status": 200, "body": {}}
+    runner = RecipeRunner(
+        base_url=base_url, env="sandbox",
+        credentials_map={"u": {"kind": "api_key", "key": "k"}},
+    )
+    runner.run({
+        "schema_version": "1.0", "goal": "G-X",
+        "steps": [{
+            "id": "patch", "kind": "api_call", "role": "u",
+            "method": "PATCH", "endpoint": "/api/x",
+            "idempotency_key": "patch-k1",
+            "body": {"x": 1},
+        }],
+    })
+    headers_ci = {k.lower(): v for k, v in log[0]["headers"].items()}
+    assert headers_ci.get("idempotency-key") == "patch-k1"
+
+
+def test_delete_carries_idempotency_key(http_server):
+    base_url, routes, log = http_server
+    routes[("DELETE", "/api/x/1")] = {"status": 204, "body": {}}
+    runner = RecipeRunner(
+        base_url=base_url, env="sandbox",
+        credentials_map={"u": {"kind": "api_key", "key": "k"}},
+    )
+    runner.run({
+        "schema_version": "1.0", "goal": "G-X",
+        "steps": [{
+            "id": "del", "kind": "api_call", "role": "u",
+            "method": "DELETE", "endpoint": "/api/x/1",
+            "idempotency_key": "del-k1",
+        }],
+    })
+    headers_ci = {k.lower(): v for k, v in log[0]["headers"].items()}
+    assert headers_ci.get("idempotency-key") == "del-k1"
+
+
+# ─── Codex-A-MEDIUM: AuthDegradedError typed exception ──────────────
+
+
+def test_auth_degraded_when_refresh_then_401(http_server):
+    """Bearer JWT: refresh succeeds but second response is also 401 →
+    refresh-token expired, surface as AuthDegradedError so caller can
+    re-prompt for credentials."""
+    base_url, routes, _ = http_server
+    routes[("POST", "/auth/token")] = {
+        "status": 200, "body": {"access_token": "jwt-1"},
+    }
+    routes[("GET", "/api/me")] = {"status": 401, "body": {}}
+    runner = RecipeRunner(
+        base_url=base_url, env="sandbox",
+        credentials_map={"u": {
+            "kind": "bearer_jwt",
+            "endpoint": "/auth/token",
+            "body": {"u": "alice"},
+        }},
+    )
+    with pytest.raises(AuthDegradedError, match="refresh succeeded"):
+        runner.run({
+            "schema_version": "1.0", "goal": "G-X",
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/api/me"}],
         })

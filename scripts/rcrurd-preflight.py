@@ -37,7 +37,9 @@ except ImportError:
     print(json.dumps({"verdict": "ERROR", "error": "PyYAML required"}))
     sys.exit(2)
 
-from runtime.rcrurd_gate import run_pre_state, LifecycleGateError  # noqa: E402
+from runtime.rcrurd_gate import (  # noqa: E402
+    LifecycleGateError, run_post_state_with_retry, run_pre_state,
+)
 
 
 def _find_phase_dir(repo: Path, phase: str) -> Path | None:
@@ -86,7 +88,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", required=True)
     ap.add_argument("--base-url", help="Sandbox API root URL (or VG_BASE_URL)")
-    ap.add_argument("--severity", choices=["block", "warn"], default="warn")
+    ap.add_argument("--severity", choices=["block", "warn"], default="block")
+    ap.add_argument("--mode", choices=["pre", "post"], default="pre",
+                    help="pre = pre_state at review entry (default); "
+                         "post = post_state after action (Codex-HIGH-1 wiring)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only", help="Comma-separated goal IDs to check")
     ap.add_argument("--repo-root", default=None)
@@ -127,21 +132,28 @@ def main() -> int:
             plan.append({"goal": gid, "error": "not an object"})
             continue
         lifecycle = recipe.get("lifecycle")
-        if not isinstance(lifecycle, dict) or "pre_state" not in lifecycle:
-            continue  # no pre_state to check
+        if not isinstance(lifecycle, dict):
+            continue
+        # Mode determines which leg of the lifecycle to assert
+        required_key = "pre_state" if args.mode == "pre" else "post_state"
+        if required_key not in lifecycle:
+            continue
         plan.append({"goal": gid, "lifecycle": lifecycle})
 
     if not plan:
+        leg = "pre_state" if args.mode == "pre" else "post_state"
         print(json.dumps({"verdict": "PASS",
-                           "reason": "no fixtures declare pre_state"}))
+                           "reason": f"no fixtures declare {leg}"}))
         return 0
 
     if args.dry_run:
+        leg_key = "pre_state" if args.mode == "pre" else "post_state"
         print(json.dumps({
             "verdict": "DRY_RUN",
+            "mode": args.mode,
             "would_check": [
                 {"goal": p["goal"],
-                 "endpoint": p.get("lifecycle", {}).get("pre_state", {}).get("endpoint")}
+                 "endpoint": p.get("lifecycle", {}).get(leg_key, {}).get("endpoint")}
                 for p in plan if "lifecycle" in p
             ],
             "errors": [p for p in plan if "error" in p],
@@ -204,15 +216,38 @@ def main() -> int:
             failed_count += 1
             continue
         try:
-            res = run_pre_state(entry["goal"], entry["lifecycle"], get_fn)
-            results.append({
-                "goal": res.goal_id,
-                "passed": res.pre_state_passed,
-                "skipped": res.skipped_reason,
-                "errors": res.pre_state_failures,
-            })
-            if not res.pre_state_passed and res.skipped_reason is None:
-                failed_count += 1
+            if args.mode == "pre":
+                res = run_pre_state(entry["goal"], entry["lifecycle"], get_fn)
+                results.append({
+                    "goal": res.goal_id,
+                    "passed": res.pre_state_passed,
+                    "skipped": res.skipped_reason,
+                    "errors": res.pre_state_failures,
+                })
+                if not res.pre_state_passed and res.skipped_reason is None:
+                    failed_count += 1
+            else:  # post
+                # Capture pre_payload for increased_by_at_least delta checks
+                pre_payload = None
+                pre_block = entry["lifecycle"].get("pre_state") or {}
+                if pre_block.get("endpoint") and pre_block.get("role"):
+                    try:
+                        pre_payload = get_fn(pre_block["role"],
+                                              pre_block["endpoint"])
+                    except Exception:
+                        pre_payload = None  # best-effort
+                res = run_post_state_with_retry(
+                    entry["goal"], entry["lifecycle"], get_fn,
+                    pre_payload=pre_payload,
+                )
+                results.append({
+                    "goal": res.goal_id,
+                    "passed": res.post_state_passed,
+                    "skipped": res.skipped_reason,
+                    "errors": res.post_state_failures,
+                })
+                if not res.post_state_passed and res.skipped_reason is None:
+                    failed_count += 1
         except LifecycleGateError as e:
             results.append({"goal": entry["goal"], "passed": False,
                              "errors": [str(e)]})
@@ -221,6 +256,7 @@ def main() -> int:
     if failed_count == 0:
         print(json.dumps({
             "verdict": "PASS",
+            "mode": args.mode,
             "phase": args.phase,
             "checked": len(plan),
             "results": results,
@@ -230,6 +266,7 @@ def main() -> int:
     verdict = "BLOCK" if args.severity == "block" else "WARN"
     print(json.dumps({
         "verdict": verdict,
+        "mode": args.mode,
         "phase": args.phase,
         "failed": failed_count,
         "checked": len(plan),

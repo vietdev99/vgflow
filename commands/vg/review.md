@@ -1646,7 +1646,7 @@ if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/ENV-CONTRACT.md" 
     if [ -n "$PRE_BASE" ]; then
       PRE_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/preflight-invariants.py" \
         --phase "$PHASE_NUMBER" --base-url "$PRE_BASE" \
-        --severity "${VG_PREFLIGHT_SEVERITY:-warn}" 2>&1)
+        --severity "${VG_PREFLIGHT_SEVERITY:-block}" 2>&1)
       PRE_RC=$?
       echo "  preflight invariants: $(echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
 import json, sys
@@ -1656,7 +1656,7 @@ try:
     if v == "BLOCK":
         print(f"BLOCK ({len(d.get(\"gaps\",[]))} gap(s))")
     elif v == "WARN":
-        print(f"WARN ({len(d.get(\"gaps\",[]))} gap(s) — set VG_PREFLIGHT_SEVERITY=block to enforce)")
+        print(f"WARN ({len(d.get(\"gaps\",[]))} gap(s) — VG_PREFLIGHT_SEVERITY=warn override active)")
     elif v == "PASS":
         print(f"PASS (checked {d.get(\"invariants_checked\",\"?\")} invariants)")
     elif v == "DRY_RUN":
@@ -1665,7 +1665,26 @@ try:
         print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
 except: print("parse-error")
 ')"
-      if [ "$PRE_RC" -eq 1 ] && [ "${VG_PREFLIGHT_SEVERITY:-warn}" = "block" ]; then
+      # Codex-HIGH-5 fix: setup errors (RC=2) ALWAYS block, regardless of
+      # severity gate. Missing api_index, bad creds, or missing base_url
+      # mean we cannot proceed safely — silent skip would let scan run on
+      # broken sandbox state.
+      if [ "$PRE_RC" -eq 2 ]; then
+        echo "⛔ Phase 0.5 preflight setup error — cannot proceed (RFC v9 PR-C):"
+        echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(f"   {d.get(\"error\",\"unknown setup error\")[:300]}")
+except: print("   (could not parse error)")
+'
+        echo "   Fix path: ENV-CONTRACT.md must declare api_index for every"
+        echo "   resource referenced in data_invariants. Verify vg.config.md"
+        echo "   credentials_map covers all count_role values."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      if [ "$PRE_RC" -eq 1 ] && [ "${VG_PREFLIGHT_SEVERITY:-block}" = "block" ]; then
         echo "⛔ Phase 0.5 preflight invariants gate BLOCK — fix path:"
         echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
 import json, sys
@@ -1690,7 +1709,7 @@ for g in d.get("gaps", []):
     if [ -n "$PRE_BASE_RC" ]; then
       RCRURD_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
         --phase "$PHASE_NUMBER" --base-url "$PRE_BASE_RC" \
-        --severity "${VG_RCRURD_SEVERITY:-warn}" 2>&1)
+        --severity "${VG_RCRURD_SEVERITY:-block}" 2>&1)
       RCRURD_RC=$?
       echo "  RCRURD pre_state: $(echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
 import json, sys
@@ -1700,14 +1719,29 @@ try:
     if v == "BLOCK":
         print(f"BLOCK ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed)")
     elif v == "WARN":
-        print(f"WARN ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed — set VG_RCRURD_SEVERITY=block to enforce)")
+        print(f"WARN ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed — VG_RCRURD_SEVERITY=warn override active)")
     elif v == "PASS":
         print(f"PASS (checked {d.get(\"checked\",0)} fixtures)")
     else:
         print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
 except: print("parse-error")
 ')"
-      if [ "$RCRURD_RC" -eq 1 ] && [ "${VG_RCRURD_SEVERITY:-warn}" = "block" ]; then
+      # Codex-HIGH-5 fix: RCRURD setup errors (RC=2) ALWAYS block.
+      if [ "$RCRURD_RC" -eq 2 ]; then
+        echo "⛔ Phase 0.5 RCRURD setup error — cannot proceed:"
+        echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(f"   {d.get(\"error\",\"unknown setup error\")[:300]}")
+except: print("   (could not parse error)")
+'
+        echo "   Fix path: vg.config.md credentials_map must cover every role"
+        echo "   referenced in FIXTURES/{G-XX}.yaml lifecycle.pre_state."
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+      if [ "$RCRURD_RC" -eq 1 ] && [ "${VG_RCRURD_SEVERITY:-block}" = "block" ]; then
         echo "⛔ Phase 0.5 RCRURD gate BLOCK — fixture pre_state assertions failed."
         echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
 import json, sys
@@ -6085,6 +6119,65 @@ if [ -f "$MATRIX_LINK_VAL" ]; then
   fi
 fi
 
+# RFC v9 PR-D2 Codex-HIGH-1 fix: post_state lifecycle gate AFTER scanner ran.
+# Pre_state checked at Phase 0.5 (pre-scanner); post_state must verify the
+# action actually mutated state correctly. Without this leg, RCRURD is half-
+# wired (Codex review found pre-only).
+# Re-resolve base URL from config (PRE_BASE local to Phase 0.5; not in scope).
+POST_BASE_RC=$(echo "${CONFIG_RAW:-}" | grep -A2 '^step_env:' | grep -E 'sandbox_test:|sandbox:' | head -1 | sed 's/.*: *//;s/[" ]//g')
+[ -z "$POST_BASE_RC" ] && POST_BASE_RC="${VG_BASE_URL:-}"
+if [ -f "${REPO_ROOT}/scripts/rcrurd-preflight.py" ] && \
+   [ -d "${PHASE_DIR}/FIXTURES" ] && [ -n "$POST_BASE_RC" ]; then
+  POST_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
+    --phase "$PHASE_NUMBER" --base-url "$POST_BASE_RC" \
+    --mode post --severity "${VG_RCRURD_POST_SEVERITY:-block}" 2>&1)
+  POST_RC=$?
+  echo "▸ RCRURD post_state: $(echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    v = d.get("verdict","?")
+    if v == "BLOCK":
+        print(f"BLOCK ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} post-state assertions failed)")
+    elif v == "WARN":
+        print(f"WARN ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed)")
+    elif v == "PASS":
+        print(f"PASS ({d.get(\"checked\",0)} fixtures)")
+    else:
+        print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
+except: print("parse-error")
+')"
+  if [ "$POST_RC" -eq 2 ]; then
+    echo "⛔ RCRURD post_state setup error — cannot proceed:"
+    echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(f"   {d.get(\"error\",\"unknown\")[:300]}")
+except: print("   (could not parse error)")
+'
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  if [ "$POST_RC" -eq 1 ] && [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
+    echo "⛔ RCRURD post_state gate BLOCK — fixture lifecycle assertions failed"
+    echo "   after the scanner action. State did not transition as expected."
+    echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+for r in d.get("results", []):
+    if r.get("passed") is False:
+        print(f"    {r[\"goal\"]}:")
+        for err in r.get("errors", [])[:3]:
+            print(f"      - {err[:200]}")
+'
+    echo "   Fix path: re-run scanner if action genuinely succeeded; or fix"
+    echo "   the action's expected_network/post_state assertion drift."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_state_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # v2.46-wave3.2 matrix-staleness final gate: after matrix is BUILT (Phase 4),
 # re-run staleness validator at review-complete time. Step 0 entry pass catches
 # stale entries from PRIOR runs; this catches stale entries created by THIS run
@@ -6121,18 +6214,18 @@ fi
 # layer2_proposal_id}. Closes the trust hole where executor agents could
 # fabricate evidence to flip matrix-staleness bidirectional sync.
 #
-# Migration grace: provenance.enforcement=warn (default) emits findings
-# without blocking. Set provenance.enforcement=block in vg.config.md once
-# all phases have been migrated via /vg:fixture-backfill.
+# Codex-HIGH-4 fix: default to BLOCK (was warn). Migration grace via
+# explicit `review.provenance.enforcement: warn` in vg.config.md OR
+# --allow-legacy-provenance flag for phases pre-dating RFC v9.
 PROV_VAL=".claude/scripts/validators/verify-evidence-provenance.py"
 if [ -f "$PROV_VAL" ]; then
-  # Resolve enforcement from config — env var wins, then grep config, default warn
+  # Resolve enforcement from config — env var wins, then grep config, default block
   PROV_MODE="${VG_PROVENANCE_ENFORCEMENT:-}"
   if [ -z "$PROV_MODE" ] && [ -n "${CONFIG_RAW:-}" ]; then
     PROV_MODE=$(echo "$CONFIG_RAW" | grep -A2 '^review:' | grep -E '^\s*provenance:' -A2 | \
                 grep -E '^\s*enforcement:' | head -1 | sed 's/.*enforcement:\s*//;s/[\"'\'']//g' | tr -d ' ')
   fi
-  [ -z "$PROV_MODE" ] && PROV_MODE="warn"
+  [ -z "$PROV_MODE" ] && PROV_MODE="block"
   PROV_FLAGS="--severity ${PROV_MODE}"
   # During migration window, allow legacy phases without provenance
   [[ "${ARGUMENTS}" =~ --allow-legacy-provenance ]] && PROV_FLAGS="$PROV_FLAGS --allow-legacy"

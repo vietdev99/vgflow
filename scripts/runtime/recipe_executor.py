@@ -27,11 +27,25 @@ from typing import Any
 from .recipe_auth import AuthContext, AuthError, authenticate
 from .recipe_capture import CaptureError, capture_paths
 from .recipe_interpolate import interpolate
-from .recipe_safety import SandboxSafetyError, assert_step_safe
+from .recipe_safety import (
+    SandboxEchoMissingError,
+    SandboxSafetyError,
+    assert_response_echo,
+    assert_step_safe,
+    assert_url_in_allowlist,
+)
 
 
 class RecipeExecutionError(Exception):
     """Step failed during execution."""
+
+
+class AuthDegradedError(RecipeExecutionError):
+    """Auth refresh exhausted — credentials likely expired/revoked.
+
+    Distinct from generic execution error so callers can prompt for
+    re-auth instead of treating it as a programming bug.
+    """
 
 
 @dataclass
@@ -42,6 +56,17 @@ class RecipeRunner:
     sessions: dict[str, AuthContext] = field(default_factory=dict)
     store: dict[str, Any] = field(default_factory=dict)
     request_timeout: float = 30.0
+    sandbox_url_allowlist: list[str] | tuple[str, ...] = field(default_factory=list)
+    response_echo_check: bool = False
+    _echo_verified_for_role: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        # Codex-HIGH-7: enforce URL allowlist before any traffic flows
+        if self.env == "sandbox" and self.sandbox_url_allowlist:
+            try:
+                assert_url_in_allowlist(self.base_url, self.sandbox_url_allowlist)
+            except SandboxSafetyError as e:
+                raise RecipeExecutionError(str(e)) from e
 
     def _auth_context(self, role: str) -> AuthContext:
         if role not in self.sessions:
@@ -156,9 +181,12 @@ class RecipeRunner:
 
         url = self.base_url.rstrip("/") + endpoint
         headers: dict[str, str] = {}
-        # D13: idempotency-key for POST/PUT
+        # D13: idempotency-key for ALL mutation verbs (POST/PUT/PATCH/DELETE)
+        # Codex-B-MEDIUM fix: was POST/PUT only; PATCH+DELETE need it too
+        # for safe retry semantics (RFC 7240 §4.3 — idempotency-key applies
+        # to any mutation, not just create/replace).
         idem = step.get("idempotency_key")
-        if idem and method in {"POST", "PUT"}:
+        if idem and method in {"POST", "PUT", "PATCH", "DELETE"}:
             idem_resolved = interpolate(idem, ctx_store)
             headers["Idempotency-Key"] = str(idem_resolved)
 
@@ -175,8 +203,34 @@ class RecipeRunner:
             try:
                 auth.refresh_callable()
             except AuthError as e:
-                raise RecipeExecutionError(f"Auth refresh failed: {e}") from e
+                # Codex-A-MEDIUM fix: typed error so callers can re-prompt
+                raise AuthDegradedError(
+                    f"Auth refresh failed for role={role}: {e}. "
+                    f"Credentials likely expired/revoked — caller should "
+                    f"prompt for new credentials and retry."
+                ) from e
             resp = session.request(method, url, **kwargs)
+            # Refresh succeeded but second response also 401 → token format
+            # OK, but credentials still invalid. Treat as degraded.
+            if resp.status_code == 401:
+                raise AuthDegradedError(
+                    f"Auth refresh succeeded but second {method} {endpoint} "
+                    f"still 401 for role={role}. Refresh-token likely "
+                    f"expired — caller should prompt for new credentials."
+                )
+
+        # Codex-HIGH-7: response echo handshake — proves backend honored
+        # X-VGFlow-Sandbox: true. Verified once per role per run (cheap).
+        if (self.env == "sandbox" and self.response_echo_check
+                and role not in self._echo_verified_for_role
+                and resp.status_code < 400):
+            try:
+                assert_response_echo(resp.headers)
+                self._echo_verified_for_role.add(role)
+            except SandboxEchoMissingError as e:
+                raise RecipeExecutionError(
+                    f"Sandbox echo handshake failed at {method} {endpoint}: {e}"
+                ) from e
 
         expect = step.get("expect_status")
         if expect is not None and resp.status_code != expect:

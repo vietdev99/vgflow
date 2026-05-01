@@ -289,6 +289,145 @@ def test_warn_severity_does_not_block(tmp_path, server):
     assert out["verdict"] == "WARN"
 
 
+# ─── Codex-HIGH-1: --mode post wires post_state into workflow ────────
+
+
+def test_mode_post_runs_post_state_assertions(tmp_path, server):
+    """Codex-HIGH-1: post-state must actually execute, not just be defined."""
+    base_url, routes = server
+    routes[("GET", "/api/topup/pending")] = {
+        "status": 200, "body": {"count": 1},  # post-state expects 1
+    }
+    _phase(tmp_path, {
+        "G-10": {
+            "schema_version": "1.0", "goal": "G-10",
+            "description": "x" * 50,
+            "fixture_intent": {"declared_in": "x", "validates": "x" * 25},
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/x"}],
+            "lifecycle": {
+                "pre_state": {"role": "u", "method": "GET",
+                              "endpoint": "/api/topup/pending",
+                              "assert_jsonpath": [{"path": "$.count", "equals": 0}]},
+                "action": {"surface": "ui_click",
+                           "expected_network": {"method": "POST",
+                                                  "endpoint": "/api/x",
+                                                  "status_range": [200, 299]}},
+                "post_state": {"role": "u", "method": "GET",
+                               "endpoint": "/api/topup/pending",
+                               "assert_jsonpath": [{"path": "$.count", "equals": 1}]},
+            },
+        },
+    })
+    creds = json.dumps({"u": {"kind": "api_key", "key": "k"}})
+    result = _run(tmp_path, "--phase", "1.0", "--base-url", base_url,
+                   "--mode", "post",
+                   env_extra={"VG_CREDENTIALS_JSON": creds})
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    out = json.loads(result.stdout)
+    assert out["verdict"] == "PASS"
+    assert out["mode"] == "post"
+
+
+def test_mode_post_blocks_when_post_state_wrong(tmp_path, server):
+    """Action did not produce expected post-state — must BLOCK."""
+    base_url, routes = server
+    # Both endpoints return count=0 — pre-state OK, post-state WRONG
+    routes[("GET", "/api/topup/pending")] = {
+        "status": 200, "body": {"count": 0},
+    }
+    _phase(tmp_path, {
+        "G-10": {
+            "schema_version": "1.0", "goal": "G-10",
+            "description": "x" * 50,
+            "fixture_intent": {"declared_in": "x", "validates": "x" * 25},
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/x"}],
+            "lifecycle": {
+                "pre_state": {"role": "u", "method": "GET",
+                              "endpoint": "/api/topup/pending",
+                              "assert_jsonpath": [{"path": "$.count", "equals": 0}]},
+                "action": {"surface": "ui_click",
+                           "expected_network": {"method": "POST",
+                                                  "endpoint": "/api/x",
+                                                  "status_range": [200, 299]}},
+                "post_state": {"role": "u", "method": "GET",
+                               "endpoint": "/api/topup/pending",
+                               "assert_jsonpath": [{"path": "$.count", "equals": 1}]},
+            },
+        },
+    })
+    creds = json.dumps({"u": {"kind": "api_key", "key": "k"}})
+    result = _run(tmp_path, "--phase", "1.0", "--base-url", base_url,
+                   "--mode", "post", "--severity", "block",
+                   env_extra={"VG_CREDENTIALS_JSON": creds})
+    assert result.returncode == 1
+    out = json.loads(result.stdout)
+    assert out["verdict"] == "BLOCK"
+    assert out["mode"] == "post"
+
+
+def test_mode_post_dry_run_lists_post_state_endpoints(tmp_path):
+    _phase(tmp_path, {
+        "G-10": {
+            "schema_version": "1.0", "goal": "G-10",
+            "description": "x" * 50,
+            "fixture_intent": {"declared_in": "x", "validates": "x" * 25},
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/x"}],
+            "lifecycle": {
+                "pre_state": {"role": "u", "method": "GET",
+                              "endpoint": "/api/pre",
+                              "assert_jsonpath": [{"path": "$.x", "equals": 0}]},
+                "action": {"surface": "ui_click",
+                           "expected_network": {"method": "POST",
+                                                  "endpoint": "/api/x",
+                                                  "status_range": [200, 299]}},
+                "post_state": {"role": "u", "method": "GET",
+                               "endpoint": "/api/post",
+                               "assert_jsonpath": [{"path": "$.x", "equals": 1}]},
+            },
+        },
+    })
+    result = _run(tmp_path, "--phase", "1.0", "--mode", "post", "--dry-run")
+    assert result.returncode == 0
+    out = json.loads(result.stdout)
+    # Should list /api/post (post_state endpoint), not /api/pre
+    assert any("/api/post" in p["endpoint"] for p in out["would_check"])
+    assert not any("/api/pre" in p["endpoint"] for p in out["would_check"])
+
+
+def test_default_severity_is_now_block(tmp_path, server):
+    """Codex-HIGH-4: default severity changed from warn to block."""
+    base_url, routes = server
+    routes[("GET", "/api/x")] = {"status": 200, "body": {"count": 99}}  # wrong
+    _phase(tmp_path, {
+        "G-10": {
+            "schema_version": "1.0", "goal": "G-10",
+            "description": "x" * 50,
+            "fixture_intent": {"declared_in": "x", "validates": "x" * 25},
+            "steps": [{"id": "x", "kind": "api_call", "role": "u",
+                       "method": "GET", "endpoint": "/x"}],
+            "lifecycle": {
+                "pre_state": {"role": "u", "method": "GET", "endpoint": "/api/x",
+                              "assert_jsonpath": [{"path": "$.count", "equals": 0}]},
+                "action": {"surface": "ui_click",
+                           "expected_network": {"method": "POST",
+                                                  "endpoint": "/api/x",
+                                                  "status_range": [200, 299]}},
+                "post_state": {"role": "u", "method": "GET", "endpoint": "/api/x",
+                               "assert_jsonpath": [{"path": "$.count", "equals": 1}]},
+            },
+        },
+    })
+    creds = json.dumps({"u": {"kind": "api_key", "key": "k"}})
+    # NO --severity flag → should default to block, exit 1
+    result = _run(tmp_path, "--phase", "1.0", "--base-url", base_url,
+                   env_extra={"VG_CREDENTIALS_JSON": creds})
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["verdict"] == "BLOCK"
+
+
 def test_missing_credentials_errors(tmp_path):
     _phase(tmp_path, {
         "G-10": {
