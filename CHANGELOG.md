@@ -1,5 +1,87 @@
 # Changelog
 
+## v2.45.0 — fail-closed validators + matrix-evidence-link (PR fix/fail-closed-validators-coverage-fabrication)
+
+Closes the largest dogfood-found false-positive class to date: validators
+silently passing on format mismatch / regex miss / parse failure. PrintwayV3
+Phase 3.2 review claimed 65/67 goals READY while RUNTIME-MAP showed 27
+sequences recorded (10 passed, 11 blocked, 6 deferred-structural) and 40
+goals never replayed. User reported admin topup approve/flag forms
+crashing in browser — validators that should have caught this all returned
+PASS or WARN.
+
+### Fixed — `verify-runtime-map-coverage.py` parses markdown TEST-GOALS
+
+Validator was YAML-frontmatter-only. Phase 3.2 used `## Goal G-XX:` markdown
+headers → 0 goals parsed → return 0 with "(no parseable goals — passing)".
+Now: tries YAML first, falls back to markdown parser supporting `## Goal G-XX:`
++ `**Field:** value` lines. **FAIL CLOSED** if neither format matches —
+previously silently passed.
+
+### Fixed — `verify-runtime-map-crud-depth.py` mutation vocabulary
+
+`MUTATION_WORD_RE` only matched create/update/delete/submit/save. Admin
+state-transition verbs (approve/reject/flag/reset/enable/etc.) bypassed the
+gate, so `goal_sequence` with only a list-render step satisfied "depth"
+checks for mutation goals. Expanded vocabulary to cover: approve, reject,
+flag, unflag, enable, disable, activate, deactivate, reset, cancel,
+archive, restore, publish, lock, unlock, freeze, unfreeze, suspend, resume,
+verify, confirm, deny, assign, unassign, transfer, upload, download +
+Vietnamese (duyệt, từ chối, đánh dấu, mở khóa, kích hoạt, vô hiệu, hủy,
+chuyển).
+
+### Added — `verify-matrix-evidence-link.py` validator
+
+Cross-checks GOAL-COVERAGE-MATRIX.md status verdicts against the runtime
+evidence they claim to summarize (RUNTIME-MAP.json goal_sequences[].result).
+
+Catches three fabrication classes:
+- `matrix_status_without_runtime_sequence` — matrix=READY but no sequence entry
+- `matrix_status_with_empty_sequence` — sequence shell with 0 steps
+- `matrix_status_contradicts_runtime_result` — matrix=READY but result=blocked
+
+Statuses that legitimately don't need runtime evidence: INFRA_PENDING,
+UNREACHABLE, DEFERRED. All others require non-empty sequence with result in
+{passed, ready, ok, deferred-structural}.
+
+Wired into `commands/vg/review.md` end-of-step block — runs before
+`vg-orchestrator run-complete`. Phase 3.2 dogfood: 55 mismatches (40 missing
++ 11 contradicts + 4 empty).
+
+### Fixed — `verify-contract-runtime.py` accepts level-3 endpoint headers
+
+Regex `^##\s+METHOD /path` only matched level-2 headers. Phase 3.2
+API-CONTRACTS.md used `### POST /api/v1/...` (level 3) under group headers
+(level 2) → 0 endpoints parsed → WARN "empty_contract" → silently passed.
+Now: matches `##` / `###` / `####` headers. **FAIL CLOSED** on empty
+contract (was WARN).
+
+### Patched — `commands/vg/test.md` removed silent CRUD fallback
+
+Branching table v2.32.1 said: `READY + missing goal_sequences[G-XX] + CRUD
+match → Sinh structural spec from CRUD-SURFACES.md`. Phase 3.2 dogfood:
+this fallback turned 40 goals (review never replayed) into list-render
+.spec.ts with no mutation evidence → /vg:test PASS while production
+buttons crashed.
+
+New default: `READY + missing seq` → BLOCK with re-review hint. Legacy
+fallback preserved behind `--allow-structural-fallback` flag (logs
+override-debt). The `matrix-evidence-link` validator at review-exit now
+catches the mismatch upstream, so this fallback should rarely be reached.
+
+### Architecture rule (added to skill prose)
+
+> Validators MUST fail-closed on parse error / format drift / regex miss.
+> Returning PASS/WARN when the validator cannot enforce its invariant
+> means the gate has been silently bypassed. The default for unparseable
+> input is BLOCK with a hint to fix the format.
+
+This PR converts 4 validators from fail-open to fail-closed and adds 1
+new content-aware validator (matrix-evidence-link). The pattern can be
+extended to other validators showing similar silent-pass behavior.
+
+---
+
 ## v2.44.0 — verdict-aware Next + review.method axis + agents + test-id stack (PR #67)
 
 Bundles 5 reporter-internal milestones (v2.43.1 → v2.43.5) into a single minor release: 1612 insertions, 83 deletions, 18 files. Built on top of v2.43.2's i18n login fix.
