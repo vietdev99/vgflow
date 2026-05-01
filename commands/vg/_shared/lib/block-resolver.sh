@@ -224,9 +224,54 @@ _block_resolve_l2_architect() {
   echo "$prompt_path" >&3 2>/dev/null || true
   echo "block-architect-prompt: $prompt_path (model=${architect_model})" >&2
 
-  # Fallback return when Task dispatch isn't hooked up in raw shell:
-  # emit a placeholder proposal so caller can decide L3/L4.
-  printf '{"type":"config-change","summary":"architect_unavailable — Task dispatch required","file_structure":"N/A","framework_choice":"N/A","decision_questions":[{"q":"Architect subagent could not be dispatched in this context. Proceed with manual direction?","recommendation":"Re-run command from Claude harness (Task tool available) or provide manual fix.","rationale":"Raw shell has no Task capability; orchestrator must substitute live Haiku call."}],"confidence":0.1}\n'
+  # RFC v9 PR-D3 stub-3 fix: try scripts/spawn-diagnostic-l2.py for live
+  # Haiku invocation. Falls back to placeholder if script unavailable, CLI
+  # not in PATH, or subagent fails.
+  local spawn_script="${REPO_ROOT:-.}/scripts/spawn-diagnostic-l2.py"
+  if [ -f "$spawn_script" ] && [ -n "$phase_dir" ] && [ -d "$phase_dir" ] && \
+     [ "${VG_DIAGNOSTIC_L2_DISABLE:-0}" != "1" ]; then
+    local spawn_out
+    spawn_out=$("${PYTHON_BIN:-python3}" "$spawn_script" \
+      --gate-id "$gate_id" \
+      --block-family "${gate_id%%-*}" \
+      --phase-dir "$phase_dir" \
+      --gate-context "$gate_context" \
+      --evidence-json "$evidence_json" \
+      ${VG_DIAGNOSTIC_L2_DRY_RUN:+--dry-run} \
+      2>/dev/null)
+    local spawn_rc=$?
+    if [ "$spawn_rc" -eq 0 ]; then
+      # Translate spawn-diagnostic-l2 output → architect proposal shape
+      ${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    out = {
+        'type': 'diagnostic-l2',
+        'summary': d.get('diagnosis', '')[:200],
+        'file_structure': 'N/A — proposal stored at .l2-proposals/{}.json'.format(d.get('proposal_id','')),
+        'framework_choice': 'diagnostic_l2 subagent',
+        'decision_questions': [{
+            'q': 'Apply proposed fix?',
+            'recommendation': d.get('proposed_fix', '')[:300],
+            'rationale': f'L2 audit trail: {d.get(\"proposal_id\",\"?\")}; confidence {d.get(\"confidence\",0):.2f}',
+        }],
+        'confidence': float(d.get('confidence', 0.0)),
+        'proposal_id': d.get('proposal_id'),
+    }
+    print(json.dumps(out))
+except Exception as e:
+    print(json.dumps({'type':'parse-error','summary':str(e),'file_structure':'','framework_choice':'','decision_questions':[],'confidence':0.0}))
+" "$spawn_out"
+      return 0
+    else
+      echo "  spawn-diagnostic-l2 exited rc=${spawn_rc} — falling back to placeholder" >&2
+    fi
+  fi
+
+  # Fallback return when spawn unavailable: emit placeholder proposal so
+  # caller (orchestrator/Claude harness) can decide L3/L4 manually.
+  printf '{"type":"config-change","summary":"architect_unavailable — Task dispatch required","file_structure":"N/A","framework_choice":"N/A","decision_questions":[{"q":"Architect subagent could not be dispatched in this context. Proceed with manual direction?","recommendation":"Re-run command from Claude harness (Task tool available) or provide manual fix.","rationale":"Raw shell has no Task capability; orchestrator must substitute live Haiku call. Set VG_DIAGNOSTIC_L2_DRY_RUN=1 to test plumbing without invoking CLI."}],"confidence":0.1}\n'
 }
 
 # ═══════════════════════════════════════════════════════════════════════

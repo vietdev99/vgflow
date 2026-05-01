@@ -29,6 +29,12 @@ from .fixture_cache import (
     save as cache_save,
     write_captured,
 )
+from .api_index import (
+    ApiIndexError,
+    ResourceCounter,
+    count_fn_factory,
+    parse_api_index,
+)
 from .preflight import (
     InvariantGap,
     PreflightError,
@@ -77,4 +83,8 @@ __all__ = [
     "required_count",
     "verify_invariants",
     "fix_hint",
+    "ApiIndexError",
+    "ResourceCounter",
+    "count_fn_factory",
+    "parse_api_index",
 ]

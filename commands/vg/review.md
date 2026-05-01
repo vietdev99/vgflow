@@ -1634,35 +1634,97 @@ if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/ENV-CONTRACT.md" 
       --phase "$PHASE_NUMBER" --apply --skip-orphans 2>&1 | sed 's/^/  prune: /'
   fi
 
-  # 2. data_invariants N-consumer check (PR-C)
-  # Stub count_fn returns 0 — real implementation wires recipe_executor;
-  # for now we surface gaps so user can populate FIXTURES manually.
-  PRE_INVARIANT=$("${PYTHON_BIN:-python3}" - <<'PY'
-import json, os, sys
-from pathlib import Path
-sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+  # 2. data_invariants N-consumer check (PR-C, live HTTP wiring stub-1 fix)
+  # Calls scripts/preflight-invariants.py which authenticates per credentials_map
+  # and counts entities via api_index. BLOCK exits the skill so we don't burn
+  # Haiku tokens on a doomed scan.
+  if [ -f "${REPO_ROOT}/scripts/preflight-invariants.py" ] && \
+     [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
+    # Resolve base_url from config (sandbox env section)
+    PRE_BASE=$(echo "${CONFIG_RAW:-}" | grep -A2 '^step_env:' | grep -E 'sandbox_test:|sandbox:' | head -1 | sed 's/.*: *//;s/[" ]//g')
+    [ -z "$PRE_BASE" ] && PRE_BASE="${VG_BASE_URL:-}"
+    if [ -n "$PRE_BASE" ]; then
+      PRE_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/preflight-invariants.py" \
+        --phase "$PHASE_NUMBER" --base-url "$PRE_BASE" \
+        --severity "${VG_PREFLIGHT_SEVERITY:-warn}" 2>&1)
+      PRE_RC=$?
+      echo "  preflight invariants: $(echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
 try:
-    from runtime.preflight import parse_env_contract, verify_invariants
-    invs = parse_env_contract(Path(os.environ["PHASE_DIR"]) / "ENV-CONTRACT.md")
-    if invs:
-        # Stub count_fn: returns 0 until recipe_executor wiring lands
-        def count_fn(resource, where): return 0
-        gaps = verify_invariants(invs, count_fn)
-        print(json.dumps({"invariants": len(invs), "gaps": len(gaps)}))
+    d = json.loads(sys.stdin.read())
+    v = d.get("verdict","?")
+    if v == "BLOCK":
+        print(f"BLOCK ({len(d.get(\"gaps\",[]))} gap(s))")
+    elif v == "WARN":
+        print(f"WARN ({len(d.get(\"gaps\",[]))} gap(s) — set VG_PREFLIGHT_SEVERITY=block to enforce)")
+    elif v == "PASS":
+        print(f"PASS (checked {d.get(\"invariants_checked\",\"?\")} invariants)")
+    elif v == "DRY_RUN":
+        print("DRY_RUN")
     else:
-        print(json.dumps({"invariants": 0, "gaps": 0}))
-except Exception as e:
-    print(json.dumps({"error": str(e)[:200]}))
-PY
-)
-  echo "  preflight invariants: $PRE_INVARIANT"
+        print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
+except: print("parse-error")
+')"
+      if [ "$PRE_RC" -eq 1 ] && [ "${VG_PREFLIGHT_SEVERITY:-warn}" = "block" ]; then
+        echo "⛔ Phase 0.5 preflight invariants gate BLOCK — fix path:"
+        echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+for g in d.get("gaps", []):
+    print("    " + g.get("fix_hint", ""))
+'
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_invariants_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+    else
+      echo "  preflight invariants: SKIPPED (no base_url in config + no VG_BASE_URL)"
+    fi
+  fi
 
-  # 3. RCRURD pre_state gate (PR-D2) — informational; full wiring requires
-  # recipe_executor session + lifecycle parsing from FIXTURES/{G-XX}.yaml.
-  # For now we count how many mutation goals declare lifecycle blocks.
-  if [ -d "${PHASE_DIR}/FIXTURES" ]; then
-    LIFECYCLE_N=$(grep -lE "^lifecycle:" "${PHASE_DIR}/FIXTURES"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
-    echo "  lifecycle declarations: ${LIFECYCLE_N} fixtures (PR-D2 wiring queued)"
+  # 3. RCRURD pre_state gate (PR-D2, live wiring stub-2 fix)
+  # Calls scripts/rcrurd-preflight.py: walks FIXTURES/*.yaml, runs pre_state
+  # GET + assert_jsonpath for each lifecycle block. Fail-fast before scan.
+  if [ -f "${REPO_ROOT}/scripts/rcrurd-preflight.py" ] && \
+     [ -d "${PHASE_DIR}/FIXTURES" ]; then
+    PRE_BASE_RC="${PRE_BASE:-${VG_BASE_URL:-}}"
+    if [ -n "$PRE_BASE_RC" ]; then
+      RCRURD_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/rcrurd-preflight.py" \
+        --phase "$PHASE_NUMBER" --base-url "$PRE_BASE_RC" \
+        --severity "${VG_RCRURD_SEVERITY:-warn}" 2>&1)
+      RCRURD_RC=$?
+      echo "  RCRURD pre_state: $(echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    v = d.get("verdict","?")
+    if v == "BLOCK":
+        print(f"BLOCK ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed)")
+    elif v == "WARN":
+        print(f"WARN ({d.get(\"failed\",0)}/{d.get(\"checked\",0)} failed — set VG_RCRURD_SEVERITY=block to enforce)")
+    elif v == "PASS":
+        print(f"PASS (checked {d.get(\"checked\",0)} fixtures)")
+    else:
+        print(f"ERROR: {d.get(\"error\",\"unknown\")[:200]}")
+except: print("parse-error")
+')"
+      if [ "$RCRURD_RC" -eq 1 ] && [ "${VG_RCRURD_SEVERITY:-warn}" = "block" ]; then
+        echo "⛔ Phase 0.5 RCRURD gate BLOCK — fixture pre_state assertions failed."
+        echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+for r in d.get("results", []):
+    if r.get("passed") is False:
+        print(f"    {r[\"goal\"]}:")
+        for err in r.get("errors", [])[:3]:
+            print(f"      - {err[:200]}")
+'
+        echo "  Fix path: ensure sandbox seed data matches each fixture's lifecycle.pre_state assertions"
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_preflight_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        exit 1
+      fi
+    else
+      echo "  RCRURD pre_state: SKIPPED (no base_url)"
+    fi
   fi
 fi
 ```
