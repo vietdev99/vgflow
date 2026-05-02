@@ -305,7 +305,8 @@ _PROFILE_KEYWORDS = {
 # converts to a WARN (not a BLOCK) when _verify_contract sees must_write.
 _PROFILE_REQUIRED_ARTIFACTS = {
     "feature":   {"SPECS.md", "CONTEXT.md", "PLAN.md", "API-CONTRACTS.md",
-                  "TEST-GOALS.md", "SUMMARY.md", "DISCUSSION-LOG.md"},
+                  "TEST-GOALS.md", "SUMMARY.md", "DISCUSSION-LOG.md",
+                  "api-contract-precheck.txt"},
     "infra":     {"SPECS.md", "PLAN.md", "SUMMARY.md"},
     "hotfix":    {"SPECS.md", "PLAN.md", "SUMMARY.md"},
     "bugfix":    {"SPECS.md", "PLAN.md", "SUMMARY.md"},

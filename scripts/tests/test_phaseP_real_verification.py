@@ -1,6 +1,6 @@
 """
 OHOK Batch 2 B5 + C4 — review.md phaseP_delta + phaseP_regression real verification
-+ contract expand to 23 markers.
++ contract expand to require the API precheck gate before discovery.
 
 Before Batch 2:
 - phaseP_delta wrote "Verdict: PASS" stub without re-checking parent failed goals
@@ -159,7 +159,7 @@ def test_phaseP_regression_emits_verification_event(review_text):
 
 # ═══════════════════════════ C4: contract expand ═══════════════════════════
 
-def test_review_contract_has_all_23_steps(review_text):
+def test_review_contract_has_api_precheck_step(review_text):
     contract = contracts.parse("vg:review")
     markers = contracts.normalize_markers(contract.get("must_touch_markers") or [])
     names = {m["name"] for m in markers}
@@ -175,6 +175,7 @@ def test_review_contract_has_all_23_steps(review_text):
         "phaseP_schema_verify", "phaseP_link_check",
         # Full-profile pipeline
         "phase1_code_scan", "phase1_5_ripple_and_god_node",
+        "phase2a_api_contract_probe",
         "phase2_browser_discovery", "phase2_exploration_limits",
         "phase2_mobile_discovery", "phase2_5_visual_checks",
         "phase2_5_mobile_visual_checks", "phase3_fix_loop",
@@ -187,6 +188,20 @@ def test_review_contract_has_all_23_steps(review_text):
     assert not missing, (
         f"review contract missing {len(missing)} markers: {sorted(missing)}"
     )
+
+
+def test_review_api_precheck_requires_fresh_artifact_and_telemetry(review_text):
+    assert '${PHASE_DIR}/api-contract-precheck.txt' in review_text
+    artifact_idx = review_text.index('${PHASE_DIR}/api-contract-precheck.txt')
+    artifact_block = review_text[artifact_idx:artifact_idx + 260]
+    assert 'must_be_created_in_run: true' in artifact_block
+    assert 'check_provenance: true' in artifact_block
+    assert 'required_unless_flag: "--skip-discovery"' in artifact_block
+
+    assert 'event_type: "review.api_precheck_completed"' in review_text
+    event_idx = review_text.index('event_type: "review.api_precheck_completed"')
+    event_block = review_text[event_idx:event_idx + 220]
+    assert 'required_unless_flag: "--skip-discovery"' in event_block
 
 
 def test_review_hard_gates_are_block_severity(review_text):

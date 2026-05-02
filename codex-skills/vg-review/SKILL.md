@@ -2245,6 +2245,103 @@ Graphify inactive. Enable for cross-module impact detection.
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase1_5_ripple_and_god_node" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase1_5_ripple_and_god_node.done"`
 </step>
 
+<step name="phase2a_api_contract_probe" profile="web-fullstack,web-frontend-only">
+## Phase 2a.5: API CONTRACT PROBE (curl, no browser)
+
+**Mandatory before browser discovery for web feature phases.**
+
+Purpose:
+- prove the current run touched the live API surface before any browser scan
+- fail fast on broken/stale backend routes instead of hiding the problem behind discovery noise
+- create a fresh artifact that runtime_contract can enforce even on older pinned phases
+
+**Scope:** low-cost readiness gate only. This is NOT the full `/vg:test` runtime contract verification and NOT a project-specific mutation batch. Mutating endpoints are probed safely (OPTIONS / existence check), not executed for side effects.
+
+```bash
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔎 Phase 2a.5 — API contract probe"
+echo "   Curl API contracts trước browser discovery"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+API_PROBE_OUT="${PHASE_DIR}/api-contract-precheck.txt"
+VG_SCRIPT_ROOT="${REPO_ROOT:-.}/.claude/scripts"
+[ -d "$VG_SCRIPT_ROOT" ] || VG_SCRIPT_ROOT="${REPO_ROOT:-.}/scripts"
+PROBE_SCRIPT="${VG_SCRIPT_ROOT}/review-api-contract-probe.py"
+
+if [ ! -f "$PROBE_SCRIPT" ]; then
+  echo "⛔ API contract probe setup error — missing helper: $PROBE_SCRIPT" | tee "$API_PROBE_OUT"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_helper\"}" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+# Resolve base URL from the same canonical source used by Phase 0.5 preflight.
+API_PROBE_BASE=$("${PYTHON_BIN:-python3}" -c "
+import re, sys
+path = '${PHASE_DIR}/ENV-CONTRACT.md'
+try:
+    text = open(path, encoding='utf-8').read()
+except OSError:
+    sys.exit(0)
+m = re.search(r'^target:\\s*\\n((?:[ \\t].*\\n)+)', text, re.MULTILINE)
+if m:
+    body = m.group(1)
+    bm = re.search(r'^\\s*base_url:\\s*[\"\\']?([^\"\\'\\s#]+)', body, re.MULTILINE)
+    if bm:
+        print(bm.group(1))
+" 2>/dev/null)
+[ -z "$API_PROBE_BASE" ] && API_PROBE_BASE="${VG_BASE_URL:-}"
+
+if [ -z "$API_PROBE_BASE" ]; then
+  echo "⛔ API contract probe setup error — no base_url found in ENV-CONTRACT.md and VG_BASE_URL is empty." | tee "$API_PROBE_OUT"
+  echo "   Fix path: set target.base_url in ENV-CONTRACT.md or export VG_BASE_URL." | tee -a "$API_PROBE_OUT"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_base_url\"}" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_started" \
+  --payload "$(printf '{"phase":"%s","base_url":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}")" >/dev/null 2>&1 || true
+
+PROBE_CMD=("${PYTHON_BIN:-python3}" "$PROBE_SCRIPT"
+  --contracts "${PHASE_DIR}/API-CONTRACTS.md"
+  --base-url "$API_PROBE_BASE"
+  --out "$API_PROBE_OUT")
+
+# Optional auth token from deploy/auth bootstrap. If absent, 401/403 still count
+# as route-exists evidence for auth-protected endpoints.
+if [ -n "${AUTH_TOKEN:-}" ]; then
+  PROBE_CMD+=(--header "Authorization: Bearer ${AUTH_TOKEN}")
+fi
+
+"${PROBE_CMD[@]}"
+API_PROBE_RC=$?
+cat "$API_PROBE_OUT"
+
+if [ "$API_PROBE_RC" -ne 0 ]; then
+  echo "⛔ API contract probe failed — browser discovery is not allowed to start on stale/broken API surface." >&2
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
+    --payload "$(printf '{"phase":"%s","base_url":"%s","rc":%s}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "${API_PROBE_RC}")" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/emit-evidence-manifest.py" \
+  --path "${PHASE_DIR}/api-contract-precheck.txt" \
+  --source-inputs "${PHASE_DIR}/API-CONTRACTS.md,.claude/vg.config.md" \
+  --producer "vg:review/phase2a_api_contract_probe"
+MANIFEST_RC=$?
+if [ "$MANIFEST_RC" -ne 0 ]; then
+  echo "⛔ API contract probe wrote report but failed to bind evidence to current run." >&2
+  exit 1
+fi
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_completed" \
+  --payload "$(printf '{"phase":"%s","base_url":"%s","artifact":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "api-contract-precheck.txt")" >/dev/null 2>&1 || true
+```
+
+</step>
+
 <step name="phase2_browser_discovery" profile="web-fullstack,web-frontend-only">
 ## Phase 2: BROWSER DISCOVERY (MCP Playwright — organic)
 

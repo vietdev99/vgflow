@@ -98,6 +98,7 @@ def test_artifact_applicable_feature(sandbox):
     assert contracts.artifact_applicable("feature", "CONTEXT.md")
     assert contracts.artifact_applicable("feature", "API-CONTRACTS.md")
     assert contracts.artifact_applicable("feature", "TEST-GOALS.md")
+    assert contracts.artifact_applicable("feature", "api-contract-precheck.txt")
 
 
 def test_artifact_applicable_infra_skips_feature_artifacts(sandbox):

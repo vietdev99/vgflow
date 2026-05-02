@@ -15,6 +15,25 @@
             "properties": {
               "path": {"type": "string"},
               "content_min_bytes": {"type": "integer", "minimum": 1, "default": 1},
+              "glob_min_count": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Treat path as a glob; require at least N matches."
+              },
+              "required_unless_flag": {
+                "type": "string",
+                "description": "Waive this artifact check when the named CLI flag is present."
+              },
+              "must_be_created_in_run": {
+                "type": "boolean",
+                "default": false,
+                "description": "Require evidence-manifest entry creator_run_id == current run."
+              },
+              "check_provenance": {
+                "type": "boolean",
+                "default": false,
+                "description": "Also verify source_inputs hashes still match on disk."
+              },
               "content_required_sections": {
                 "type": "array",
                 "items": {"type": "string"}
@@ -68,7 +87,11 @@
               "event_type": {"type": "string"},
               "phase": {"type": "string"},
               "min_count": {"type": "integer", "minimum": 1, "default": 1},
-              "must_pair_with": {"type": "string"}
+              "must_pair_with": {"type": "string"},
+              "required_unless_flag": {
+                "type": "string",
+                "description": "Waive this telemetry requirement when the named CLI flag is present."
+              }
             }
           }
         ]
