@@ -134,7 +134,15 @@ detect_phase_profile() {
       # migrations/123.sql when bumping a single column") without
       # forcing the migration profile.
       local mig_path_count
-      mig_path_count=$(grep -cE '<file-path>[^<]*(migrations|schema|\.sql)[^<]*</file-path>' "$plan" 2>/dev/null || echo 0)
+      # v2.47.2 (2026-05-02) — bugfix: word-boundary on `schema` to avoid
+      # false-positive match on filenames like `area.subschema.ts`. Without
+      # \b…\b, any path containing "schema" as substring (subschema, schemas,
+      # schemavalidator) counted toward the migration quorum, flipping
+      # feature phases to migration profile (which then SKIP API-CONTRACTS.md
+      # + TEST-GOALS.md generation — wrong for feature work). Discovered
+      # while re-blueprinting Phase 2 (catalog-pricing) on 2026-05-02 in
+      # PrintwayV3 dogfood; ported back to source.
+      mig_path_count=$(grep -cE '<file-path>[^<]*(migrations|\bschema\b|\.sql)[^<]*</file-path>' "$plan" 2>/dev/null || echo 0)
       if [ "$mig_path_count" -ge 2 ]; then
         echo "migration"
         return 0
