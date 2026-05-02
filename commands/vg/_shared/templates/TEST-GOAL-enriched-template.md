@@ -120,6 +120,33 @@ goal_class: mutation | readonly | crud-roundtrip | wizard | approval | webhook
   # wizard: ≥10 (multi-step form, capture each step transition)
   # webhook: ≥4 (trigger event → wait → query downstream state → assert)
 
+goal_grounding: api | flow | presentation
+  # REQUIRED post-2026-05-01 (PR-F). Drives /vg:test verification strategy
+  # dispatch — different grounding = different proof shape:
+  #
+  # `api`            (B2B billing/orders/payments/wallet — most goals here)
+  #   Anchor: API-CONTRACTS endpoint shape + business invariants.
+  #   Verification: recipe_executor against openapi.json + lifecycle.post_state.
+  #   UI = thin client, may have extras/gaps but NOT the source of truth.
+  #
+  # `flow`           (onboarding wizard, KYC, password recovery, multi-step)
+  #   Anchor: FLOW-SPEC.md state-machine + checkpoint transitions.
+  #   Verification: flow-runner walks declarative steps with assertions
+  #   per checkpoint. Multiple API calls per step OK.
+  #   API endpoints fragmented; flow itself IS the business semantics.
+  #
+  # `presentation`   (dashboards, charts, pricing previews, reports)
+  #   Anchor: API raw data + UI display computation (totals, percentages,
+  #   formatted dates).
+  #   Verification: screenshot diff + computation check (verify
+  #   formula: display_total = sum(items) × (1 + tax_rate)).
+  #   UI legitimately has "extra fields" derived from API data — they're
+  #   not phantom.
+  #
+  # Default if unspecified: infer from surface (api/data/integration → api;
+  # ui + multi-step flow_ref → flow; ui + chart/dashboard/preview → presentation).
+  # Validator (verify-goal-grounding) warns on unspecified for new phases.
+
 # ─────────────────────────────────────────────────────────────────────
 # v2.5 Phase B enrichment — Security + Performance
 # ─────────────────────────────────────────────────────────────────────

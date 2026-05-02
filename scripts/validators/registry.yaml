@@ -1151,3 +1151,14 @@ validators:
     runtime_target_ms: 1500
     added_in: v2.48
     description: 'Fastify routes must attach Zod schema (validation + auto-OpenAPI generation per fastify-type-provider-zod). Default 80% coverage threshold; baseline-file mode tolerates legacy gap, blocks only on regression. Closes the "openapi.json published but empty" gap that drives 4xx noise during /vg:review (Haiku scanner has no schema → fills bogus form values → backend reject → AI misclassifies as feature bug). Override: --allow-coverage-regression.'
+
+  # ──── RFC v9 PR-F — 3-class goal grounding (2026-05-02) ────
+
+  - id: goal-grounding
+    path: scripts/validators/verify-goal-grounding.py
+    severity: block
+    phases_active: [blueprint]
+    domain: contract
+    runtime_target_ms: 400
+    added_in: v2.48
+    description: 'TEST-GOALS must declare goal_grounding ∈ {api, flow, presentation} per goal. Drives /vg:test verification strategy dispatch — different grounding = different proof shape (api → recipe_executor; flow → FLOW-runner walks checkpoints; presentation → screenshot diff + display-computation check). Pre-2026-05-01 phases get warn-mode with inferred grounding from surface/title heuristics. Override: --allow-grounding-gaps.'

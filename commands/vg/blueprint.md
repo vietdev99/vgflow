@@ -3649,6 +3649,52 @@ fi
 ```
 </step>
 
+<step name="2g_goal_grounding_gate">
+## Sub-step 2g: PR-F goal_grounding gate (3-class verification dispatch)
+
+Validate every goal declares `goal_grounding ∈ {api, flow, presentation}`.
+Drives /vg:test verification strategy dispatch — without grounding,
+test cannot pick the correct proof shape:
+
+- **api**          → recipe_executor + openapi.json + lifecycle.post_state
+- **flow**         → flow-runner walks FLOW-SPEC checkpoints
+- **presentation** → screenshot diff + display-computation check
+
+Closes the "API = nghiệp vụ, UI = thin client" simplification — true for
+B2B billing (most PrintwayV3 phases) but NOT for onboarding wizards
+(flow IS business) or dashboards (UI computes display from API raw data).
+
+```bash
+GROUNDING_VAL=".claude/scripts/validators/verify-goal-grounding.py"
+if [ -f "$GROUNDING_VAL" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+  echo "━━━ Sub-step 2g — PR-F goal_grounding gate ━━━"
+
+  # Pre-2026-05-01 phases grandfathered to WARN; new phases BLOCK.
+  GOALS_FIRST_COMMIT_TS=$(git log --reverse --format=%ct -- \
+    "${PHASE_DIR}/TEST-GOALS.md" 2>/dev/null | head -1)
+  GRANDFATHER_CUTOFF=$(date -u -j -f "%Y-%m-%d" "2026-05-01" +%s 2>/dev/null \
+    || date -u -d "2026-05-01" +%s 2>/dev/null || echo "0")
+  if [ -n "$GOALS_FIRST_COMMIT_TS" ] && [ "$GOALS_FIRST_COMMIT_TS" -lt "$GRANDFATHER_CUTOFF" ]; then
+    GROUNDING_SEVERITY="warn"
+  else
+    GROUNDING_SEVERITY="block"
+  fi
+  ${PYTHON_BIN:-python3} "$GROUNDING_VAL" \
+    --phase "${PHASE_NUMBER}" --severity "$GROUNDING_SEVERITY" 2>&1 | \
+    sed 's/^/  PR-F: /'
+  GROUND_RC=$?
+  if [ "$GROUND_RC" -eq 1 ] && [ "$GROUNDING_SEVERITY" = "block" ]; then
+    echo "⛔ PR-F BLOCK: goals missing goal_grounding declaration."
+    echo "   Fix: add `**Goal grounding:** api|flow|presentation` to each goal."
+    echo "   Pre-2026-05-01 phases get WARN grandfather (grounding inferred)."
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "blueprint.goal_grounding_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2g_goal_grounding_gate 2>/dev/null || true
+```
+</step>
+
 <step name="3_complete">
 
 ### R7 step markers verify gate (v1.14.4+)
