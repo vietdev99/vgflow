@@ -5031,6 +5031,70 @@ Fix iteration {N}/3:
   Matrix coverage: {review_passed}/{total} goals
   Map stable: {YES|NO}
 ```
+
+### 3e: Iter limit fallback — Diagnostic L2 (RFC v9 D11 + D26, PR-E)
+
+When iter 3 exits with errors STILL remaining (loop hit cap without
+self-resolving), do NOT silent-BLOCK. Spawn diagnostic_l2 single-advisory
+fallback:
+
+1. Capture residual evidence: list of unresolved error rows from
+   RUNTIME-MAP + scan-*.json + recipe_executor logs.
+2. Spawn isolated Haiku subagent (zero parent context — RFC v9 D11) to
+   classify root cause `block_family` ∈ {schema_drift, validation_bug,
+   auth_issue, db_constraint, business_logic, integration_failure,
+   unknown}.
+3. L2 generates `L2Proposal.json` with confidence + proposed_fix.
+4. Present to user via single-advisory pattern (D26):
+     - confidence ≥ 0.7  → "Đề xuất: <fix>. [Yes / chi tiết]"
+     - confidence < 0.7  → 3-option block_resolve_l3_present (legacy)
+5. **User gate is mandatory** — never auto-apply (per project policy).
+6. User accept → apply fix → re-run iter 4 (one extra iteration grace).
+7. User reject → BLOCK with full audit trail in
+   `.l2-proposals/{proposal_id}.json` + DEFECT-LOG entry referencing
+   the proposal.
+
+```bash
+if [ "${ITER:-1}" -eq 3 ] && [ -n "${REMAINING_ERRORS}" ] && \
+   [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; then
+  echo "━━━ Phase 3e — Diagnostic L2 fallback (iter 3 hit cap) ━━━"
+  L2_ARGS=(
+    --phase "${PHASE_NUMBER}"
+    --gate-id "review.fix_loop"
+    --evidence-file "${PHASE_DIR}/.fix-loop-evidence.json"
+  )
+  L2_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" \
+    "${L2_ARGS[@]}" 2>&1)
+  L2_PROPOSAL_ID=$(echo "$L2_OUT" | ${PYTHON_BIN:-python3} -c "
+import json, sys
+try: print(json.loads(sys.stdin.read()).get('proposal_id',''))
+except: print('')
+")
+  if [ -n "$L2_PROPOSAL_ID" ]; then
+    echo "  L2 proposal generated: $L2_PROPOSAL_ID"
+    # Open DEFECT-LOG entry referencing the proposal
+    if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
+      "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" defect new \
+        --phase "${PHASE_NUMBER}" \
+        --title "[ITER-LIMIT] Fix loop hit max=3, L2 proposal $L2_PROPOSAL_ID" \
+        --severity major --found-in review \
+        --notes "L2 proposal at .l2-proposals/${L2_PROPOSAL_ID}.json — user decision pending" \
+        2>&1 | sed 's/^/  /' || true
+    fi
+    # User gate via AskUserQuestion is invoked by spawn-diagnostic-l2.py.
+    # On accept → run-complete sees applied; on reject → BLOCK below.
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.diagnostic_l2_spawned" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"proposal_id\":\"$L2_PROPOSAL_ID\"}" \
+      >/dev/null 2>&1 || true
+  fi
+fi
+```
+
+> **Tại sao không tự apply L2 fix**: L2 đã sai trong dogfood 3.2
+> (propose fix giả mà có vẻ hợp lý). User gate là single source of truth
+> cho fix correctness. Audit trail (`.l2-proposals/`) cho phép trace
+> sau-incident: proposal nào được accept/reject, fix tham chiếu commit nào.
 </step>
 
 <step name="phase4_goal_comparison">
@@ -6461,6 +6525,73 @@ if [ -f "$ALIGN_VAL" ]; then
       fi
     fi
   fi
+fi
+
+# RFC v9 D21 — DEFECT-LOG.md generation (tester pro).
+# After GOAL-COVERAGE-MATRIX is final, parse the matrix and create one
+# Defect entry per goal with status ∈ {BLOCKED, UNREACHABLE, FAILED, SUSPECTED}
+# that does NOT already have an open defect in .tester-pro/defects.json.
+# Severity inferred from priority + block_family heuristics.
+TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+if [ -f "$TESTER_PRO_CLI" ] && [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
+  echo "━━━ D21 — Defect log generation ━━━"
+  ${PYTHON_BIN:-python3} - <<'PYDEFECT' 2>&1 | sed 's/^/  D21: /' || true
+import json, os, re, subprocess, sys
+phase_dir = os.environ['PHASE_DIR']
+phase_no = os.environ['PHASE_NUMBER']
+matrix = open(os.path.join(phase_dir, 'GOAL-COVERAGE-MATRIX.md'),
+              encoding='utf-8').read()
+cli = os.path.join(os.environ['REPO_ROOT'], 'scripts', 'tester-pro-cli.py')
+# Parse rows `| G-XX | priority | surface | STATUS | evidence |`
+row_re = re.compile(
+    r"^\|\s*(G-[\w.-]+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|"
+    r"\s*([A-Z_]+)\s*\|\s*(.+?)\s*\|", re.MULTILINE,
+)
+fail_states = {"BLOCKED", "UNREACHABLE", "FAILED", "SUSPECTED"}
+# Load existing open defects to skip duplicates by (goal, title-prefix)
+defects_path = os.path.join(phase_dir, '.tester-pro', 'defects.json')
+existing = []
+if os.path.exists(defects_path):
+    try: existing = json.load(open(defects_path, encoding='utf-8'))
+    except: pass
+def is_open_for(gid, title_prefix):
+    return any(
+        d.get('related_goals') and gid in d['related_goals']
+        and d.get('title','').startswith(title_prefix)
+        and not d.get('closed_at')
+        for d in existing
+    )
+opened = 0
+for m in row_re.finditer(matrix):
+    gid, prio, surf, status, ev = m.groups()
+    if status not in fail_states:
+        continue
+    title_prefix = f"[{status}]"
+    if is_open_for(gid, title_prefix):
+        continue
+    # Severity heuristic: critical priority → critical; backend mutation → major;
+    # else minor.
+    prio_l = prio.strip().lower()
+    surf_l = surf.strip().lower()
+    if prio_l == 'critical':
+        sev = 'critical'
+    elif any(s in surf_l for s in ('api', 'data', 'integration')):
+        sev = 'major'
+    else:
+        sev = 'minor'
+    title = f"[{status}] {gid} — {ev[:80]}"
+    cmd = [
+        sys.executable, cli, 'defect', 'new',
+        '--phase', phase_no, '--title', title,
+        '--severity', sev, '--found-in', 'review',
+        '--goals', gid,
+        '--notes', f"surface={surf} priority={prio} status={status}. Auto-opened from GOAL-COVERAGE-MATRIX.",
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0:
+        opened += 1
+print(f"opened {opened} new defect(s) from matrix")
+PYDEFECT
 fi
 
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete

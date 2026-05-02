@@ -3976,6 +3976,37 @@ if [ "$COMP_RC" -ne 0 ] && [ "$COMP_SEV" = "block" ]; then
   exit 1
 fi
 
+# RFC v9 D22 + D23 — TEST-SUMMARY-REPORT.md + RTM.md (tester pro discipline).
+# Aggregate goal results + defect log + traceability into final reports.
+TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+if [ -f "$TESTER_PRO_CLI" ]; then
+  echo "━━━ D22 — TEST-SUMMARY-REPORT.md ━━━"
+  "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" summary render \
+    --phase "${PHASE_NUMBER}" 2>&1 | sed 's/^/  D22: /' || true
+
+  echo "━━━ D23 — RTM.md (bi-directional traceability) ━━━"
+  # Pre-2026-05-01 phases: WARN (orphan goals/requirements expected during
+  # migration). New phases: BLOCK on orphan to enforce traceability.
+  GOALS_FIRST_COMMIT_TS=$(git log --reverse --format=%ct -- \
+    "${PHASE_DIR}/TEST-GOALS.md" 2>/dev/null | head -1)
+  GRANDFATHER_CUTOFF=$(date -u -j -f "%Y-%m-%d" "2026-05-01" +%s 2>/dev/null \
+    || date -u -d "2026-05-01" +%s 2>/dev/null || echo "0")
+  if [ -n "$GOALS_FIRST_COMMIT_TS" ] && [ "$GOALS_FIRST_COMMIT_TS" -lt "$GRANDFATHER_CUTOFF" ]; then
+    RTM_SEVERITY="warn"
+  else
+    RTM_SEVERITY="block"
+  fi
+  "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" rtm render \
+    --phase "${PHASE_NUMBER}" --severity "$RTM_SEVERITY" 2>&1 | sed 's/^/  D23: /' || true
+  RTM_RC=$?
+  if [ "${RTM_RC:-0}" -eq 1 ] && [ "$RTM_SEVERITY" = "block" ]; then
+    echo "⛔ D23 BLOCK: RTM has orphan goals or orphan requirements."
+    echo "   Fix: every goal must trace to a decision (D-XX) cited in SPECS/CONTEXT;"
+    echo "        every decision must have ≥1 covering goal in TEST-GOALS."
+    exit 1
+  fi
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
 RUN_RC=$?
 if [ $RUN_RC -ne 0 ]; then
