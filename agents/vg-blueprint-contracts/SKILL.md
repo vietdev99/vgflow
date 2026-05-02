@@ -1,6 +1,6 @@
 ---
 name: vg-blueprint-contracts
-description: Generate API-CONTRACTS.md + INTERFACE-STANDARDS.{md,json} + TEST-GOALS.md + Codex proposal/delta + CRUD-SURFACES.md for a phase. ONLY this task.
+description: Generate API-CONTRACTS (flat + per-endpoint split) + INTERFACE-STANDARDS + TEST-GOALS (flat + per-goal split) + Codex proposal/delta + CRUD-SURFACES for a phase. ONLY this task.
 tools: [Read, Write, Bash, Grep]
 model: opus
 ---
@@ -21,38 +21,88 @@ You MUST NOT ask user questions.
 - `must_cite_bindings`
 - `include_codex_lane` (bool, default true)
 
-## Required outputs (paths under `phase_dir`)
+## Required outputs (3-layer split for build context budget)
+
+### Layer 1 — per-endpoint / per-goal split (primary)
+
+| Path pattern | One file per | Example |
+|---|---|---|
+| `<phase_dir>/API-CONTRACTS/{method}-{path-slug}.md` | endpoint | `API-CONTRACTS/post-api-sites.md` |
+| `<phase_dir>/TEST-GOALS/G-NN.md` | goal | `TEST-GOALS/G-04.md` |
+
+Each per-endpoint file contains the 4-block format (auth + schemas + errors + sample).
+Each per-goal file contains success criteria + mutation evidence + persistence check.
+
+### Layer 2 — index files (table of contents)
+
+| Path | Content |
+|---|---|
+| `<phase_dir>/API-CONTRACTS/index.md` | endpoint table grouped by resource |
+| `<phase_dir>/TEST-GOALS/index.md` | goal table by priority + decision coverage |
+
+### Layer 3 — flat concat (legacy compat for grep validators)
 
 | File | Min bytes | Notes |
 |---|---|---|
-| API-CONTRACTS.md | (no min) | endpoints + request/response shapes |
-| INTERFACE-STANDARDS.md | 500 | response/error envelope rules |
-| INTERFACE-STANDARDS.json | 500 | machine-readable schema |
-| TEST-GOALS.md | (no min) | one G-XX per acceptance criterion |
-| TEST-GOALS.codex-proposal.md | 40 | only if `include_codex_lane=true` |
-| TEST-GOALS.codex-delta.md | 80 | only if `include_codex_lane=true` |
-| CRUD-SURFACES.md | 120 | resource × operation matrix |
+| `<phase_dir>/API-CONTRACTS.md` | (no min) | concat of API-CONTRACTS/{method}-{path}.md prefixed with index |
+| `<phase_dir>/INTERFACE-STANDARDS.md` | 500 | response/error envelope rules (single doc, not split) |
+| `<phase_dir>/INTERFACE-STANDARDS.json` | 500 | machine-readable schema (single file) |
+| `<phase_dir>/TEST-GOALS.md` | (no min) | concat of TEST-GOALS/G-NN.md prefixed with index |
+| `<phase_dir>/TEST-GOALS.codex-proposal.md` | 40 | only if `include_codex_lane=true` (single file) |
+| `<phase_dir>/TEST-GOALS.codex-delta.md` | 80 | only if `include_codex_lane=true` (single file) |
+| `<phase_dir>/CRUD-SURFACES.md` | 120 | resource × operation matrix (single file) |
 
-Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching
-`must_cite_bindings`.
+Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching `must_cite_bindings`.
 
 ## Steps
 
-1. Read PLAN.md, CONTEXT.md, INTERFACE-STANDARDS template.
-2. Derive endpoints from PLAN tasks; write API-CONTRACTS.md.
-3. Write INTERFACE-STANDARDS.md + .json (response envelope, error shape, error codes).
-4. Write TEST-GOALS.md (one G-XX per task acceptance criterion).
-5. If `include_codex_lane`: invoke Codex lane via existing helper:
-   `bash scripts/vg-codex-test-goal-lane.sh --phase <num>`.
-   This produces both `.codex-proposal.md` and `.codex-delta.md`.
-6. Write CRUD-SURFACES.md from PLAN tasks (resource × CRUD op matrix).
-7. Compute sha256 for API-CONTRACTS.md, return JSON.
+1. Read PLAN.md (Layer 3 flat) or PLAN/index.md (preferred for context budget).
+2. Read CONTEXT.md, INTERFACE-STANDARDS template.
+3. Derive endpoints from PLAN tasks. For EACH endpoint:
+   - Write `<phase_dir>/API-CONTRACTS/{method}-{path-slug}.md` with 4-block format.
+   - path-slug = lowercase, hyphens, strip leading slash, strip path params:
+     `POST /api/v1/sites/:id` → `post-api-v1-sites-id`
+4. Write `<phase_dir>/API-CONTRACTS/index.md` (Layer 2 — endpoint table grouped by resource).
+5. Concat `API-CONTRACTS/index.md` + all `API-CONTRACTS/{method}-*.md` →
+   `<phase_dir>/API-CONTRACTS.md` (Layer 3 legacy).
+6. Write INTERFACE-STANDARDS.md + .json (single docs, not split).
+7. Plan goals from CONTEXT decisions + PLAN tasks. For EACH goal:
+   - Write `<phase_dir>/TEST-GOALS/G-NN.md` with success criteria + mutation
+     evidence + persistence check + dependencies + priority + infra deps.
+8. Write `<phase_dir>/TEST-GOALS/index.md` (Layer 2 — goal table by priority).
+9. Concat `TEST-GOALS/index.md` + all `TEST-GOALS/G-*.md` →
+   `<phase_dir>/TEST-GOALS.md` (Layer 3 legacy).
+10. If `include_codex_lane`: invoke
+    `bash scripts/vg-codex-test-goal-lane.sh --phase <num>`.
+11. Write CRUD-SURFACES.md (single doc).
+12. Compute sha256 for API-CONTRACTS.md (Layer 3 flat). Return JSON.
+
+## Concat snippets (use bash)
+
+```bash
+# API-CONTRACTS Layer 3
+cat <phase_dir>/API-CONTRACTS/index.md > <phase_dir>/API-CONTRACTS.md
+for f in <phase_dir>/API-CONTRACTS/*.md; do
+  [ "$(basename "$f")" = "index.md" ] && continue
+  echo "" >> <phase_dir>/API-CONTRACTS.md
+  echo "---" >> <phase_dir>/API-CONTRACTS.md
+  cat "$f" >> <phase_dir>/API-CONTRACTS.md
+done
+
+# TEST-GOALS Layer 3
+cat <phase_dir>/TEST-GOALS/index.md > <phase_dir>/TEST-GOALS.md
+for f in <phase_dir>/TEST-GOALS/G-*.md; do
+  echo "" >> <phase_dir>/TEST-GOALS.md
+  echo "---" >> <phase_dir>/TEST-GOALS.md
+  cat "$f" >> <phase_dir>/TEST-GOALS.md
+done
+```
 
 ## Failure modes
 
 - Missing input → `{"error": "missing_input", "field": "<name>"}`.
 - Codex lane fails → return success with `warnings: ["codex_lane_failed: <stderr>"]`,
-  do NOT fail outright (codex lane is optional unless --skip-codex-test-goal-lane absent).
+  do NOT fail outright.
 - Binding unmet → `{"error": "binding_unmet", "missing": [...]}`.
 
 ## Example return
@@ -60,15 +110,45 @@ Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching
 ```json
 {
   "api_contracts_path": ".vg/phases/01-foo/API-CONTRACTS.md",
+  "api_contracts_index_path": ".vg/phases/01-foo/API-CONTRACTS/index.md",
+  "api_contracts_sub_files": [
+    ".vg/phases/01-foo/API-CONTRACTS/post-api-sites.md",
+    ".vg/phases/01-foo/API-CONTRACTS/get-api-sites.md",
+    ".vg/phases/01-foo/API-CONTRACTS/get-api-sites-id.md"
+  ],
+  "endpoint_count": 3,
   "api_contracts_sha256": "abc123...",
   "interface_md_path": ".vg/phases/01-foo/INTERFACE-STANDARDS.md",
   "interface_json_path": ".vg/phases/01-foo/INTERFACE-STANDARDS.json",
   "test_goals_path": ".vg/phases/01-foo/TEST-GOALS.md",
+  "test_goals_index_path": ".vg/phases/01-foo/TEST-GOALS/index.md",
+  "test_goals_sub_files": [
+    ".vg/phases/01-foo/TEST-GOALS/G-00.md",
+    ".vg/phases/01-foo/TEST-GOALS/G-01.md",
+    ".vg/phases/01-foo/TEST-GOALS/G-02.md"
+  ],
+  "goal_count": 3,
   "codex_proposal_path": ".vg/phases/01-foo/TEST-GOALS.codex-proposal.md",
   "codex_delta_path": ".vg/phases/01-foo/TEST-GOALS.codex-delta.md",
   "crud_surfaces_path": ".vg/phases/01-foo/CRUD-SURFACES.md",
-  "summary": "Generated 8 endpoints across 4 resources, 12 G-XX test goals, 4 CRUD surfaces.",
+  "summary": "Generated 3 endpoints, 3 G-XX test goals, 1 CRUD surface (sites).",
   "bindings_satisfied": ["PLAN:tasks", "INTERFACE-STANDARDS:error-shape"],
   "warnings": []
 }
 ```
+
+## Why split
+
+Build/review/test load contracts to verify endpoints + goals. Monolithic
+API-CONTRACTS.md (200+ lines per endpoint × 8 endpoints = 1600+ lines)
+overflows executor context. Per-endpoint split lets build task 4 load only
+`API-CONTRACTS/post-api-sites.md` (~40 lines).
+
+Layer 3 flat concat preserved for legacy validators
+(verify-blueprint-completeness, decisions-to-tasks, etc.) — they continue to
+work without modification.
+
+Consumers prefer `vg-load` helper for partial loads:
+- `vg-load --phase N --artifact contracts --endpoint post-api-sites`
+- `vg-load --phase N --artifact goals --priority critical`
+- `vg-load --phase N --artifact contracts --full` (legacy fallback)

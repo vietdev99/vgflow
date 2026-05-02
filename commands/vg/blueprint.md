@@ -14,11 +14,24 @@ allowed-tools:
   - TodoWrite
 runtime_contract:
   must_write:
+    # Layer 3: flat concat (legacy compat for grep validators)
     - "${PHASE_DIR}/PLAN.md"
     - "${PHASE_DIR}/INTERFACE-STANDARDS.md"
     - "${PHASE_DIR}/INTERFACE-STANDARDS.json"
     - "${PHASE_DIR}/API-CONTRACTS.md"
     - "${PHASE_DIR}/TEST-GOALS.md"
+    # Layer 2: index files (table of contents)
+    - "${PHASE_DIR}/PLAN/index.md"
+    - "${PHASE_DIR}/API-CONTRACTS/index.md"
+    - "${PHASE_DIR}/TEST-GOALS/index.md"
+    # Layer 1: per-task / per-endpoint / per-goal split (primary, for build context budget)
+    - path: "${PHASE_DIR}/PLAN/task-*.md"
+      glob_min_count: 1
+    - path: "${PHASE_DIR}/API-CONTRACTS/*.md"
+      glob_min_count: 2  # at least index.md + 1 endpoint file
+    - path: "${PHASE_DIR}/TEST-GOALS/G-*.md"
+      glob_min_count: 1
+    # Codex lane + CRUD-SURFACES (single docs, not split)
     - path: "${PHASE_DIR}/TEST-GOALS.codex-proposal.md"
       content_min_bytes: 40
       required_unless_flag: "--skip-codex-test-goal-lane"
