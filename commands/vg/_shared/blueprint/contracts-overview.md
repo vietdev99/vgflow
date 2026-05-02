@@ -60,8 +60,14 @@ echo "✓ Contracts will use format: ${CONTRACT_TYPE}"
 
 ## STEP 4.2 — spawn vg-blueprint-contracts
 
-Read `contracts-delegation.md` for the full prompt template. Then:
+Read `contracts-delegation.md` for the full prompt template. **MANDATORY**:
+emit colored-tag narration before + after the spawn (per vg-meta-skill).
 
+```bash
+bash scripts/vg-narrate-spawn.sh vg-blueprint-contracts spawning "writing API/TEST-GOALS/CRUD for ${PHASE_NUMBER}"
+```
+
+Then call:
 ```
 Agent(subagent_type="vg-blueprint-contracts", prompt=<rendered template>)
 ```
@@ -72,6 +78,15 @@ The subagent writes:
 - `${PHASE_DIR}/CRUD-SURFACES.md` (resource × operation × platform contract)
 
 Returns JSON with paths + sha256 + bindings_satisfied + warnings.
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-blueprint-contracts returned "API endpoints+goals+CRUD generated"
+```
+
+If subagent error JSON or empty output:
+```bash
+bash scripts/vg-narrate-spawn.sh vg-blueprint-contracts failed "<one-line cause>"
+```
 
 ---
 

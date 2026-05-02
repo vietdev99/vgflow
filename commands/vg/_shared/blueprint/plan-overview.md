@@ -303,13 +303,28 @@ vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint" "${PHASE_NUMBE
 
 ## STEP 3.2 — spawn planner
 
-Now read `plan-delegation.md` and use its prompt template to call:
+Now read `plan-delegation.md` and use its prompt template. **MANDATORY**:
+emit colored-tag narration before + after the spawn (per vg-meta-skill).
 
+```bash
+bash scripts/vg-narrate-spawn.sh vg-blueprint-planner spawning "writing PLAN/ for ${PHASE_NUMBER}"
+```
+
+Then call:
 ```
 Agent(subagent_type="vg-blueprint-planner", prompt=<rendered template>)
 ```
 
-Wait for completion. Verify `${PHASE_DIR}/PLAN.md` exists.
+Wait for completion. Verify `${PHASE_DIR}/PLAN.md` exists. Then narrate return:
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-blueprint-planner returned "PLAN.md $(wc -l < ${PHASE_DIR}/PLAN.md) lines"
+```
+
+If subagent returned error JSON or empty output:
+```bash
+bash scripts/vg-narrate-spawn.sh vg-blueprint-planner failed "<one-line cause>"
+```
 
 ---
 

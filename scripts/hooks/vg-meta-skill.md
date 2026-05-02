@@ -44,3 +44,38 @@ project, roadmap, specs, scope, blueprint, build, review, test, accept
 When the user invokes `/vg:<cmd>`, follow the slim entry SKILL.md exactly.
 Read references when instructed. Spawn subagents (using tool name `Agent`,
 NOT `Task`) when instructed.
+
+## Subagent spawn narration (MANDATORY)
+
+For EVERY `Agent(subagent_type=...)` call, emit a colored-tag narration
+BEFORE the spawn AND AFTER its return. Uses bash helper that outputs ANSI
+escape codes — Claude Code chat renders as green/cyan/red pill.
+
+Pattern:
+```bash
+bash scripts/vg-narrate-spawn.sh <subagent-name> spawning ["<short context>"]
+```
+Then call:
+```
+Agent(subagent_type="<subagent-name>", prompt=<...>)
+```
+On return:
+```bash
+bash scripts/vg-narrate-spawn.sh <subagent-name> returned ["<result summary>"]
+```
+On failure (subagent error JSON or empty output):
+```bash
+bash scripts/vg-narrate-spawn.sh <subagent-name> failed "<one-line cause>"
+```
+
+State → background color:
+- `spawning` → 🟢 green pill — about to spawn
+- `returned` → 🔵 cyan pill — completed successfully
+- `failed` → 🔴 red pill — error/timeout/refused
+
+WHY: makes subagent transitions visually distinct in chat — user can
+glance-scan run progress without parsing prose. GSD-style chip UX.
+
+DO NOT skip narration to "save bash calls" — UX consistency matters more
+than 1 bash call savings. Hook does not enforce this convention; it is
+operator courtesy.
