@@ -275,18 +275,37 @@ def find_lens_callers(
 def find_lib_callers(
     artifact: Artifact,
     skill_files: list[Path],
+    lib_files: list[Path] | None = None,
 ) -> dict[str, list[str]]:
-    name = artifact.name  # e.g. "block-resolver"
+    """Match three reference styles a skill might use to invoke a lib helper:
+
+    1. `source .../lib/X.sh`             — direct sourcing
+    2. `lib/X.sh` bare path              — referenced in heredoc/comment
+    3. `"X.sh"` bare filename            — assigned to var then sourced
+       (pattern in design-scaffold.md: `SCAFFOLD_LIB="scaffold-figma.sh"`)
+
+    Also searches lib/*.sh (transitive: e.g. zsh-compat sourced by
+    block-resolver, which is in turn sourced by skill .md). A lib helper
+    transitively reaches a skill via another lib counts as wired.
+    """
+    name = artifact.name
     callers: list[str] = []
-    # Match `source ... lib/X.sh` or bare `lib/X.sh`
     pat = re.compile(
         rf"(?:source\s+[^\n]*lib/{re.escape(name)}\.sh|"
-        rf"lib/{re.escape(name)}\.sh)",
+        rf"lib/{re.escape(name)}\.sh|"
+        rf"[\"'`]{re.escape(name)}\.sh[\"'`])",
     )
     for f in skill_files:
         text = _read_safe(f)
         if pat.search(text):
             callers.append(str(f))
+    # Search other lib files too — transitive wiring.
+    for f in (lib_files or []):
+        if f == artifact.path:
+            continue
+        text = _read_safe(f)
+        if pat.search(text):
+            callers.append(f"lib/{f.name}")
     return {"_module": callers}
 
 
@@ -442,7 +461,8 @@ def main() -> None:
             elif a.kind == "lens":
                 a.callers = find_lens_callers(a, skill_files)
             elif a.kind == "lib":
-                a.callers = find_lib_callers(a, skill_files)
+                lib_files = [x.path for x in artifacts if x.kind == "lib"]
+                a.callers = find_lib_callers(a, skill_files, lib_files)
 
         # 4. Transitive wiring for runtime
         resolve_transitive_wiring(artifacts)

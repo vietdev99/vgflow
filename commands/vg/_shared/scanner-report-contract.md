@@ -343,6 +343,10 @@ Each lens declares which tiers fire. Scanner reads lens spec, captures only rele
 | roam `lens-input-injection` | A | C if auth-bypass attempted | — |
 | roam `lens-file-upload` | A + B | C if file-mutation auth | E (upload progress UI) |
 | roam `lens-duplicate-submit` | A + B (idempotency_replay) | — | — |
+| roam `lens-business-logic` | A + B + F | C if mutation | — |
+| roam `lens-mass-assignment` | A + C | B (privileged-field reflect check) | — |
+| roam `lens-open-redirect` | A + C | F (post-redirect URL) | — |
+| roam `lens-ssrf` | A + C | F (server-fetch storage trace) | — |
 | /vg:debug discovery agent | A only (lightweight) | B/C/E based on classification | F if storage-related |
 | Mobile (Maestro) | A (limited) + G | E (screenshot diff) | — |
 

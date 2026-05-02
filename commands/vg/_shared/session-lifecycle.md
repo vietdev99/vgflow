@@ -215,6 +215,13 @@ At top of `/vg:review`, `/vg:test`, `/vg:build` command files:
 # Source shared helpers (already part of config-loader pattern)
 source .claude/commands/vg/_shared/lib/session-lifecycle.sh   # .sh when extracted (v1.9.0 T3); functions inline in practice today
 
+# Pre-mutation Codex mirror sync check (lib/premutation-sync-check.sh).
+# Runs BEFORE session_start so a drift block fails fast without consuming
+# orchestrator run-start budget. No-op if mirrors already in sync.
+[ -f "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/premutation-sync-check.sh" ] && \
+  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/premutation-sync-check.sh" && \
+  premutation_sync_check "{cmd_name}" 2>&1 || true
+
 PHASE_NUMBER="..."  # resolved from args
 PHASE_DIR="${PLANNING_DIR}/phases/${PHASE_NUMBER}..."
 
