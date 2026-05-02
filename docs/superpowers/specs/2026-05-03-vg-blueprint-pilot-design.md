@@ -52,44 +52,69 @@ Three reinforcing failures:
 
 ## 2. Architecture
 
-### 2.1 End-to-end flow
+### 2.1 End-to-end flow (revised after Codex review)
 
 ```
-User: /vg:blueprint 2 (in PrintwayV3 Claude Code)
+User types: /vg:blueprint 2 in PrintwayV3 Claude Code
    ↓
-[SessionStart hook] inject vg-meta-skill.md content (HARD-GATE rules + Red Flags)
+[UserPromptSubmit hook] (NEW per Codex fix #1)
+   detects /vg: invocation in prompt text
+   creates .vg/active-runs/<session>.json BEFORE model executes
+   prevents bypass: Stop hook would otherwise no-op without active run
+   ↓
+[SessionStart hook] (matchers: startup|resume|clear|compact)
+   inject vg-meta-skill.md content + open diagnostics list (Layer 4)
    ↓
 Claude reads commands/vg/blueprint.md (slim, ≤500 lines, imperative)
    ↓
-SKILL.md instructs: "STEP 1: Bash emit-tasklist.py NOW"
+SKILL.md STEP 1: Bash emit-tasklist.py
+   → writes .vg/runs/<id>/tasklist-contract.json (6 groups, 18 steps)
    ↓
-Bash → writes .vg/runs/<id>/tasklist-contract.json (6 groups, 18 steps)
+SKILL.md STEP 2: "Call TodoWrite NOW with these items..."
    ↓
-SKILL.md instructs: "STEP 2: Call TodoWrite NOW with these items..." (inline JSON template)
+Claude calls TodoWrite (tool) → tasklist visible in UI
    ↓
-Claude calls TodoWrite → tasklist visible in UI
-   ↓
-[PostToolUse hook on TodoWrite] captures payload, validates checksum vs contract,
-   writes .vg/runs/<id>/.tasklist-projected.evidence.json
+[PostToolUse hook on TodoWrite]
+   captures payload via vg-orchestrator-emit-evidence-signed.py
+   writes HMAC-signed .tasklist-projected.evidence.json
+   (NOT direct write — protected path; PreToolUse on Write would block)
    ↓
 For each step (loop):
    Claude calls Bash: vg-orchestrator step-active <step>
       ↓
-   [PreToolUse hook on Bash] reads evidence file
-      missing/mismatch → exit 2 with explanation
+   [PreToolUse hook on Bash] (vg-pre-tool-use-bash.sh)
+      reads evidence file + verifies HMAC signature + checksum
+      missing/invalid/mismatch → exit 2 with §4.5 Layer 1 diagnostic
    ↓
-   IF light step: Claude follows reference file inline
+   IF Claude attempts Write to protected path (e.g., fake .step-markers):
+      [PreToolUse hook on Write/Edit] (NEW per Codex fix #2)
+         exit 2 with: "Use vg-orchestrator helper, not direct Write"
+      Closes evidence-forgery bypass.
+   ↓
+   IF light step: Claude follows reference file inline (Read tool)
    IF heavy step (2a_plan, 2b_contracts):
-      Main Claude calls Task(subagent_type="vg-blueprint-planner", prompt={...})
-      Subagent has narrow context + tools whitelist → cannot skim → returns artifact + checksum
-      Main Claude validates → marks step done
+      Main Claude calls Agent(subagent_type="vg-blueprint-planner", prompt={...})
+      (Tool name: "Agent" per Claude Code docs, NOT "Task" — Codex fix #3)
+      ↓
+      [PreToolUse hook on Agent] (NEW per Codex fix #3)
+         spawn-count check vs plan
+      ↓
+      Subagent narrow context + tools whitelist → cannot skim → returns artifact + checksum
+      Main Claude validates → marks step done via signed helper
    ↓
    Claude calls Bash: vg-orchestrator mark-step blueprint <step>
    ↓
 End: Claude calls Bash: vg-orchestrator run-complete
    ↓
-[Stop hook] verifies runtime_contract (must_write, must_emit_telemetry, must_touch_markers)
-   missing → exit 2 with explicit list
+[Stop hook] (vg-stop.sh)
+   1. If no active VG run, exit 0
+   2. Verify must_write paths + content_min_bytes
+   3. Query events.db for must_emit_telemetry counts
+   4. Check must_touch_markers
+   5. NEW (Codex fix #5): invoke vg-state-machine-validator.py
+      verifies events emitted in expected ORDER (semantic check beyond count)
+   6. Check vg.block.fired paired with vg.block.handled (Layer 2)
+   any failure → exit 2 + explicit missing list
    complete → allow stop
    ↓
 Claude outputs summary, tasklist clears (close-on-complete)
@@ -102,12 +127,13 @@ Claude outputs summary, tasklist clears (close-on-complete)
 | 1. Surface | Slim SKILL.md ≤500 lines | AI reads 30% of file, skips rest |
 | 2. Imperative language | HARD-GATE tags, "MUST", Red Flags | AI rationalizes around descriptive instructions |
 | 3. Context bootstrap | SessionStart hook injects meta-skill | AI starts session without VG awareness |
-| 4. Tool gate | PreToolUse hook on critical Bash | AI skips TodoWrite, calls step-active anyway |
-| 5. Evidence capture | PostToolUse hook on TodoWrite | No proof TodoWrite was called with right content |
-| 6. Subagent isolation | Custom agents with narrow tools/system prompt | Heavy step gets skimmed by lazy main agent |
-| 7. Completion gate | Stop hook validates runtime contract | AI ends turn before contract satisfied |
+| 4. Start-of-run gate | **UserPromptSubmit hook** detects `/vg:` invocation, force-creates active run state BEFORE model execution | AI answers without active run → all 4 below hooks no-op (Codex-caught bypass #1) |
+| 5. Tool gate | PreToolUse hook on critical Bash AND `Write`/`Edit` for protected paths | AI skips TodoWrite, calls step-active OR fakes evidence file via Write (Codex-caught bypass #2) |
+| 6. Evidence capture | PostToolUse hook on TodoWrite | No proof TodoWrite was called with right content |
+| 7. Subagent isolation | Custom agents with narrow tools/system prompt; PreToolUse on **`Agent`** tool name (NOT `Task` — see §4.4 hook matchers) | Heavy step gets skimmed by lazy main agent |
+| 8. Completion gate | Stop hook validates runtime contract + state-machine ordering | AI ends turn before contract satisfied OR emits events out-of-order |
 
-Removing any layer reverts to a known failure mode. All 7 layers required for pilot.
+Removing any layer reverts to a known failure mode. All 8 layers required for pilot. **Layers 4, 5, and the state-machine portion of 8 added per Codex review (2026-05-03) — original 7-layer design left bypass vectors unaddressed.**
 
 ---
 
@@ -118,29 +144,36 @@ Removing any layer reverts to a known failure mode. All 7 layers required for pi
 ```
 commands/vg/
   blueprint.md                              REFACTOR: 3,970 → ~450 lines
-  _shared/blueprint/                        NEW dir
+  _shared/blueprint/                        NEW dir — FLAT structure (Codex review: Anthropic recommends 1-level refs)
     preflight.md                            ~300 lines (5 light steps)
     design.md                               ~250 lines (4 UI steps)
-    plan/                                   nested for heavy step
-      overview.md                           ~100 lines (entry, instructs subagent spawn)
-      delegation.md                         ~150 lines (input/output contract)
-    contracts/                              nested for heavy step
-      overview.md                           ~100 lines
-      delegation.md                         ~150 lines
+    plan-overview.md                        ~100 lines (entry for plan group, instructs subagent spawn)
+    plan-delegation.md                      ~150 lines (input/output contract for vg-blueprint-planner)
+    contracts-overview.md                   ~100 lines (entry for contracts group)
+    contracts-delegation.md                 ~150 lines (input/output for vg-blueprint-contracts)
     verify.md                               ~250 lines (7 grep/path check steps)
     close.md                                ~150 lines (bootstrap + complete)
+    # Note: NO nested subdirs (plan/, contracts/) per Codex review fix #4.
+    # Entry SKILL.md must directly list ALL leaf refs above.
 
 agents/                                     NEW canonical dir
   vg-blueprint-planner/SKILL.md             ~200 lines, narrow task
   vg-blueprint-contracts/SKILL.md           ~200 lines, narrow task
 
 scripts/hooks/                              NEW
-  vg-session-start.sh                       inject meta-skill content
+  vg-user-prompt-submit.sh                  NEW (Codex fix #1) — detect /vg:* invocation, create active-run state file before model runs
+  vg-session-start.sh                       inject meta-skill content (matchers: startup|resume|clear|compact)
   vg-pre-tool-use-bash.sh                   gate before step-active
+  vg-pre-tool-use-write.sh                  NEW (Codex fix #2) — deny Write/Edit on protected paths (.vg/runs/*evidence*, .step-markers/*, events.db, .tasklist-projected.evidence.json) unless via signed orchestrator helper
+  vg-pre-tool-use-agent.sh                  NEW (Codex fix #3) — match tool name "Agent" (NOT "Task"); spawn-count check (build spec strengthen)
   vg-post-tool-use-todowrite.sh             capture + checksum evidence
-  vg-stop.sh                                run-complete contract check
+  vg-stop.sh                                run-complete contract check + state-machine order verify
   vg-meta-skill.md                          text injected by SessionStart
   install-hooks.sh                          merge hooks block into target settings.json
+
+scripts/
+  vg-orchestrator-emit-evidence-signed.py   NEW (Codex fix #2) — only path that writes protected evidence files; signs with HMAC stored in .vg/.evidence-key (mode 0600)
+  vg-state-machine-validator.py             NEW (Codex fix #5) — verifies events emitted in expected ORDER per command (e.g., tasklist_shown → native_tasklist_projected → step.active → mark-step → run-complete)
 
 scripts/tests/
   test_blueprint_pilot_*.py                 NEW test files
@@ -200,12 +233,15 @@ Read `_shared/blueprint/preflight.md`. Follow it exactly.
 Read `_shared/blueprint/design.md`. Follow it exactly.
 
 ### STEP 3 — plan (HEAVY)
-Read `_shared/blueprint/plan/overview.md`. It instructs spawning the
-`vg-blueprint-planner` subagent. DO NOT plan inline.
+Read `_shared/blueprint/plan-overview.md` AND `_shared/blueprint/plan-delegation.md`.
+Then call `Agent(subagent_type="vg-blueprint-planner", ...)` per delegation contract.
+(Tool name is `Agent`, not `Task` — verified per Claude Code hook docs.)
+DO NOT plan inline.
 
 ### STEP 4 — contracts (HEAVY)
-Read `_shared/blueprint/contracts/overview.md`. It instructs spawning the
-`vg-blueprint-contracts` subagent. DO NOT generate contracts inline.
+Read `_shared/blueprint/contracts-overview.md` AND `_shared/blueprint/contracts-delegation.md`.
+Then call `Agent(subagent_type="vg-blueprint-contracts", ...)` per delegation contract.
+DO NOT generate contracts inline.
 
 ### STEP 5 — verify
 Read `_shared/blueprint/verify.md`. Follow it exactly.
@@ -290,14 +326,41 @@ You MUST NOT ask the user questions — your input is the contract.
 
 **`agents/vg-blueprint-contracts/SKILL.md`** follows the same pattern, output: API-CONTRACTS.md + INTERFACE-STANDARDS.{md,json}.
 
-### 4.4 Four hook scripts
+### 4.4 SEVEN hook scripts (revised after Codex review)
 
 | Hook | Matcher | Script | Block? | Purpose |
 |---|---|---|---|---|
-| SessionStart | `startup\|clear\|compact` | `vg-session-start.sh` | No | Inject `vg-meta-skill.md` content as `additionalContext` (Anthropic-recommended pattern, mirrors superpowers technique) |
-| PreToolUse | `Bash` (regex `vg-orchestrator step-active`) | `vg-pre-tool-use-bash.sh` | YES (exit 2) | Read `.vg/runs/<run_id>/.tasklist-projected.evidence.json`. If missing or checksum mismatch with `tasklist-contract.json`, block tool call with stderr message explaining what to do |
-| PostToolUse | `TodoWrite` | `vg-post-tool-use-todowrite.sh` | No | Read tool input payload, diff against `tasklist-contract.json`, write evidence file with `{ todowrite_at, payload_sha256, contract_sha256, match_bool }` |
-| Stop | empty matcher (fires on every Stop event) | `vg-stop.sh` | YES (exit 2) | Read active run from `.vg/active-runs/<session>.json`. If no active VG run, exit 0 (no-op). Otherwise parse `runtime_contract` from command md, verify must_write paths exist with content_min_bytes met, query events.db for must_emit_telemetry counts, check must_touch_markers. Missing any = exit 2 with explicit list |
+| **UserPromptSubmit** (NEW, Codex fix #1) | empty (fires every prompt) | `vg-user-prompt-submit.sh` | YES if invalid | Detect `/vg:<cmd> <args>` in prompt text. If detected, create `.vg/active-runs/<session>.json` BEFORE model executes. If user already has active run + tries different `/vg:<cmd>`, block + ask resolution. Closes Codex bypass #1 (Stop hook no-op without active run). |
+| SessionStart | `startup\|resume\|clear\|compact` (added `resume` per Codex) | `vg-session-start.sh` | No | Inject `vg-meta-skill.md` content as `additionalContext`. On `compact`/`resume`, also inject open diagnostics list per §4.5 Layer 4. |
+| PreToolUse on Bash | `Bash` (regex match `vg-orchestrator step-active` in command) | `vg-pre-tool-use-bash.sh` | YES (exit 2) | Read `.vg/runs/<run_id>/.tasklist-projected.evidence.json` (HMAC-signed). If missing/invalid signature/checksum mismatch, block + diagnostic stderr. |
+| **PreToolUse on Write/Edit** (NEW, Codex fix #2) | `Write\|Edit` matching protected paths via regex on tool input `file_path` | `vg-pre-tool-use-write.sh` | YES (exit 2) | Block direct write to protected paths: `.vg/runs/*/evidence*`, `.vg/runs/*/.tasklist-projected.evidence.json`, `**/.step-markers/**`, `.vg/events.db`, `.vg/events.jsonl`. Stderr: "Use vg-orchestrator-emit-evidence-signed.py instead — direct writes forge evidence." Closes Codex bypass #2 (forgeable evidence). |
+| **PreToolUse on Agent** (NEW, Codex fix #3 — name was wrong in original spec) | `Agent` (verified per Claude Code docs — NOT `Task`) | `vg-pre-tool-use-agent.sh` | YES if shortfall | Spawn-count check (per build spec). Reads active wave plan, verifies subagent_type matches allow-list, increments spawn counter. |
+| PostToolUse on TodoWrite | `TodoWrite` | `vg-post-tool-use-todowrite.sh` | No | Read tool input payload, diff against `tasklist-contract.json`, write evidence via `vg-orchestrator-emit-evidence-signed.py` (NOT direct write — see §4.5b). |
+| Stop | empty matcher | `vg-stop.sh` | YES (exit 2) | (1) If no active VG run, exit 0. (2) Verify `runtime_contract.must_write` paths + content_min_bytes. (3) Query events.db for `must_emit_telemetry` counts. (4) Check `must_touch_markers`. (5) **NEW (Codex fix #5)** invoke `vg-state-machine-validator.py` to verify event ORDER matches expected sequence. (6) Check `vg.block.fired` paired with `vg.block.handled` per §4.5 Layer 2. Any failure → exit 2 + explicit missing list. |
+
+### 4.4b Signed evidence helper (NEW per Codex fix #2)
+
+`scripts/vg-orchestrator-emit-evidence-signed.py`:
+- The ONLY path that writes to protected paths (.vg/runs/*evidence*, .step-markers, events.db).
+- Signs payload with HMAC-SHA256 using key at `.vg/.evidence-key` (mode 0600, gitignored).
+- Hooks (PostToolUse on TodoWrite, PreToolUse step-active) verify signature before trusting evidence.
+- Direct AI Write/Edit to these paths blocked by `vg-pre-tool-use-write.sh`.
+- Pattern adopted from `allow_flag_gate.py` HMAC pattern already in VG.
+
+### 4.4c State-machine validator (NEW per Codex fix #5)
+
+`scripts/vg-state-machine-validator.py`:
+- Defines per-command expected event ORDER (state machine).
+- Example for blueprint:
+  1. `blueprint.tasklist_shown` (1×)
+  2. `blueprint.native_tasklist_projected` (1×)
+  3. `blueprint.step_active` events (≥18×, in step order)
+  4. `blueprint.plan_written` (1×, after 2a_plan step.active)
+  5. `blueprint.contracts_generated` (1×, after 2b_contracts step.active)
+  6. `crossai.verdict` (1×, unless --skip-crossai)
+  7. `blueprint.completed` (1×, last)
+- Stop hook invokes this before allowing run-complete.
+- Catches: events emitted but in wrong order (semantic violation) — closes Codex bypass #5.
 
 **Hook installation strategy:** sync via `install-hooks.sh` which idempotently merges the hooks block into target `.claude/settings.json`. Existing user hooks preserved. Re-running install does not duplicate.
 
@@ -478,6 +541,12 @@ All block messages follow the diagnostic flow defined in §4.5 (5-layer mechanis
 - `test_stop_hook_requires_block_handled_pair.py` — simulate run with 1 vg.block.fired and 0 vg.block.handled, assert Stop hook exits 2 with "UNHANDLED DIAGNOSTIC" line
 - `test_repeated_block_escalation.py` — simulate 3 blocks on same gate, assert 3rd stderr contains "MUST call AskUserQuestion before retrying"
 - `test_session_start_reinjects_open_diagnostics.py` — simulate run with unhandled block + compact event, assert SessionStart hook output contains "OPEN DIAGNOSTICS for current run" with the block listed
+- **NEW (Codex fix #1)** `test_user_prompt_submit_creates_run.py` — simulate `/vg:blueprint 2` prompt submission, assert hook creates `.vg/active-runs/<session>.json` BEFORE model invocation
+- **NEW (Codex fix #2)** `test_pre_tool_use_write_blocks_protected.py` — for each protected path pattern, simulate Write/Edit, assert hook exits 2 with stderr referencing signed helper
+- **NEW (Codex fix #2)** `test_evidence_helper_signs_hmac.py` — simulate orchestrator emit-evidence call, assert evidence file has valid HMAC signature; tampered evidence rejected by hook
+- **NEW (Codex fix #3)** `test_pre_tool_use_agent_matcher.py` — assert hook config uses tool name `Agent` (not `Task`); spawn-count enforcement works
+- **NEW (Codex fix #5)** `test_state_machine_validator.py` — for blueprint command, simulate events emitted out of order (mark-step before step.active), assert validator returns FAIL with explicit ordering violation
+- **NEW (Codex fix #4)** `test_blueprint_refs_flat_structure.py` — assert `_shared/blueprint/` has FLAT structure (no nested subdirs), entry SKILL.md directly lists all leaf refs
 
 **Empirical dogfood (manual run + automated metric query):**
 - Sync to PrintwayV3 via `DEV_ROOT=".../PrintwayV3" ./sync.sh --no-global`
@@ -491,14 +560,34 @@ All block messages follow the diagnostic flow defined in §4.5 (5-layer mechanis
 2. `blueprint.native_tasklist_projected` event count = 1 in this run (baseline 1/28 = 3.5%)
 3. All 18+ step markers touched without override flag
 4. PLAN.md and API-CONTRACTS.md exist with non-placeholder content (content_min_bytes met)
-5. Two Task subagent invocation events present (one per heavy step)
+5. Two `Agent` tool invocation events present (one per heavy step) — tool name verified `Agent` not `Task`
 6. Manual test: simulate skipping TodoWrite, PreToolUse hook blocks with diagnostic stderr formatted per §4.5 Layer 1
 7. User (sếp) reads workflow narration end-to-end and reports understanding each step's purpose (qualitative)
 8. Stop hook fires without exit 2 (run-complete contract satisfied)
 9. Manual test: triggered block produces user-facing narration in session language using §4.5 Layer 5 template (not silent retry)
 10. Stop hook fails closed if `vg.block.fired` events are not paired with `vg.block.handled` (verify with manual induce-and-skip test)
+11. **NEW (Codex fix #1)**: UserPromptSubmit hook fires on `/vg:blueprint 2` invocation, creates active-run state file BEFORE first model response (verify via filesystem timestamp)
+12. **NEW (Codex fix #2)**: simulate AI Write to `.vg/runs/<id>/.tasklist-projected.evidence.json` directly → PreToolUse on Write/Edit blocks with stderr "Use vg-orchestrator-emit-evidence-signed.py instead"
+13. **NEW (Codex fix #5)**: state-machine validator catches event emitted in wrong order (e.g., `mark-step` before `step.active`) → Stop hook blocks
 
 Pilot FAILS if any criterion missed. Failure path: return to design phase. **Do not scale to other commands.**
+
+### 5.5 Multi-canary R1 strategy (NEW per Codex review)
+
+Codex flagged: "Blueprint R1 passing is insufficient for R2-R5. You need separate canaries for parallel build waves, interactive UAT/scope/project flows, review/roam lens dispatch, and phase parent-tasklist mode."
+
+R1 is now a **multi-canary phase** with 4 sub-pilots, each verifying a distinct pattern:
+
+| Canary | Spec | Verifies pattern |
+|---|---|---|
+| **R1a — blueprint** | this spec | slim+refs+hooks+diagnostic baseline |
+| **R1b — phase** | `2026-05-03-vg-phase-design.md` | parent-tasklist coordination (VG_PARENT_RUN_ID) |
+| **R1c — scope** | `2026-05-03-vg-scope-design.md` | interactive UX with challenger/expander Agent invocations (5 rounds) |
+| **R1d — review** | `2026-05-03-vg-review-design.md` | lens dispatch + parallel Haiku scanners + per-lens telemetry |
+
+R2-R5 only proceed after ALL 4 canaries pass. R1a is sequential first (blueprint is canonical template); R1b/c/d can run in parallel after R1a.
+
+Rationale: each pattern dimension has unique failure modes. Blueprint passing doesn't validate that interactive UX (scope) or parallel scanners (review) work. Single-pilot extrapolation is the trap.
 
 ---
 

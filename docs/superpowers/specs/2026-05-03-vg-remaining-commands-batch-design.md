@@ -53,13 +53,28 @@ Most are < 500 lines (already at Anthropic ceiling). They need:
 
 NO subagent extraction needed (most are simple workflows).
 
-### 1.3 Exception: `migrate` (1,301 lines)
+### 1.3 Files >500 lines requiring slim+refs (NOT just migrate — Codex review correction)
 
-Migrate is the only remaining command >500 lines. It has complex GSD→VG conversion logic. Treatment:
-- Slim entry SKILL.md (≤500 lines) + 4-6 reference files for migration phases
-- NO subagent (single-task migration script)
-- Uniform application of imperative cleanup
-- Audit migrate-specific patterns (idempotency, rollback) before refactor
+Original spec claimed migrate was the ONLY remaining file >500 lines. **Codex audit caught this error.** Actual files >500 lines requiring slim+refs treatment:
+
+| Command | Lines | Treatment |
+|---|---|---|
+| `migrate` | 1,301 | Slim + 4-6 refs (most complex; GSD→VG conversion logic) |
+| `scope-review` | 670 | Slim + 3 refs (cross-phase scope validation) |
+| `update` | 640 | Slim + 3 refs (3-way merge with park conflicts) |
+| `deploy` | 588 | Slim + 3 refs (multi-env: sandbox/staging/prod) |
+
+All 4 require:
+- Slim entry SKILL.md (≤500 lines)
+- Reference file split for body
+- NO subagent (single-task workflows)
+- Uniform imperative cleanup
+- Per-command audit of unique patterns (idempotency for migrate, conflict-park for update, env-state for deploy, cross-phase scan for scope-review)
+
+Files in 400-500 range (treated as borderline — slim only if obvious split available, else imperative cleanup):
+- `extract-utils` (455), `map` (442), `reapply-patches` (407)
+
+All other ~30 commands: imperative cleanup only (no slim+refs).
 
 ### 1.4 Goals
 
@@ -278,15 +293,24 @@ Total automation possible — most cleanup is mechanical text transformation.
 
 ```
 commands/vg/
-  <38 commands>.md                          IMPERATIVE CLEANUP + frontmatter strengthen
-  migrate.md                                REFACTOR: 1,301 → ~500 lines (slim + refs)
-  _shared/migrate/                          NEW (only for migrate)
-    overview.md
-    detection.md
-    conversion.md
-    rollback.md
-    verification.md
-  _shared/vg-meta-skill.md                  EXTEND — append per-command Red Flags sections
+  <30+ small commands>.md                   IMPERATIVE CLEANUP + frontmatter strengthen
+  
+  # 4 files >500 lines requiring slim+refs (Codex review correction):
+  migrate.md                                REFACTOR: 1,301 → ~500 lines + refs
+  scope-review.md                           REFACTOR: 670 → ~400 lines + refs
+  update.md                                 REFACTOR: 640 → ~400 lines + refs
+  deploy.md                                 REFACTOR: 588 → ~400 lines + refs
+  
+  _shared/migrate/                          NEW
+    overview.md, detection.md, conversion.md, rollback.md, verification.md
+  _shared/scope-review/                     NEW
+    overview.md, conflict-detection.md, gap-detection.md
+  _shared/update/                           NEW
+    overview.md, merge-strategy.md, conflict-park.md
+  _shared/deploy/                           NEW
+    overview.md, env-handling.md, deploy-state.md
+  
+  _shared/vg-meta-skill.md                  EXTEND — append per-command Red Flags sections (Codex caution: keep command-specific, don't dump globally)
 
 scripts/
   refactor-imperative-pass.sh               NEW utility — sed-based descriptive→imperative replace
@@ -322,10 +346,10 @@ All blocks follow blueprint pilot §4.5. Per-command errors handled by inherited
 
 ### 7.4 Exit criteria — batch cleanup PASS requires ALL of:
 
-1. All ~38 commands pass static tests (imperative + hard-gate + red-flags + telemetry frontmatter)
-2. `migrate.md` ≤ 600 lines
+1. All ~30+ small commands pass static tests (imperative + hard-gate + red-flags + telemetry frontmatter)
+2. **4 large files (migrate, scope-review, update, deploy)** all ≤ 600 lines after slim+refs (Codex review correction — was wrongly only migrate)
 3. Sampled commands emit native_tasklist_projected (verified via dogfood subset)
-4. `vg-meta-skill.md` extended with per-command Red Flags (count: ~20+ new sections)
+4. `vg-meta-skill.md` extended with per-command Red Flags (count: ~20+ new sections, command-specific NOT global dump per Codex caution)
 5. Stop hook fires correctly for sampled commands
 
 Batch PASS = R5 complete = full VG pipeline + all auxiliary commands aligned with new template.

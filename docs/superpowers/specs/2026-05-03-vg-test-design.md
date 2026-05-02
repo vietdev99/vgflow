@@ -282,3 +282,21 @@ Test pilot dogfood may use the SAME PrintwayV3 phase as build pilot (e.g., phase
 - Existing test.md: `commands/vg/test.md` (4,188 lines pre-refactor)
 - Deep-probe pattern: existing L2664-2732 (Sonnet + adversarial)
 - Bootstrap reflection: existing L3796-3845
+
+---
+
+## Appendix — Codex review corrections (2026-05-03)
+
+External review by Codex (gpt-5.5) flagged 5 spec-wide issues:
+
+1. **Tool name `Agent`, not `Task`** — Claude Code current docs use tool name `Agent` for subagent invocations (verified via [hooks reference](https://code.claude.com/docs/en/hooks)). Any reference in this spec to `Task(...)` invocation or PreToolUse matcher `Task` MUST be implemented as `Agent`. Both `SubagentStart`/`SubagentStop` events available for additional observability.
+
+2. **UserPromptSubmit hook needed** — Per blueprint pilot spec amendment §4.4. This spec inherits the start-of-run gate that creates `.vg/active-runs/<session>.json` BEFORE model executes. Otherwise Stop hook no-ops bypass entire enforcement.
+
+3. **PreToolUse on Write/Edit for protected paths** — Per blueprint pilot spec amendment §4.4. AI cannot directly Write to `.vg/runs/*evidence*`, `.step-markers/*`, `events.db` etc. Must use signed orchestrator helper.
+
+4. **Flat references (1-level)** — Anthropic guidance: keep refs ONE level from SKILL.md. Any nested `_shared/<cmd>/<group>/overview.md + delegation.md` chain in this spec should be flattened to `_shared/<cmd>/<group>-overview.md + <group>-delegation.md`.
+
+5. **State-machine validator** — Per blueprint pilot spec amendment §4.4c. Stop hook invokes `vg-state-machine-validator.py` to verify event ORDER matches expected sequence per command — beyond mere event count.
+
+Implementation plans for this command MUST incorporate all 5 corrections.

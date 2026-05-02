@@ -241,3 +241,21 @@ All blocks follow blueprint pilot §4.5. Roam-specific:
 - Existing roam.md: `commands/vg/roam.md` (1,103 lines)
 - Lens definitions: `commands/vg/_shared/lens-prompts/` (19 lenses, shared)
 - State coherence rules: `roam-analyze.py` (R1-R8)
+
+---
+
+## Appendix — Codex review corrections (2026-05-03)
+
+External review by Codex (gpt-5.5) flagged 5 spec-wide issues:
+
+1. **Tool name `Agent`, not `Task`** — Claude Code current docs use tool name `Agent` for subagent invocations (verified via [hooks reference](https://code.claude.com/docs/en/hooks)). Any reference in this spec to `Task(...)` invocation or PreToolUse matcher `Task` MUST be implemented as `Agent`. Both `SubagentStart`/`SubagentStop` events available for additional observability.
+
+2. **UserPromptSubmit hook needed** — Per blueprint pilot spec amendment §4.4. This spec inherits the start-of-run gate that creates `.vg/active-runs/<session>.json` BEFORE model executes. Otherwise Stop hook no-ops bypass entire enforcement.
+
+3. **PreToolUse on Write/Edit for protected paths** — Per blueprint pilot spec amendment §4.4. AI cannot directly Write to `.vg/runs/*evidence*`, `.step-markers/*`, `events.db` etc. Must use signed orchestrator helper.
+
+4. **Flat references (1-level)** — Anthropic guidance: keep refs ONE level from SKILL.md. Any nested `_shared/<cmd>/<group>/overview.md + delegation.md` chain in this spec should be flattened to `_shared/<cmd>/<group>-overview.md + <group>-delegation.md`.
+
+5. **State-machine validator** — Per blueprint pilot spec amendment §4.4c. Stop hook invokes `vg-state-machine-validator.py` to verify event ORDER matches expected sequence per command — beyond mere event count.
+
+Implementation plans for this command MUST incorporate all 5 corrections.
