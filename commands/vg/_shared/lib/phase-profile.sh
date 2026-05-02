@@ -112,16 +112,39 @@ detect_phase_profile() {
   fi
 
   # ─── Rule 5: migration (SPECS mentions migration + touches schema) ──
+  # v2.47.1 (Issue #82) — strengthen detection to require quorum, not just
+  # any "migration" word match. Pre-fix: feature SPECS that mentioned
+  # "migration" in passing (e.g., "deferred destructive-migration notes",
+  # "data migration plan in Phase 6") tripped Rule 5 → wrong profile →
+  # required ROLLBACK.md → user forced to override at every /vg:review.
+  # Now: explicit migration_plan: frontmatter is strongest signal;
+  # otherwise PLAN.md must list ≥2 migration/schema file paths (not 1) for
+  # the weaker fallback to fire.
+  if grep -qiE '^migration_plan:\s*' "$specs" 2>/dev/null; then
+    # Strongest signal: explicit frontmatter declaration. Trust it
+    # without further checks.
+    echo "migration"
+    return 0
+  fi
   if grep -qiE '\b(migration|migrate|schema change|db migration)\b' "$specs" 2>/dev/null; then
     # Also must touch schema/migrations paths — check PLAN if present
     if [ -f "$plan" ]; then
-      if grep -qE '<file-path>[^<]*(migrations|schema|\.sql)[^<]*</file-path>' "$plan" 2>/dev/null; then
+      # Require ≥2 file-path matches (quorum). Single-file mention of
+      # migrations/* is allowed in feature specs (e.g., "we'll touch
+      # migrations/123.sql when bumping a single column") without
+      # forcing the migration profile.
+      local mig_path_count
+      mig_path_count=$(grep -cE '<file-path>[^<]*(migrations|schema|\.sql)[^<]*</file-path>' "$plan" 2>/dev/null || echo 0)
+      if [ "$mig_path_count" -ge 2 ]; then
         echo "migration"
         return 0
       fi
     fi
-    # Weaker signal — SPECS itself mentions migration directory
-    if grep -qiE '(migrations/|\.sql|prisma/schema|sqlx migrate|knex migrate)' "$specs" 2>/dev/null; then
+    # Weakest fallback — only fire if SPECS explicitly references
+    # migration tooling (knex/prisma/sqlx) in CMD form, not just prose.
+    # Pre-fix the bare "migrations/" or ".sql" prose mention was enough,
+    # which is the false-positive root cause.
+    if grep -qiE '(prisma migrate|sqlx migrate|knex migrate|alembic upgrade|django.*makemigrations)' "$specs" 2>/dev/null; then
       echo "migration"
       return 0
     fi

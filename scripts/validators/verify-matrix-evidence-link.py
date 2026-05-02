@@ -56,7 +56,13 @@ MATRIX_ROW_RE = re.compile(
     re.MULTILINE,
 )
 
-STATUSES_WITHOUT_RUNTIME = {"BLOCKED", "INFRA_PENDING", "UNREACHABLE", "DEFERRED"}
+# v2.47.1 (Issue #84) — BLOCKED added: when matrix Status=BLOCKED matches
+# runtime goal_sequences[gid].result='blocked'/'failed'/'error', the two
+# are semantically aligned and should NOT trigger
+# matrix_status_contradicts_runtime_result. Pre-fix: workflow forced
+# DEFERRED workaround instead of the natural BLOCKED.
+STATUSES_WITHOUT_RUNTIME = {"INFRA_PENDING", "UNREACHABLE", "DEFERRED", "BLOCKED"}
+RUNTIME_FAILURE_RESULTS = {"blocked", "failed", "error"}
 RUNTIME_PASS_RESULTS = {"passed", "ready", "ok", "deferred-structural"}
 
 
@@ -189,6 +195,12 @@ def main() -> int:
                 continue
 
             if result and result not in RUNTIME_PASS_RESULTS:
+                # v2.47.1 (Issue #84) — alignment short-circuit: if matrix
+                # explicitly wrote a failure status (BLOCKED) and runtime
+                # also recorded failure, both are saying the same thing.
+                # Don't flag as contradiction.
+                if status == "BLOCKED" and result in RUNTIME_FAILURE_RESULTS:
+                    continue
                 # Most common: matrix=READY, result=blocked
                 output.add(Evidence(
                     type="matrix_status_contradicts_runtime_result",

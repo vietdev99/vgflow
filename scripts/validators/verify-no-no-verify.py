@@ -78,10 +78,25 @@ ALLOWLIST_RE = [
     re.compile(r"^\.vg/"),
     re.compile(r"^docs/"),
     re.compile(r"\.example$"),
-    # This validator's own file
-    re.compile(r"^\.claude/scripts/validators/verify-no-no-verify\.py$"),
-    # Test fixtures
-    re.compile(r"^\.claude/scripts/validators/test-"),
+    # v2.47.2 (Issue #87) — allowlist patterns must work from BOTH vgflow-repo
+    # source layout (`scripts/validators/...`) and user installs
+    # (`.claude/scripts/validators/...`). Pre-fix the `^\.claude/` anchor only
+    # matched user installs, so running the validator from vgflow-repo source
+    # self-flagged its own file + its own test fixture + gate-manifest.json
+    # (which contains the literal --no-verify string in its frozen gate hash
+    # data). 80 violations on a clean v2.47.1 install blocked every
+    # /vg:* run-complete.
+    # This validator's own file (any layout)
+    re.compile(r"(^|/)scripts/validators/verify-no-no-verify\.py$"),
+    # Test fixtures (any layout) — both `tests/` (vgflow-repo) and
+    # `.claude/scripts/tests/` (user install) carry test_no_no_verify.py
+    # with intentional --no-verify literals as repro fixtures.
+    re.compile(r"(^|/)scripts/validators/test-"),
+    re.compile(r"(^|/)tests/test_no_no_verify\.py$"),
+    re.compile(r"(^|/)scripts/tests/test_no_no_verify\.py$"),
+    # Generated gate manifest — contains the literal flag inside hashed
+    # gate body, NOT as an executable command.
+    re.compile(r"(^|/)gate-manifest\.json$"),
     # Storybook static assets
     re.compile(r"^apps/web/storybook-static/"),
 ]
@@ -105,13 +120,21 @@ def is_in_code_fence(text: str, start_offset: int) -> bool:
 def is_in_negative_example(line: str) -> bool:
     """Heuristic: line shows the flag as a forbidden example.
 
-    Markers: 'NEVER', 'don't', 'do not', 'banned', 'forbidden', '🚫',
-    'không bao giờ', 'KHÔNG', '⛔'.
+    v2.47.2 (Issue #87) — added 'MUST NOT', 'must not', 'Bypass', 'anti --no-verify'
+    so docstrings/comments educating about the rule (e.g. orchestrator
+    `__main__.py:2764` comment "Source code MUST NOT contain --no-verify",
+    or `verify-rule-cards-fresh-hook.py:29` docstring "Bypass: git commit
+    --no-verify (already banned)") are recognized as legitimate prose
+    instead of self-flagging the validator.
     """
     markers = ("NEVER", "don't", "do not", "banned", "forbidden",
                "không bao giờ", "KHÔNG", "DO NOT", "Don't", "đừng",
                "ANTI-PATTERN", "anti-pattern", "anti pattern", "wrong:",
-               "BAD:", "❌", "⛔", "🚫")
+               "BAD:", "❌", "⛔", "🚫",
+               # v2.47.2 additions for source-code prose
+               "MUST NOT", "must not", "Must not", "Bypass:", "bypass:",
+               "anti --no-verify", "no-no-verify", "non-negotiable",
+               "(already banned)", "already banned")
     return any(m in line for m in markers)
 
 
@@ -132,18 +155,44 @@ def scan_file(file_path: Path) -> list[dict]:
                 in_fence = is_in_code_fence(text, offset) if is_md else False
                 negative_example = is_in_negative_example(line)
 
-                # Severity routing:
-                # - Source code (.py/.ts/.sh/.yaml etc.) → BLOCK always
-                # - Markdown in code fence with no negative-example marker → WARN
-                #   (might be example command, but not clearly forbidden)
-                # - Markdown negative-example or prose → skip (doc legitimately
-                #   discusses the rule)
+                # v2.47.2 (Issue #87) — severity routing:
+                # - Source code line that is a COMMENT or in DOCSTRING and
+                #   carries a negative-example marker → skip (educational
+                #   prose, not actual bypass intent).
+                # - Source code line containing `git commit`/`git push`/
+                #   `git rebase` AS A COMMAND (not just discussed) → BLOCK.
+                #   Pre-fix: any --no-verify mention in .py/.sh was BLOCK,
+                #   self-flagging orchestrator's own anti-bypass docstring.
+                # - Markdown in code fence without negative-example marker → WARN.
+                # - Markdown negative-example or prose → skip.
+                stripped = line.lstrip()
+                is_comment_line = (
+                    stripped.startswith("#") or  # py/sh/yaml comment
+                    stripped.startswith("//") or  # ts/js/go comment
+                    stripped.startswith("*") or   # /* ... */ continuation
+                    stripped.startswith("///")    # rust/c# doc comment
+                )
                 if is_md:
                     if negative_example:
                         continue  # legitimate doc mention
                     severity = "WARN" if in_fence else "WARN"
                 else:
-                    severity = "BLOCK"
+                    # v2.47.2 (Issue #87) — negative-example marker (NEVER /
+                    # MUST NOT / Bypass: / already banned / etc.) on the same
+                    # line as --no-verify is sufficient to recognize the
+                    # mention as educational prose, regardless of whether
+                    # the line is a `#` comment, `//` comment, inside a
+                    # `"""..."""` docstring, or plain text in a multi-line
+                    # rules block. Same intent as the markdown branch above.
+                    if negative_example:
+                        continue
+                    if is_comment_line:
+                        # Comment without explicit anti-pattern marker —
+                        # downgrade to WARN (could be example, not clearly
+                        # forbidden; reviewer can confirm).
+                        severity = "WARN"
+                    else:
+                        severity = "BLOCK"
 
                 findings.append({
                     "line": line_no,
