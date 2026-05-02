@@ -182,8 +182,8 @@ detect_phase_profile() {
 
 phase_profile_required_artifacts() {
   case "${1:-feature}" in
-    feature)        echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;
-    feature-legacy) echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;  # v1.9.2.1 — pre-SPECS phases
+    feature)        echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md API-DOCS.md TEST-GOALS.md SUMMARY.md" ;;
+    feature-legacy) echo "CONTEXT.md PLAN.md API-CONTRACTS.md API-DOCS.md TEST-GOALS.md SUMMARY.md" ;;  # v1.9.2.1 — pre-SPECS phases
     infra)          echo "SPECS.md PLAN.md SUMMARY.md" ;;
     hotfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
     bugfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
@@ -198,11 +198,11 @@ phase_profile_skip_artifacts() {
   case "${1:-feature}" in
     feature)        echo "" ;;
     feature-legacy) echo "SPECS.md" ;;  # v1.9.2.1 — treat SPECS as optional for legacy phases
-    infra)          echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md RUNTIME-MAP.json" ;;
-    hotfix)         echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md" ;;
-    bugfix)         echo "API-CONTRACTS.md CONTEXT.md" ;;
-    migration)      echo "API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json" ;;
-    docs)           echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json SUMMARY.md" ;;
+    infra)          echo "TEST-GOALS.md API-CONTRACTS.md API-DOCS.md CONTEXT.md RUNTIME-MAP.json" ;;
+    hotfix)         echo "TEST-GOALS.md API-CONTRACTS.md API-DOCS.md CONTEXT.md" ;;
+    bugfix)         echo "API-CONTRACTS.md API-DOCS.md CONTEXT.md" ;;
+    migration)      echo "API-CONTRACTS.md API-DOCS.md TEST-GOALS.md RUNTIME-MAP.json" ;;
+    docs)           echo "CONTEXT.md PLAN.md API-CONTRACTS.md API-DOCS.md TEST-GOALS.md RUNTIME-MAP.json SUMMARY.md" ;;
     *)              echo "" ;;
   esac
 }

@@ -29,9 +29,21 @@ from urllib.parse import urljoin
 HEADER_RE = re.compile(
     r"(?m)^###?\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)"
 )
-PARAM_SEGMENT_RE = re.compile(r"/(:[A-Za-z0-9_]+|\{[^}/]+\})")
+PARAM_SEGMENT_RE = re.compile(r":([A-Za-z0-9_]+)|\{([^}/]+)\}")
 GET_ACCEPTABLE = set(range(200, 300)) | {400, 401, 403, 405, 409, 422, 428}
+GET_PARAM_ACCEPTABLE = GET_ACCEPTABLE | {404}
 MUTATION_ACCEPTABLE = {200, 201, 202, 204, 400, 401, 403, 405, 409, 415, 422, 428}
+
+
+def _dummy_path_value(name: str) -> str:
+    lower = name.lower()
+    if lower in {"id", "merchant_id", "merchantid", "request_id", "requestid", "file_id", "fileid"}:
+        return "000000000000000000000000"
+    if "gateway" in lower:
+        return "paypal"
+    if "currency" in lower:
+        return "USD"
+    return "test"
 
 
 @dataclass
@@ -46,12 +58,14 @@ class Endpoint:
 
     @property
     def materialized_path(self) -> str:
-        path = self.path
-        if PARAM_SEGMENT_RE.search(path):
-            collapsed = PARAM_SEGMENT_RE.sub("", path).rstrip("/")
-            if collapsed:
-                return collapsed
-        return path
+        return PARAM_SEGMENT_RE.sub(
+            lambda m: _dummy_path_value(m.group(1) or m.group(2) or "id"),
+            self.path,
+        )
+
+    @property
+    def has_path_params(self) -> bool:
+        return bool(PARAM_SEGMENT_RE.search(self.path))
 
 
 @dataclass
@@ -154,7 +168,13 @@ def probe_endpoint(base_url: str, endpoint: Endpoint, headers: list[str], timeou
             detail=f"curl_rc={curl_rc} {curl_err[:220]}".strip(),
         )
 
-    acceptable = GET_ACCEPTABLE if endpoint.method == "GET" else MUTATION_ACCEPTABLE
+    acceptable = (
+        GET_PARAM_ACCEPTABLE
+        if endpoint.method == "GET" and endpoint.has_path_params
+        else GET_ACCEPTABLE
+        if endpoint.method == "GET"
+        else MUTATION_ACCEPTABLE
+    )
     if status in acceptable:
         verdict = "PASS" if 200 <= status < 300 else "ACCEPTABLE"
         detail_bits = [f"probe={endpoint.probe_method}", f"status={status}"]

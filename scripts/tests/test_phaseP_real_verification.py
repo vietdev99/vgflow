@@ -14,6 +14,7 @@ regress back to performative stubs.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -170,6 +171,7 @@ def test_review_contract_has_api_precheck_step(review_text):
         "0b_goal_coverage_gate", "complete",
         # Session / planning
         "00_session_lifecycle", "create_task_tracker", "phase_profile_branch",
+        "0c_telemetry_suggestions",
         # phaseP_*
         "phaseP_infra_smoke", "phaseP_delta", "phaseP_regression",
         "phaseP_schema_verify", "phaseP_link_check",
@@ -177,6 +179,9 @@ def test_review_contract_has_api_precheck_step(review_text):
         "phase1_code_scan", "phase1_5_ripple_and_god_node",
         "phase2a_api_contract_probe",
         "phase2_browser_discovery", "phase2_exploration_limits",
+        "phase2c_enrich_test_goals", "phase2c_pre_dispatch_gates",
+        "phase2d_crud_roundtrip_dispatch", "phase2e_findings_merge",
+        "phase2e_post_challenge", "phase2f_route_auto_fix",
         "phase2_mobile_discovery", "phase2_5_visual_checks",
         "phase2_5_mobile_visual_checks", "phase3_fix_loop",
         "phase4_goal_comparison",
@@ -191,6 +196,11 @@ def test_review_contract_has_api_precheck_step(review_text):
 
 
 def test_review_api_precheck_requires_fresh_artifact_and_telemetry(review_text):
+    assert '${PHASE_DIR}/api-docs-check.txt' in review_text
+    docs_idx = review_text.index('${PHASE_DIR}/api-docs-check.txt')
+    docs_block = review_text[docs_idx:docs_idx + 260]
+    assert 'must_be_created_in_run: true' in docs_block
+    assert 'check_provenance: true' in docs_block
     assert '${PHASE_DIR}/api-contract-precheck.txt' in review_text
     artifact_idx = review_text.index('${PHASE_DIR}/api-contract-precheck.txt')
     artifact_block = review_text[artifact_idx:artifact_idx + 260]
@@ -202,6 +212,103 @@ def test_review_api_precheck_requires_fresh_artifact_and_telemetry(review_text):
     event_idx = review_text.index('event_type: "review.api_precheck_completed"')
     event_block = review_text[event_idx:event_idx + 220]
     assert 'required_unless_flag: "--skip-discovery"' in event_block
+    assert '${PHASE_DIR}/REVIEW-LENS-PLAN.json' in review_text
+    assert 'event_type: "review.lens_plan_generated"' in review_text
+
+
+def test_review_requires_native_tasklist_projection(review_text):
+    assert "TaskCreate" in review_text
+    assert "TaskUpdate" in review_text
+    assert 'event_type: "review.native_tasklist_projected"' in review_text
+    assert "vg-orchestrator tasklist-projected --adapter" in review_text
+    assert "tasklist-contract.json" in review_text
+    assert "Native task UI projection is REQUIRED" in review_text
+
+
+def test_review_step_plan_surfaces_api_docs_and_step_active(review_text):
+    create_task_tracker = _extract_step(review_text, "create_task_tracker")
+    assert "2a.5: API Docs + API contract precheck" in create_task_tracker
+    assert "2c:   Runtime lens dispatch" in create_task_tracker
+    assert "2d:   API error-message runtime lens" in create_task_tracker
+    assert "filter, paging, sort, search, URL-state, visual" in create_task_tracker
+    assert "2e:   Findings pipeline" in create_task_tracker
+    assert "vg-orchestrator step-active <step_name>" in create_task_tracker
+    assert "tasklist-projected --adapter" in create_task_tracker
+
+    probe_step = _extract_step(review_text, "phase2a_api_contract_probe")
+    assert "vg-orchestrator step-active phase2a_api_contract_probe" in probe_step
+
+
+def test_review_tasklist_mode_filter_makes_full_workflow_concrete(review_text):
+    filter_script = REVIEW_MD.parents[2] / "scripts" / "filter-steps.py"
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(filter_script),
+            "--command",
+            str(REVIEW_MD),
+            "--profile",
+            "web-fullstack",
+            "--mode",
+            "full",
+            "--output-ids",
+        ],
+        text=True,
+    )
+    steps = [s for s in out.strip().split(",") if s]
+    assert "phase1_code_scan" in steps
+    assert "phase2c_enrich_test_goals" in steps
+    assert "phase2d_crud_roundtrip_dispatch" in steps
+    assert "phase2_9_error_message_runtime" in steps
+    assert "phaseP_regression" not in steps
+    assert "phaseP_delta" not in steps
+
+
+def test_review_tasklist_mode_filter_selects_single_phaseP_branch(review_text):
+    filter_script = REVIEW_MD.parents[2] / "scripts" / "filter-steps.py"
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(filter_script),
+            "--command",
+            str(REVIEW_MD),
+            "--profile",
+            "web-fullstack",
+            "--mode",
+            "regression",
+            "--output-ids",
+        ],
+        text=True,
+    )
+    steps = [s for s in out.strip().split(",") if s]
+    assert "phaseP_regression" in steps
+    assert "phaseP_delta" not in steps
+    assert "phase1_code_scan" not in steps
+    assert "phase2_browser_discovery" not in steps
+
+
+def test_review_full_tasklist_steps_are_declared_in_runtime_contract(review_text):
+    filter_script = REVIEW_MD.parents[2] / "scripts" / "filter-steps.py"
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(filter_script),
+            "--command",
+            str(REVIEW_MD),
+            "--profile",
+            "web-fullstack",
+            "--mode",
+            "full",
+            "--output-ids",
+        ],
+        text=True,
+    )
+    steps = {s for s in out.strip().split(",") if s}
+    contract = contracts.parse("vg:review")
+    markers = contracts.normalize_markers(contract.get("must_touch_markers") or [])
+    marker_names = {m["name"] for m in markers}
+    missing = steps - marker_names
+    assert not missing, f"tasklist step(s) missing runtime marker contract: {sorted(missing)}"
 
 
 def test_review_hard_gates_are_block_severity(review_text):

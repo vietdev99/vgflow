@@ -17,7 +17,7 @@ Codex use the same workflow contracts, but their orchestration primitives differ
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
 | Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
-| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| TaskCreate / TaskUpdate / TodoWrite | Native Codex tasklist/plan projection + orchestrator step markers | Use `tasklist-contract.json` as source of truth. After projecting, emit `vg-orchestrator tasklist-projected --adapter codex`; if no native task UI is exposed, use `--adapter fallback` and `run-status --pretty`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
@@ -143,30 +143,49 @@ Invoke this skill as `$vg-build`. Treat all user text after the skill name as ar
 
 
 
-<NARRATION_POLICY>
-**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in this command.**
+<TASKLIST_POLICY>
+**Native task UI projection is REQUIRED.**
 
-Why: those tools persist items in Claude Code's status tail across sessions. Wave-based parallel build can spawn 5+ subagents running 10-30 min each — items hang in UI for runs after if interrupted.
+Source of truth:
+1. `.vg/runs/{run_id}/tasklist-contract.json` — canonical checklist + step list for this run.
+2. `.vg/events.db` — `build.tasklist_shown`, `build.native_tasklist_projected`, `step.active`, `step.marked`.
+3. `${PHASE_DIR}/.step-markers/...` — durable completion markers.
 
-**Use these instead:**
-1. **Markdown headers in YOUR text output** between tool calls — e.g., `## ━━━ Wave 2 / Task 7.6-04 ━━━`. Appears in message stream, does NOT persist after session ends.
-2. **`run_in_background: true` for any Bash > 30s** (typecheck, lint, tests), then poll with `BashOutput` so user sees stdout live.
-3. **For Task subagents > 2 min**: write 1-line status BEFORE spawning ("Wave 2 spawning 5 parallel executors for tasks 04-08...") + 1-line summary AFTER ("Wave 2 done: 5/5 commits, typecheck PASS").
-4. Bash echo narration is audit log only — not user-visible during long runs.
-5. **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `Wave (đợt)`, `commit (lưu thay đổi)`, `typecheck (kiểm tra kiểu)`, `BLOCK (chặn)`. Không áp dụng: file path, code identifier, config tag values, lần lặp lại trong cùng message.
-</NARRATION_POLICY>
+Provider adapters:
+- **Claude CLI:** create one `TaskCreate` item per contract item; preserve each contract `id` at the start of the task title. Use `TaskUpdate` to mark active/completed around each step.
+- **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text.
+- **Fallback:** if no native task UI is exposed, use `vg-orchestrator run-status --pretty` before/after each step and record adapter `fallback`.
+
+Mandatory binding:
+1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.
+2. Project every contract item to the runtime-native task UI before build execution continues.
+3. Immediately call:
+   ```bash
+   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected --adapter claude
+   # or: --adapter codex
+   # or: --adapter fallback
+   ```
+4. At each step start, update the native UI item to active and call `vg-orchestrator step-active <step_name>`.
+5. At each step end, write the marker, update the native UI item to completed, and call `vg-orchestrator mark-step build <step_name>`.
+
+Long-running work still needs visible narration: run Bash jobs over 30s in background and poll with `BashOutput`; summarize wave executor progress before and after spawning.
+
+**Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `Wave (đợt)`, `commit (lưu thay đổi)`, `typecheck (kiểm tra kiểu)`, `BLOCK (chặn)`. Không áp dụng: file path, code identifier, config tag values, lần lặp lại trong cùng message.
+</TASKLIST_POLICY>
 
 <rules>
 1. **Blueprint required** — phase must have PLAN*.md AND API-CONTRACTS.md before build. Missing = BLOCK.
 2. **Contract injection + runtime verification** — every executor agent receives relevant contract sections as context. At run-complete, orchestrator dispatches `verify-contract-runtime` validator: for each `## METHOD /path` endpoint declared in API-CONTRACTS.md, static presence check across framework patterns (fastify / express / nest / hono); missing routes → BLOCK. Catches phantom endpoints at wave-commit boundary instead of surfacing at review/test 1+ hour later (OHOK A2, v2.4).
-3. **Orchestrator coordinates, not executes** — discover plans, group waves, spawn agents, collect results.
-4. **Context budget per agent ~2000 lines** — each executor gets scoped context blocks (task/API contract/CRUD surface/goals/design/sibling/wave/execution). Modern Claude 200k comfortable; starving context causes drift. See step 8c for per-block line budgets.
-5. **Wave execution** — sequential between waves, parallel within.
-6. **Flags are opt-in** — only active when literal token appears in $ARGUMENTS.
-7. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as its FINAL action, run:
+3. **Interface standards are mandatory** — `/vg:build` must read or generate `${PHASE_DIR}/INTERFACE-STANDARDS.md` before executor spawn. API/FE/CLI work must follow the standard envelope, message priority, and CLI error contract.
+4. **Build-generated API docs are mandatory** — `/vg:build` must materialize `${PHASE_DIR}/API-DOCS.md` from `API-CONTRACTS.md` plus the implemented code surface and INTERFACE-STANDARDS. This is the AI-facing runtime reference for `/vg:review` and `/vg:test`; missing or incomplete docs = BLOCK.
+5. **Orchestrator coordinates, not executes** — discover plans, group waves, spawn agents, collect results.
+6. **Context budget per agent ~2000 lines** — each executor gets scoped context blocks (task/API contract/interface standards/CRUD surface/goals/design/sibling/wave/execution). Modern Claude 200k comfortable; starving context causes drift. See step 8c for per-block line budgets.
+7. **Wave execution** — sequential between waves, parallel within.
+8. **Flags are opt-in** — only active when literal token appears in $ARGUMENTS.
+9. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as its FINAL action, run:
    `touch "${PHASE_DIR}/.step-markers/{STEP_NAME}.done"`
    where `{STEP_NAME}` matches the `<step name="...">` attribute. Step 9 verifies all expected markers exist; missing marker = BLOCK. This is deterministic enforcement — AI cannot silently skip a step without leaving forensic evidence.
-8. **Bash vs MCP convention**:
+9. **Bash vs MCP convention**:
    - ` ```bash ` blocks = REAL bash commands. Run via Bash tool. Outputs to shell variables for use in next step.
    - **MCP tool calls** (`mcp__graphify__*`, `mcp__playwright*__*`, etc.) = Claude tool invocations. NEVER call from bash — invoke directly via tool use. Required tool name is in prose; arguments listed as bullet points.
    - Confusing the two = silent fall-back to grep path / lost graphify benefit. When a step has BOTH (compute vars in bash → call MCP tool → parse result), the prose explicitly separates them with "(in bash)" vs "(Claude tool call)" labels.
@@ -262,6 +281,10 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --command "vg:build" \
   --profile "${PROFILE:-web-fullstack}" \
   --phase "${PHASE_ARG:-unknown}" 2>&1 | head -40 || true
+
+# Immediately after this block, apply TASKLIST_POLICY: project
+# `.vg/runs/{run_id}/tasklist-contract.json` to the native task UI and call
+# `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
 [ -n "$PHASE_DIR_CANDIDATE" ] && stale_state_sweep "build" "$PHASE_DIR_CANDIDATE"
 [ "${CONFIG_SESSION_PORT_SWEEP_ON_START:-true}" = "true" ] && session_port_sweep "pre-flight"
 session_mark_step "1-parse-args"
@@ -450,18 +473,16 @@ else
 fi
 ```
 
-### Step 1: Narrate step plan (NO TaskCreate — see NARRATION_POLICY above)
+### Step 1: Native tasklist projection
 
-Per NARRATION_POLICY (`⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate`), progress tracking in /vg:build uses `.step-markers/*.done` files as the authoritative signal, NOT a task list. Before proceeding:
+Use the `tasklist-contract.json` emitted at session start. It contains coarse
+checklists (`build_preflight`, `build_context`, `build_execute`,
+`build_verify`, `build_close`) plus the exact filtered step IDs.
 
-1. Write a markdown header in your text output listing the expected step plan:
-   ```
-   ## ━━━ /vg:build step plan (profile=$PROFILE, $EXPECTED_COUNT steps) ━━━
-   - ${stepId_1}
-   - ${stepId_2}
-   - ...
-   ```
-2. Run each step in order. At start: write `## ━━━ Running ${stepId} ━━━` header. At end: `touch "${PHASE_DIR}/.step-markers/${stepId}.done"`.
+Before proceeding:
+1. Project every item to Claude/Codex native task UI per TASKLIST_POLICY.
+2. Call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
+3. Keep `.step-markers/*.done` as the durable enforcement signal.
 
 ### Step 2: Marker directory sanity check (replaces task count assertion)
 
@@ -481,7 +502,9 @@ touch "${PHASE_DIR}/.step-markers/{STEP_NAME}.done"
 ```
 Post-execution check (step 9) compares markers vs EXPECTED_STEPS. Missing marker = step skipped silently = BLOCK.
 
-Each sub-step: write narration header at start, marker file at end. No TaskCreate/TaskUpdate invocation anywhere in /vg:build.
+Each sub-step: set the matching task item active at start, write marker at end,
+then set the item completed. The native tasklist is UI projection; markers and
+events remain the enforcement source of truth.
 </step>
 
 <step name="2_initialize">
@@ -514,6 +537,36 @@ CONTRACTS=$(ls "${PHASE_DIR}"/API-CONTRACTS.md 2>/dev/null)
 
 Missing PLAN → BLOCK: "Run `/vg:blueprint {phase}` first."
 Missing CONTRACTS → WARNING: "No API contracts. Executors will build without contract guidance. Continue? (y/n)"
+
+### 3a.5: Interface standards gate
+
+Before any executor receives a task, materialize and validate the phase's
+API/FE/CLI communication contract. This prevents each agent from inventing
+its own response envelope or toast/error convention.
+
+```bash
+INTERFACE_GEN="${REPO_ROOT}/.claude/scripts/generate-interface-standards.py"
+INTERFACE_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-interface-standards.py"
+if [ -f "$INTERFACE_GEN" ]; then
+  "${PYTHON_BIN:-python3}" "$INTERFACE_GEN" \
+    --phase-dir "${PHASE_DIR}" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}"
+fi
+if [ -f "$INTERFACE_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  "${PYTHON_BIN:-python3}" "$INTERFACE_VAL" \
+    --phase-dir "${PHASE_DIR}" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+    > "${PHASE_DIR}/.tmp/interface-standards-build.json" 2>&1
+  INTERFACE_RC=$?
+  cat "${PHASE_DIR}/.tmp/interface-standards-build.json"
+  if [ "$INTERFACE_RC" -ne 0 ]; then
+    echo "⛔ INTERFACE-STANDARDS gate failed before build."
+    echo "   Fix the API/FE/CLI communication standard before spawning executors."
+    exit 1
+  fi
+fi
+```
 
 ### 3b: CONTEXT.md format validation (v1.14.4+ — R2 enforcement)
 
@@ -1347,6 +1400,7 @@ TASK_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(j
 CONTRACT_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['contract_context'])")
 GOALS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['goals_context'])")
 CRUD_SURFACE_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin).get('crud_surface_context','CRUD-SURFACES.md not found'))")
+INTERFACE_STANDARDS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin).get('interface_standards_context','INTERFACE-STANDARDS.md not found'))")
 TASK_CONTEXT_CAPSULE=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.dumps(json.load(sys.stdin)['task_context_capsule'], indent=2, ensure_ascii=False))")
 TASK_SIBLINGS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['sibling_context'])")
 TASK_CALLERS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['downstream_callers'])")
@@ -1709,6 +1763,10 @@ WAVE_CONTEXT="NONE - wave context unavailable."
   printf '%s\n' "$CONTRACT_CONTEXT"
   echo "</contract_context>"
   echo ""
+  echo "<interface_standards_context>"
+  printf '%s\n' "$INTERFACE_STANDARDS_CONTEXT"
+  echo "</interface_standards_context>"
+  echo ""
   echo "<crud_surface_context>"
   printf '%s\n' "$CRUD_SURFACE_CONTEXT"
   echo "</crud_surface_context>"
@@ -1828,6 +1886,14 @@ Agent(subagent_type="general-purpose", model="${MODEL_EXECUTOR}"):
     ${CONTRACT_CONTEXT}
     Import types from: ${config.contract_format.generated_types_path}
     </contract_context>
+
+    <interface_standards_context>
+    Phase-local API/FE/CLI communication contract. API handlers, API clients,
+    forms, toasts, and CLI commands MUST follow this before local preference.
+    In particular: FE visible error copy uses API envelope message priority,
+    never HTTP status/statusText or raw AxiosError.message.
+    ${INTERFACE_STANDARDS_CONTEXT}
+    </interface_standards_context>
 
     <crud_surface_context>
     Resource-level CRUD contract slice from CRUD-SURFACES.md. This is the
@@ -3545,6 +3611,42 @@ if [ "${SCHEMA_RC}" != "0" ]; then
   exit 2
 fi
 
+# v2.48 — build-time API docs. Generated from API-CONTRACTS plus the current
+# implementation so review/test consume what was actually built, not only the
+# planning-time contract.
+API_DOCS_PATH="${PHASE_DIR}/API-DOCS.md"
+"${PYTHON_BIN}" .claude/scripts/generate-api-docs.py \
+  --phase "${PHASE_NUMBER}" \
+  --contracts "${PHASE_DIR}/API-CONTRACTS.md" \
+  --plan "${PHASE_DIR}/PLAN.md" \
+  --goals "${PHASE_DIR}/TEST-GOALS.md" \
+  --interface-standards "${PHASE_DIR}/INTERFACE-STANDARDS.json" \
+  --out "${API_DOCS_PATH}"
+API_DOCS_RC=$?
+if [ "${API_DOCS_RC}" != "0" ]; then
+  echo "⛔ API docs generation failed — build cannot complete without API-DOCS.md."
+  exit 2
+fi
+
+"${PYTHON_BIN}" .claude/scripts/validators/verify-api-docs-coverage.py \
+  --phase "${PHASE_NUMBER}" \
+  > "${PHASE_DIR}/.tmp/api-docs-coverage.json" 2>&1
+API_DOCS_VERIFY_RC=$?
+if [ "${API_DOCS_VERIFY_RC}" != "0" ]; then
+  echo "⛔ API docs coverage failed — see ${PHASE_DIR}/.tmp/api-docs-coverage.json"
+  cat "${PHASE_DIR}/.tmp/api-docs-coverage.json"
+  exit 2
+fi
+
+"${PYTHON_BIN}" .claude/scripts/emit-evidence-manifest.py \
+  --path "${API_DOCS_PATH}" \
+  --source-inputs "${PHASE_DIR}/API-CONTRACTS.md,${PHASE_DIR}/PLAN.md,${PHASE_DIR}/TEST-GOALS.md" \
+  --producer "vg:build/9_post_execution" >/dev/null 2>&1 || {
+    echo "⛔ API-DOCS.md was written but evidence binding failed."
+    exit 2
+  }
+echo "✓ API-DOCS.md generated and validated for review/test consumption"
+
 # ─── L2 forcing-function gate: LAYOUT-FINGERPRINT.md per design-ref task ──
 # For every task body that declared a SLUG-form <design-ref>, the executor
 # is required (per vg-executor-rules.md "Design fidelity") to write a
@@ -4114,6 +4216,19 @@ if [ -f "$BIZRULE_VAL" ]; then
     echo "⛔ Business-rule-implemented gate failed: code constants drift from CONTEXT decisions."
     echo "   Verify expected_assertion values appear as constants in apps/packages/infra source."
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.bizrule_blocked" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+INTERFACE_VAL=".claude/scripts/validators/verify-interface-standards.py"
+if [ -f "$INTERFACE_VAL" ]; then
+  ${PYTHON_BIN:-python3} "$INTERFACE_VAL" \
+    --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}"
+  INTERFACE_RC=$?
+  if [ "$INTERFACE_RC" -ne 0 ]; then
+    echo "⛔ Interface standards gate failed at build run-complete."
+    echo "   API/FE/CLI code must follow INTERFACE-STANDARDS.md before /vg:review."
     exit 1
   fi
 fi

@@ -18,15 +18,18 @@ a task summary section. You do NOT decide what to build — the plan task tells 
     constraints — do NOT fabricate decisions not present in this block.)
 2. Read <task_context> — your assignment (file paths, endpoint, description)
 3. Read <contract_context> — Zod/API code blocks to copy VERBATIM
-4. Read <goals_context> — which G-XX goals this task covers
-5. Read <design_context> — screenshot + structural HTML (if FE task)
-6. Read <sibling_context> — peer module signatures for consistency
-7. Read <wave_context> — parallel tasks in this wave, field alignment
-8. Read <downstream_callers> — files calling symbols you'll edit
-9. Implement the task
-10. Typecheck
-11. Commit with proper message + citations
-12. Write task summary section
+4. Read <interface_standards_context> — API envelope, FE message priority,
+   CLI stdout/stderr/JSON rules. This is mandatory for handlers, clients,
+   forms, toasts, and CLI commands.
+5. Read <goals_context> — which G-XX goals this task covers
+6. Read <design_context> — screenshot + structural HTML (if FE task)
+7. Read <sibling_context> — peer module signatures for consistency
+8. Read <wave_context> — parallel tasks in this wave, field alignment
+9. Read <downstream_callers> — files calling symbols you'll edit
+10. Implement the task
+11. Typecheck
+12. Commit with proper message + citations
+13. Write task summary section
 ```
 
 **Decision context rule (Phase C):** The `<decision_context>` block is the ONLY source of
@@ -237,9 +240,10 @@ obscures which step failed and whether the prior cleanup actually ran.
 Separation also makes retry easier: after a BLOCK, you re-issue ONLY the
 commit with a fixed message — no need to re-run the cleanup.
 
-## Contract adherence — 3 code blocks per endpoint
+## Contract adherence — interface standard + endpoint blocks
 
-API-CONTRACTS.md has **3 executable code blocks** per endpoint. Copy ALL 3 verbatim.
+INTERFACE-STANDARDS.md is the phase-wide interface contract. API-CONTRACTS.md
+adds endpoint-specific auth/schema/error blocks. Follow both.
 
 ### Block 1: Auth middleware
 - COPY the exact auth line (e.g., `requireRole('publisher')`) into route registration
@@ -254,10 +258,15 @@ API-CONTRACTS.md has **3 executable code blocks** per endpoint. Copy ALL 3 verba
 
 ### Block 3: Error responses
 - COPY error response shapes into catch/error handlers
-- BE: return EXACT error shape from Block 3 (e.g., `{ error: { code, message } }`)
-- FE: read `response.data.error.message` for toast — NEVER `response.statusText` or HTTP code
+- BE: return the phase standard envelope from INTERFACE-STANDARDS.md, typically:
+  `{ ok: false, error: { code, message, user_message?, details?, field_errors?, request_id? } }`
+- FE: read `response.data.error.user_message || response.data.error.message || response.data.message` for toast/form errors — NEVER `response.statusText`, HTTP code text, or raw AxiosError.message
 - Every catch block MUST show user-facing feedback using the error message from response
 - NEVER `toast.error(error.message)` where error = AxiosError (that shows "Request failed with status 403")
+- Field validation errors come from `response.data.error.field_errors` and bind to fields when available; only non-field errors go to toast/banner.
+
+Use or create a shared API error adapter for the project instead of repeating
+catch-block parsing in every form/component.
 - ALWAYS `toast.error(error.response?.data?.error?.message || 'An error occurred')`
 
 ### What this prevents

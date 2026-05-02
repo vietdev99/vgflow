@@ -870,6 +870,14 @@ def main():
         phase_dir, task_context, goals_context, contract_context
     )
 
+    interface_standards_path = phase_dir / "INTERFACE-STANDARDS.md"
+    if interface_standards_path.exists():
+        interface_standards_context = interface_standards_path.read_text(
+            encoding="utf-8", errors="replace",
+        )[:12000]
+    else:
+        interface_standards_context = "INTERFACE-STANDARDS.md not found"
+
     # Ensure siblings (builds if missing)
     sibling_context = ensure_siblings(phase_dir, args.task_num, config, repo_root)
 
@@ -1033,6 +1041,7 @@ def main():
             "contract_context": 800,
             "goals_context": 400,
             "crud_surface_context": 500,
+            "interface_standards_context": 260,
             "sibling_context": 400,
             "downstream_callers": 400,
             "design_context": 400,
@@ -1046,6 +1055,7 @@ def main():
             "contract_context": 500,
             "goals_context": 200,
             "crud_surface_context": 300,
+            "interface_standards_context": 180,
             "sibling_context": 400,
             "downstream_callers": 400,
             "design_context": 200,
@@ -1067,6 +1077,7 @@ def main():
         "contract_context": contract_context,
         "goals_context": goals_context,
         "crud_surface_context": crud_surface_context,
+        "interface_standards_context": interface_standards_context,
         "sibling_context": sibling_context,
         "downstream_callers": downstream_callers,
         "design_context": design_context,

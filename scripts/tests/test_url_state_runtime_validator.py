@@ -5,9 +5,9 @@ verify-url-state-runtime.
 Pins:
 1. PASS — every declared control has a matching probe entry with the
    declared url_param present in url_params_after.
-2. WARN — url-runtime-probe.json artifact missing.
-3. WARN — probe artifact present but specific goal absent from probe.
-4. WARN — goal probed but a declared control was not exercised.
+2. BLOCK — url-runtime-probe.json artifact missing.
+3. BLOCK — probe artifact present but specific goal absent from probe.
+4. BLOCK — goal probed but a declared control was not exercised.
 5. BLOCK — control exercised but url_params_after missing the declared param.
 6. WARN-only — --skip-runtime suppresses checks (CI without browser).
 7. PASS — goal without interactive_controls.url_sync: true is ignored.
@@ -24,7 +24,16 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _repo_root() -> Path:
+    path = Path(__file__).resolve()
+    for parent in path.parents:
+        if (parent / ".claude" / "scripts" / "validators").exists():
+            return parent
+    return path.parents[2]
+
+
+REPO_ROOT = _repo_root()
 SCRIPT = REPO_ROOT / ".claude" / "scripts" / "validators" / "verify-url-state-runtime.py"
 
 
@@ -141,7 +150,12 @@ def _full_probe() -> dict:
             "controls": [
                 {"kind": "filter", "name": "status",
                  "value": "active",
-                 "url_params_after": {"status": "active"}},
+                 "url_params_after": {"status": "active"},
+                 "result_semantics": {
+                     "passed": True,
+                     "rows_checked": 2,
+                     "violations": [],
+                 }},
                 {"kind": "pagination", "name": "page",
                  "value": "2",
                  "url_params_after": {"page": "2"}},
@@ -171,18 +185,18 @@ def test_pass_all_controls_match(tmp_path):
     assert data["verdict"] == "PASS", data
 
 
-def test_warn_on_missing_probe_artifact(tmp_path):
+def test_block_on_missing_probe_artifact(tmp_path):
     repo = _setup_fake_repo(
         tmp_path, phase="14", goals_md=GOAL_FULL, probe_json=None,
     )
     rc, data = _run(repo, "14")
-    assert rc == 0, data
-    assert data["verdict"] == "WARN", data
+    assert rc == 1, data
+    assert data["verdict"] == "BLOCK", data
     types = [e["type"] for e in data["evidence"]]
     assert "url_runtime_probe_missing" in types
 
 
-def test_warn_on_goal_unprobed(tmp_path):
+def test_block_on_goal_unprobed(tmp_path):
     """Probe artifact exists but G-01 is missing from probe.goals[]."""
     repo = _setup_fake_repo(
         tmp_path, phase="14",
@@ -190,13 +204,13 @@ def test_warn_on_goal_unprobed(tmp_path):
         probe_json={"goals": [{"goal_id": "G-99", "url": "/x", "controls": []}]},
     )
     rc, data = _run(repo, "14")
-    assert rc == 0
-    assert data["verdict"] == "WARN", data
+    assert rc == 1
+    assert data["verdict"] == "BLOCK", data
     assert any(e["type"] == "url_runtime_probe_goal_missing"
                for e in data["evidence"])
 
 
-def test_warn_on_unprobed_control(tmp_path):
+def test_block_on_unprobed_control(tmp_path):
     """G-01 entry exists but pagination control was not exercised."""
     probe = _full_probe()
     probe["goals"][0]["controls"] = [
@@ -208,8 +222,8 @@ def test_warn_on_unprobed_control(tmp_path):
         goals_md=GOAL_FULL, probe_json=probe,
     )
     rc, data = _run(repo, "14")
-    assert rc == 0
-    assert data["verdict"] == "WARN", data
+    assert rc == 1
+    assert data["verdict"] == "BLOCK", data
     assert any(e["type"] == "url_runtime_control_unprobed"
                for e in data["evidence"])
 
@@ -228,6 +242,58 @@ def test_block_on_param_mismatch(tmp_path):
     assert data["verdict"] == "BLOCK", data
     assert any(e["type"] == "url_runtime_param_missing"
                for e in data["evidence"])
+
+
+def test_block_on_missing_filter_result_semantics(tmp_path):
+    """URL param alone is insufficient for filters; rows must match."""
+    probe = _full_probe()
+    probe["goals"][0]["controls"][0].pop("result_semantics")
+    repo = _setup_fake_repo(
+        tmp_path, phase="14",
+        goals_md=GOAL_FULL, probe_json=probe,
+    )
+    rc, data = _run(repo, "14")
+    assert rc == 1, data
+    assert data["verdict"] == "BLOCK", data
+    assert any(e["type"] == "url_runtime_filter_semantics_missing"
+               for e in data["evidence"])
+
+
+def test_markdown_inline_controls_are_parsed(tmp_path):
+    goals = """# Test Goals
+
+## Goal G-09: Admin topup queue list with filters
+**Surface:** ui
+**Trigger:** Admin navigates `/admin/topup-requests`
+**interactive_controls:**
+url_sync: true
+filters:
+  - {name: status, type: tabs, options: [all, pending, approved, flagged], url_param: status}
+pagination: {page_size: 20, url_param: cursor}
+search: {url_param: q, debounce_ms: 300}
+sort: {columns: [created_at, amount], url_param_field: sort, url_param_dir: dir}
+"""
+    probe = {
+        "goals": [{
+            "goal_id": "G-09",
+            "url": "/admin/topup-requests",
+            "controls": [
+                {"kind": "filter", "name": "status", "value": "pending",
+                 "url_params_after": {"status": "pending"},
+                 "result_semantics": {"passed": True, "rows_checked": 4, "violations": []}},
+                {"kind": "pagination", "name": "page", "value": "2",
+                 "url_params_after": {"cursor": "abc"}},
+                {"kind": "search", "name": "search", "value": "demo",
+                 "url_params_after": {"q": "demo"}},
+                {"kind": "sort", "name": "sort", "value": "created_at",
+                 "url_params_after": {"sort": "created_at"}},
+            ],
+        }]
+    }
+    repo = _setup_fake_repo(tmp_path, phase="14", goals_md=goals, probe_json=probe)
+    rc, data = _run(repo, "14")
+    assert rc == 0, data
+    assert data["verdict"] == "PASS", data
 
 
 def test_skip_runtime_suppresses_checks(tmp_path):

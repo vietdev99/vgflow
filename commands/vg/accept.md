@@ -27,23 +27,28 @@ runtime_contract:
   must_touch_markers:
     # Hard gates — foundational + verdict enforcement
     - "0_gate_integrity_precheck"
+    - "0_load_config"
+    - "create_task_tracker"
+    - "0c_telemetry_suggestions"
     - "1_artifact_precheck"
     - "2_marker_precheck"
     - "3_sandbox_verdict_gate"
     - "3b_unreachable_triage_gate"
     - "3c_override_resolution_gate"
+    - "4_build_uat_checklist"
+    - "4b_uat_narrative_autofire"
     - "5_interactive_uat"
     - "5_uat_quorum_gate"
+    - "6b_security_baseline"
+    - "6c_learn_auto_surface"
     - "6_write_uat_md"
     # Advisory / post-accept
-    - name: "0_load_config"
-      severity: "warn"
-    - name: "4_build_uat_checklist"
-      severity: "warn"
     - "7_post_accept_actions"
   must_emit_telemetry:
     # v2.5.1 anti-forge: tasklist visibility at flow start
     - event_type: "accept.tasklist_shown"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "accept.native_tasklist_projected"
       phase: "${PHASE_NUMBER}"
     - event_type: "accept.started"
       phase: "${PHASE_NUMBER}"
@@ -61,6 +66,23 @@ runtime_contract:
     - "--allow-unreachable"
     - "--allow-deferred"
 ---
+
+<TASKLIST_POLICY>
+**Native tasklist is mandatory.**
+
+`emit-tasklist.py` writes the authoritative profile-filtered
+`.vg/runs/<run_id>/tasklist-contract.json`. Before UAT gates continue past
+`create_task_tracker`, project that contract into the active runtime:
+- Claude Code: use `TaskCreate` / `TaskUpdate`.
+- Codex CLI: use the native plan/tasklist UI or Codex adapter.
+- Fallback: print `vg-orchestrator run-status --pretty`, but still emit
+  `accept.native_tasklist_projected`.
+
+Every checklist item and step must retain the IDs from the contract. Every
+step must call `vg-orchestrator step-active` at start and `vg-orchestrator
+mark-step accept {step}` at finish. Missing markers are a runtime contract
+violation; no silent UAT/accept pass is allowed.
+</TASKLIST_POLICY>
 
 <rules>
 1. **All pipeline artifacts required** — SPECS → CONTEXT → PLAN → API-CONTRACTS → TEST-GOALS → SUMMARY → RUNTIME-MAP → GOAL-COVERAGE-MATRIX → SANDBOX-TEST. CRUD-SURFACES is required when the phase touches CRUD/resource behavior. Missing = BLOCK.
@@ -117,6 +139,10 @@ fi
 # OHOK-8 round-4 Codex fix: parse PHASE_NUMBER BEFORE run-start
 [ -z "${PHASE_NUMBER:-}" ] && PHASE_NUMBER=$(echo "${ARGUMENTS}" | awk '{print $1}')
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start vg:accept "${PHASE_NUMBER}" "${ARGUMENTS}" || { echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2; exit 1; }
+if [ -n "${PHASE_DIR:-}" ]; then
+  mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_gate_integrity_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_gate_integrity_precheck.done"
+fi
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_gate_integrity_precheck 2>/dev/null || true
 ```
 
@@ -142,15 +168,46 @@ fi
 PHASE_NUMBER=$(basename "$PHASE_DIR" | grep -oE '^[0-9]+(\.[0-9]+)*')
 echo "Phase: $PHASE_NUMBER ($PHASE_DIR)"
 
-# v1.15.2 — register run so Stop hook can verify runtime_contract evidence
-type -t vg_run_start >/dev/null 2>&1 && \
-  vg_run_start "vg:accept" "${PHASE_NUMBER}" "${ARGUMENTS:-}"
-
 # v2.5.1 anti-forge: show task list at flow start so user sees planned steps
 ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --command "vg:accept" \
   --profile "${PROFILE:-web-fullstack}" \
   --phase "${PHASE_NUMBER:-unknown}" 2>&1 | head -40 || true
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_gate_integrity_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_gate_integrity_precheck.done"
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_load_config" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_load_config.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_load_config 2>/dev/null || true
+```
+</step>
+
+<step name="create_task_tracker">
+**Project `/vg:accept` checklists into the native task UI.**
+
+Read `.vg/runs/<run_id>/tasklist-contract.json` written by
+`emit-tasklist.py`. Create one native task per checklist group and bind each
+profile-filtered accept step to its checklist. The contract is authoritative;
+do not invent UAT gates or skip listed ones.
+
+Adapter requirements:
+- Claude Code: use `TaskCreate` once for the checklist projection, then
+  `TaskUpdate` as gates/steps start or complete.
+- Codex CLI: use the native plan/tasklist UI or Codex adapter. Checklist IDs
+  and step IDs must match `tasklist-contract.json`.
+- Fallback: print `vg-orchestrator run-status --pretty`, then continue only
+  after emitting `accept.native_tasklist_projected`.
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-fallback}" >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "accept.native_tasklist_projected" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"adapter\":\"${VG_TASKLIST_ADAPTER:-fallback}\"}" \
+  >/dev/null 2>&1 || true
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/create_task_tracker.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept create_task_tracker 2>/dev/null || true
 ```
 </step>
 
@@ -182,6 +239,7 @@ for line in sys.stdin:
   fi
 fi
 touch "${PHASE_DIR}/.step-markers/0c_telemetry_suggestions.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0c_telemetry_suggestions 2>/dev/null || true
 ```
 </step>
 
@@ -245,6 +303,10 @@ if [ -f "${REPO_ROOT:-.}/.claude/scripts/validators/verify-rule-cards-fresh.py" 
   "${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-rule-cards-fresh.py 2>&1 | tail -5
   echo ""
 fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "1_artifact_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1_artifact_precheck.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 1_artifact_precheck 2>/dev/null || true
 ```
 </step>
 
@@ -339,6 +401,9 @@ if [ -n "$(echo "$LEGACY" | xargs)" ]; then
 fi
 
 echo "✓ All expected step markers present for profile: $PROFILE"
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2_marker_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_marker_precheck.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 2_marker_precheck 2>/dev/null || true
 ```
 </step>
 
@@ -451,6 +516,10 @@ if [ -n "$REG_REPORT" ]; then
     fi
   fi
 fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3_sandbox_verdict_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_sandbox_verdict_gate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3_sandbox_verdict_gate 2>/dev/null || true
 ```
 </step>
 
@@ -561,6 +630,10 @@ PY
     echo "$RESOLVED_LIST" > "${VG_TMP}/uat-unreachable-resolved.txt"
   fi
 fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3b_unreachable_triage_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3b_unreachable_triage_gate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3b_unreachable_triage_gate 2>/dev/null || true
 ```
 </step>
 
@@ -745,6 +818,13 @@ fi
 ```
 
 **NEW command placeholder:** `/vg:override-resolve {gate_id} --wont-fix --reason='...'` — explicit decline path for overrides that will never be clean-resolved. Ships in v1.9+. Until then, use `--allow-unresolved-overrides` inline path (logs new debt entry, still blocks next accept — forces eventual confrontation).
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3c_override_resolution_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3c_override_resolution_gate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3c_override_resolution_gate 2>/dev/null || true
+```
 </step>
 
 <step name="4_build_uat_checklist">
@@ -1029,6 +1109,13 @@ Proceed with UAT? (y/n/abort)
 ```
 
 If user aborts → stop, write UAT.md with status `ABORTED`.
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "4_build_uat_checklist" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/4_build_uat_checklist.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 4_build_uat_checklist 2>/dev/null || true
+```
 </step>
 
 <step name="4b_uat_narrative_autofire">
@@ -1097,6 +1184,13 @@ The interactive UAT in step 5 references this document — testers walk each
 prompt with the narrative open in another window. The narrative does NOT
 replace the interactive checklist; it provides the WHY/HOW context that
 used to live only in tester memory.
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "4b_uat_narrative_autofire" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/4b_uat_narrative_autofire.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 4b_uat_narrative_autofire 2>/dev/null || true
+```
 </step>
 
 <step name="5_interactive_uat">
@@ -1308,6 +1402,7 @@ AI can write/update this JSON via Bash heredoc after each section completes. Mis
 ```bash
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5_interactive_uat" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5_interactive_uat.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_interactive_uat 2>/dev/null || true
 ```
 </step>
 
@@ -1511,6 +1606,7 @@ fi
   --payload "{\"phase\":\"${PHASE_NUMBER}\",\"critical_skips\":${CRITICAL_SKIPS},\"total_skips\":${TOTAL_SKIPS}}" >/dev/null 2>&1 || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5_uat_quorum_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5_uat_quorum_gate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_uat_quorum_gate 2>/dev/null || true
 ```
 </step>
 
@@ -1576,6 +1672,7 @@ else
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "6b_security_baseline" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/6b_security_baseline.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6b_security_baseline 2>/dev/null || true
 ```
 </step>
 
@@ -1805,6 +1902,7 @@ with open(r'''${CONFLICT_JSONL}''', encoding='utf-8') as fh:
 
   touch "${PHASE_DIR}/.step-markers/6c_learn_auto_surface.done"
 fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6c_learn_auto_surface 2>/dev/null || true
 ```
 
 **Orchestrator hook:** khi step này echo `→ Invoking /vg:learn --auto-surface`, orchestrator MUST call the slash command inline so user can make y/n/e/s decisions. Non-interactive fallback: Tier B candidates stay in CANDIDATES.md for next phase's accept surface.
@@ -1982,15 +2080,9 @@ if [ "$COMP_RC" -ne 0 ] && [ "$COMP_SEV" = "block" ]; then
   exit 1
 fi
 
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "accept" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/accept.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept accept 2>/dev/null || true
-# v1.15.2 — fulfill runtime_contract markers declared in frontmatter
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "1_artifact_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1_artifact_precheck.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 1_artifact_precheck 2>/dev/null || true
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2_marker_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_marker_precheck.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 2_marker_precheck 2>/dev/null || true
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3_sandbox_verdict_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_sandbox_verdict_gate.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3_sandbox_verdict_gate 2>/dev/null || true
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "6_write_uat_md" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/6_write_uat_md.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6_write_uat_md 2>/dev/null || true
 
 # (OHOK-3 2026-04-22) Legacy `vg_run_complete` bash helper call removed —
 # canonical `python vg-orchestrator run-complete` runs at step 7 below.
@@ -2170,7 +2262,7 @@ fi
 **Commit UAT.md + RUNBOOK + cross-phase artifacts**:
 ```bash
 # Base artifacts
-git add "${PHASE_DIR}/${PHASE_NUMBER}-UAT.md" "${PHASE_DIR}/.step-markers/accept.done"
+git add "${PHASE_DIR}/${PHASE_NUMBER}-UAT.md" "${PHASE_DIR}/.step-markers/6_write_uat_md.done"
 
 # v1.14.0+ C.3 — RUNBOOK canonical (nếu đã promoted)
 [ -f "${PHASE_DIR}/DEPLOY-RUNBOOK.md" ] && git add "${PHASE_DIR}/DEPLOY-RUNBOOK.md"
@@ -2262,6 +2354,33 @@ if [ -f "$ATRACE_VAL" ]; then
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.traceability_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
+fi
+
+# Profile-aware marker contract: accept must not close if any injected
+# checklist step for the active profile failed to mark completion.
+EXPECTED_ACCEPT_STEPS=$(${PYTHON_BIN:-python3} .claude/scripts/filter-steps.py \
+  --command .claude/commands/vg/accept.md \
+  --profile "${PROFILE:-web-fullstack}" \
+  --output-ids 2>/dev/null || echo "")
+MISSING_ACCEPT_MARKERS=""
+for STEP_ID in $(echo "$EXPECTED_ACCEPT_STEPS" | tr ',' ' '); do
+  [ -z "$STEP_ID" ] && continue
+  [ "$STEP_ID" = "7_post_accept_actions" ] && continue
+  if [ -f "${PHASE_DIR}/.step-markers/accept/${STEP_ID}.done" ] || \
+     [ -f "${PHASE_DIR}/.step-markers/${STEP_ID}.done" ]; then
+    :
+  else
+    MISSING_ACCEPT_MARKERS="${MISSING_ACCEPT_MARKERS} ${STEP_ID}"
+  fi
+done
+if [ -n "$(echo "$MISSING_ACCEPT_MARKERS" | xargs)" ]; then
+  echo "⛔ /vg:accept profile marker gate BLOCKED — missing markers for profile ${PROFILE:-web-fullstack}:"
+  for STEP_ID in $MISSING_ACCEPT_MARKERS; do echo "   - ${STEP_ID}"; done
+  echo "   The workflow cannot accept until every injected checklist step emits a marker."
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.marker_gate_blocked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"profile\":\"${PROFILE:-web-fullstack}\",\"missing\":\"$(echo "$MISSING_ACCEPT_MARKERS" | xargs)\"}" \
+    >/dev/null 2>&1 || true
+  exit 1
 fi
 
 # v2.2 — terminal emit + run-complete for /vg:accept

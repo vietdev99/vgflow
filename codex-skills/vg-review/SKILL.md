@@ -17,7 +17,7 @@ Codex use the same workflow contracts, but their orchestration primitives differ
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
 | Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
-| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| TaskCreate / TaskUpdate / TodoWrite | Native Codex tasklist/plan projection + orchestrator step markers | Use `tasklist-contract.json` as source of truth. After projecting, emit `vg-orchestrator tasklist-projected --adapter codex`; if no native task UI is exposed, use `--adapter fallback` and `run-status --pretty`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
@@ -143,20 +143,37 @@ Invoke this skill as `$vg-review`. Treat all user text after the skill name as a
 
 
 
-<NARRATION_POLICY>
-**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in this command.**
+<TASKLIST_POLICY>
+**Native task UI projection is REQUIRED.**
 
-Why: those tools persist items in Claude Code's status tail across sessions. If a long step (Haiku scanner, Bash, Task subagent) interrupts before items get marked completed, they hang forever in the UI ("Phase 2b-1: Navigator", "Start pnpm dev + wait health" stuck for runs after).
+Source of truth:
+1. `.vg/runs/{run_id}/tasklist-contract.json` — canonical checklist for this run.
+2. `.vg/events.db` — `review.tasklist_shown`, `review.native_tasklist_projected`, `step.active`, `step.marked`.
+3. `${PHASE_DIR}/.step-markers/...` — durable completion markers.
 
-**Use these instead:**
-1. **Markdown headers in YOUR text output** between tool calls — e.g., `## ━━━ Phase 2b-1: Navigator ━━━` written in plain text. Appears in message stream, does NOT persist after session ends.
-2. **`run_in_background: true` for any Bash > 30s** (dev server boot, health wait, parallel scanner spawn). Then poll with `BashOutput` so user sees stdout live instead of waiting blind.
-3. **For Task subagents** that take > 2 min: write a 1-line status in your text output BEFORE spawning ("Spawning Haiku scanner for /users + /settings..."), then a 1-line summary AFTER it returns ("Scanner found 12 elements, 0 errors"). User sees both in the message stream.
-4. **Bash echo narration** (`narrate_phase`, `session_start` banner) lands in tool result block — useful for audit log but NOT visible during long runs. Don't rely on it as primary progress signal.
-5. **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `BLOCK (chặn)`, `Foundation (nền tảng) drift detected (phát hiện lệch hướng)`, `legacy-v1 (định dạng cũ v1)`, `UNREACHABLE (không tiếp cận được)`. Không áp dụng: file path, code identifier (`D-XX`, `git`, `pnpm`), config tag values, lần lặp lại trong cùng message.
+Provider adapters:
+- **Claude CLI:** create one `TaskCreate` item per contract item; preserve each contract `id` at the start of the task title. Use `TaskUpdate` to mark the current item active before each step and completed after its marker is written.
+- **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text. Update the active/completed item before/after each step.
+- **Fallback:** only if the runtime exposes no native task UI, use `vg-orchestrator run-status --pretty` before and after each step and record adapter `fallback`.
 
-This is a HARD rule — TodoWrite is the wrong abstraction for a 30-min orchestrator with parallel subagents.
-</NARRATION_POLICY>
+Mandatory binding:
+1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.
+2. Project every contract item to the runtime-native task UI before phase execution continues.
+3. Immediately call:
+   ```bash
+   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected --adapter claude
+   # or: --adapter codex
+   # or: --adapter fallback
+   ```
+4. At each step start, update the native UI item to active and call `vg-orchestrator step-active <step_name>`.
+5. At each step end, write the marker, update the native UI item to completed, and call `vg-orchestrator mark-step review <step_name>`.
+
+Do not improvise a separate checklist. The native UI is a projection of `tasklist-contract.json`; the harness contract remains authoritative.
+
+Long-running work still needs visible narration: run Bash jobs over 30s in background and poll with `BashOutput`; summarize Task subagent progress before and after spawning.
+
+**Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `BLOCK (chặn)`, `Foundation (nền tảng) drift detected (phát hiện lệch hướng)`, `legacy-v1 (định dạng cũ v1)`, `UNREACHABLE (không tiếp cận được)`. Không áp dụng: file path, code identifier (`D-XX`, `git`, `pnpm`), config tag values, lần lặp lại trong cùng message.
+</TASKLIST_POLICY>
 
 <rules>
 1. **Phase profile drives prerequisites (P5, v1.9.2)** — `detect_phase_profile` chooses WHICH artifacts are required:
@@ -271,11 +288,24 @@ else
   PHASE_DIR_CANDIDATE=$(ls -d ${PLANNING_DIR}/phases/${PHASE_NUMBER}* 2>/dev/null | head -1)
 fi
 
+TASKLIST_PROFILE="${PROFILE:-web-fullstack}"
+TASKLIST_MODE=""
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/phase-profile.sh" 2>/dev/null || true
+if [ -n "$PHASE_DIR_CANDIDATE" ] && type -t detect_phase_profile >/dev/null 2>&1; then
+  TASKLIST_PHASE_PROFILE=$(detect_phase_profile "$PHASE_DIR_CANDIDATE" 2>/dev/null || echo "feature")
+  TASKLIST_MODE=$(phase_profile_review_mode "$TASKLIST_PHASE_PROFILE" 2>/dev/null || echo "full")
+fi
+if [[ "$ARGUMENTS" =~ --mode=([a-z-]+) ]]; then
+  TASKLIST_MODE="${BASH_REMATCH[1]}"
+fi
+: "${TASKLIST_MODE:=full}"
+
 # Emit session-start banner → distinct separator for Claude Code tail UI
 session_start "review" "${PHASE_NUMBER:-unknown}"
 ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --command "vg:review" \
-  --profile "${PROFILE:-web-fullstack}" \
+  --profile "${TASKLIST_PROFILE}" \
+  --mode "${TASKLIST_MODE}" \
   --phase "${PHASE_NUMBER:-unknown}" 2>&1 | head -40 || true
 # Register EXIT trap emitting "━━━ review Phase X EXITED at step=Y ━━━" on any exit path
 # Sweep stale state from previous interrupted runs (>config.session.stale_hours old)
@@ -285,6 +315,10 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
 
 session_mark_step "0-parse-args"
 ```
+
+Immediately after this block returns, execute the TASKLIST_POLICY binding:
+project `.vg/runs/{run_id}/tasklist-contract.json` to the native task UI and
+call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
 </step>
 
 <step name="0_parse_and_validate">
@@ -299,6 +333,7 @@ Flags:
 - `--retry-failed` — skip Phase 1 + Phase 2 navigator, re-scan ONLY views mapped to failed/blocked/SUSPECTED goals in GOAL-COVERAGE-MATRIX.md. Requires: GOAL-COVERAGE-MATRIX.md + RUNTIME-MAP.json already exist. Use when: review already ran but goals < 100%, code was fixed, need targeted re-scan without full re-discovery. **v2.46-wave3.2:** SUSPECTED status (matrix=READY but no submit evidence) is now included in retry set automatically — closes Phase 3.2 staleness gap where matrix lied.
 - `--re-scan-goals=G-XX,G-YY,G-ZZ` — bypass matrix entirely; re-scan only the listed goal IDs. Resolves to start_views via RUNTIME-MAP.json goal_sequences. Use when: matrix-staleness validator surfaced specific suspected goals, OR you know exactly which goals need re-evidence. Mutually exclusive with `--retry-failed` (more precise overrides broader).
 - `--dogfood` — re-scan ALL mutation goals (any goal with non-empty `mutation_evidence` in TEST-GOALS.md) regardless of matrix status. Use when: you suspect systemic submit-evidence gaps. Slower than `--retry-failed` but catches the full surface.
+- `--force` — full rerun from scratch for an already-reviewed phase. Clears prior review markers/artifacts before any staleness/reuse logic runs, so API precheck + discovery + matrix must be regenerated in the current run. Use when: you explicitly want fresh evidence, not re-validation on existing artifacts.
 - `--full-scan` — disable sidebar suppression. Haiku agents see full page (sidebar/header/footer) in every snapshot. Use when: app has non-standard layout, geometry detection fails, or debugging suppression issues.
 - `--with-probes` — enable mutation probe variations (edit/boundary/repeat) in step 2b-3 step 9. Adds 1 Haiku per mutation goal. Default OFF — let /vg:test handle variations via Playwright codegen (deterministic, cheaper).
 - `--allow-no-crud-surface` — last-resort waiver for legacy phases missing CRUD-SURFACES.md. Logs debt via validator output; do not use for new CRUD work.
@@ -321,12 +356,14 @@ WITH_PROBES=""
 SKIP_CROSSAI=""
 ALLOW_NO_CRUD_SURFACE=""
 NON_INTERACTIVE=""
+FORCE_RERUN=""
 
 for tok in $ARGS_RAW; do
   case "$tok" in
     --retry-failed)            RETRY_FAILED=1 ;;
     --re-scan-goals=*)         RE_SCAN_GOALS="${tok#--re-scan-goals=}" ;;
     --dogfood)                 DOGFOOD=1 ;;
+    --force)                   FORCE_RERUN=1 ;;
     --skip-scan)               SKIP_SCAN=1 ;;
     --skip-discovery)          SKIP_DISCOVERY=1 ;;
     --fix-only)                FIX_ONLY=1 ;;
@@ -341,7 +378,7 @@ done
 
 export RETRY_FAILED RE_SCAN_GOALS DOGFOOD SKIP_SCAN SKIP_DISCOVERY FIX_ONLY \
        EVALUATE_ONLY FULL_SCAN WITH_PROBES SKIP_CROSSAI ALLOW_NO_CRUD_SURFACE \
-       NON_INTERACTIVE
+       NON_INTERACTIVE FORCE_RERUN
 ```
 
 **Phase profile detection (P5, v1.9.2) — FIRST ACTION before any blanket check:**
@@ -365,7 +402,7 @@ else
   # Graceful fallback for legacy workflows where helper not yet installed
   PHASE_PROFILE="feature"
   REVIEW_MODE="full"
-  REQUIRED_ARTIFACTS="SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md"
+  REQUIRED_ARTIFACTS="SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md API-DOCS.md TEST-GOALS.md SUMMARY.md"
   SKIP_ARTIFACTS=""
   GOAL_COVERAGE_SRC="TEST-GOALS"
   echo "⚠ phase-profile.sh missing — defaulting to profile=feature" >&2
@@ -456,6 +493,74 @@ s['status'] = 'reviewing'; s['pipeline_step'] = 'review'
 s['updated_at'] = __import__('datetime').datetime.now().isoformat()
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
+```
+
+**Force rerun reset (`--force`) — clear prior review state before any reuse/staleness branch can fire.**
+
+This is the explicit escape hatch for "phase already reviewed" situations.
+`--force` means: do a real full rerun, not matrix-only re-validation.
+
+```bash
+if [ -n "$FORCE_RERUN" ]; then
+  if [ -n "$RETRY_FAILED" ] || [ -n "$RE_SCAN_GOALS" ] || [ -n "$EVALUATE_ONLY" ] || \
+     [ -n "$DOGFOOD" ] || [ -n "$SKIP_DISCOVERY" ] || [ -n "$FIX_ONLY" ]; then
+    echo "⛔ --force is incompatible with --retry-failed, --re-scan-goals, --evaluate-only, --dogfood, --skip-discovery, and --fix-only." >&2
+    echo "   Use plain full review + --force when you need fresh API/browser evidence." >&2
+    exit 1
+  fi
+
+  # If operator explicitly pinned a non-full mode on CLI, reject. Force is
+  # for full rerun semantics, not profile-short-circuit modes.
+  if [[ "${ARGS_RAW}" =~ --mode=([a-z-]+) ]] && [ "${BASH_REMATCH[1]}" != "full" ]; then
+    echo "⛔ --force currently supports only --mode=full. Got --mode=${BASH_REMATCH[1]}." >&2
+    exit 1
+  fi
+
+  VG_SCRIPT_ROOT="${REPO_ROOT:-.}/.claude/scripts"
+  [ -d "$VG_SCRIPT_ROOT" ] || VG_SCRIPT_ROOT="${REPO_ROOT:-.}/scripts"
+  FORCE_RESET_SCRIPT="${VG_SCRIPT_ROOT}/reset-review-state.py"
+  if [ ! -f "$FORCE_RESET_SCRIPT" ]; then
+    echo "⛔ --force requested but reset helper missing: $FORCE_RESET_SCRIPT" >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "↻ Force rerun requested"
+  echo "   Clearing prior review markers/artifacts"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  FORCE_RESET_JSON=$("${PYTHON_BIN:-python3}" "$FORCE_RESET_SCRIPT" --phase-dir "${PHASE_DIR}")
+  FORCE_RESET_RC=$?
+  if [ "$FORCE_RESET_RC" -ne 0 ]; then
+    echo "⛔ reset-review-state failed — cannot guarantee a fresh rerun." >&2
+    exit 1
+  fi
+
+  echo "$FORCE_RESET_JSON" | "${PYTHON_BIN:-python3}" -c "
+import json, sys
+data = json.load(sys.stdin)
+print(f\"   removed artifacts: {data.get('removed_count', 0)}\")
+for path in data.get('removed', [])[:12]:
+    print(f\"   - {path}\")
+extra = max(0, len(data.get('removed', [])) - 12)
+if extra:
+    print(f\"   ... +{extra} more\")
+"
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.force_rerun_requested" \
+    --step "0_parse_and_validate" \
+    --actor "llm-claimed" \
+    --outcome "INFO" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mode\":\"full\"}" >/dev/null 2>&1 || true
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.force_rerun_workspace_reset" \
+    --step "0_parse_and_validate" \
+    --actor "llm-claimed" \
+    --outcome "INFO" \
+    --payload "$FORCE_RESET_JSON" >/dev/null 2>&1 || true
+fi
 ```
 
 **Matrix staleness check (v2.46-wave3.2) — closes "matrix says READY but button still errors" gap.**
@@ -734,6 +839,12 @@ case "$VG_METHOD" in
     ;;
 esac
 
+if [ -n "${FORCE_RERUN:-}" ] && [ "$VG_REVIEW_MODE" != "full" ]; then
+  echo "⛔ --force requires full review mode after env gate. Current mode=${VG_REVIEW_MODE}." >&2
+  echo "   Re-run với --mode=full --force nếu muốn ép scan lại từ đầu." >&2
+  exit 1
+fi
+
 # 6. Display banner — user-visible confirmation of what's about to run
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -883,33 +994,48 @@ for line in sys.stdin:
   fi
 fi
 touch "${PHASE_DIR}/.step-markers/0c_telemetry_suggestions.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 0c_telemetry_suggestions 2>/dev/null || true
 ```
 </step>
 
 <step name="create_task_tracker">
-**Narrate step plan using markdown headers (NO TaskCreate/TaskUpdate — see NARRATION_POLICY).**
+**Project the harness tasklist contract into native task UI.**
 
-Per NARRATION_POLICY: review can spawn 5-20 Haiku scanners running in parallel (30+ min total). TaskCreate items would persist forever in Claude Code tail UI if the session interrupts mid-scan. Instead:
+Per TASKLIST_POLICY, the tasklist shown by `emit-tasklist.py` is a binding contract, not advisory text. Before running Phase 1, do all of this:
 
-1. Write this block verbatim in your text output before starting phase 1 so user sees the plan:
+1. Read `.vg/runs/{run_id}/tasklist-contract.json` from the current run.
+2. Project every contract item to native task UI:
+   - Claude CLI: `TaskCreate` one item per contract item, then `TaskUpdate` as steps move active/completed.
+   - Codex CLI: use Codex native tasklist/plan UI with the same item ids, then update items as steps move active/completed.
+3. Bind the projection to orchestrator telemetry:
+   ```bash
+   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected --adapter claude
+   # Codex runtime uses: --adapter codex
+   # Runtime with no native task UI uses: --adapter fallback
+   ```
+4. Also write this compact step plan in your text output before starting phase 1 so the message stream is readable:
    ```
    ## ━━━ /vg:review step plan ━━━
    1a:   Contract verify (grep BE routes vs contracts)
    1b:   Element inventory (count UI elements per file)
    1.5:  Graphify ripple analysis (cross-module callers)
    2a:   Deploy + preflight (to {ENV}, health check)
+   2a.5: API Docs + API contract precheck (BE -> FE reference + live route probe)
    2b-1: Navigator discovers views (Haiku scanning sidebar)
    2b-2: Haiku scanners per view (N parallel agents)
    2b-3: Merge + evaluate scan results
-   2.5:  Visual integrity checks
+   2c:   Runtime lens dispatch (plugins: enrich, CRUD/RCRURD, filter, paging, sort, search, URL-state, visual)
+   2d:   API error-message runtime lens (API body message -> visible toast/form error)
+   2e:   Findings pipeline (merge, adversarial challenge, auto-fix routing)
    3:    Fix loop (max 3 iterations)
    4a:   Load goals + filter infra deps
    4b:   Map goals to RUNTIME-MAP
    4c:   Weighted gate evaluation
    4d:   Write GOAL-COVERAGE-MATRIX
+   post: Unreachable triage → CrossAI review → artifacts → reflection
    ```
-2. Before each sub-step runs, narrate: `## ━━━ Running 2b-2: Scanning /conversions as advertiser (3/7 views) ━━━`.
-3. After each sub-step: `touch "${PHASE_DIR}/.step-markers/${sub_step}.done"`.
+5. Before each major step/sub-step runs, update the native task item to active, call `vg-orchestrator step-active <step_name>`, then narrate: `## ━━━ Running 2b-2: Scanning /conversions as advertiser (3/7 views) ━━━`.
+6. After each sub-step: write its marker, call `vg-orchestrator mark-step review <step_name>`, then update the native task item to completed.
 
 **Dynamic header examples** (concrete values in headers, not in stale task items):
 - `## ━━━ 2b-2: Scanning /conversions as advertiser (3/7 views) ━━━`
@@ -957,12 +1083,34 @@ case "$REVIEW_MODE" in
     REVIEW_MODE="full"
     ;;
 esac
+
+# Materialize the profile-aware checklist/plugin contract early. Full web runs
+# refresh it after RUNTIME-MAP discovery, but backend-only/CLI/library and
+# non-full modes still need a REVIEW-LENS-PLAN artifact and task contract.
+LENS_PLAN_SCRIPT="${REPO_ROOT}/.claude/scripts/review-lens-plan.py"
+if [ -f "$LENS_PLAN_SCRIPT" ]; then
+  "${PYTHON_BIN:-python3}" "$LENS_PLAN_SCRIPT" \
+    --phase-dir "$PHASE_DIR" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+    --mode "${REVIEW_MODE:-full}" \
+    --write >/dev/null 2>&1 || {
+      echo "⛔ Review checklist/lens plan generation failed for profile=${PROFILE:-${CONFIG_PROFILE:-web-fullstack}} mode=${REVIEW_MODE:-full}" >&2
+      exit 1
+    }
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.lens_plan_generated" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"platform\":\"${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}\",\"phase_profile\":\"${PHASE_PROFILE:-unknown}\",\"mode\":\"${REVIEW_MODE:-full}\",\"artifact\":\"REVIEW-LENS-PLAN.json\"}" \
+    >/dev/null 2>&1 || true
+else
+  echo "⛔ Missing review lens planner: $LENS_PLAN_SCRIPT" >&2
+  exit 1
+fi
 ```
 
 **Dispatcher rule:** Orchestrator runs EXACTLY ONE of: `phaseP_infra_smoke` | `phaseP_delta` | `phaseP_regression` | `phaseP_schema_verify` | `phaseP_link_check` | classic `phase1_code_scan → phase4_goal_comparison`. Infra-smoke etc. write `GOAL-COVERAGE-MATRIX.md` directly (implicit goals from SPECS), skip browser + RUNTIME-MAP entirely.
 </step>
 
-<step name="phaseP_infra_smoke" profile="web-fullstack,web-backend-only,cli-tool,library">
+<step name="phaseP_infra_smoke" profile="web-fullstack,web-backend-only,cli-tool,library" mode="infra-smoke">
 ## Review mode: infra-smoke (P5, v1.9.2)
 
 **Runs when `REVIEW_MODE=infra-smoke` (infra profile).**
@@ -1117,13 +1265,32 @@ PY
   echo "✓ Infra-smoke PASS (${READY_COUNT}/${TOTAL}) — phase provisioned as specified."
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_infra_smoke" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_infra_smoke.done"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_infra_smoke 2>/dev/null || true
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+      --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
+      --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
+        echo "⛔ Infra-smoke checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
+        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        if [ -f "$DIAG_SCRIPT" ]; then
+          "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+            --gate-id "review.phaseP_infra_smoke_lens_plan" \
+            --phase-dir "$PHASE_DIR" \
+            --input "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" \
+            --out-md "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" \
+            >/dev/null 2>&1 || true
+          cat "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" 2>/dev/null || true
+        fi
+        exit 1
+      }
+  fi
   # Exit review early — subsequent steps (browser, goal comparison) N/A for infra profile.
   exit 0
 fi
 ```
 </step>
 
-<step name="phaseP_delta">
+<step name="phaseP_delta" mode="delta">
 ## Review mode: delta (P5, v1.9.2 — OHOK Batch 2 B5: real verification)
 
 **Runs when `REVIEW_MODE=delta` (hotfix profile).**
@@ -1415,12 +1582,31 @@ PY
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_delta 2>/dev/null || true
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.phaseP_delta_verified" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"parent\":\"${PARENT_REF}\",\"overlap_count\":${OVERLAP_COUNT:-0},\"failed_count\":${FAILED_COUNT:-0}}" >/dev/null 2>&1 || true
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+      --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
+      --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
+        echo "⛔ Delta checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
+        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        if [ -f "$DIAG_SCRIPT" ]; then
+          "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+            --gate-id "review.phaseP_delta_lens_plan" \
+            --phase-dir "$PHASE_DIR" \
+            --input "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" \
+            --out-md "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" \
+            >/dev/null 2>&1 || true
+          cat "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" 2>/dev/null || true
+        fi
+        exit 1
+      }
+  fi
   exit 0
 fi
 ```
 </step>
 
-<step name="phaseP_regression">
+<step name="phaseP_regression" mode="regression">
 ## Review mode: regression (P5, v1.9.2 — bugfix profile, OHOK Batch 2 B5: real verification)
 
 **Runs when `REVIEW_MODE=regression`.**
@@ -1562,12 +1748,31 @@ PY
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_regression 2>/dev/null || true
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.phaseP_regression_verified" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"bug_ref\":\"${BUG_REF}\",\"code_count\":${CODE_COUNT},\"test_count\":${TEST_COUNT},\"test_linked\":${TEST_MENTIONS_BUG}}" >/dev/null 2>&1 || true
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+      --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
+      --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
+        echo "⛔ Regression checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
+        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        if [ -f "$DIAG_SCRIPT" ]; then
+          "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+            --gate-id "review.phaseP_regression_lens_plan" \
+            --phase-dir "$PHASE_DIR" \
+            --input "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" \
+            --out-md "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" \
+            >/dev/null 2>&1 || true
+          cat "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" 2>/dev/null || true
+        fi
+        exit 1
+      }
+  fi
   exit 0
 fi
 ```
 </step>
 
-<step name="phaseP_schema_verify">
+<step name="phaseP_schema_verify" mode="schema-verify">
 ## Review mode: schema-verify (P5, v1.9.2 — migration profile)
 
 ```bash
@@ -1612,12 +1817,31 @@ print("✓ GOAL-COVERAGE-MATRIX.md written (migration schema-verify)")
 PY
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_schema_verify" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_schema_verify.done"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_schema_verify 2>/dev/null || true
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+      --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
+      --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
+        echo "⛔ Schema-verify checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
+        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        if [ -f "$DIAG_SCRIPT" ]; then
+          "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+            --gate-id "review.phaseP_schema_verify_lens_plan" \
+            --phase-dir "$PHASE_DIR" \
+            --input "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" \
+            --out-md "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" \
+            >/dev/null 2>&1 || true
+          cat "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" 2>/dev/null || true
+        fi
+        exit 1
+      }
+  fi
   exit 0
 fi
 ```
 </step>
 
-<step name="phaseP_link_check">
+<step name="phaseP_link_check" mode="link-check">
 ## Review mode: link-check (P5, v1.9.2 — docs profile)
 
 ```bash
@@ -1658,12 +1882,31 @@ print("✓ GOAL-COVERAGE-MATRIX.md written (docs link-check)")
 PY
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_link_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_link_check.done"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_link_check 2>/dev/null || true
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+      --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
+      --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
+        echo "⛔ Link-check checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
+        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        if [ -f "$DIAG_SCRIPT" ]; then
+          "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+            --gate-id "review.phaseP_link_check_lens_plan" \
+            --phase-dir "$PHASE_DIR" \
+            --input "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" \
+            --out-md "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" \
+            >/dev/null 2>&1 || true
+          cat "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" 2>/dev/null || true
+        fi
+        exit 1
+      }
+  fi
   exit 0
 fi
 ```
 </step>
 
-<step name="phase1_code_scan">
+<step name="phase1_code_scan" mode="full">
 ## Phase 0.5: RFC v9 preflight (data invariants + RCRURD + cache hygiene)
 
 **RFC v9 PR-D1/D2/F integration.** Runs deterministic gates BEFORE the
@@ -2054,7 +2297,7 @@ matched at least one OPEN debt entry from a prior phase (R9: gate_id +
 timestamp + git_sha). No-op when there are no matching entries.
 </step>
 
-<step name="phase1_5_ripple_and_god_node">
+<step name="phase1_5_ripple_and_god_node" mode="full">
 ## Phase 1.5: GRAPHIFY IMPACT ANALYSIS (cross-module ripple + god node coupling)
 
 **Purpose**: retroactive safety net for changes that affect callers outside the phase's changed-files list. Complement to /vg:build's proactive caller graph.
@@ -2245,7 +2488,7 @@ Graphify inactive. Enable for cross-module impact detection.
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase1_5_ripple_and_god_node" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase1_5_ripple_and_god_node.done"`
 </step>
 
-<step name="phase2a_api_contract_probe" profile="web-fullstack,web-frontend-only">
+<step name="phase2a_api_contract_probe" profile="web-fullstack,web-frontend-only,web-backend-only" mode="full">
 ## Phase 2a.5: API CONTRACT PROBE (curl, no browser)
 
 **Mandatory before browser discovery for web feature phases.**
@@ -2254,6 +2497,7 @@ Purpose:
 - prove the current run touched the live API surface before any browser scan
 - fail fast on broken/stale backend routes instead of hiding the problem behind discovery noise
 - create a fresh artifact that runtime_contract can enforce even on older pinned phases
+- verify API-DOCS.md fully covers API-CONTRACTS.md so discovery/test use the built API reference, not stale prose
 
 **Scope:** low-cost readiness gate only. This is NOT the full `/vg:test` runtime contract verification and NOT a project-specific mutation batch. Mutating endpoints are probed safely (OPTIONS / existence check), not executed for side effects.
 
@@ -2263,16 +2507,77 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🔎 Phase 2a.5 — API contract probe"
 echo "   Curl API contracts trước browser discovery"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2a_api_contract_probe >/dev/null 2>&1 || true
 
 API_PROBE_OUT="${PHASE_DIR}/api-contract-precheck.txt"
+API_DOCS_CHECK_OUT="${PHASE_DIR}/api-docs-check.txt"
 VG_SCRIPT_ROOT="${REPO_ROOT:-.}/.claude/scripts"
 [ -d "$VG_SCRIPT_ROOT" ] || VG_SCRIPT_ROOT="${REPO_ROOT:-.}/scripts"
 PROBE_SCRIPT="${VG_SCRIPT_ROOT}/review-api-contract-probe.py"
+INTERFACE_CHECK_OUT="${PHASE_DIR}/.tmp/interface-standards-review.json"
 
 if [ ! -f "$PROBE_SCRIPT" ]; then
   echo "⛔ API contract probe setup error — missing helper: $PROBE_SCRIPT" | tee "$API_PROBE_OUT"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_helper\"}" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+INTERFACE_VAL="${VG_SCRIPT_ROOT}/validators/verify-interface-standards.py"
+if [ -f "$INTERFACE_VAL" ]; then
+  "${PYTHON_BIN:-python3}" "$INTERFACE_VAL" \
+    --phase-dir "$PHASE_DIR" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+    > "$INTERFACE_CHECK_OUT" 2>&1
+  INTERFACE_RC=$?
+  cat "$INTERFACE_CHECK_OUT"
+  if [ "$INTERFACE_RC" -ne 0 ]; then
+    echo "⛔ Interface standards gate failed — review cannot continue with undefined API/FE error semantics." >&2
+    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    if [ -f "$DIAG_SCRIPT" ]; then
+      "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+        --gate-id "review.interface_standards" \
+        --phase-dir "$PHASE_DIR" \
+        --input "$INTERFACE_CHECK_OUT" \
+        --out-md "${PHASE_DIR}/.tmp/interface-standards-diagnostic.md" \
+        >/dev/null 2>&1 || true
+      cat "${PHASE_DIR}/.tmp/interface-standards-diagnostic.md" 2>/dev/null || true
+    fi
+    exit 1
+  fi
+else
+  echo "⛔ Interface standards validator missing: $INTERFACE_VAL" >&2
+  exit 1
+fi
+
+"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-api-docs-coverage.py \
+  --phase "${PHASE_NUMBER}" \
+  > "${API_DOCS_CHECK_OUT}" 2>&1
+API_DOCS_RC=$?
+cat "${API_DOCS_CHECK_OUT}"
+if [ "$API_DOCS_RC" -ne 0 ]; then
+  echo "⛔ API docs coverage failed — browser discovery is not allowed to continue with incomplete API-DOCS.md." >&2
+  DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+  if [ -f "$DIAG_SCRIPT" ]; then
+    "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+      --gate-id "review.api_docs_contract_coverage" \
+      --phase-dir "$PHASE_DIR" \
+      --input "$API_DOCS_CHECK_OUT" \
+      --out-md "${PHASE_DIR}/.tmp/api-docs-diagnostic.md" \
+      >/dev/null 2>&1 || true
+    cat "${PHASE_DIR}/.tmp/api-docs-diagnostic.md" 2>/dev/null || true
+  fi
+  exit 1
+fi
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/emit-evidence-manifest.py" \
+  --path "${PHASE_DIR}/api-docs-check.txt" \
+  --source-inputs "${PHASE_DIR}/API-CONTRACTS.md,${PHASE_DIR}/API-DOCS.md,.claude/vg.config.md" \
+  --producer "vg:review/phase2a_api_contract_probe"
+API_DOCS_MANIFEST_RC=$?
+if [ "$API_DOCS_MANIFEST_RC" -ne 0 ]; then
+  echo "⛔ API docs check wrote report but failed to bind evidence to current run." >&2
   exit 1
 fi
 
@@ -2338,11 +2643,14 @@ fi
 
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_completed" \
   --payload "$(printf '{"phase":"%s","base_url":"%s","artifact":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "api-contract-precheck.txt")" >/dev/null 2>&1 || true
+
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2a_api_contract_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2a_api_contract_probe.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2a_api_contract_probe 2>/dev/null || true
 ```
 
 </step>
 
-<step name="phase2_browser_discovery" profile="web-fullstack,web-frontend-only">
+<step name="phase2_browser_discovery" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2: BROWSER DISCOVERY (MCP Playwright — organic)
 
 **🎬 Live narration protocol (tightened 2026-04-17 — user theo dõi flow):**
@@ -2350,6 +2658,7 @@ fi
 Orchestrator PHẢI in dòng tiếng người BEFORE mỗi sub-phase + BEFORE mỗi view/goal đang xử lý. Khác test.md: review chạy parallel nhiều Haiku, narration ở orchestrator level không cần per-step.
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2_browser_discovery >/dev/null 2>&1 || true
 narrate_phase() {
   # $1=phase_name, $2=intent tiếng Việt
   echo ""
@@ -3290,7 +3599,7 @@ User sẽ thấy banner đầy đủ BEFORE spawn + structured description trong
 
 </step>
 
-<step name="phase2_5_recursive_lens_probe" profile="web-fullstack,web-frontend-only">
+<step name="phase2_5_recursive_lens_probe" profile="web-fullstack,web-frontend-only" mode="full">
 
 #### 2b-2.5: Recursive Lens Probe (v2.40, manager dispatcher)
 
@@ -3474,7 +3783,7 @@ python scripts/aggregate_recursive_goals.py --phase-dir "$PHASE_DIR" --mode "$RE
 
 </step>
 
-<step name="phase2b_collect_merge" profile="web-fullstack,web-frontend-only">
+<step name="phase2b_collect_merge" profile="web-fullstack,web-frontend-only" mode="full">
 
 #### 2b-3: Collect, Cross-Check, Fill Gaps (Opus, no browser)
 
@@ -3693,7 +4002,7 @@ invocations don't show up as false positives.
 
 ```bash
 PHANTOM_VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-haiku-spawn-fired.py"
-if [ -x "$PHANTOM_VALIDATOR" ] && [ -f "${REPO_ROOT}/.claude/state/events.db" ]; then
+if [ -x "$PHANTOM_VALIDATOR" ] && [ -f "${REPO_ROOT}/.vg/events.db" ]; then
   ${PYTHON_BIN} "$PHANTOM_VALIDATOR" --phase "${PHASE_NUMBER}" \
       > "${VG_TMP}/haiku-spawn-audit.json" 2>&1 || true
   HSV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/haiku-spawn-audit.json')).get('verdict','SKIP'))" 2>/dev/null)
@@ -3713,9 +4022,38 @@ if [ -x "$PHANTOM_VALIDATOR" ] && [ -f "${REPO_ROOT}/.claude/state/events.db" ];
   esac
 fi
 ```
+
+### 2b-4: Generate Review Lens Plan
+
+After RUNTIME-MAP exists, materialize the plugin contract that the remaining
+review steps must execute. This is the harness-level binding between the
+visible step list and the smaller checks/lenses.
+
+```bash
+LENS_PLAN_SCRIPT="${REPO_ROOT}/.claude/scripts/review-lens-plan.py"
+if [ -f "$LENS_PLAN_SCRIPT" ]; then
+  "${PYTHON_BIN:-python3}" "$LENS_PLAN_SCRIPT" \
+    --phase-dir "$PHASE_DIR" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+    --mode "${REVIEW_MODE:-full}" \
+    --write
+  LENS_PLAN_RC=$?
+  if [ "$LENS_PLAN_RC" -ne 0 ] || [ ! -f "${PHASE_DIR}/REVIEW-LENS-PLAN.json" ]; then
+    echo "⛔ Review lens plan generation failed — cannot prove plugin checklist coverage." >&2
+    exit 1
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.lens_plan_generated" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"artifact\":\"REVIEW-LENS-PLAN.json\"}" \
+    >/dev/null 2>&1 || true
+else
+  echo "⛔ Missing review lens planner: $LENS_PLAN_SCRIPT" >&2
+  exit 1
+fi
+```
 </step>
 
-<step name="phase2c_enrich_test_goals" profile="web-fullstack,web-frontend-only">
+<step name="phase2c_enrich_test_goals" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2c — Enrich TEST-GOALS from runtime discovery (v2.34.0+, closes #52)
 
 Bridges the design gap between **Step 3 (click many components)** and **Step 4 (rich goals for test layer)** of the original 4-step review architecture. Without this step, every Haiku-discovered button/form/modal/tab/row-action sits dead in `views[X].elements[]` and the downstream test layer never tests it.
@@ -3725,6 +4063,7 @@ Bridges the design gap between **Step 3 (click many components)** and **Step 4 (
 ```bash
 echo ""
 echo "━━━ Phase 2c — Enrich TEST-GOALS from runtime discovery ━━━"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2c_enrich_test_goals >/dev/null 2>&1 || true
 
 ENRICH_THRESHOLD=$(vg_config_get "review.enrich_min_elements" "3" 2>/dev/null || echo "3")
 
@@ -3769,10 +4108,11 @@ if [[ ! "$ARGUMENTS" =~ --skip-enrich-validate ]]; then
     exit 1
   fi
 fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2c_enrich_test_goals 2>/dev/null || true
 ```
 </step>
 
-<step name="phase2c_pre_dispatch_gates" profile="web-fullstack,web-frontend-only">
+<step name="phase2c_pre_dispatch_gates" profile="web-fullstack,web-frontend-only,web-backend-only" mode="full">
 ## Phase 2c-pre — Contract completeness + env preflight (v2.39.0+)
 
 Two pre-dispatch gates close Codex critiques #1 (contract validity not gated) + #6 (env state implicit):
@@ -3785,6 +4125,7 @@ If contract incomplete OR env preflight fails → review aborts BEFORE spawning 
 ```bash
 echo ""
 echo "━━━ Phase 2c-pre — Contract completeness + env preflight ━━━"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2c_pre_dispatch_gates >/dev/null 2>&1 || true
 
 # Contract completeness gate (severity warn first release for dogfood)
 COMPLETE_SEV=$(vg_config_get "review.contract_completeness.severity" "warn" 2>/dev/null || echo "warn")
@@ -3806,10 +4147,22 @@ if grep -q '"kit"\s*:\s*"crud-roundtrip"\|"kit"\s*:\s*"approval-flow"\|"kit"\s*:
     echo "  ⚠ ENV-CONTRACT skipped: $ENV_REASON (logged to OVERRIDE-DEBT)"
   else
     ${PYTHON_BIN:-python3} .claude/scripts/verify-env-contract.py \
-      --phase-dir "$PHASE_DIR"
+      --phase-dir "$PHASE_DIR" \
+      > "${PHASE_DIR}/.tmp/env-contract-review.txt" 2>&1
     ENV_RC=$?
     if [ "$ENV_RC" -ne 0 ] && [ "$ENV_SEV" = "block" ]; then
       echo "⛔ ENV-CONTRACT preflight FAIL — fix env or pass --skip-env-contract=\"<reason>\""
+      cat "${PHASE_DIR}/.tmp/env-contract-review.txt" 2>/dev/null || true
+      DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+      if [ -f "$DIAG_SCRIPT" ]; then
+        "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+          --gate-id "review.env_contract" \
+          --phase-dir "$PHASE_DIR" \
+          --input "${PHASE_DIR}/.tmp/env-contract-review.txt" \
+          --out-md "${PHASE_DIR}/.tmp/env-contract-diagnostic.md" \
+          >/dev/null 2>&1 || true
+        cat "${PHASE_DIR}/.tmp/env-contract-diagnostic.md" 2>/dev/null || true
+      fi
       exit 1
     fi
   fi
@@ -3818,10 +4171,11 @@ fi
 emit_telemetry_v2 "review_phase2c_pre_gates" "${PHASE_NUMBER}" \
   "review.2c-pre" "pre_dispatch_gates" "PASS" \
   "{\"contract_complete_rc\":${COMPLETE_RC:-0}}" 2>/dev/null || true
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2c_pre_dispatch_gates 2>/dev/null || true
 ```
 </step>
 
-<step name="phase2d_crud_roundtrip_dispatch" profile="web-fullstack,web-frontend-only">
+<step name="phase2d_crud_roundtrip_dispatch" profile="web-fullstack,web-frontend-only,web-backend-only" mode="full">
 ## Phase 2d — CRUD round-trip lens dispatch (v2.35.0+, closes #51)
 
 Dispatches Gemini Flash workers per `(resource × role)` declared with `kit: crud-roundtrip` in CRUD-SURFACES.md. Each worker runs the 8-step Read→Create→Read→Update→Read→Delete→Read round-trip per `commands/vg/_shared/transition-kits/crud-roundtrip.md`.
@@ -3833,6 +4187,7 @@ Dispatches Gemini Flash workers per `(resource × role)` declared with `kit: cru
 ```bash
 echo ""
 echo "━━━ Phase 2d — CRUD round-trip lens dispatch ━━━"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2d_crud_roundtrip_dispatch >/dev/null 2>&1 || true
 
 # Skip if no CRUD-SURFACES or no resources declare this kit
 if [ ! -f "${PHASE_DIR}/CRUD-SURFACES.md" ]; then
@@ -3875,10 +4230,11 @@ else
     fi
   fi
 fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2d_crud_roundtrip_dispatch 2>/dev/null || true
 ```
 </step>
 
-<step name="phase2e_findings_merge" profile="web-fullstack,web-frontend-only">
+<step name="phase2e_findings_merge" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2e — Findings derivation (v2.35.0+)
 
 Reads run artifacts from Phase 2d and derives `REVIEW-FINDINGS.json` (machine-readable, deduped) + `REVIEW-BUGS.md` (Strix-style human-readable triage doc).
@@ -3888,6 +4244,7 @@ Reads run artifacts from Phase 2d and derives `REVIEW-FINDINGS.json` (machine-re
 ```bash
 echo ""
 echo "━━━ Phase 2e — Findings derivation ━━━"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2e_findings_merge >/dev/null 2>&1 || true
 
 if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/null | grep -v INDEX.json)" ]; then
   ${PYTHON_BIN:-python3} .claude/scripts/derive-findings.py \
@@ -3904,10 +4261,11 @@ if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/n
 else
   echo "  (no run artifacts to derive — skipping)"
 fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2e_findings_merge 2>/dev/null || true
 ```
 </step>
 
-<step name="phase2e_post_challenge" profile="web-fullstack,web-frontend-only">
+<step name="phase2e_post_challenge" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2e-post — Manager adversarial challenge (v2.39.0+, closes Codex critique #7)
 
 Workers report `coverage.passed`. This step asks: "do these passes actually imply coverage?". Heuristic adversarial reducer samples N% of run artifacts and challenges each pass step:
@@ -3920,6 +4278,7 @@ Output: `${PHASE_DIR}/COVERAGE-CHALLENGE.json` with downgrades + warnings. v2.40
 ```bash
 echo ""
 echo "━━━ Phase 2e-post — Manager adversarial challenge ━━━"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2e_post_challenge >/dev/null 2>&1 || true
 
 if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/null | grep -v INDEX.json)" ]; then
   CHALLENGE_RATE=$(vg_config_get "review.challenge.sample_rate" "25" 2>/dev/null || echo "25")
@@ -3941,10 +4300,11 @@ if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/n
     "review.2e-post" "coverage_challenge" "PASS" \
     "{\"sample_rate\":${CHALLENGE_RATE}}" 2>/dev/null || true
 fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2e_post_challenge 2>/dev/null || true
 ```
 </step>
 
-<step name="phase2f_route_auto_fix" profile="web-fullstack,web-frontend-only">
+<step name="phase2f_route_auto_fix" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2f — Route findings to /vg:build (v2.37.0+, opt-in)
 
 Reads `REVIEW-FINDINGS.json` and emits `AUTO-FIX-TASKS.md` for findings meeting the conservative gate (severity ≥ high, confidence == high, cleanup_status == completed). `/vg:build` consumes via `--include-auto-fix` flag (opt-in v2.37, may default-on v2.38 after dogfood).
@@ -3952,6 +4312,7 @@ Reads `REVIEW-FINDINGS.json` and emits `AUTO-FIX-TASKS.md` for findings meeting 
 ```bash
 echo ""
 echo "━━━ Phase 2f — Route findings to /vg:build (auto-fix loop) ━━━"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2f_route_auto_fix >/dev/null 2>&1 || true
 
 if [ -f "${PHASE_DIR}/REVIEW-FINDINGS.json" ]; then
   ${PYTHON_BIN:-python3} .claude/scripts/route-findings-to-build.py \
@@ -3971,10 +4332,11 @@ if [ -f "${PHASE_DIR}/REVIEW-FINDINGS.json" ]; then
 else
   echo "  (no REVIEW-FINDINGS.json — skipping)"
 fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2f_route_auto_fix 2>/dev/null || true
 ```
 </step>
 
-<step name="phase2_exploration_limits" profile="web-fullstack,web-frontend-only">
+<step name="phase2_exploration_limits" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2-limit: EXPLORATION LIMIT CHECK (R8 enforcement — v1.14.4+)
 
 Counts actions + views + wall-time sau Phase 2 để phát hiện runaway discovery (phát hiện quét vô kiểm soát). WARN (cảnh báo) only — không block (không chặn) vì discovery đã xong. Kết quả ghi vào PIPELINE-STATE.json metrics để test/accept biết RUNTIME-MAP có thể noisy (nhiễu).
@@ -4089,7 +4451,7 @@ fi
 **Hành vi downstream:** nếu có warnings, step `crossai_review` cuối pipeline sẽ include "exploration noisy" flag vào context để CrossAI xem xét kỹ goals liên quan views overflow.
 </step>
 
-<step name="phase2_mobile_discovery" profile="mobile-*">
+<step name="phase2_mobile_discovery" profile="mobile-*" mode="full">
 ## Phase 2 (mobile): DEVICE DISCOVERY (Maestro — equivalent of browser scan)
 
 Fires when `profile ∈ {mobile-rn, mobile-flutter, mobile-native-ios,
@@ -4242,7 +4604,7 @@ at artifact-read level — they read scan-*.json agnostic of source.
 This keeps Phase 3/4 code zero-touch in the mobile rollout.
 </step>
 
-<step name="phase2_5_visual_checks" profile="web-fullstack,web-frontend-only">
+<step name="phase2_5_visual_checks" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2.5: VISUAL INTEGRITY CHECK
 
 **Config gate:** Read `visual_checks` from vg.config.md. If `visual_checks.enabled` != true → skip.
@@ -4554,7 +4916,7 @@ fi
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_5_visual_checks" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_5_visual_checks.done"`
 </step>
 
-<step name="phase2_5_mobile_visual_checks" profile="mobile-*">
+<step name="phase2_5_mobile_visual_checks" profile="mobile-*" mode="full">
 ## Phase 2.5 (mobile): VISUAL INTEGRITY CHECK
 
 **Config gate:**
@@ -4656,7 +5018,7 @@ MAJOR → handled in Phase 3 fix loop. MINOR → logged only.
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_5_mobile_visual_checks" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_5_mobile_visual_checks.done"`
 </step>
 
-<step name="phase2_7_url_state_sync" profile="web-fullstack,web-frontend-only">
+<step name="phase2_7_url_state_sync" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2.7: URL state sync declaration check (Phase J)
 
 → `narrate_phase "Phase 2.7 — URL state sync" "Kiểm tra interactive_controls trong TEST-GOALS"`
@@ -4705,6 +5067,7 @@ debt entry.
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 "${PYTHON_BIN}" .claude/scripts/validators/verify-url-state-sync.py \
   --phase "${PHASE_NUMBER}" \
+  --enforce-required-lenses \
   > "${PHASE_DIR}/.tmp/url-state-sync.json" 2>&1
 URL_SYNC_RC=$?
 
@@ -4717,6 +5080,16 @@ if [ "${URL_SYNC_RC}" != "0" ]; then
   else
     echo "⛔ URL state sync declarations missing — see ${PHASE_DIR}/.tmp/url-state-sync.json"
     cat "${PHASE_DIR}/.tmp/url-state-sync.json"
+    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    if [ -f "$DIAG_SCRIPT" ]; then
+      "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+        --gate-id "review.url_state_sync" \
+        --phase-dir "$PHASE_DIR" \
+        --input "${PHASE_DIR}/.tmp/url-state-sync.json" \
+        --out-md "${PHASE_DIR}/.tmp/url-state-sync-diagnostic.md" \
+        >/dev/null 2>&1 || true
+      cat "${PHASE_DIR}/.tmp/url-state-sync-diagnostic.md" 2>/dev/null || true
+    fi
     echo ""
     echo "Fix options:"
     echo "  1. Add interactive_controls blocks to TEST-GOALS.md per goal."
@@ -4737,7 +5110,7 @@ makes runtime probe meaningful.
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_7_url_state_sync" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_7_url_state_sync.done"`
 </step>
 
-<step name="phase2_8_url_state_runtime" profile="web-fullstack,web-frontend-only">
+<step name="phase2_8_url_state_runtime" profile="web-fullstack,web-frontend-only" mode="full">
 ## Phase 2.8: URL state runtime probe (v2.7 Phase A)
 
 → `narrate_phase "Phase 2.8 — URL state runtime probe" "Click từng control + snapshot URL để verify declaration vs implementation"`
@@ -4772,12 +5145,17 @@ For every goal in `${PHASE_DIR}/TEST-GOALS.md` that declares
 3. Navigate to the route. Wait for the list/table/grid to be visible.
 4. For every entry in the goal's `interactive_controls`:
    - **filter** — pick the first declared `values[0]`, click the filter
-     control, snapshot URL.
-   - **sort** — apply the first declared column, snapshot URL.
+     control, snapshot URL, then prove visible rows and/or network response
+     match the selected value. Example: `status=pending` must not show flagged,
+     approved, rejected, or failed rows unless the contract explicitly says
+     flagged is an orthogonal boolean.
+   - **sort** — apply the first declared column, snapshot URL, then prove row
+     order matches the declared direction.
    - **pagination** — click page 2 (or scroll once for `infinite-scroll`),
-     snapshot URL.
+     snapshot URL, then prove the result window changed without duplicated
+     first-page rows.
    - **search** — type a representative query, wait `debounce_ms + 100ms`,
-     snapshot URL.
+     snapshot URL, then prove returned rows contain/match the query.
 5. Also compare the observed route against `${PHASE_DIR}/CRUD-SURFACES.md`
    `platforms.web.list`: heading/description presence, declared table columns,
    row actions, empty/loading/error/unauthorized states where reachable, and
@@ -4800,7 +5178,12 @@ For every goal in `${PHASE_DIR}/TEST-GOALS.md` that declares
           "value": "active",
           "url_before": "https://app.local:5173/admin/campaigns",
           "url_after": "https://app.local:5173/admin/campaigns?status=active",
-          "url_params_after": {"status": "active"}
+          "url_params_after": {"status": "active"},
+          "result_semantics": {
+            "passed": true,
+            "rows_checked": 20,
+            "violations": []
+          }
         }
       ]
     }
@@ -4811,7 +5194,9 @@ For every goal in `${PHASE_DIR}/TEST-GOALS.md` that declares
 `kind` is one of `filter | sort | pagination | search`. `name` matches the
 declared control name (or normalised — `page` for pagination, `search` for
 search, `sort` for sort). `url_params_after` is the parsed search-param
-dict.
+dict. For filters, `result_semantics` is mandatory; URL-only success is not
+enough because it misses the class where a Pending tab still renders Flagged
+records.
 
 ### 2.8b Run validator
 
@@ -4837,6 +5222,16 @@ if [ "${URL_RUNTIME_RC}" != "0" ]; then
   else
     echo "⛔ URL state runtime drift detected — see ${PHASE_DIR}/.tmp/url-state-runtime.json"
     cat "${PHASE_DIR}/.tmp/url-state-runtime.json"
+    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    if [ -f "$DIAG_SCRIPT" ]; then
+      "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+        --gate-id "review.url_state_runtime" \
+        --phase-dir "$PHASE_DIR" \
+        --input "${PHASE_DIR}/.tmp/url-state-runtime.json" \
+        --out-md "${PHASE_DIR}/.tmp/url-state-runtime-diagnostic.md" \
+        >/dev/null 2>&1 || true
+      cat "${PHASE_DIR}/.tmp/url-state-runtime-diagnostic.md" 2>/dev/null || true
+    fi
     echo ""
     echo "Fix options:"
     echo "  1. Implementation drift — fix the route handler / UI so declared url_param actually appears in URL after interaction."
@@ -4850,10 +5245,110 @@ fi
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_8_url_state_runtime" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_8_url_state_runtime.done"`
 </step>
 
-<step name="phase3_fix_loop">
+<step name="phase2_9_error_message_runtime" profile="web-fullstack,web-frontend-only" mode="full">
+## Phase 2.9: API error-message runtime lens
+
+→ `narrate_phase "Phase 2.9 — API error-message runtime lens" "Trigger API error paths and prove toast/form errors show API body messages, not HTTP transport text"`
+
+**Purpose:** catch the P3.2 class of bug where the backend returns a useful
+domain/validation message but the frontend toast shows `Request failed with
+status 403`, `statusText`, or another generic transport message.
+
+This is a plugin/lens inside review, not a second full browser discovery pass.
+Reuse the authenticated browser session and routes already discovered by
+Phase 2. For each API+UI mutation or protected action that can safely fail,
+drive one negative path and record API body + visible UI message.
+
+### 2.9a Drive the probe
+
+For API+UI phases:
+
+1. Read `${PHASE_DIR}/INTERFACE-STANDARDS.md`, `${PHASE_DIR}/API-DOCS.md`,
+   `${PHASE_DIR}/API-CONTRACTS.md`, and `${PHASE_DIR}/RUNTIME-MAP.json`.
+2. Pick safe negative paths in this order:
+   - validation error on create/update form
+   - unauthorized/forbidden path for a role-gated action
+   - domain rule error that does not mutate durable data
+3. Capture the network response JSON for the failed request.
+4. Capture visible toast/banner/form error text from the UI.
+5. Compare using the standard message priority:
+   `error.user_message -> error.message -> message -> network_fallback`.
+6. Write `${PHASE_DIR}/error-message-probe.json`.
+
+**Artifact schema**:
+
+```json
+{
+  "generated_at": "2026-05-02T10:30:00Z",
+  "checks": [
+    {
+      "goal_id": "G-01",
+      "route": "/admin/billing/topup-queue",
+      "action": "submit invalid filter or mutation",
+      "request": {"method": "POST", "path": "/api/example"},
+      "status": 400,
+      "api_error": {
+        "code": "VALIDATION_ERROR",
+        "message": "Amount is required",
+        "user_message": "Amount is required"
+      },
+      "api_user_message": "Amount is required",
+      "visible_message": "Amount is required",
+      "passed": true
+    }
+  ]
+}
+```
+
+If a phase has API contracts and UI goals but no reachable negative path, write
+the artifact with `checks: []` plus `blocked_reason`, then run the diagnostic.
+Do not silently skip.
+
+### 2.9b Run validator
+
+```bash
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+
+"${PYTHON_BIN}" .claude/scripts/validators/verify-error-message-runtime.py \
+  --phase "${PHASE_NUMBER}" \
+  > "${PHASE_DIR}/.tmp/error-message-runtime.json" 2>&1
+ERROR_MESSAGE_RC=$?
+
+if [ "${ERROR_MESSAGE_RC}" != "0" ]; then
+  echo "⛔ API error-message runtime lens failed — see ${PHASE_DIR}/.tmp/error-message-runtime.json"
+  cat "${PHASE_DIR}/.tmp/error-message-runtime.json"
+  DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+  if [ -f "$DIAG_SCRIPT" ]; then
+    "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+      --gate-id "review.error_message_runtime" \
+      --phase-dir "$PHASE_DIR" \
+      --input "${PHASE_DIR}/.tmp/error-message-runtime.json" \
+      --out-md "${PHASE_DIR}/.tmp/error-message-runtime-diagnostic.md" \
+      >/dev/null 2>&1 || true
+    cat "${PHASE_DIR}/.tmp/error-message-runtime-diagnostic.md" 2>/dev/null || true
+  fi
+  echo ""
+  echo "Fix options:"
+  echo "  1. Backend drift — return the standard API error envelope from INTERFACE-STANDARDS.md."
+  echo "  2. Frontend drift — use shared error adapter: error.user_message || error.message, never statusText/AxiosError.message."
+  echo "  3. Probe gap — rerun full review with a safe negative path and write error-message-probe.json."
+  exit 2
+fi
+
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_9_error_message_runtime" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_9_error_message_runtime.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2_9_error_message_runtime 2>/dev/null || true
+```
+</step>
+
+<step name="phase3_fix_loop" mode="full">
 ## Phase 3: FIX LOOP (max 3 iterations)
 
 → `narrate_phase "Phase 3 — Fix loop (iteration ${I}/3)" "Sửa bug MINOR, escalate MODERATE/MAJOR"`
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase3_fix_loop >/dev/null 2>&1 || true
+```
 
 **If no errors found in Phase 2 → skip to Phase 4.**
 **If --fix-only → load RUNTIME-MAP, find errors, fix them.**
@@ -5262,10 +5757,14 @@ fi
 > sau-incident: proposal nào được accept/reject, fix tham chiếu commit nào.
 </step>
 
-<step name="phase4_goal_comparison">
+<step name="phase4_goal_comparison" mode="full">
 ## Phase 4: GOAL COMPARISON
 
 → `narrate_phase "Phase 4 — Goal comparison" "So khớp ${N} goals từ TEST-GOALS với views đã khám phá"`
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase4_goal_comparison >/dev/null 2>&1 || true
+```
 
 ### 4a: Load Goals
 
@@ -5598,23 +6097,82 @@ fi
 # v2.35.0 verdict gate hardening (closes #51) — 3 invariants replacing path-existence checks
 # Override per-phase: --skip-content-invariants=<reason> logs OVERRIDE-DEBT
 if [[ ! "$ARGUMENTS" =~ --skip-content-invariants ]]; then
-  for VALIDATOR in verify-haiku-scan-completeness verify-runtime-map-coverage verify-crud-runs-coverage; do
+  for VALIDATOR in verify-interface-standards verify-goal-security verify-goal-perf verify-security-baseline verify-haiku-scan-completeness verify-runtime-map-coverage verify-crud-runs-coverage verify-error-message-runtime; do
     VAL_PATH="${REPO_ROOT}/.claude/scripts/validators/${VALIDATOR}.py"
     if [ -f "$VAL_PATH" ]; then
-      ${PYTHON_BIN:-python3} "$VAL_PATH" --phase-dir "$PHASE_DIR"
+      mkdir -p "${PHASE_DIR}/.tmp"
+      VAL_OUT="${PHASE_DIR}/.tmp/${VALIDATOR}-diagnostic-input.txt"
+      case "$VALIDATOR" in
+        verify-interface-standards)
+          ${PYTHON_BIN:-python3} "$VAL_PATH" --phase "${PHASE_NUMBER}" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" > "$VAL_OUT" 2>&1
+          ;;
+        verify-error-message-runtime)
+          ${PYTHON_BIN:-python3} "$VAL_PATH" --phase "${PHASE_NUMBER}" > "$VAL_OUT" 2>&1
+          ;;
+        verify-goal-security|verify-goal-perf)
+          ${PYTHON_BIN:-python3} "$VAL_PATH" --phase "${PHASE_NUMBER}" > "$VAL_OUT" 2>&1
+          ;;
+        verify-security-baseline)
+          ${PYTHON_BIN:-python3} "$VAL_PATH" --phase "${PHASE_NUMBER}" --scope all > "$VAL_OUT" 2>&1
+          ;;
+        *)
+          ${PYTHON_BIN:-python3} "$VAL_PATH" --phase-dir "$PHASE_DIR" > "$VAL_OUT" 2>&1
+          ;;
+      esac
       VAL_RC=$?
+      cat "$VAL_OUT"
       if [ "$VAL_RC" -ne 0 ]; then
         echo ""
         echo "⛔ Verdict gate invariant FAILED: ${VALIDATOR}"
         echo "   v2.35.0 hardened gate: review cannot PASS with empty/incomplete artifacts."
         echo "   Either re-run /vg:review ${PHASE_NUMBER} with proper scanner/dispatch coverage,"
         echo "   or pass --skip-content-invariants=\"<reason>\" to log OVERRIDE-DEBT."
+        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        if [ -f "$DIAG_SCRIPT" ]; then
+          "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+            --gate-id "review.${VALIDATOR}" \
+            --phase-dir "$PHASE_DIR" \
+            --input "$VAL_OUT" \
+            --out-md "${PHASE_DIR}/.tmp/${VALIDATOR}-diagnostic.md" \
+            >/dev/null 2>&1 || true
+          cat "${PHASE_DIR}/.tmp/${VALIDATOR}-diagnostic.md" 2>/dev/null || true
+        fi
         emit_telemetry_v2 "review_verdict_invariant_failed" "${PHASE_NUMBER}" \
           "review.4-verdict" "${VALIDATOR}" "BLOCK" "{}" 2>/dev/null || true
         exit 1
       fi
     fi
   done
+fi
+
+LENS_PLAN_SCRIPT="${REPO_ROOT}/.claude/scripts/review-lens-plan.py"
+if [ -f "$LENS_PLAN_SCRIPT" ] && [[ ! "$ARGUMENTS" =~ --skip-lens-plan-gate ]]; then
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  "${PYTHON_BIN:-python3}" "$LENS_PLAN_SCRIPT" \
+    --phase-dir "$PHASE_DIR" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+    --mode "${REVIEW_MODE:-full}" \
+    --validate-only \
+    --json \
+    > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1
+  LENS_GATE_RC=$?
+  if [ "$LENS_GATE_RC" -ne 0 ]; then
+    echo ""
+    echo "⛔ Review lens plan gate FAILED — required checklist plugins lack evidence."
+    echo "   See ${PHASE_DIR}/.tmp/review-lens-plan-validation.json"
+    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    if [ -f "$DIAG_SCRIPT" ]; then
+      "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+        --gate-id "review.lens_plan_gate" \
+        --phase-dir "$PHASE_DIR" \
+        --input "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" \
+        --out-md "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" \
+        >/dev/null 2>&1 || true
+      cat "${PHASE_DIR}/.tmp/review-lens-plan-diagnostic.md" 2>/dev/null || true
+    fi
+    echo "   Re-run /vg:review ${PHASE_NUMBER} --mode=full --force so API docs, browser inventory, URL-state/filter/paging, error-message, visual, and findings lenses execute."
+    exit 1
+  fi
 fi
 
 ```
@@ -6030,7 +6588,7 @@ fi
 ```
 </step>
 
-<step name="unreachable_triage">
+<step name="unreachable_triage" mode="full">
 ## UNREACHABLE Triage — legacy guard (v1.14.0+)
 
 **Từ v1.14.0, triage chạy INLINE trong Phase 4d (ngay trước cổng 100%).** Step này chỉ còn là **guard** cho trường hợp legacy flow đi vòng (ví dụ `--skip-discovery` + `--fix-only` nhảy qua 4d). Nếu `.unreachable-triage.json` đã tồn tại từ 4d → skip; nếu chưa → chạy fallback.
@@ -6055,7 +6613,7 @@ fi
 **Lưu ý v1.14.0+:** Triage không còn là "report-only cho accept gate". Triage SINH action_required, review 4d ÁP DỤNG autonomous action (mark_deferred/mark_manual) và BLOCK gate cho action cần người duyệt (spawn_fix_agent, draft_amendment_ask, prompt_scope_tag). Xem spec section A.2.
 </step>
 
-<step name="crossai_review">
+<step name="crossai_review" mode="full">
 ## CrossAI Review (mandatory when CLIs are configured)
 
 **If config.crossai_clis is empty, emit an explicit skip note and continue.**
@@ -6070,7 +6628,7 @@ Required evidence when not skipped:
 - `crossai.verdict` telemetry event
 </step>
 
-<step name="write_artifacts">
+<step name="write_artifacts" mode="full">
 ## Write Final Artifacts
 
 **Write order: JSON first, then derive MD from it.**
@@ -6105,7 +6663,7 @@ git commit -m "review({phase}): RUNTIME-MAP — {views} views, {actions} actions
 ```
 </step>
 
-<step name="bootstrap_reflection">
+<step name="bootstrap_reflection" mode="full">
 ## End-of-Step Reflection (v1.15.0 Bootstrap Overlay)
 
 Before closing review, spawn the **reflector** subagent to analyze this step's

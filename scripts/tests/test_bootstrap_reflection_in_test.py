@@ -15,7 +15,18 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+def _repo_root() -> Path:
+    for candidate in Path(__file__).resolve().parents:
+        if candidate.name == ".claude" and (candidate / "commands" / "vg").exists():
+            return candidate.parent
+        if (candidate / "sync.sh").exists() and (candidate / ".claude" / "commands" / "vg").exists():
+            return candidate
+        if (candidate / "commands" / "vg").exists() and (candidate / "scripts").exists():
+            return candidate
+    return Path(__file__).resolve().parents[2]
+
+
+REPO_ROOT = _repo_root()
 TEST_MD = REPO_ROOT / ".claude" / "commands" / "vg" / "test.md"
 
 

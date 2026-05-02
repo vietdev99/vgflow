@@ -10,6 +10,8 @@ allowed-tools:
   - Glob
   - Grep
   - Task
+  - TaskCreate
+  - TaskUpdate
   - AskUserQuestion
   - BashOutput
 runtime_contract:
@@ -18,8 +20,48 @@ runtime_contract:
   must_write:
     - "${PHASE_DIR}/SANDBOX-TEST.md"
   must_touch_markers:
+    - "00_gate_integrity_precheck"
+    - "00_session_lifecycle"
     - "0_parse_and_validate"
-    - "5b_runtime_contract_verify"
+    - "0c_telemetry_suggestions"
+    - "create_task_tracker"
+    - "0_state_update"
+    - "5c_goal_verification"
+    - "5c_fix"
+    - "5c_auto_escalate"
+    - "5e_regression"
+    - "5f_security_audit"
+    - "write_report"
+    - "complete"
+    # Profile-specific markers are verified hard by the profile-aware marker
+    # gate in step `complete`. Runtime contract keeps them as WARN here
+    # because this YAML contract is intentionally profile-agnostic.
+    - name: "5a_deploy"
+      severity: "warn"
+    - name: "5a_mobile_deploy"
+      severity: "warn"
+    - name: "5b_runtime_contract_verify"
+      severity: "warn"
+    - name: "5c_smoke"
+      severity: "warn"
+    - name: "5c_flow"
+      severity: "warn"
+    - name: "5c_mobile_flow"
+      severity: "warn"
+    - name: "5d_codegen"
+      severity: "warn"
+    - name: "5d_binding_gate"
+      severity: "warn"
+    - name: "5d_deep_probe"
+      severity: "warn"
+    - name: "5d_mobile_codegen"
+      severity: "warn"
+    - name: "5f_mobile_security_audit"
+      severity: "warn"
+    - name: "5g_performance_check"
+      severity: "warn"
+    - name: "5h_security_dynamic"
+      severity: "warn"
     # BOOT-1 (2026-04-23): reflector must run at test-close so the learning
     # loop captures evidence from the full specs→accept pipeline, not only
     # review. severity=warn (non-blocking) — reflector crashes don't fail test.
@@ -28,6 +70,8 @@ runtime_contract:
   must_emit_telemetry:
     # v2.5.1 anti-forge: tasklist visibility at flow start
     - event_type: "test.tasklist_shown"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "test.native_tasklist_projected"
       phase: "${PHASE_NUMBER}"
     - event_type: "test.started"
       phase: "${PHASE_NUMBER}"
@@ -40,18 +84,30 @@ runtime_contract:
     - "--allow-missing-console-check"
 ---
 
-<NARRATION_POLICY>
-**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in this command.**
+<TASKLIST_POLICY>
+**Native tasklist is mandatory.**
 
-Why: those tools persist items in Claude Code's status tail across sessions. If a long step interrupts before items get marked completed, they hang in UI for runs after.
+`emit-tasklist.py` is the source of truth. It writes
+`.vg/runs/<run_id>/tasklist-contract.json` containing profile-filtered
+checklists and steps. Before any test execution beyond `create_task_tracker`,
+project that contract into the active AI runtime:
+- Claude Code: create/update native tasks with `TaskCreate` / `TaskUpdate`.
+- Codex CLI: use native plan/tasklist UI or the Codex adapter exposed by the
+  harness; every step start/end must be visible.
+- Fallback: print `vg-orchestrator run-status --pretty`, but still emit
+  `test.native_tasklist_projected`.
 
-**Use these instead:**
-1. **Markdown headers in YOUR text output** between tool calls — e.g., `## ━━━ Phase 5b: Goal verification ━━━`. Appears in message stream, does NOT persist after session ends.
-2. **`run_in_background: true` for any Bash > 30s**, then poll with `BashOutput` so user sees stdout live.
-3. **For Task subagents > 2 min**: write 1-line status BEFORE spawning + 1-line summary AFTER. User sees both in the message stream.
-4. Bash echo narration is audit log only — not user-visible during long runs.
-5. **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `PASSED (đạt)`, `FAILED (thất bại)`, `regression (hồi quy)`, `coverage (độ phủ)`. Không áp dụng: file path, code identifier (`G-XX`, `git`), config tag values, lần lặp lại trong cùng message.
-</NARRATION_POLICY>
+Every profile-applicable step MUST call `vg-orchestrator step-active` when it
+starts and `vg-orchestrator mark-step test {step}` when it finishes. The
+final `complete` step recomputes the profile-filtered step list and BLOCKS if
+any required marker is missing.
+
+Long-running commands still use background execution + `BashOutput` polling so
+the user sees live logs. Tasklist items are progress projection, not a reason
+to split browser/lens work into extra passes.
+
+**Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `PASSED (đạt)`, `FAILED (thất bại)`, `regression (hồi quy)`, `coverage (độ phủ)`. Không áp dụng: file path, code identifier (`G-XX`, `git`), config tag values, lần lặp lại trong cùng message.
+</TASKLIST_POLICY>
 
 <rules>
 1. **RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md required** — review must have completed. Missing = BLOCK.
@@ -133,6 +189,10 @@ fi
 # OHOK-8 round-4 Codex fix: parse PHASE_NUMBER BEFORE run-start
 [ -z "${PHASE_NUMBER:-}" ] && PHASE_NUMBER=$(echo "${ARGUMENTS}" | awk '{print $1}')
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start vg:test "${PHASE_NUMBER}" "${ARGUMENTS}" || { echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2; exit 1; }
+if [ -n "${PHASE_DIR:-}" ]; then
+  mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "00_gate_integrity_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/00_gate_integrity_precheck.done"
+fi
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 00_gate_integrity_precheck 2>/dev/null || true
 ```
 
@@ -159,6 +219,13 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
 [ -n "$PHASE_DIR_CANDIDATE" ] && stale_state_sweep "test" "$PHASE_DIR_CANDIDATE"
 [ "${CONFIG_SESSION_PORT_SWEEP_ON_START:-true}" = "true" ] && session_port_sweep "pre-flight"
 session_mark_step "0-parse-args"
+MARKER_PHASE_DIR="${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-}}"
+if [ -n "$MARKER_PHASE_DIR" ]; then
+  mkdir -p "${MARKER_PHASE_DIR}/.step-markers" 2>/dev/null
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "00_gate_integrity_precheck" "${MARKER_PHASE_DIR}") || touch "${MARKER_PHASE_DIR}/.step-markers/00_gate_integrity_precheck.done"
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "00_session_lifecycle" "${MARKER_PHASE_DIR}") || touch "${MARKER_PHASE_DIR}/.step-markers/00_session_lifecycle.done"
+fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 00_session_lifecycle 2>/dev/null || true
 ```
 </step>
 
@@ -209,6 +276,25 @@ if [ -n "$INTERMEDIATE" ]; then
   exit 1
 fi
 
+# Interface standards gate: test must verify against the same API/FE/CLI
+# contract created during specs/blueprint/build. This catches drift where FE
+# displays HTTP transport text instead of the API envelope message.
+INTERFACE_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-interface-standards.py"
+if [ -f "$INTERFACE_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  "${PYTHON_BIN:-python3}" "$INTERFACE_VAL" \
+    --phase "${PHASE_NUMBER}" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+    > "${PHASE_DIR}/.tmp/interface-standards-test.json" 2>&1
+  INTERFACE_RC=$?
+  if [ "$INTERFACE_RC" != "0" ]; then
+    echo "⛔ Interface standards gate failed — see ${PHASE_DIR}/.tmp/interface-standards-test.json"
+    cat "${PHASE_DIR}/.tmp/interface-standards-test.json"
+    echo "   Fix API envelope / FE error adapter / CLI output contract before /vg:test can verify goals."
+    exit 1
+  fi
+fi
+
 # CRUD depth gate: old or shallow RUNTIME-MAP files can mark a mutation goal
 # READY after only opening a list page. Block before replay/codegen so /vg:test
 # cannot turn list-only evidence into a false pass.
@@ -237,6 +323,12 @@ Khi loop qua goals để replay:
 If `--regression-only`: skip to 5e (requires generated tests to exist).
 If `--smoke-only`: run only 5c-smoke, report, exit.
 If `--fix-only`: skip to 5c-fix section.
+
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_parse_and_validate 2>/dev/null || true
+```
 </step>
 
 <step name="0c_telemetry_suggestions">
@@ -268,27 +360,38 @@ for line in sys.stdin:
   fi
 fi
 touch "${PHASE_DIR}/.step-markers/0c_telemetry_suggestions.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0c_telemetry_suggestions 2>/dev/null || true
 ```
 </step>
 
 <step name="create_task_tracker">
-**Narrate step plan using markdown headers (NO TaskCreate — see NARRATION_POLICY).**
+**Project `/vg:test` checklists into the native task UI.**
 
-Per NARRATION_POLICY at top of this file: /vg:test spawns Playwright runs + CrossAI agents that may take 20-60 min. TaskCreate items persist across sessions and hang if interrupted. Use markdown headers in text output instead.
+Read `.vg/runs/<run_id>/tasklist-contract.json` written by
+`emit-tasklist.py`. Create one native task per checklist group and bind each
+profile-filtered step to its checklist. Do not invent steps; the contract is
+authoritative.
 
-Before starting phase 5a, write this block verbatim so user sees plan:
+Adapter requirements:
+- Claude Code: use `TaskCreate` once for the checklist projection, then
+  `TaskUpdate` when each checklist/step starts or completes.
+- Codex CLI: use the native plan/tasklist UI or Codex adapter. Checklist IDs
+  and step IDs must match `tasklist-contract.json`.
+- Fallback: print `vg-orchestrator run-status --pretty`, then continue only
+  after emitting `test.native_tasklist_projected`.
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-fallback}" >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "test.native_tasklist_projected" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"adapter\":\"${VG_TASKLIST_ADAPTER:-fallback}\"}" \
+  >/dev/null 2>&1 || true
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/create_task_tracker.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test create_task_tracker 2>/dev/null || true
 ```
-## ━━━ /vg:test step plan ━━━
-5a. Deploy to target
-5b. Runtime contract verify
-5c. Independent smoke + goal verify + minor fix loop + multi-page flows
-5d. Codegen .spec.ts from verified runtime map
-5e. Regression run (Playwright)
-5f. Security audit
-```
-
-At start of each sub-step: `## ━━━ Running 5c: Goal verification (3/12 goals done) ━━━`.
-At end: `touch "${PHASE_DIR}/.step-markers/${sub_step}.done"`. Marker file is authoritative progress signal (consumed by step 9 post-exec check + /vg:next routing).
 </step>
 
 <step name="0_state_update">
@@ -304,6 +407,9 @@ s['status'] = 'testing'; s['pipeline_step'] = 'test'
 s['updated_at'] = __import__('datetime').datetime.now().isoformat()
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_state_update" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_state_update.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_state_update 2>/dev/null || true
 ```
 </step>
 
@@ -337,6 +443,13 @@ Display:
   Health: {OK|FAIL}
   Services: {N}/{total} OK
   Seed: {OK|skipped (no seed_command)}
+```
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5a_deploy" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5a_deploy.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5a_deploy 2>/dev/null || true
 ```
 </step>
 
@@ -410,7 +523,11 @@ Display:
   ran; test doesn't re-check size. Instead test step 5f security audit
   scans the signed binary for hardcoded secrets.
 
-Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5a_mobile_deploy" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5a_mobile_deploy.done"`
+Final action:
+```bash
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5a_mobile_deploy" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5a_mobile_deploy.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5a_mobile_deploy 2>/dev/null || true
+```
 </step>
 
 <step name="5b_runtime_contract_verify" profile="web-fullstack,web-backend-only">
@@ -423,6 +540,10 @@ For each endpoint in API-CONTRACTS.md:
 ```
 curl endpoint on target → extract response keys via jq
 Compare actual keys vs expected keys from contract
+For negative/error samples, compare the response envelope and message priority
+from INTERFACE-STANDARDS.md:
+  ok:false → error.code + error.message (+ optional error.user_message/field_errors/request_id)
+  FE-visible copy must resolve error.user_message -> error.message -> message -> network_fallback
 Record: endpoint, match status, mismatched fields (if any)
 ```
 
@@ -597,6 +718,13 @@ Display:
   Views checked: 5
   Matches: {N}/5
   Result: {PROCEED|WARNING|FLAG}
+```
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_smoke" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_smoke.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_smoke 2>/dev/null || true
 ```
 </step>
 
@@ -895,6 +1023,13 @@ Goal {id} ({priority}): {description}
   Mutations: {verified}/{total} verified
   Result: {PASSED|FAILED|UNREACHABLE}
 ```
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_goal_verification" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_goal_verification.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_goal_verification 2>/dev/null || true
+```
 </step>
 
 <step name="5c_fix">
@@ -1141,6 +1276,12 @@ Per-goal commands (filled in dynamically for THIS phase):
 - ❌ Loop `/vg:test {phase}` without changes — budget won't reset, same failures return.
 - ❌ Claim "done" without updating GOAL-COVERAGE-MATRIX.md for SKIPPED goals.
 ```
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_fix" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_fix.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_fix 2>/dev/null || true
+```
 </step>
 
 <step name="5c_auto_escalate">
@@ -1352,6 +1493,13 @@ Display:
   Iterations: {N}/2
   Goals improved: {before_pass}/{total} → {after_pass}/{total}
 ```
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_auto_escalate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_auto_escalate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_auto_escalate 2>/dev/null || true
+```
 </step>
 
 <step name="5c_flow" profile="web-fullstack,web-frontend-only">
@@ -1464,6 +1612,13 @@ Display:
 ```
 
 **Cross-flow failures feed back:** merge failed flows into the same classification pipeline as 5c-goal (MINOR/MODERATE/MAJOR) so 5c-fix and 5c-auto-escalate treat them uniformly.
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_flow" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_flow.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_flow 2>/dev/null || true
+```
 
 </step>
 
@@ -1931,9 +2086,14 @@ fi
    ```
    // Layer 1: Toast text
    await expect(page.getByRole('status')).toContainText(step.expected_toast);
+   // For negative/error paths, expected_toast MUST come from API body message priority:
+   // error.user_message -> error.message -> message -> network_fallback.
+   await expect(page.getByRole('status')).not.toContainText(/Request failed with status|statusText|HTTP 4\d\d|HTTP 5\d\d/i);
    // Layer 2: API 2xx (not just called)
    const res = await page.waitForResponse(r => r.url().includes(step.endpoint));
    expect(res.status()).toBeLessThan(400);
+   // Negative-path specs invert Layer 2: expect 4xx and assert the same API
+   // body message is visible in toast/form error.
    // Layer 3: Persistence after refresh/re-read
    await page.reload();
    await expect(page.getByText(step.persisted_text)).toBeVisible();
@@ -2097,6 +2257,13 @@ if [ -f "$CGFR_VAL" ] && [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
     exit 1
   fi
 fi
+```
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5d_codegen" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5d_codegen.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5d_codegen 2>/dev/null || true
 ```
 
 </step>
@@ -2315,6 +2482,13 @@ if [ "$ADV_RC" != "0" ]; then
   # WARN — surface but don't block
   echo "⚠ Adversarial coverage WARN — accept will surface this entry."
 fi
+```
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5d_binding_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5d_binding_gate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5d_binding_gate 2>/dev/null || true
 ```
 </step>
 
@@ -2575,7 +2749,11 @@ CI reader (step 18+) xử lý:
 
 Nếu `DEEP_PROBE_ENABLED=false` hoặc goal READY = 0 → step 5d-deep.* bỏ qua, phase tiếp tục sang 5e_regression.
 
-`(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5d_deep_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5d_deep_probe.done"` dù skip hay chạy.
+Final action dù skip hay chạy:
+```bash
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5d_deep_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5d_deep_probe.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5d_deep_probe 2>/dev/null || true
+```
 </step>
 
 <step name="5d_mobile_codegen" profile="mobile-*">
@@ -2718,6 +2896,13 @@ Display:
   Duration: {time}
   Result: {PASS|FAIL}
 ```
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5e_regression" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5e_regression.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5e_regression 2>/dev/null || true
+```
 </step>
 
 <step name="5f_security_audit">
@@ -2844,16 +3029,17 @@ while IFS=$'\t' read -r ENDPOINT AUTH_LINE; do
   fi
 done < "${VG_TMP}/contract-auth-lines.txt"
 
-# Same for error response shape — verify FE reads error.message not statusText
-ERROR_SHAPE=$(vg_config_get contract_format.error_response_shape "{ error: { code: string, message: string } }")
+# Same for error response shape — verify FE reads standard API envelope message,
+# not statusText / AxiosError.message / generic HTTP status text.
+ERROR_SHAPE=$(vg_config_get contract_format.error_response_shape "{ ok: false, error: { code: string, message: string, user_message?: string, field_errors?: object } }")
 WEB_PAGES_PATTERN=$(vg_config_get code_patterns.web_pages "apps/web/**/*.tsx")
 CHANGED_FE=$(git diff --name-only HEAD~${COMMIT_COUNT:-5} HEAD -- "$WEB_PAGES_PATTERN" 2>/dev/null)
 if [ -n "$CHANGED_FE" ]; then
   # FE anti-pattern: toast.error(error.message) where error = AxiosError
   BAD_TOAST=$(echo "$CHANGED_FE" | xargs grep -l "toast.*error\.message\b\|toast.*err\.message\b" 2>/dev/null | \
-    xargs grep -L "error\.response.*data.*error.*message\|\.data\.error\.message" 2>/dev/null | head -5)
+    xargs grep -L "error\.response.*data.*error.*user_message\|error\.response.*data.*error.*message\|\.data\.error\.user_message\|\.data\.error\.message" 2>/dev/null | head -5)
   if [ -n "$BAD_TOAST" ]; then
-    echo "  HIGH: FE files read error.message (AxiosError) instead of error.response.data.error.message:"
+    echo "  HIGH: FE files read error.message (AxiosError) instead of error.response.data.error.user_message || error.response.data.error.message:"
     echo "$BAD_TOAST" | sed 's/^/    /'
     COPY_MISMATCHES=$((COPY_MISMATCHES + 1))
   fi
@@ -2917,6 +3103,13 @@ Display:
 Final verdict rule: if `SEC_TIER0_EXIT != 0` → result is FAIL regardless of
 Tier 1-4 outcome. B8 validators are structured truth gates; grep tiers are
 advisory complements.
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5f_security_audit" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5f_security_audit.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5f_security_audit 2>/dev/null || true
+```
 </step>
 
 <step name="5f_mobile_security_audit" profile="mobile-*">
@@ -3272,6 +3465,13 @@ Display:
 ```
 
 Performance failures → GAPS_FOUND (not FAIL — pre-prod is advisory). Production load test via `/vg:regression` or external tool.
+
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5g_performance_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5g_performance_check.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5g_performance_check 2>/dev/null || true
+```
 </step>
 
 <step name="5h_security_dynamic" profile="web-fullstack,web-backend-only">
@@ -3523,6 +3723,9 @@ Commit:
 ```bash
 git add ${PHASE_DIR}/*-SANDBOX-TEST.md ${SCREENSHOTS_DIR}/ ${GENERATED_TESTS_DIR}/
 git commit -m "test({phase}): goal verification — {verdict}, {passed}/{total} goals passed"
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "write_report" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/write_report.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test write_report 2>/dev/null || true
 ```
 </step>
 
@@ -3642,7 +3845,12 @@ Reflector crash/timeout → log warning, continue to `complete`. Never block tes
 ⚠ Reflection failed — test completes normally. Check .vg/bootstrap/logs/
 ```
 
-Final action: `touch "${PHASE_DIR}/.step-markers/bootstrap_reflection.done"`
+Final action:
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "bootstrap_reflection" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/bootstrap_reflection.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test bootstrap_reflection 2>/dev/null || true
+```
 </step>
 
 <step name="complete">
@@ -3855,6 +4063,35 @@ if [ -f "$TTRACE_VAL" ]; then
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.trace_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
+fi
+
+# Profile-aware marker contract: hard block if any step that applies to the
+# active profile failed to emit a marker. This closes the profile-agnostic
+# YAML gap where mobile/web/backend-only steps cannot all be hard-coded in
+# runtime_contract without false positives.
+EXPECTED_TEST_STEPS=$(${PYTHON_BIN:-python3} .claude/scripts/filter-steps.py \
+  --command .claude/commands/vg/test.md \
+  --profile "${PROFILE:-web-fullstack}" \
+  --output-ids 2>/dev/null || echo "")
+MISSING_TEST_MARKERS=""
+for STEP_ID in $(echo "$EXPECTED_TEST_STEPS" | tr ',' ' '); do
+  [ -z "$STEP_ID" ] && continue
+  [ "$STEP_ID" = "complete" ] && continue
+  if [ -f "${PHASE_DIR}/.step-markers/test/${STEP_ID}.done" ] || \
+     [ -f "${PHASE_DIR}/.step-markers/${STEP_ID}.done" ]; then
+    :
+  else
+    MISSING_TEST_MARKERS="${MISSING_TEST_MARKERS} ${STEP_ID}"
+  fi
+done
+if [ -n "$(echo "$MISSING_TEST_MARKERS" | xargs)" ]; then
+  echo "⛔ /vg:test profile marker gate BLOCKED — missing markers for profile ${PROFILE:-web-fullstack}:"
+  for STEP_ID in $MISSING_TEST_MARKERS; do echo "   - ${STEP_ID}"; done
+  echo "   The workflow cannot complete until every injected checklist step/lens emits a marker."
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.marker_gate_blocked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"profile\":\"${PROFILE:-web-fullstack}\",\"missing\":\"$(echo "$MISSING_TEST_MARKERS" | xargs)\"}" \
+    >/dev/null 2>&1 || true
+  exit 1
 fi
 
 # v2.2 — terminal emit + run-complete for /vg:test

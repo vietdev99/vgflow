@@ -45,6 +45,33 @@ validators:
     added_in: v2.5.2
     description: Every mutating VG command must declare runtime_contract with must_write + must_emit_telemetry
 
+  - id: api-docs-coverage
+    path: .claude/scripts/validators/verify-api-docs-coverage.py
+    severity: block
+    phases_active: [build, review]
+    domain: contract
+    runtime_target_ms: 1500
+    added_in: v2.48.0
+    description: API-DOCS.md must cover every API-CONTRACTS endpoint with request/response/implementation evidence and AI notes
+
+  - id: interface-standards
+    path: .claude/scripts/validators/verify-interface-standards.py
+    severity: block
+    phases_active: [specs, blueprint, build, review, test]
+    domain: contract
+    runtime_target_ms: 1500
+    added_in: v2.49.0
+    description: Phase-local API/FE/CLI interface standard must define envelopes, message priority, and forbid HTTP/statusText UI copy
+
+  - id: error-message-runtime
+    path: .claude/scripts/validators/verify-error-message-runtime.py
+    severity: block
+    phases_active: [review]
+    domain: ui
+    runtime_target_ms: 1500
+    added_in: v2.49.0
+    description: API+UI review must prove visible toast/form errors show API body messages, not transport errors
+
   # ──── Phase K — Artifact-run binding ────
   - id: artifact-freshness
     path: .claude/scripts/validators/verify-artifact-freshness.py

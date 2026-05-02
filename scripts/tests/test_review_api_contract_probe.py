@@ -23,6 +23,14 @@ def _serve():
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if self.path == "/api/files/000000000000000000000000":
+                body = b'{"error":"not_found"}'
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             self.send_response(404)
             self.end_headers()
 
@@ -125,6 +133,48 @@ def test_probe_fails_when_endpoint_missing(tmp_path):
         report = out.read_text(encoding="utf-8")
         assert "FAIL" in report
         assert "Failing endpoints:" in report
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_probe_materializes_path_params_instead_of_stripping_them(tmp_path):
+    server, thread = _serve()
+    try:
+        contracts = tmp_path / "API-CONTRACTS.md"
+        contracts.write_text(
+            textwrap.dedent(
+                """\
+                # API Contracts
+
+                ## GET /api/files/:id
+                **Auth:** Authenticated
+                """
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "report.txt"
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--contracts",
+                str(contracts),
+                "--base-url",
+                base_url,
+                "--out",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0, r.stderr
+        report = out.read_text(encoding="utf-8")
+        assert "/api/files/000000000000000000000000" in report
+        assert "materialized_from=/api/files/:id" in report
+        assert "FAIL: 0" in report
     finally:
         server.shutdown()
         server.server_close()

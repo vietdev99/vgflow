@@ -17,7 +17,7 @@ Codex use the same workflow contracts, but their orchestration primitives differ
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
 | Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
-| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| TaskCreate / TaskUpdate / TodoWrite | Native Codex tasklist/plan projection + orchestrator step markers | Use `tasklist-contract.json` as source of truth. After projecting, emit `vg-orchestrator tasklist-projected --adapter codex`; if no native task UI is exposed, use `--adapter fallback` and `run-status --pretty`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
@@ -441,15 +441,59 @@ fi
 ```
 </step>
 
-<step name="commit_and_next">
-## Step 7: Commit and Next Step
+<step name="write_interface_standards">
+## Step 7: Write Interface Standards
+
+After SPECS.md exists, generate the phase-local API/FE/CLI/mobile interface
+contract. This artifact is mandatory context for blueprint, build, review,
+and test. It standardizes API response envelopes, FE toast/form error
+priority, CLI stdout/stderr/JSON output, and harness enforcement.
 
 ```bash
-git add "${PHASE_DIR}/SPECS.md" || {
+INTERFACE_GEN="${REPO_ROOT:-.}/.claude/scripts/generate-interface-standards.py"
+INTERFACE_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-interface-standards.py"
+[ -f "$INTERFACE_GEN" ] || INTERFACE_GEN="${REPO_ROOT:-.}/scripts/generate-interface-standards.py"
+[ -f "$INTERFACE_VAL" ] || INTERFACE_VAL="${REPO_ROOT:-.}/scripts/validators/verify-interface-standards.py"
+
+if [ ! -f "$INTERFACE_GEN" ] || [ ! -f "$INTERFACE_VAL" ]; then
+  echo "⛔ Interface standards helpers missing — cannot continue specs." >&2
+  exit 1
+fi
+
+"${PYTHON_BIN:-python3}" "$INTERFACE_GEN" \
+  --phase-dir "$PHASE_DIR" \
+  --profile "${PROFILE:-web-fullstack}" \
+  --force
+
+mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+"${PYTHON_BIN:-python3}" "$INTERFACE_VAL" \
+  --phase-dir "$PHASE_DIR" \
+  --profile "${PROFILE:-web-fullstack}" \
+  --no-scan-source \
+  > "${PHASE_DIR}/.tmp/interface-standards-specs.json" 2>&1
+INTERFACE_RC=$?
+if [ "$INTERFACE_RC" -ne 0 ]; then
+  echo "⛔ INTERFACE-STANDARDS validation failed — see ${PHASE_DIR}/.tmp/interface-standards-specs.json" >&2
+  cat "${PHASE_DIR}/.tmp/interface-standards-specs.json"
+  exit 1
+fi
+
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "write_interface_standards" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/write_interface_standards.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step specs write_interface_standards 2>/dev/null || true
+```
+</step>
+
+<step name="commit_and_next">
+## Step 8: Commit and Next Step
+
+```bash
+git add "${PHASE_DIR}/SPECS.md" \
+        "${PHASE_DIR}/INTERFACE-STANDARDS.md" \
+        "${PHASE_DIR}/INTERFACE-STANDARDS.json" || {
   echo "⛔ git add failed — check permissions" >&2
   exit 1
 }
-git commit -m "specs(${PHASE_NUMBER}): create SPECS.md for phase ${PHASE_NUMBER}" || {
+git commit -m "specs(${PHASE_NUMBER}): create SPECS and interface standards for phase ${PHASE_NUMBER}" || {
   echo "⛔ git commit failed — check pre-commit hooks" >&2
   exit 1
 }
@@ -489,7 +533,7 @@ if [ "$RUN_RC" -ne 0 ]; then
 fi
 
 echo ""
-echo "✓ SPECS.md created for Phase ${PHASE_NUMBER}."
+echo "✓ SPECS.md + INTERFACE-STANDARDS created for Phase ${PHASE_NUMBER}."
 echo "  Next: /vg:scope ${PHASE_NUMBER}"
 ```
 </step>
@@ -498,10 +542,11 @@ echo "  Next: /vg:scope ${PHASE_NUMBER}"
 
 <success_criteria>
 - SPECS.md written to `${PHASE_DIR}/SPECS.md`
+- INTERFACE-STANDARDS.md/json written to `${PHASE_DIR}/INTERFACE-STANDARDS.*`
 - Contains ALL sections: Goal, Scope (In/Out), Constraints, Success Criteria, Dependencies
 - Frontmatter includes phase, status, created, source fields
 - User explicitly approved (`USER_APPROVAL=approve`) before writing — silent / unset = BLOCK
-- All 7 step markers present under `.step-markers/` (guided_questions waived in --auto mode)
+- All 8 step markers present under `.step-markers/` (guided_questions waived in --auto mode)
 - `specs.started` + `specs.approved` telemetry events emitted
 - Git committed + `run-complete` returned 0
 </success_criteria>

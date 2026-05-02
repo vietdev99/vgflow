@@ -17,7 +17,7 @@ Codex use the same workflow contracts, but their orchestration primitives differ
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
 | Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
-| TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
+| TaskCreate / TaskUpdate / TodoWrite | Native Codex tasklist/plan projection + orchestrator step markers | Use `tasklist-contract.json` as source of truth. After projecting, emit `vg-orchestrator tasklist-projected --adapter codex`; if no native task UI is exposed, use `--adapter fallback` and `run-status --pretty`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
 
@@ -142,6 +142,35 @@ Invoke this skill as `$vg-blueprint`. Treat all user text after the skill name a
 </codex_skill_adapter>
 
 
+
+<TASKLIST_POLICY>
+**Native task UI projection is REQUIRED.**
+
+Source of truth:
+1. `.vg/runs/{run_id}/tasklist-contract.json` — canonical checklist + step list for this run.
+2. `.vg/events.db` — `blueprint.tasklist_shown`, `blueprint.native_tasklist_projected`, `step.active`, `step.marked`.
+3. `${PHASE_DIR}/.step-markers/...` — durable completion markers.
+
+Provider adapters:
+- **Claude CLI:** create one `TaskCreate` item per contract item; preserve each contract `id` at the start of the task title. Use `TaskUpdate` to mark active/completed around each step.
+- **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text.
+- **Fallback:** if no native task UI is exposed, use `vg-orchestrator run-status --pretty` before/after each step and record adapter `fallback`.
+
+Mandatory binding:
+1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.
+2. Project every contract item to the runtime-native task UI before blueprint generation continues.
+3. Immediately call:
+   ```bash
+   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected --adapter claude
+   # or: --adapter codex
+   # or: --adapter fallback
+   ```
+4. At each step start, update the native UI item to active and call `vg-orchestrator step-active <step_name>`.
+5. At each step end, write the marker, update the native UI item to completed, and call `vg-orchestrator mark-step blueprint <step_name>`.
+
+Do not improvise a separate checklist. The native UI is a projection of
+`tasklist-contract.json`; the harness contract remains authoritative.
+</TASKLIST_POLICY>
 
 <rules>
 1. **CONTEXT.md required** — must exist before blueprint. No CONTEXT = BLOCK.
@@ -434,6 +463,10 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --profile "${PROFILE:-web-fullstack}" \
   --phase "${PHASE_NUMBER:-unknown}" 2>&1 | head -40 || true
 
+# Immediately after this block, apply TASKLIST_POLICY: project
+# `.vg/runs/{run_id}/tasklist-contract.json` to the native task UI and call
+# `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
+
 FROM_STEP=""
 if [[ "$ARGUMENTS" =~ --from=(2b|2c|2d|2b5|2b6|2b7) ]]; then
   FROM_STEP="${BASH_REMATCH[1]}"
@@ -501,21 +534,19 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 </step>
 
 <step name="create_task_tracker">
-**Create sub-step task list for progress tracking.**
+**Bind native tasklist to the blueprint checklist contract.**
 
-Create tasks for each sub-step in this command:
-```
-TaskCreate: "2a. Plan — GSD planner"           (activeForm: "Creating plans...")
-TaskCreate: "2b. Contracts — API contracts"     (activeForm: "Generating API contracts...")
-TaskCreate: "2b5. Test goals — generate goals"   (activeForm: "Generating TEST-GOALS...")
-TaskCreate: "2b5. CRUD surfaces — resource contract" (activeForm: "Generating CRUD-SURFACES...")
-TaskCreate: "2b7. Flow detect — FLOW-SPEC"      (activeForm: "Detecting business flows...")
-TaskCreate: "2c. Verify 1 — grep diff"          (activeForm: "Verifying contracts (grep)...")
-TaskCreate: "2d. CrossAI review"               (activeForm: "Running CrossAI review...")
-```
+Use the `tasklist-contract.json` emitted at session start. It contains coarse
+checklists (`blueprint_preflight`, `blueprint_design`, `blueprint_plan`,
+`blueprint_contracts`, `blueprint_verify`, `blueprint_close`) plus the exact
+filtered step IDs.
 
-Store task IDs for updating status as each sub-step runs.
-Each sub-step should: `TaskUpdate: status="in_progress"` at start, `status="completed"` at end.
+Required behavior:
+1. Project every item to Claude/Codex native task UI per TASKLIST_POLICY.
+2. Call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
+3. Keep `.step-markers/*.done` as the durable enforcement signal.
+4. At each sub-step, set the matching task active before work and completed
+   after the marker is written.
 
 ```bash
 # R7 step marker (v1.14.4+ — enforced via 3_complete gate)
@@ -572,6 +603,31 @@ if [ "$PHASE_PROFILE" != "feature" ]; then
   echo "ℹ Blueprint profile-aware mode: PHASE_PROFILE=${PHASE_PROFILE} — bỏ qua (skip) sub-steps 2b, 2b5, 2b7 (contracts/test-goals/flow)."
   echo "   Chỉ tạo PLAN.md (+ ROLLBACK.md nếu migration). CrossAI review vẫn áp dụng để kiểm tra PLAN quality."
   export BLUEPRINT_PROFILE_SHORT_CIRCUIT=true
+fi
+
+# Interface standards are locked before PLAN/API-CONTRACTS are generated.
+# This gives the planner/contract author one source of truth for API envelope,
+# FE error-message priority, CLI stdout/stderr, and mobile parity.
+INTERFACE_GEN="${REPO_ROOT}/.claude/scripts/generate-interface-standards.py"
+INTERFACE_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-interface-standards.py"
+if [ -f "$INTERFACE_GEN" ]; then
+  "${PYTHON_BIN:-python3}" "$INTERFACE_GEN" \
+    --phase-dir "${PHASE_DIR}" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}"
+fi
+if [ -f "$INTERFACE_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  "${PYTHON_BIN:-python3}" "$INTERFACE_VAL" \
+    --phase-dir "${PHASE_DIR}" \
+    --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+    > "${PHASE_DIR}/.tmp/interface-standards-blueprint.json" 2>&1
+  INTERFACE_RC=$?
+  cat "${PHASE_DIR}/.tmp/interface-standards-blueprint.json"
+  if [ "$INTERFACE_RC" -ne 0 ]; then
+    echo "⛔ INTERFACE-STANDARDS gate failed before blueprint generation."
+    echo "   Fix the phase API/FE/CLI communication standard first."
+    exit 1
+  fi
 fi
 ```
 
@@ -1498,6 +1554,7 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## Sub-step 2b: CONTRACTS (strict format — executable code block)
 
 Read `.claude/skills/api-contract/SKILL.md` — Mode: Generate.
+Read `${PHASE_DIR}/INTERFACE-STANDARDS.md` — API envelope, FE toast/form error priority, CLI stderr/stdout rules. This artifact is mandatory context, not optional prose.
 Read `config.contract_format` from `.claude/vg.config.md`:
 - `type`: zod_code_block | openapi_yaml | typescript_interface | pydantic_model
 - `compile_cmd`: how to validate syntax (used in 2c2)
@@ -1553,14 +1610,15 @@ export type PostApiSitesResponse = z.infer<typeof PostApiSitesResponse>;
 
 ```typescript
 // === BLOCK 3: Error responses (COPY VERBATIM to error handler) ===
-// Executor: use these EXACT shapes in catch blocks. FE reads error.message for toast.
+// Executor: use these EXACT shapes in catch blocks.
+// INTERFACE-STANDARDS.md: FE reads error.user_message || error.message for toast.
 export const PostSitesErrors = {
-  400: { error: { code: 'VALIDATION_FAILED', message: 'Invalid site data' } },
-  401: { error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } },
-  403: { error: { code: 'FORBIDDEN', message: 'Publisher role required' } },
-  409: { error: { code: 'DUPLICATE_DOMAIN', message: 'Domain already registered' } },
+  400: { ok: false, error: { code: 'VALIDATION_FAILED', message: 'Invalid site data', field_errors: {} } },
+  401: { ok: false, error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } },
+  403: { ok: false, error: { code: 'FORBIDDEN', message: 'Publisher role required', user_message: 'Publisher role required' } },
+  409: { ok: false, error: { code: 'DUPLICATE_DOMAIN', message: 'Domain already registered' } },
 } as const;
-// FE toast rule: always show `response.data.error.message` — never HTTP status text
+// FE toast rule: always show `response.data.error.user_message || response.data.error.message` — never HTTP status text
 ```
 
 ```typescript
@@ -1592,9 +1650,13 @@ auth middleware and error responses. Block 4 eliminates the second bug class: he
 generation in test.md step 5b-2 producing values that fail Zod validation (e.g. `idempotency-test-domain`
 is not a valid URL). Contract author knows the schema best — they provide the valid sample.
 
-**Error response shape** is project-wide consistent. Read `config.error_response_shape` (default:
-`{ error: { code: string, message: string } }`) — every endpoint's Block 3 MUST use this shape.
-FE code reads `response.data.error.message` for toast — never `response.statusText` or raw code.
+**Error response shape** is phase-wide consistent. Read `${PHASE_DIR}/INTERFACE-STANDARDS.md`
+first. Every endpoint's Block 3 MUST use the standard envelope/message priority:
+`{ ok:false, error:{ code, message, user_message?, details?, field_errors?, request_id? } }`.
+Legacy compact `{ error:{ code, message } }` is allowed only when the endpoint explicitly
+declares compatibility, and FE still reads `response.data.error.user_message ||
+response.data.error.message` for toast — never `response.statusText`, HTTP code text, or raw
+AxiosError.message.
 
 **Block 4 rules:**
 1. Each endpoint MUST have Block 4 with valid sample payload matching Block 2 schema.
@@ -1610,6 +1672,7 @@ FE code reads `response.data.error.message` for toast — never `response.status
 - CONTEXT.md (decisions list, ~50 lines)
 - Grep results from code (extracted field hints, ~100 lines)
 - Contract format template from config (~150 lines)
+- INTERFACE-STANDARDS.md API/FE/CLI rules (~120 lines)
 - Existing auth middleware patterns in codebase (~100 lines)
 
 **Output:** Write `${PHASE_DIR}/API-CONTRACTS.md`. Must contain at least 1 code block per endpoint.
@@ -3236,6 +3299,27 @@ if [ -x "$CRUD_VAL" ]; then
     *) echo "ℹ crud-surface-contract: $CRUD_V" ;;
   esac
 fi
+
+# Gate C2: Interface standards (API envelope + FE/CLI error semantics)
+INTERFACE_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-interface-standards.py"
+if [ -x "$INTERFACE_VAL" ]; then
+  INTERFACE_TMP="${VG_TMP:-${PHASE_DIR}/.vg-tmp}"
+  mkdir -p "$INTERFACE_TMP"
+  ${PYTHON_BIN} "$INTERFACE_VAL" --phase "${PHASE_NUMBER}" \
+      --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" \
+      > "${INTERFACE_TMP}/interface-standards.json" 2>&1 || true
+  INTERFACE_V=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+        "${INTERFACE_TMP}/interface-standards.json" 2>/dev/null)
+  case "$INTERFACE_V" in
+    PASS|WARN) echo "✓ interface-standards: $INTERFACE_V" ;;
+    BLOCK)
+      echo "⛔ interface-standards: BLOCK — see ${INTERFACE_TMP}/interface-standards.json" >&2
+      echo "   API/FE/CLI phases must lock request/response envelope and error-message semantics before build." >&2
+      exit 1
+      ;;
+    *) echo "ℹ interface-standards: $INTERFACE_V" ;;
+  esac
+fi
 ```
 
 ### 2d-3d: Phase 16 task schema + cross-AI output gates (hot-fix v2.11.1)
@@ -3820,7 +3904,7 @@ git add "${PHASE_DIR}/PLAN"*.md \
         "${PHASE_DIR}/TEST-GOALS.md" \
         "${PHASE_DIR}/crossai/"
 # Optional artifacts — only present when the relevant generator fired this phase.
-for opt in CRUD-SURFACES.md UI-SPEC.md UI-MAP.md UI-MAP-AS-IS.md FLOW-SPEC.md; do
+for opt in INTERFACE-STANDARDS.md INTERFACE-STANDARDS.json CRUD-SURFACES.md UI-SPEC.md UI-MAP.md UI-MAP-AS-IS.md FLOW-SPEC.md; do
   [ -f "${PHASE_DIR}/${opt}" ] && git add "${PHASE_DIR}/${opt}"
 done
 git commit -m "blueprint({phase}): plans + contracts + goals — CrossAI {verdict}"

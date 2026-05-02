@@ -3,7 +3,7 @@ OHOK Batch 1 — specs.md runtime_contract + enforcement.
 
 specs.md used to be 100% performative (zero runtime_contract, zero markers,
 zero validators). Batch 1 added:
-- runtime_contract frontmatter with 7 markers + 2 telemetry events
+- runtime_contract frontmatter with 8 markers + 2 telemetry events
 - parse_args phase-exists bash gate (grep ROADMAP.md || exit 1)
 - generate_draft USER_APPROVAL bash gate (exit 2 if not approve)
 - load_context step removed (inlined as process preamble)
@@ -45,25 +45,32 @@ def test_specs_has_runtime_contract(specs_text):
     assert "must_emit_telemetry" in contract
 
 
-def test_specs_must_write_includes_SPECS_md(specs_text):
+def test_specs_must_write_includes_SPECS_and_interface_standards(specs_text):
     contract = contracts.parse("vg:specs")
     must_write = contracts.normalize_must_write(contract.get("must_write") or [])
     paths = [item["path"] for item in must_write]
     assert any("SPECS.md" in p for p in paths), (
         f"must_write missing SPECS.md: {paths}"
     )
+    assert any("INTERFACE-STANDARDS.md" in p for p in paths), (
+        f"must_write missing INTERFACE-STANDARDS.md: {paths}"
+    )
+    assert any("INTERFACE-STANDARDS.json" in p for p in paths), (
+        f"must_write missing INTERFACE-STANDARDS.json: {paths}"
+    )
 
 
-def test_specs_contract_lists_all_7_markers(specs_text):
+def test_specs_contract_lists_all_8_markers(specs_text):
     """Every step in body must appear in must_touch_markers."""
     contract = contracts.parse("vg:specs")
     markers = contracts.normalize_markers(contract.get("must_touch_markers") or [])
     names = [m["name"] for m in markers]
 
-    # Step body declares these 7 steps (after removing load_context A1)
+    # Step body declares these 8 steps (after removing load_context A1)
     expected = {
         "parse_args", "check_existing", "choose_mode",
-        "guided_questions", "generate_draft", "write_specs", "commit_and_next",
+        "guided_questions", "generate_draft", "write_specs",
+        "write_interface_standards", "commit_and_next",
     }
     actual = set(names)
     missing = expected - actual
@@ -166,7 +173,7 @@ def test_load_context_step_removed(specs_text):
 
 # ═══════════════════════════ Marker file emission ═══════════════════════════
 
-def test_all_7_steps_emit_markers(specs_text):
+def test_all_8_steps_emit_markers(specs_text):
     """Every <step name="X"> must have touch .step-markers/X.done in body."""
     step_names = re.findall(r'<step name="([^"]+)">', specs_text)
     for name in step_names:
@@ -193,3 +200,23 @@ def test_commit_and_next_calls_run_complete(specs_text):
     assert 'vg-orchestrator run-complete' in block
     assert 'RUN_RC' in block, "missing rc check after run-complete"
     assert 'exit $RUN_RC' in block, "missing exit on run-complete failure"
+
+
+def test_specs_generates_interface_standards_before_commit(specs_text):
+    step = re.search(
+        r'<step name="write_interface_standards">(.+?)</step>',
+        specs_text,
+        re.DOTALL,
+    )
+    assert step, "write_interface_standards step missing"
+    block = step.group(1)
+    assert "generate-interface-standards.py" in block
+    assert "verify-interface-standards.py" in block
+    assert "--no-scan-source" in block
+    commit = re.search(
+        r'<step name="commit_and_next">(.+?)</step>',
+        specs_text,
+        re.DOTALL,
+    ).group(1)
+    assert "INTERFACE-STANDARDS.md" in commit
+    assert "INTERFACE-STANDARDS.json" in commit

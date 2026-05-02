@@ -25,15 +25,23 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _repo_root() -> Path:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / ".claude" / "scripts" / "validators").exists():
+            return candidate
+    raise RuntimeError("repo root not found")
+
+
+REPO_ROOT = _repo_root()
 SCRIPT = REPO_ROOT / ".claude" / "scripts" / "validators" / "verify-url-state-sync.py"
 
 
-def _run(repo: Path, phase: str) -> tuple[int, dict]:
+def _run(repo: Path, phase: str, *extra: str) -> tuple[int, dict]:
     env = os.environ.copy()
     env["VG_REPO_ROOT"] = str(repo)
     proc = subprocess.run(
-        [sys.executable, str(SCRIPT), "--phase", phase],
+        [sys.executable, str(SCRIPT), "--phase", phase, *extra],
         capture_output=True, text=True, cwd=repo, env=env, timeout=15,
     )
     try:
@@ -48,6 +56,7 @@ def _setup_fake_repo(
     *,
     phase: str,
     goals_md: str,
+    api_docs_md: str | None = None,
     cutover: int = 14,
 ) -> Path:
     """Create a minimal fake repo with TEST-GOALS.md + vg.config.md."""
@@ -60,6 +69,9 @@ def _setup_fake_repo(
         src = REPO_ROOT / ".claude" / "scripts" / "validators" / helper
         if src.exists():
             shutil.copy(src, scripts_dir / helper)
+    api_docs_common = REPO_ROOT / ".claude" / "scripts" / "api_docs_common.py"
+    if api_docs_common.exists():
+        shutil.copy(api_docs_common, tmp_path / ".claude" / "scripts" / "api_docs_common.py")
     # _i18n loads narration strings — copy that file too if exists.
     narr_src = REPO_ROOT / ".claude" / "commands" / "vg" / "_shared" / "narration-strings.yaml"
     if narr_src.exists():
@@ -81,6 +93,8 @@ def _setup_fake_repo(
     phase_dir = tmp_path / ".vg" / "phases" / phase
     phase_dir.mkdir(parents=True)
     (phase_dir / "TEST-GOALS.md").write_text(goals_md, encoding="utf-8")
+    if api_docs_md is not None:
+        (phase_dir / "API-DOCS.md").write_text(api_docs_md, encoding="utf-8")
     return tmp_path
 
 
@@ -155,6 +169,30 @@ def _single_record_goal(gid: str = "G-02") -> str:
     )
 
 
+def _api_docs_with_status_and_paging() -> str:
+    return (
+        "# API Docs — Phase 14\n\n"
+        "## GET /api/campaigns\n\n"
+        "```json\n"
+        "{\n"
+        "  \"method\": \"GET\",\n"
+        "  \"path\": \"/api/campaigns\",\n"
+        "  \"purpose\": \"List campaigns\",\n"
+        "  \"request\": {\n"
+        "    \"query\": {\n"
+        "      \"status\": {\"type\": \"string\", \"enum\": [\"pending\", \"flagged\"], \"required\": false},\n"
+        "      \"page\": {\"type\": \"integer\", \"required\": false},\n"
+        "      \"limit\": {\"type\": \"integer\", \"required\": false}\n"
+        "    }\n"
+        "  },\n"
+        "  \"response\": {\"collection\": true},\n"
+        "  \"implementation\": {\"route_hits\": [\"apps/api/src/routes/campaigns.ts\"]},\n"
+        "  \"ai_notes\": {\"filter_semantics\": [\"status must constrain rows\"], \"paging_semantics\": [\"page changes returned window\"]}\n"
+        "}\n"
+        "```\n"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -181,12 +219,47 @@ def test_list_view_missing_controls_warns_at_legacy_phase(tmp_path):
                for e in data.get("evidence", []))
 
 
+def test_review_enforcement_blocks_legacy_phase(tmp_path):
+    """Review can hard-enforce required lenses even for grandfathered phases."""
+    repo = _setup_fake_repo(tmp_path, phase="7.14.3",
+                            goals_md=_list_goal_no_controls(),
+                            cutover=14)
+    rc, data = _run(repo, "7.14.3", "--enforce-required-lenses")
+    assert rc == 1, data
+    assert data["verdict"] == "BLOCK", f"got {data}"
+    assert any(e["type"] == "url_state_block_missing"
+               for e in data.get("evidence", []))
+
+
 def test_full_controls_passes(tmp_path):
     repo = _setup_fake_repo(tmp_path, phase="14",
                             goals_md=_list_goal_full_controls())
     rc, data = _run(repo, "14")
     assert data["verdict"] == "PASS", f"got {data}"
     assert data.get("evidence") == [] or data.get("evidence") is None
+
+
+def test_markdown_inline_controls_are_enforced(tmp_path):
+    goals = """# Test Goals
+
+## Goal G-09: Admin topup queue list with filters
+**Surface:** ui
+**api_contracts:** [/api/v1/admin/topup-requests]
+**Trigger:** Admin navigates `/admin/topup-requests`
+**interactive_controls:**
+url_sync: true
+filters:
+  - {name: status, type: tabs, options: [all, pending, flagged], url_param: status}
+pagination: {page_size: 20, ui_pattern: "first-prev-numbered-window-next-last", url_param: cursor}
+search: {url_param: q, debounce_ms: 300}
+sort: {columns: [created_at], url_param_field: sort, url_param_dir: dir}
+"""
+    repo = _setup_fake_repo(tmp_path, phase="14", goals_md=goals)
+    rc, data = _run(repo, "14")
+    assert data["verdict"] == "BLOCK", f"got {data}"
+    types = {e["type"] for e in data.get("evidence", [])}
+    assert "url_state_filter_incomplete" in types
+    assert "url_state_pagination_incomplete" in types
 
 
 def test_single_record_goal_skipped(tmp_path):
@@ -339,6 +412,58 @@ def test_pagination_missing_total_records_blocks(tmp_path):
     assert "show_total_records" in actual or "show_total_pages" in actual
 
 
+def test_api_docs_requires_filter_and_pagination_declarations(tmp_path):
+    repo = _setup_fake_repo(
+        tmp_path,
+        phase="14",
+        goals_md=_list_goal_no_controls(),
+        api_docs_md=_api_docs_with_status_and_paging(),
+    )
+    rc, data = _run(repo, "14")
+    assert data["verdict"] == "BLOCK"
+    assert any(e["type"] == "url_state_api_docs_mismatch"
+               for e in data.get("evidence", []))
+
+
+def test_api_docs_enum_mismatch_blocks(tmp_path):
+    goals = (
+        "---\n"
+        "id: G-01\n"
+        "title: \"Campaigns list view\"\n"
+        "surface: ui\n"
+        "trigger: \"GET /api/campaigns\"\n"
+        "main_steps:\n"
+        "  - S1: User opens campaigns table view\n"
+        "interactive_controls:\n"
+        "  url_sync: true\n"
+        "  filters:\n"
+        "    - name: status\n"
+        "      values: [pending]\n"
+        "      url_param: status\n"
+        "      assertion: \"rows match + URL synced\"\n"
+        "  pagination:\n"
+        "    page_size: 20\n"
+        "    url_param_page: page\n"
+        "    ui_pattern: \"first-prev-numbered-window-next-last\"\n"
+        "    show_total_records: true\n"
+        "    show_total_pages: true\n"
+        "    assertion: \"page 2 differs\"\n"
+        "---\n"
+    )
+    repo = _setup_fake_repo(
+        tmp_path,
+        phase="14",
+        goals_md=goals,
+        api_docs_md=_api_docs_with_status_and_paging(),
+    )
+    rc, data = _run(repo, "14")
+    assert data["verdict"] == "BLOCK"
+    mismatch = [e for e in data.get("evidence", []) if e["type"] == "url_state_api_docs_mismatch"]
+    assert mismatch, data
+    assert "pending" in mismatch[0]["actual"]
+    assert "flagged" in mismatch[0]["actual"]
+
+
 def test_no_goals_passes(tmp_path):
     empty = "# Test Goals\n\nNo goals defined yet.\n"
     repo = _setup_fake_repo(tmp_path, phase="14", goals_md=empty)
@@ -359,5 +484,8 @@ def test_phase_dir_missing_passes(tmp_path):
         src = REPO_ROOT / ".claude" / "scripts" / "validators" / helper
         if src.exists():
             shutil.copy(src, scripts_dir / helper)
+    api_docs_common = REPO_ROOT / ".claude" / "scripts" / "api_docs_common.py"
+    if api_docs_common.exists():
+        shutil.copy(api_docs_common, tmp_path / ".claude" / "scripts" / "api_docs_common.py")
     rc, data = _run(tmp_path, "99.99")
     assert data["verdict"] == "PASS"

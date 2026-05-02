@@ -11,7 +11,15 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def _repo_root() -> Path:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / ".claude" / "scripts" / "vg-orchestrator").exists():
+            return candidate
+    raise RuntimeError("repo root not found")
+
+
+REPO_ROOT = _repo_root()
 
 
 @pytest.fixture(scope="module")

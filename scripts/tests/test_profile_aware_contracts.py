@@ -93,10 +93,30 @@ def test_detect_phase_profile_frontmatter_explicit(sandbox):
     assert contracts.detect_phase_profile("88") == "migration"
 
 
+def test_detect_phase_profile_migration_prose_does_not_false_positive(sandbox):
+    """Casual migration prose with one schema path stays feature, not migration."""
+    phase_dir = sandbox / ".vg" / "phases" / "99-test-feature"
+    (phase_dir / "PLAN.md").write_text(
+        textwrap.dedent("""\
+            # PLAN
+
+            - <file-path>apps/api/src/payments/service.ts</file-path>
+            - <file-path>apps/api/src/db/migrations/001_add_wallet.sql</file-path>
+            """),
+        encoding="utf-8",
+    )
+    (phase_dir / "SPECS.md").write_text(
+        "# SPECS\n\nDefer destructive migration details to a later phase.\n",
+        encoding="utf-8",
+    )
+    assert contracts.detect_phase_profile("99") == "feature"
+
+
 def test_artifact_applicable_feature(sandbox):
     """Feature profile requires CONTEXT, API-CONTRACTS, TEST-GOALS."""
     assert contracts.artifact_applicable("feature", "CONTEXT.md")
     assert contracts.artifact_applicable("feature", "API-CONTRACTS.md")
+    assert contracts.artifact_applicable("feature", "API-DOCS.md")
     assert contracts.artifact_applicable("feature", "TEST-GOALS.md")
     assert contracts.artifact_applicable("feature", "api-contract-precheck.txt")
 
@@ -105,6 +125,7 @@ def test_artifact_applicable_infra_skips_feature_artifacts(sandbox):
     """Infra profile does NOT require CONTEXT, API-CONTRACTS, TEST-GOALS."""
     assert not contracts.artifact_applicable("infra", "CONTEXT.md")
     assert not contracts.artifact_applicable("infra", "API-CONTRACTS.md")
+    assert not contracts.artifact_applicable("infra", "API-DOCS.md")
     assert not contracts.artifact_applicable("infra", "TEST-GOALS.md")
     # But SPECS + PLAN + SUMMARY ARE required
     assert contracts.artifact_applicable("infra", "SPECS.md")

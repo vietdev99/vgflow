@@ -38,6 +38,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+sys.path.insert(0, str(Path(__file__).parent))
+from _common import find_phase_dir  # noqa: E402
 
 # Markdown goal header: `## Goal G-12: title (P3.D-46)`
 GOAL_HEADER_RE = re.compile(r"^##\s+Goal\s+(G-[A-Z0-9-]+)\s*:?\s*(.*)$", re.IGNORECASE)
@@ -152,13 +154,18 @@ def parse_test_goals(path: Path) -> tuple[list[dict], str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--phase-dir", required=True)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--phase-dir")
+    src.add_argument("--phase")
     ap.add_argument("--severity", choices=["warn", "block"], default="block")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
-    phase_dir = Path(args.phase_dir).resolve()
+    phase_dir = Path(args.phase_dir).resolve() if args.phase_dir else find_phase_dir(args.phase)
+    if phase_dir is None:
+        print(f"⛔ Phase dir not found for phase: {args.phase}", file=sys.stderr)
+        return 2
     if not phase_dir.is_dir():
         print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
         return 2

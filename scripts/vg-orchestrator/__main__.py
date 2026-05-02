@@ -13,6 +13,8 @@ Subcommands:
   run-resume
   run-repair [--force]
   emit-event <event_type> [--payload JSON]
+  tasklist-projected --adapter claude|codex|fallback
+  step-active <step_name>
   mark-step <namespace> <step_name>
   wave-start <wave_n>
   wave-complete <wave_n> < evidence.json   (reads stdin or --evidence-file)
@@ -103,6 +105,7 @@ def _verify_artifact_run_binding(artifact_path: Path, run_id: str,
     """
     import hashlib as _hashlib
     import json as _json
+    import subprocess
     from pathlib import Path as _Path
 
     def _sha256(p: _Path) -> str | None:
@@ -720,6 +723,237 @@ def cmd_run_start(args) -> int:
     return 0
 
 
+def _tasklist_event_name(command: str) -> str:
+    return f"{command.replace('vg:', '').replace(':', '_')}.tasklist_shown"
+
+
+def _tasklist_projection_event_name(command: str) -> str:
+    return f"{command.replace('vg:', '').replace(':', '_')}.native_tasklist_projected"
+
+
+def _humanize_step_name(step: str) -> str:
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", step)
+    text = re.sub(r"([A-Za-z])([0-9])", r"\1 \2", text)
+    text = re.sub(r"([0-9])([A-Za-z])", r"\1 \2", text)
+    text = text.replace("_", " ").replace("-", " ").strip()
+    return " ".join(part.capitalize() for part in text.split())
+
+
+def _load_run_taskboard(run_id: str, command: str) -> dict:
+    tasklist_events = db.query_events(
+        run_id=run_id,
+        event_type=_tasklist_event_name(command),
+        limit=20,
+    )
+    tasklist_payload = {}
+    if tasklist_events:
+        try:
+            tasklist_payload = json.loads(tasklist_events[-1]["payload_json"] or "{}")
+        except Exception:
+            tasklist_payload = {}
+
+    steps = tasklist_payload.get("steps") or []
+    profile = tasklist_payload.get("profile")
+    marked_events = db.query_events(run_id=run_id, event_type="step.marked", limit=2000)
+    marked = [evt.get("step") for evt in marked_events if evt.get("step")]
+    marked_set = set(marked)
+
+    current_step = None
+    for step in steps:
+        if step not in marked_set:
+            current_step = step
+            break
+
+    return {
+        "profile": profile,
+        "steps": steps,
+        "marked": marked,
+        "marked_set": marked_set,
+        "completed_count": sum(1 for step in steps if step in marked_set),
+        "current_step": current_step,
+        "last_completed_step": marked[-1] if marked else None,
+    }
+
+
+def _render_taskboard(current: dict, run_row: dict | None, compact: bool = False) -> str:
+    board = _load_run_taskboard(current["run_id"], current["command"])
+    steps = board["steps"]
+    if not steps:
+        return ""
+
+    lines = []
+    profile = board.get("profile") or "unknown"
+    completed = board["completed_count"]
+    total = len(steps)
+    active_step = current.get("active_step")
+    current_step = active_step or board["current_step"]
+    last_completed = board["last_completed_step"]
+
+    lines.append("━" * 78)
+    lines.append(
+        f"  {current['command']} — Phase {current['phase']} — Profile {profile}"
+    )
+    if run_row and run_row.get("started_at"):
+        lines.append(f"  Started: {run_row['started_at']}")
+    lines.append(f"  Progress: {completed}/{total} step(s) completed")
+    if last_completed:
+        lines.append(f"  Last completed: {last_completed}")
+    if active_step:
+        lines.append(f"  Active: {active_step}")
+    elif current_step:
+        lines.append(f"  Next: {current_step}")
+    lines.append("━" * 78)
+
+    visible_steps = steps
+    if compact and total > 7:
+        done_tail = [s for s in steps if s in board["marked_set"]][-2:]
+        pending_head = [s for s in steps if s not in board["marked_set"]][:4]
+        keep = []
+        seen = set()
+        for step in done_tail + pending_head:
+            if step not in seen:
+                seen.add(step)
+                keep.append(step)
+        visible_steps = keep
+
+    for step in visible_steps:
+        if step in board["marked_set"]:
+            icon = "[x]"
+        elif step == current_step:
+            icon = "[>]"
+        else:
+            icon = "[ ]"
+        real_idx = steps.index(step) + 1
+        lines.append(f"  {icon} {real_idx:2d}. {step}")
+        if not compact:
+            lines.append(f"      {_humanize_step_name(step)}")
+
+    if compact and len(visible_steps) < total:
+        remaining = total - len(visible_steps)
+        lines.append(f"  ... {remaining} more step(s) hidden")
+
+    lines.append("━" * 78)
+    return "\n".join(lines)
+
+
+def cmd_tasklist_projected(args) -> int:
+    """Record that the runtime-native task UI now mirrors the task contract.
+
+    The native task list is intentionally a projection, not the source of
+    truth. This command binds that projection back to the durable harness
+    contract so run-complete can verify that users saw the step checklist
+    before execution moved on.
+    """
+    current = state_mod.read_current_run()
+    if not current:
+        print("⛔ No active run. Call run-start first.", file=sys.stderr)
+        return 1
+
+    run_id = current["run_id"]
+    contract_path = _REPO_ROOT / ".vg" / "runs" / run_id / "tasklist-contract.json"
+    if not contract_path.exists():
+        print(
+            f"⛔ tasklist-contract.json missing for run_id={run_id[:12]}.\n"
+            f"   Run emit-tasklist.py after run-start, then project its items "
+            f"to the native task UI before continuing.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"⛔ tasklist-contract.json is unreadable: {exc}", file=sys.stderr)
+        return 2
+
+    items = contract.get("items") or []
+    checklists = contract.get("checklists") or []
+    item_ids = [
+        item.get("id")
+        for item in items
+        if isinstance(item, dict) and item.get("id")
+    ]
+    checklist_ids = [
+        checklist.get("id")
+        for checklist in checklists
+        if isinstance(checklist, dict) and checklist.get("id")
+    ]
+    if contract.get("schema") != "native-tasklist.v1":
+        print("⛔ tasklist contract schema must be native-tasklist.v1", file=sys.stderr)
+        return 2
+    if contract.get("run_id") != run_id:
+        print("⛔ tasklist contract belongs to a different run_id", file=sys.stderr)
+        return 2
+    if contract.get("command") != current.get("command"):
+        print("⛔ tasklist contract command does not match active run", file=sys.stderr)
+        return 2
+    if str(contract.get("phase")) != str(current.get("phase")):
+        print("⛔ tasklist contract phase does not match active run", file=sys.stderr)
+        return 2
+    if not item_ids:
+        print("⛔ tasklist contract contains no task items", file=sys.stderr)
+        return 2
+
+    event_type = _tasklist_projection_event_name(current["command"])
+    evt = db.append_event(
+        run_id=run_id,
+        event_type=event_type,
+        phase=current["phase"],
+        command=current["command"],
+        actor="orchestrator",
+        outcome="INFO",
+        payload={
+            "adapter": args.adapter,
+            "contract_path": str(contract_path),
+            "item_count": len(item_ids),
+            "item_ids": item_ids,
+            "checklist_count": len(checklist_ids),
+            "checklist_ids": checklist_ids,
+            "projection_required": True,
+            "source_schema": contract.get("schema"),
+        },
+    )
+
+    current["tasklist_projected"] = True
+    current["tasklist_projected_adapter"] = args.adapter
+    current["tasklist_projected_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    state_mod.write_active_run(current)
+
+    print(
+        f"native-tasklist-projected: {event_type} "
+        f"items={len(item_ids)} checklists={len(checklist_ids)} "
+        f"adapter={args.adapter} hash={evt['this_hash'][:12]}"
+    )
+    return 0
+
+
+def cmd_step_active(args) -> int:
+    current = state_mod.read_current_run()
+    if not current:
+        print("⛔ No active run. Call run-start first.", file=sys.stderr)
+        return 1
+
+    current["active_step"] = args.step_name
+    current["active_step_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    state_mod.write_active_run(current)
+
+    db.append_event(
+        run_id=current["run_id"],
+        event_type="step.active",
+        phase=current["phase"],
+        command=current["command"],
+        actor="orchestrator",
+        outcome="INFO",
+        step=args.step_name,
+        payload={"step": args.step_name},
+    )
+    print(f"active: {args.step_name}")
+    pretty = _render_taskboard(current, db.get_run(current["run_id"]), compact=True)
+    if pretty:
+        print(pretty)
+    return 0
+
+
 def cmd_run_status(_args) -> int:
     """Show active run for THIS session + cross-session sibling runs (if any).
 
@@ -765,6 +999,18 @@ def cmd_run_status(_args) -> int:
              "started_at": r.get("started_at")}
             for r in other_sessions
         ]
+    if getattr(_args, "pretty", False) and current:
+        pretty = _render_taskboard(current, run_row)
+        if pretty:
+            print(pretty)
+            if other_sessions:
+                print("Other active sessions:")
+                for r in payload["other_sessions_active"]:
+                    print(
+                        f"  - {r['session_id']} {r['command']} "
+                        f"phase={r['phase']} started={r['started_at']}"
+                    )
+            return 0
     print(json.dumps(payload, indent=2, default=str))
     return 0
 
@@ -876,10 +1122,15 @@ RESERVED_EVENT_PREFIXES = (
 RESERVED_EVENT_EXACT = {
     "step.marked",            # step markers — must use mark-step command
 }
+RESERVED_EVENT_SUFFIXES = (
+    ".native_tasklist_projected",  # must use tasklist-projected contract binder
+)
 
 
 def _is_reserved_event(event_type: str) -> bool:
     if event_type in RESERVED_EVENT_EXACT:
+        return True
+    if any(event_type.endswith(s) for s in RESERVED_EVENT_SUFFIXES):
         return True
     return any(event_type.startswith(p) for p in RESERVED_EVENT_PREFIXES)
 
@@ -897,6 +1148,7 @@ def cmd_emit_event(args) -> int:
             f"core — cannot be emitted via CLI.\n"
             f"   Reserved prefixes: {', '.join(RESERVED_EVENT_PREFIXES)}\n"
             f"   Reserved exact: {', '.join(sorted(RESERVED_EVENT_EXACT))}\n\n"
+            f"   Reserved suffixes: {', '.join(RESERVED_EVENT_SUFFIXES)}\n\n"
             f"   Rationale (OHOK-8 round-3): CrossAI reviewers found that\n"
             f"   AI could forge terminal events like build.crossai_loop_complete\n"
             f"   via `emit-event` CLI → bypass validators that count events.\n"
@@ -1034,7 +1286,14 @@ def cmd_mark_step(args) -> int:
         step=args.step_name,
         payload={"namespace": args.namespace, "marker": str(marker)},
     )
+    if current.get("active_step") == args.step_name:
+        current.pop("active_step", None)
+        current.pop("active_step_at", None)
+        state_mod.write_active_run(current)
     print(f"marked: {args.namespace}/{args.step_name}")
+    pretty = _render_taskboard(current, db.get_run(current["run_id"]), compact=True)
+    if pretty:
+        print(pretty)
     return 0
 
 
@@ -2675,6 +2934,7 @@ COMMAND_VALIDATORS = {
                      # Codex co-author lane catches missing TEST-GOALS coverage
                      # before CrossAI reviews the already-final artifact.
                      "verify-codex-test-goal-lane",
+                     "verify-interface-standards",
                      "verify-crud-surface-contract",
                      # Harness v2.6 (2026-04-25): blueprint META-gate at 2c.
                      # Goal-plan coverage, endpoint-goal coverage, surface
@@ -2721,6 +2981,8 @@ COMMAND_VALIDATORS = {
                  # declarations block; mutation-generic warns. Runtime
                  # cross-role boundary test deferred (needs live API).
                  "verify-authz-declared",
+                 "verify-interface-standards",
+                 "verify-api-docs-coverage",
                  "verify-crud-surface-contract",
                  # OHOK-7 (2026-04-22): MANDATORY post-build CrossAI loop.
                  # Must see events.db evidence of ≥1 crossai iteration +
@@ -2818,6 +3080,7 @@ COMMAND_VALIDATORS = {
     "vg:review": ["phase-exists", "runtime-evidence", "review-skip-guard",
                   "secrets-scan", "verify-input-validation",
                   "verify-authz-declared",
+                  "verify-interface-standards",
                   "accessibility-scan",
                   "verify-static-assets-runtime",
                   # B9.2 (2026-04-23): i18n coverage — catches missing
@@ -2868,6 +3131,7 @@ COMMAND_VALIDATORS = {
                 # review fixes discovered issues, test re-verifies before UAT.
                 "secrets-scan", "verify-input-validation",
                 "verify-authz-declared",
+                "verify-interface-standards",
                 # B12.1 (2026-04-23): mutation spec 3-layer verify — extends
                 # R7 console check from generated-only → all *.spec.ts.
                 # Catches ghost-save bugs (toast shown but data lost on reload).
@@ -3124,6 +3388,7 @@ UNQUARANTINABLE = {
     # AI can't slip ship a phase that never wrote a paging goal.
     "verify-test-goals-platform-essentials",
     "verify-crud-surface-contract",
+    "verify-interface-standards",
     "verify-runtime-map-crud-depth",
     # Phase 7.14.3 retro (2026-04-25): user-facing prose must read as a
     # story (preamble → details → close), not bullet/schema dumps.
@@ -3882,6 +4147,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_run_start)
 
     s = sub.add_parser("run-status", help="Show active run")
+    s.add_argument("--pretty", action="store_true",
+                   help="Render taskboard/progress instead of raw JSON")
     s.set_defaults(func=cmd_run_status)
 
     s = sub.add_parser("run-complete", help="Verify contract + complete")
@@ -3904,10 +4171,26 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["PASS", "BLOCK", "WARN", "INFO"])
     s.set_defaults(func=cmd_emit_event)
 
+    s = sub.add_parser(
+        "tasklist-projected",
+        help="Bind native task UI projection to tasklist-contract.json",
+    )
+    s.add_argument(
+        "--adapter",
+        required=True,
+        choices=["claude", "codex", "fallback"],
+        help="Runtime surface used to project the tasklist contract",
+    )
+    s.set_defaults(func=cmd_tasklist_projected)
+
     s = sub.add_parser("mark-step", help="Touch step marker")
     s.add_argument("namespace", help="e.g. 'build', 'blueprint', 'shared'")
     s.add_argument("step_name")
     s.set_defaults(func=cmd_mark_step)
+
+    s = sub.add_parser("step-active", help="Mark current active step for progress surfaces")
+    s.add_argument("step_name")
+    s.set_defaults(func=cmd_step_active)
 
     # OHOK-8 round-3 P0.1: dedicated path for emit terminal CrossAI events
     # (exhausted/user_override). loop_complete is emitted automatically by

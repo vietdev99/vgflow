@@ -2,8 +2,8 @@
 """
 filter-steps.py — Deterministic profile filter for VG command files.
 
-Parses <step name="..." profile="..."> tags in a command markdown file and
-returns the step IDs that apply to the given profile.
+Parses <step name="..." profile="..." mode="..."> tags in a command markdown
+file and returns the step IDs that apply to the given profile/mode.
 
 Used by create_task_tracker in every vg/* command as a safety net: the bash
 output is the expected task list. AI must create matching tasks — a mismatch
@@ -11,6 +11,7 @@ triggers BLOCK. Prevents AI from silently skipping profile-filtered steps.
 
 USAGE
   python3 filter-steps.py --command .claude/commands/vg/build.md --profile web-fullstack
+  python3 filter-steps.py --command .claude/commands/vg/review.md --profile web-fullstack --mode full
   python3 filter-steps.py --command ... --profile ... --output-ids    # CSV step names
   python3 filter-steps.py --command ... --profile ... --output-count  # just N
 
@@ -99,13 +100,15 @@ STEP_RE = re.compile(
 
 NAME_RE = re.compile(r'name="(?P<val>[^"]+)"')
 PROFILE_RE = re.compile(r'profile="(?P<val>[^"]+)"')
+MODE_RE = re.compile(r'mode="(?P<val>[^"]+)"')
 
 
 def parse_steps(text: str):
-    """Yield (name, profile_set|None) tuples for each <step> tag in text.
+    """Yield (name, profile_set|None, mode_set|None) for each <step> tag.
 
     profile_set is None when the step has no profile= attribute (applies to all).
     profile_set is a set[str] of concrete profile names after wildcard expansion.
+    mode_set is None when the step has no mode= attribute (applies to all modes).
     """
     for match in STEP_RE.finditer(text):
         attrs = match.group("attrs")
@@ -115,6 +118,10 @@ def parse_steps(text: str):
                 f"<step> at offset {match.start()} missing name= attribute: {attrs!r}"
             )
         name = name_match.group("val")
+        if name == "...":
+            # Ignore documentation placeholders such as
+            # `<step name="...">` in prose. They are not executable steps.
+            continue
 
         profile_match = PROFILE_RE.search(attrs)
         if profile_match:
@@ -123,14 +130,26 @@ def parse_steps(text: str):
         else:
             profile_set = None  # means "all profiles"
 
-        yield name, profile_set
+        mode_match = MODE_RE.search(attrs)
+        if mode_match:
+            mode_set = {
+                m.strip()
+                for m in mode_match.group("val").split(",")
+                if m.strip()
+            }
+        else:
+            mode_set = None
+
+        yield name, profile_set, mode_set
 
 
-def filter_for_profile(steps, profile: str):
-    """Return list of step names applicable to the given profile."""
+def filter_for_profile(steps, profile: str, mode=None):
+    """Return list of step names applicable to the given profile/mode."""
     applicable = []
-    for name, profile_set in steps:
-        if profile_set is None or profile in profile_set:
+    for name, profile_set, mode_set in steps:
+        profile_ok = profile_set is None or profile in profile_set
+        mode_ok = mode_set is None or not mode or mode in mode_set
+        if profile_ok and mode_ok:
             applicable.append(name)
     return applicable
 
@@ -139,6 +158,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--command", required=True, help="Path to vg command markdown file")
     ap.add_argument("--profile", required=True, help="Profile name")
+    ap.add_argument("--mode", default=None, help="Optional workflow mode, e.g. full/regression")
     out = ap.add_mutually_exclusive_group()
     out.add_argument("--output-ids", action="store_true", help="Print CSV of step names")
     out.add_argument("--output-count", action="store_true", help="Print count only")
@@ -168,7 +188,7 @@ def main() -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 3
 
-    applicable = filter_for_profile(steps, args.profile)
+    applicable = filter_for_profile(steps, args.profile, args.mode)
 
     if args.output_count:
         print(len(applicable))

@@ -22,7 +22,19 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+def _repo_root() -> Path:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "sync.sh").exists() and (candidate / "commands" / "vg").exists():
+            return candidate
+        if (
+            (candidate / ".claude" / "commands" / "vg").exists()
+            and (candidate / ".claude" / "scripts" / "emit-tasklist.py").exists()
+        ):
+            return candidate
+    return Path(__file__).resolve().parents[2]
+
+
+REPO_ROOT = _repo_root()
 HELPER    = REPO_ROOT / ".claude" / "scripts" / "emit-tasklist.py"
 CMDS_DIR  = REPO_ROOT / ".claude" / "commands" / "vg"
 
@@ -54,6 +66,8 @@ class TestEmitTasklistHelper:
         # Must show step list header + at least one numbered step
         assert "vg:blueprint" in r.stdout
         assert "Phase 7.14" in r.stdout
+        assert "Checklists:" in r.stdout
+        assert "blueprint_plan" in r.stdout
         assert "steps to execute" in r.stdout
         assert re.search(r"^\s+\d+\.\s+\w", r.stdout, re.MULTILINE)
 
@@ -75,6 +89,23 @@ class TestEmitTasklistHelper:
         assert "1_parse_args" in r.stdout
         assert "2a_plan" in r.stdout
         assert "2b_contracts" in r.stdout
+
+    def test_helper_groups_build_steps_into_checklists(self):
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        r = subprocess.run(
+            [sys.executable, str(HELPER),
+             "--command", "vg:build",
+             "--profile", "web-fullstack",
+             "--phase", "7.14",
+             "--no-emit"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(REPO_ROOT), env=env, encoding="utf-8", errors="replace",
+        )
+        assert r.returncode == 0, r.stderr
+        assert "build_preflight" in r.stdout
+        assert "build_execute" in r.stdout
+        assert "8_execute_waves" in r.stdout
 
     def test_helper_fails_gracefully_on_unknown_command(self):
         r = subprocess.run(
@@ -121,6 +152,11 @@ class TestCommandWiring:
             f"{cmd}.md runtime_contract missing {short}.tasklist_shown event "
             f"in must_emit_telemetry"
         )
+        if cmd in {"blueprint", "build", "review", "test", "accept"}:
+            native_pattern = rf'event_type:\s*["\']?{short}\.native_tasklist_projected'
+            assert re.search(native_pattern, text), (
+                f"{cmd}.md runtime_contract missing {short}.native_tasklist_projected"
+            )
 
     def test_emit_tasklist_invocation_passes_command_arg(self, cmd):
         """Invocation must pass --command vg:{cmd} matching the skill name.
@@ -169,3 +205,59 @@ def test_tasklist_shown_event_not_in_reserved_prefixes():
     # Must NOT include tasklist prefix
     assert '"tasklist"' not in reserved
     assert "tasklist_shown" not in reserved
+
+
+def _emit_tasklist(command: str, profile: str = "web-fullstack", mode: str | None = None) -> str:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    cmd = [
+        sys.executable, str(HELPER),
+        "--command", command,
+        "--profile", profile,
+        "--phase", "7.14",
+        "--no-emit",
+    ]
+    if mode:
+        cmd.extend(["--mode", mode])
+    r = subprocess.run(
+        cmd,
+        capture_output=True, text=True, timeout=10,
+        cwd=str(REPO_ROOT), env=env, encoding="utf-8", errors="replace",
+    )
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_helper_groups_test_steps_into_checklists():
+    out = _emit_tasklist("vg:test", "web-fullstack")
+    assert "test_preflight" in out
+    assert "test_deploy" in out
+    assert "test_runtime" in out
+    assert "test_codegen" in out
+    assert "test_regression_security" in out
+    assert "5b_runtime_contract_verify" in out
+    assert "5h_security_dynamic" in out
+
+
+def test_helper_groups_accept_steps_into_checklists():
+    out = _emit_tasklist("vg:accept", "web-fullstack")
+    assert "accept_preflight" in out
+    assert "accept_gates" in out
+    assert "accept_uat" in out
+    assert "accept_audit" in out
+    assert "create_task_tracker" in out
+    assert "6_write_uat_md" in out
+
+
+def test_test_tasklist_respects_profile_switches():
+    web = _emit_tasklist("vg:test", "web-fullstack")
+    mobile = _emit_tasklist("vg:test", "mobile-rn")
+    cli = _emit_tasklist("vg:test", "cli-tool")
+
+    assert "5a_deploy" in web
+    assert "5a_mobile_deploy" not in web
+    assert "5c_mobile_flow" in mobile
+    assert "5d_mobile_codegen" in mobile
+    assert "5c_smoke" not in mobile
+    assert "5b_runtime_contract_verify" not in cli
+    assert "5d_deep_probe" in cli

@@ -210,6 +210,21 @@ def test_build_contract_summary_still_required(build_text):
     )
 
 
+def test_build_contract_requires_api_docs(build_text):
+    contract = contracts.parse("vg:build")
+    must_write = contracts.normalize_must_write(contract.get("must_write") or [])
+    paths = [item["path"] for item in must_write]
+    assert any("API-DOCS.md" in p for p in paths), (
+        f"API-DOCS.md missing from must_write: {paths}"
+    )
+    assert any("INTERFACE-STANDARDS.md" in p for p in paths), (
+        f"INTERFACE-STANDARDS.md missing from must_write: {paths}"
+    )
+    assert any("INTERFACE-STANDARDS.json" in p for p in paths), (
+        f"INTERFACE-STANDARDS.json missing from must_write: {paths}"
+    )
+
+
 def test_build_does_not_claim_complete_before_crossai(build_text):
     """Step 9 must not tell users the build is complete before CrossAI runs."""
     step9 = _extract_step(build_text, "9_post_execution")
@@ -217,6 +232,21 @@ def test_build_does_not_claim_complete_before_crossai(build_text):
     assert "build is NOT complete yet" in step9
     assert "Do not claim /vg:build PASS until step 12 run-complete succeeds" in step9
     assert "Build complete for Phase" not in step9
+
+
+def test_step9_generates_and_verifies_api_docs(build_text):
+    step9 = _extract_step(build_text, "9_post_execution")
+    assert "generate-api-docs.py" in step9
+    assert "verify-api-docs-coverage.py" in step9
+    assert "API-DOCS.md" in step9
+    assert "--interface-standards" in step9
+    assert "INTERFACE-STANDARDS.json" in step9
+
+
+def test_build_validates_interface_standards(build_text):
+    assert "generate-interface-standards.py" in build_text
+    assert "verify-interface-standards.py" in build_text
+    assert "<interface_standards_context>" in build_text
 
 
 def test_build_completed_event_emitted_after_crossai_step(build_text):
