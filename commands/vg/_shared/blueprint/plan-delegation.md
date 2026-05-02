@@ -1,24 +1,166 @@
 # blueprint plan delegation contract (vg-blueprint-planner subagent)
 
-## Input
+This file contains the prompt template the main agent passes to
+`Agent(subagent_type="vg-blueprint-planner", prompt=...)`.
 
-Pass to `Agent(subagent_type="vg-blueprint-planner", prompt={...})`:
+Read `plan-overview.md` for orchestration order (pre-spawn setup,
+post-spawn validation). This file describes ONLY the spawn payload.
+
+---
+
+## Input contract (the JSON envelope)
 
 ```json
 {
   "phase_dir": "${PHASE_DIR}",
+  "phase_number": "${PHASE_NUMBER}",
   "context_path": "${PHASE_DIR}/CONTEXT.md",
+  "specs_path": "${PHASE_DIR}/SPECS.md",
   "interface_standards_path": "${PHASE_DIR}/INTERFACE-STANDARDS.md",
+  "graphify_brief": "${PHASE_DIR}/.graphify-brief.md",
+  "deploy_lessons_brief": "${PHASE_DIR}/.deploy-lessons-brief.md",
   "design_refs": [
     "${PHASE_DIR}/UI-SPEC.md",
-    "${PHASE_DIR}/UI-MAP.md"
+    "${PHASE_DIR}/UI-MAP.md",
+    "${PHASE_DIR}/VIEW-COMPONENTS.md"
   ],
   "must_cite_bindings": [
     "CONTEXT:decisions",
     "INTERFACE-STANDARDS:error-shape"
-  ]
+  ],
+  "config": {
+    "profile": "${PROFILE}",
+    "graphify_active": "${GRAPHIFY_ACTIVE}",
+    "context_injection_mode": "${CONFIG_CONTEXT_INJECTION_MODE:-full}"
+  }
 }
 ```
+
+---
+
+## Prompt template
+
+The main agent renders the template below (substituting `${...}` from
+its environment) and passes it as the `prompt` argument.
+
+````
+<vg_planner_rules>
+@.claude/commands/vg/_shared/vg-planner-rules.md
+</vg_planner_rules>
+
+<bootstrap_rules>
+${BOOTSTRAP_RULES_BLOCK}
+</bootstrap_rules>
+
+<graphify_brief>
+@${PHASE_DIR}/.graphify-brief.md
+</graphify_brief>
+
+<deploy_lessons>
+@${PHASE_DIR}/.deploy-lessons-brief.md (if exists — v1.14.0+ C.5)
+</deploy_lessons>
+
+<specs>
+@${PHASE_DIR}/SPECS.md
+</specs>
+
+<context>
+@${PHASE_DIR}/CONTEXT.md
+</context>
+
+<architecture_context>
+# FOUNDATION §9 Architecture Lock (injected if §9 exists).
+# Authoritative architecture contract — every plan MUST respect:
+# §9.1 Tech stack (no substitutions without /vg:project --update)
+# §9.2 Module boundary (dependency direction rules)
+# §9.3 Folder convention (route layout, test colocation)
+# §9.4 Cross-cutting concerns (logging, error handling, async pattern)
+# §9.5 Security baseline (session/identity + server hardening rules)
+# §9.6 Performance baseline (p95 per tier, cache, bundle budget)
+# §9.7 Testing baseline (runner, E2E framework, coverage)
+# §9.8 Model-portable code style (imports, exports, naming, idioms)
+# Plans MUST cite F-XX decisions when deviating; unreferenced deviation = drift.
+@${PLANNING_DIR:-.vg}/FOUNDATION.md (section 9 only — verify-foundation-architecture.py enforces presence)
+</architecture_context>
+
+<security_test_plan>
+# SECURITY-TEST-PLAN.md (injected if exists). Drives DAST severity gate
+# + compliance control mapping per risk_profile.
+@${PLANNING_DIR:-.vg}/SECURITY-TEST-PLAN.md (if exists)
+</security_test_plan>
+
+<contracts>
+@${PHASE_DIR}/API-CONTRACTS.md (if exists)
+</contracts>
+
+<goals>
+@${PHASE_DIR}/TEST-GOALS.md (if exists)
+</goals>
+
+<config>
+profile: ${PROFILE}
+typecheck_cmd: ${config.build_gates.typecheck_cmd}
+contract_format: ${config.contract_format.type}
+phase: ${PHASE_NUMBER}
+phase_dir: ${PHASE_DIR}
+graphify_active: ${GRAPHIFY_ACTIVE}
+</config>
+
+Create PLAN.md for phase ${PHASE_NUMBER}. Follow vg-planner-rules exactly.
+
+GRAPHIFY USAGE (when graphify_active=true):
+- graphify_brief lists god nodes + existing symbols + sibling files.
+- For EVERY task touching code, set <edits-*> attributes (REQUIRED, not optional)
+  so the post-plan caller-graph script (step 2a5) can compute blast radius.
+- When task touches a god node listed in brief, prefix description with
+  "BLAST-RADIUS: god node — ripple to N callers expected" and include
+  mitigation note (gradual rollout / feature flag / regression suite).
+- When task lists an endpoint in <edits-endpoint>, check brief's existing
+  symbols table — if found, mark as REUSED-MODIFY not NEW-CREATE.
+
+DEPLOY_LESSONS USAGE (when brief exists):
+- Service-specific lessons → reference DIRECTLY in task description for
+  ORG dimensions 3/4/6. Example: "Rebuild incremental tsc (Phase 7.12
+  lesson: force --skip-lib-check if node_modules freshly cleared)".
+- Env vars → tasks adding new var MUST follow reload/rotation/storage
+  format established in ENV-CATALOG (90-day vault for secrets, config-
+  stable for URLs, tuning-knob for TTL/cache).
+- No lessons relevant → ignore block (OK).
+
+CONTEXT-REFS USAGE (Phase C v2.5 — context_injection.mode: scoped):
+When config.context_injection.mode is "scoped" (or phase_number >= phase_cutover),
+each task MUST include a <context-refs> element listing the specific
+decision IDs from CONTEXT.md that the executor needs. Example:
+
+## Task 03: Add POST /api/v1/sites handler
+<context-refs>P7.14.D-02,P7.14.D-05</context-refs>
+<file-path>apps/api/src/modules/sites/routes.ts</file-path>
+
+Rules for picking refs:
+- Only cite decisions that directly constrain the task's implementation.
+- Include D-XX for auth model, schema format, error handling idiom, naming.
+- EXCLUDE decisions about other subsystems the task doesn't touch.
+- If task is infra-only (Ansible, env) → cite infra/env decisions only.
+- Maximum 5 refs per task (more = over-citing; executor gets noise).
+
+When mode is "full" (phases 0-13), <context-refs> is optional.
+
+OUTPUT: Write ${PHASE_DIR}/PLAN.md with waves, task attributes, goal
+coverage. Each task MUST contain `<!-- vg-binding: <id> -->` HTML comments
+for each citation in must_cite_bindings.
+
+Then return JSON to main agent:
+
+{
+  "path": "${PHASE_DIR}/PLAN.md",
+  "sha256": "<sha256sum of PLAN.md>",
+  "summary": "<one-paragraph plan summary>",
+  "bindings_satisfied": ["CONTEXT:decisions", "INTERFACE-STANDARDS:error-shape"],
+  "warnings": ["<any non-blocking issues>"]
+}
+````
+
+---
 
 ## Output (subagent returns)
 
@@ -32,14 +174,17 @@ Pass to `Agent(subagent_type="vg-blueprint-planner", prompt={...})`:
 }
 ```
 
-## Main agent post-spawn validation
+---
 
-1. Open returned `path`, recompute sha256, assert match.
-2. Confirm PLAN.md ≥ 500 bytes (content_min_bytes).
-3. Confirm `bindings_satisfied` covers required `must_cite_bindings`.
-4. If validation fails, retry up to 2 times, then escalate AskUserQuestion.
+## Failure modes
 
-## Failure mode
+If subagent returns error JSON, do NOT mark step done. Re-spawn after
+fixing input.
 
-If subagent returns error JSON (missing input, ORG 6-dim violation, etc.),
-do NOT mark step done. Re-spawn after fixing input.
+| Error | Cause | Action |
+|---|---|---|
+| `{"error": "missing_input", "field": "<name>"}` | Required input file missing | Verify file exists; re-spawn |
+| `{"error": "org_6dim_incomplete", "missing": [...]}` | Plan missing critical ORG dim (Deploy/Rollback) | Manual planner intervention; re-spawn |
+| `{"error": "binding_unmet", "missing": [...]}` | Required citation not in PLAN.md | Re-spawn with explicit binding instruction |
+
+Retry up to 2 times, then escalate via `AskUserQuestion` (Layer 3).
