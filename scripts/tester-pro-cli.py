@@ -57,6 +57,33 @@ from runtime.tester_pro import (  # noqa: E402
     reverse_index,
 )
 
+# RFC v9 D25/D27/D28 wires — pattern catalog feeds strategy edge-cases,
+# content_depth gates anti-skim, block_aggregator collapses repetitive
+# gate failures. Imported here so tester-pro-cli is the single entry point
+# for tester pro discipline (no orphan modules from D17–D28 batch).
+try:
+    from runtime.pattern_catalog import (  # noqa: E402,F401
+        Pattern,
+        load_catalog as load_pattern_catalog,
+        match_patterns,
+        needs_web_augment,
+    )
+    from runtime.content_depth import (  # noqa: E402,F401
+        word_count as content_word_count,
+        cross_reference as content_cross_reference,
+        edge_case_substance,
+        aggregate_failures as content_aggregate_failures,
+    )
+    from runtime.block_aggregator import (  # noqa: E402,F401
+        BlockInstance,
+        AggregatedBlock,
+        aggregate as aggregate_blocks,
+        should_aggregate,
+    )
+    HAS_RFC9_HELPERS = True
+except ImportError:
+    HAS_RFC9_HELPERS = False
+
 
 # ─── Phase resolution ──────────────────────────────────────────────
 
