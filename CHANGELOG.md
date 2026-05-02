@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.48.1 — orchestrator subprocess crash fix (PR #99) + matrix-evidence-link surface-probe schema gap closure (Issue #85)
+
+Patch release — 1 hotfix from PrintwayV3 dogfood (PR #99) + 1 deferred schema-gap fix (Issue #85, deferred since v2.47.1).
+
+### Fixed (PR #99) — `vg-orchestrator` `run-complete` `NameError: subprocess`
+- `scripts/vg-orchestrator/__main__.py:_verify_artifact_run_binding` used `subprocess.check_output` to resolve git repo root for evidence-manifest verification, but only imported `hashlib`/`json`/`Path` function-locally — never `subprocess`. Whenever an evidence-manifest binding was present (any `must_write` artifact bound to the run), `run-complete` crashed with `NameError: name 'subprocess' is not defined`.
+- Cascade impact: `vg-verify-claim.py` stop hook re-fires forever because the previous run never closed → user sees the same red BLOCK message at every prompt until manually `run-abort`.
+- Fix: add `import subprocess` to the function-local imports block alongside the existing `hashlib` / `json` / `Path`. One-line change. No behavior change other than not crashing.
+- Discovered via PrintwayV3 dogfood (`/vg:review 3.2` re-verification, 2026-05-02).
+- Credit: PR #99 from @vietnhprintway (commit `feab9f3` on `fix/orchestrator-subprocess-import`).
+
+### Fixed (Issue #85) — matrix-evidence-link surface-probe schema gap
+- `verify-matrix-evidence-link.py` only inspects RUNTIME-MAP `goal_sequences[]` to verify matrix Status. Backend goals (surface ∈ {api, data, integration, time-driven}) get probed via `surface-probe.sh` during Phase 4a and their results land in `.surface-probe-results.json` — NOT in RUNTIME-MAP. Without this fix, matrix Status=READY for a backend goal looked "ungrounded" to the validator and BLOCKed review. PrintwayV3 Phase 3.2 dogfood: 32 non-UI goals (13 api + 7 data + 7 integration + 5 time-driven) flagged as `matrix_status_without_runtime_sequence` despite legitimate probe verification.
+- Fix path chosen: **option (a)** from #85 — single-file ground truth. New script `scripts/backfill-surface-probe-runtime.py` reads `.surface-probe-results.json` after Phase 4a writes it and merges synthetic `goal_sequences[gid]` entries into RUNTIME-MAP.json. Validator continues to read only RUNTIME-MAP — no validator change needed.
+- Synthetic entry shape: `{synthetic: true, source: "surface_probe", surface, result, evidence_ref: ".surface-probe-results.json#G-XX", evidence_text, steps: [{do: "probe", target: "surface-probe:<surface>", evidence: {source: "surface_probe", evidence_ref: "..."}}]}`.
+- Status mapping: `READY → "passed"`, `BLOCKED → "blocked"`, `INFRA_PENDING → "infra_pending"`, `UNREACHABLE → "unreachable"`. `SKIPPED` produces no entry (falls through to NOT_SCANNED branch as documented).
+- Idempotent: re-runs overwrite synthetic entries by gid; real browser-recorded sequences (no `synthetic: true` flag) are NEVER overwritten — defended via explicit guard in `merge_synthetic`.
+- Wired into `commands/vg/review.md` Phase 4a immediately after `.surface-probe-results.json` write, so every `/vg:review` run that produces probe results auto-backfills RUNTIME-MAP.
+- Verified end-to-end against fixture: 4 status types (READY/BLOCKED/INFRA_PENDING/SKIPPED) handled correctly; real entry G-99 preserved untouched on rerun.
+
+### Internal
+- VERSION + VGFLOW-VERSION → 2.48.1 (patch — 1 hotfix + 1 schema-gap closure, no new feature).
+- New script: `scripts/backfill-surface-probe-runtime.py` (~220 lines, AST-validated, idempotent).
+- 28 targeted tests pass (test_profile_aware_contracts 10/10 + test_phaseP_real_verification 18/18).
+- Codex skill mirrors regenerated via `bash sync.sh --no-global` (78 changes, including .claude/scripts/backfill-surface-probe-runtime.py + updated review.md).
+- Issue #85 closed (deferred since v2.47.1; workaround via `migrate-backend-surface-probe.py` shipped in PR #86 / v2.48.0; option (a) closes the upstream schema gap once and for all).
+
 ## v2.48.0 — RFC v9 follow-up (PR #86) + 3 dogfood-found phase-profile/CRLF fixes (Issues #88 #89 #90)
 
 Mixed feature + patch release. **PR #86** (RFC v9 follow-up: fail-closed build truthcheck + OpenAPI evidence gate, held in v2.47.x because of bypass-test conflicts) merged green. On top of it, 3 new dogfood reports from PrintwayV3 surfaced after #87 was patched: 2 in `phase-profile.sh` migration detection, 1 in config-loader CRLF handling. Issues #91-#98 were filed at the same time but were already addressed by PR #86 / v2.47.1 / v2.47.2 — they are closed as "fixed in this release" without code changes (see Triage below).
