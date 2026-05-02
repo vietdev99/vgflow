@@ -79,3 +79,30 @@ glance-scan run progress without parsing prose. GSD-style chip UX.
 DO NOT skip narration to "save bash calls" — UX consistency matters more
 than 1 bash call savings. Hook does not enforce this convention; it is
 operator courtesy.
+
+## Blueprint artifact convention (R2 — downstream consumption contract)
+
+Blueprint writes 3-layer artifacts: per-task/endpoint/goal split (Layer 1)
++ index files (Layer 2) + flat concat (Layer 3, legacy compat).
+
+**Downstream commands (build, test, review, accept, roam) MUST prefer
+`vg-load` over flat read.** Direct `cat $PHASE_DIR/{PLAN,API-CONTRACTS,
+TEST-GOALS}.md` is forbidden in AI-context paths (executor capsules,
+agent prompts, codegen inputs) because the flat file enters AI context
+as a 30-100KB+ blob and triggers skim. Use:
+
+  vg-load --phase N --artifact plan --task NN
+  vg-load --phase N --artifact contracts --endpoint <slug>
+  vg-load --phase N --artifact goals --goal G-NN
+
+Deterministic transforms (grep validators, mtime checks, surface scans)
+MAY keep flat reads — they don't enter AI context. Per-command audit
+docs under `docs/audits/` are the canonical KEEP-FLAT classification
+(e.g., `docs/audits/2026-05-04-build-flat-vs-split.md`).
+
+Threshold: flat artifact > 30 KB without split subdir triggers a WARN
+(advisory, not block) via `scripts/validators/verify-blueprint-split-size.py`.
+30 KB ≈ 7K tokens — empirical AI-skim boundary.
+
+Backward compat: `vg-load --full` falls back to flat read for legacy
+phases that pre-date the per-task split.
