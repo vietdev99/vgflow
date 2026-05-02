@@ -98,9 +98,9 @@ CHECKLIST_DEFS = {
             "2b5d_expand_from_crud_surfaces", "2b7_flow_detect",
         ]),
         ("blueprint_verify", "Verification Gates", [
-            "2c_verify", "2c_verify_plan_paths", "2c1c_verify_utility_reuse",
-            "2c2_compile_check", "2d_validation_gate",
-            "2f_test_type_coverage_gate", "2g_goal_grounding_gate",
+            "2c_verify", "2c_verify_plan_paths", "2c_utility_reuse",
+            "2c_compile_check", "2d_validation_gate", "2d_crossai_review",
+            "2d_test_type_coverage", "2d_goal_grounding",
         ]),
         ("blueprint_close", "Reflection And Complete", [
             "2e_bootstrap_reflection", "3_complete",
@@ -244,6 +244,43 @@ def _step_to_checklist(checklists: list[dict]) -> dict[str, str]:
     return out
 
 
+def _build_hierarchical_projection(checklists: list[dict]) -> list[dict]:
+    """Flat list of N=len(groups)+len(steps) items for native TodoWrite hierarchy.
+
+    Per group: 1 header item + N sub-step items (prefixed with "  ↳").
+    Native TodoWrite shows all items in flat list — prefix simulates nesting.
+
+    Each item:
+      - kind: "group" | "step"
+      - id: marker name (group_id for headers, step_id for steps)
+      - parent: group_id (for steps; None for groups)
+      - title: visible text in TodoWrite (group emoji + count, step ↳ name)
+      - status: "pending" (initial)
+    """
+    items: list[dict] = []
+    for c in checklists:
+        sub_count = len(c.get("items") or [])
+        items.append({
+            "kind": "group",
+            "id": c["id"],
+            "parent": None,
+            "title": f"📋 {c['title']} ({sub_count} step{'s' if sub_count != 1 else ''})",
+            "status": "pending",
+        })
+        for step in c.get("items") or []:
+            items.append({
+                "kind": "step",
+                "id": step,
+                "parent": c["id"],
+                # Raw step ID is the marker name + already user-recognizable
+                # (e.g. 2b6c_view_decomposition). Avoid _humanize() mangling
+                # alphanumeric IDs into "2 B 6 C View Decomposition".
+                "title": f"  ↳ {step}",
+                "status": "pending",
+            })
+    return items
+
+
 def _emit_event(
     command: str,
     phase: str,
@@ -329,8 +366,9 @@ def _write_contract(
         }
         for step in steps
     ]
+    projection_items = _build_hierarchical_projection(checklists)
     contract = {
-        "schema": "native-tasklist.v1",
+        "schema": "native-tasklist.v2",
         "run_id": run_id,
         "command": command,
         "phase": phase,
@@ -338,15 +376,18 @@ def _write_contract(
         "mode": mode,
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "projection_required": True,
+        "projection_mode": "hierarchical",
         "lifecycle": {
             "projection_mode": "replace-on-start",
             "close_on_complete": True,
             "clear_strategy": "empty-list-or-completed-sentinel",
         },
         "checklists": checklists,
+        "projection_items": projection_items,
+        "projection_item_count": len(projection_items),
         "native_adapters": {
-            "claude": "TodoWrite/native tasklist (TaskCreate/TaskUpdate if exposed)",
-            "codex": "native tasklist/plan UI",
+            "claude": "TodoWrite with one item per projection_items entry (group headers + sub-steps with ↳ prefix)",
+            "codex": "native tasklist/plan UI — same hierarchy",
             "fallback": "vg-orchestrator run-status --pretty",
         },
         "items": items,
@@ -381,25 +422,26 @@ def _print_tasklist(
     steps: list[str],
     checklists: list[dict],
 ) -> None:
+    projection_items = _build_hierarchical_projection(checklists)
     print("")
     print("━" * 78)
     mode_label = f" — Mode {mode}" if mode else ""
     print(f"  {command} — Phase {phase} — Profile {profile}{mode_label}")
     print(f"  Taskboard: {len(steps)} step(s)")
-    print(f"  Checklists: {len(checklists)} group(s)")
-    for checklist in checklists:
-        print(f"   - {checklist['id']}: {checklist['title']} ({len(checklist['items'])} step(s))")
+    print(f"  Checklists: {len(checklists)} group(s) → {len(projection_items)} projection items")
     print("━" * 78)
-    print(f"  {len(steps)} steps to execute:")
+    print(f"  TodoWrite hierarchical projection ({len(projection_items)} items):")
     print("━" * 78)
-    for i, step in enumerate(steps, 1):
-        state = "[>]" if i == 1 else "[ ]"
-        print(f"  {i:2d}. {step} {state}")
-        print(f"      {_humanize(step)}")
+    for item in projection_items:
+        marker = "📋" if item["kind"] == "group" else "  "
+        print(f"  [ ] {item['title']}")
     print("━" * 78)
-    print("  Markers required: .step-markers/{name}.done")
-    print("  Native task UI projection required before execution.")
-    print("  Claude adapter: TodoWrite one item per checklist group.")
+    print("  Markers required: .step-markers/{name}.done (per sub-step, NOT group)")
+    print("  Native task UI projection REQUIRED before execution.")
+    print("  Claude adapter: TodoWrite — one item per projection_items entry")
+    print("  (6 group headers + N sub-steps with ↳ prefix). Mark sub-steps")
+    print("  in_progress/completed individually. Group header marks completed")
+    print("  ONLY when all its sub-steps are completed.")
     print("  Tasklist lifecycle: replace-on-start; close-on-complete.")
     print("  Missing marker at run end = runtime contract violation.")
     print("━" * 78)

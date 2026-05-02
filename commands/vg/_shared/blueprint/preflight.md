@@ -307,36 +307,50 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 ## STEP 1.4 — create task tracker (create_task_tracker)
 
-**Bind native tasklist to the blueprint checklist contract.**
+**Bind native tasklist to blueprint hierarchical projection.**
 
-Use the `tasklist-contract.json` emitted at session start. It contains coarse
-checklists (`blueprint_preflight`, `blueprint_design`, `blueprint_plan`,
-`blueprint_contracts`, `blueprint_verify`, `blueprint_close`) plus filtered step IDs.
+`tasklist-contract.json` (schema `native-tasklist.v2`) contains:
+- `checklists[]` — 6 coarse groups (preflight, design, plan, contracts, verify, close)
+- `projection_items[]` — flat list of N items: 6 group headers + per-group sub-steps
+  (each sub-step prefixed with `  ↳`). This is what TodoWrite projects.
 
 <HARD-GATE>
-You MUST IMMEDIATELY call TodoWrite with one item per checklist group AFTER
-the bash below runs. Do NOT continue without TodoWrite — the PreToolUse Bash
-hook will block all subsequent step-active calls until signed evidence exists
-at `.vg/runs/<run_id>/.tasklist-projected.evidence.json`.
+You MUST IMMEDIATELY call TodoWrite AFTER the bash below runs. Do NOT continue
+without TodoWrite — the PreToolUse Bash hook will block all subsequent
+step-active calls until signed evidence exists at
+`.vg/runs/<run_id>/.tasklist-projected.evidence.json`.
 
 The PostToolUse TodoWrite hook auto-writes that signed evidence after your
 TodoWrite call.
 </HARD-GATE>
 
 Required behavior:
-1. Project every checklist group to native task UI per TASKLIST_POLICY.
-   On Claude Code, the first action in this step is a `TodoWrite` call.
-2. Call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
-3. Keep `.step-markers/*.done` as the durable enforcement signal.
-4. At each sub-step, set the matching task active before work and completed
-   after the marker is written.
+1. Read `.vg/runs/<run_id>/tasklist-contract.json` → consume `projection_items[]`.
+2. Call `TodoWrite` with one todo per `projection_items[]` entry — full hierarchy
+   (group headers + sub-steps with `↳` prefix). Use the entry's `title` verbatim
+   as todo `content`.
+3. Call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
+4. Keep `.step-markers/*.done` as the durable enforcement signal.
 
-Claude projection shape:
-- Read `.vg/runs/<run_id>/tasklist-contract.json`.
-- Replace the whole native tasklist with one visible task per `checklists[]` entry.
-- Task text starts with `{checklist.id}: {checklist.title}`.
-- Status is `pending`, `in_progress`, or `completed`.
-- At normal completion, close/clear projected tasklist per `close-on-complete`.
+Per sub-step lifecycle:
+- BEFORE sub-step work: set its sub-step todo `in_progress`. Group header
+  stays `in_progress` while ANY of its sub-steps is pending/active.
+- AFTER `mark-step` writes marker: set sub-step todo `completed`.
+- When ALL sub-steps in a group are `completed`: set group header todo `completed`.
+- On run-complete: clear projected tasklist per `close-on-complete`.
+
+Example projection for vg:blueprint web-fullstack (32 items):
+```
+[ ] 📋 Blueprint Preflight (5 steps)
+[ ]   ↳ 0_design_discovery
+[ ]   ↳ 0_amendment_preflight
+[ ]   ↳ 1_parse_args
+[ ]   ↳ create_task_tracker
+[ ]   ↳ 2_verify_prerequisites
+[ ] 📋 Design Grounding (4 steps)
+[ ]   ↳ 2_fidelity_profile_lock
+... (continues for 6 groups, 26 sub-steps total)
+```
 
 ```bash
 vg-orchestrator step-active create_task_tracker
