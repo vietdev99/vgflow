@@ -1,1 +1,175 @@
-# preflight (placeholder — content lands in subsequent task)
+# Scope preflight (STEP 1)
+
+> Imperative ref — follow each section in order. DO NOT skip any.
+
+## 1. Parse args + load config
+
+```bash
+SKIP_CROSSAI=false
+AUTO_MODE=false
+UPDATE_MODE=false
+DEEPEN_DECISION=""
+
+for arg in $ARGUMENTS; do
+  case "$arg" in
+    --skip-crossai) SKIP_CROSSAI=true ;;
+    --auto)         AUTO_MODE=true ;;
+    --update)       UPDATE_MODE=true ;;
+    --deepen=*)     DEEPEN_DECISION="${arg#*=}" ;;
+    --override-reason=*) OVERRIDE_REASON="${arg#*=}" ;;
+    *)              PHASE_NUMBER="$arg" ;;
+  esac
+done
+
+# Mutual-exclusion gates
+if [ "$UPDATE_MODE" = "true" ] && [ "$AUTO_MODE" = "true" ]; then
+  echo "⛔ --update incompatible with --auto" >&2; exit 1
+fi
+if [ -n "$DEEPEN_DECISION" ] && [ "$AUTO_MODE" = "true" ]; then
+  echo "⛔ --deepen incompatible with --auto" >&2; exit 1
+fi
+if [ "$SKIP_CROSSAI" = "true" ] && [ -z "${OVERRIDE_REASON:-}" ]; then
+  echo "⛔ --skip-crossai requires --override-reason=<text>" >&2; exit 1
+fi
+
+# Config load (exports PLANNING_DIR, PHASES_DIR, PROFILE, REPO_ROOT)
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/config-loader.md" 2>/dev/null || \
+  source ".claude/commands/vg/_shared/config-loader.md"
+
+PHASE_DIR="${PHASES_DIR}/${PHASE_NUMBER}"
+[ -d "$PHASE_DIR" ] || { echo "⛔ Phase dir missing: $PHASE_DIR — check ROADMAP.md" >&2; exit 1; }
+```
+
+## 2. Run-start (registers session for Stop hook)
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start \
+    vg:scope "${PHASE_NUMBER}" "${ARGUMENTS}" || {
+  echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2
+  exit 1
+}
+```
+
+## 3. SPECS.md gate
+
+```bash
+[ -f "${PHASE_DIR}/SPECS.md" ] || {
+  echo "⛔ SPECS.md missing — run /vg:specs ${PHASE_NUMBER} first" >&2
+  exit 1
+}
+```
+
+## 4. Phase profile detection (short-circuit for non-feature profiles)
+
+```bash
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/phase-profile.sh" 2>/dev/null || true
+if type -t detect_phase_profile >/dev/null 2>&1; then
+  PHASE_PROFILE=$(detect_phase_profile "$PHASE_DIR")
+  phase_profile_summarize "$PHASE_DIR" "$PHASE_PROFILE"
+
+  case "$PHASE_PROFILE" in
+    infra|hotfix|bugfix|migration|docs)
+      echo "ℹ Phase profile='${PHASE_PROFILE}' — scope skip (non-feature)."
+      if [ ! -f "${PHASE_DIR}/CONTEXT.md" ]; then
+        ${PYTHON_BIN} - "${PHASE_DIR}/CONTEXT.md" "$PHASE_NUMBER" "$PHASE_PROFILE" <<'PY'
+import sys
+from datetime import datetime, timezone
+out, phase, profile = sys.argv[1:]
+content = f"""# Phase {phase} — Scope context ({profile} profile)
+
+**Profile:** {profile}
+**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+**Scope mode:** short-circuit (non-feature)
+
+## Decisions
+
+_Non-feature profile — execution details live in SPECS.md._
+
+## Next
+
+Run `/vg:blueprint {phase}`.
+"""
+open(out, 'w', encoding='utf-8').write(content)
+PY
+      fi
+      echo "✓ Scope short-circuit done. Next: /vg:blueprint ${PHASE_NUMBER}"
+      exit 0
+      ;;
+    feature|*) ;;  # default: 5 rounds
+  esac
+fi
+```
+
+## 5. Existing CONTEXT.md handling
+
+```
+AskUserQuestion:
+  header: "Existing Scope"
+  question: "CONTEXT.md already exists for Phase {N} ({decision_count} decisions). Action?"
+  options:
+    - "Update — re-discuss and enrich existing scope"
+    - "View — show current CONTEXT.md contents"
+    - "Skip — proceed to /vg:blueprint"
+```
+
+- "Update" → continue (will overwrite CONTEXT.md, APPEND to DISCUSSION-LOG.md)
+- "View" → display contents, then re-ask
+- "Skip" → exit with `Next: /vg:blueprint ${PHASE_NUMBER}`
+
+## 6. Inject codebase-map (silent context)
+
+```bash
+[ -f "${PLANNING_DIR}/codebase-map.md" ] && \
+  echo "✓ codebase-map.md available — god nodes/communities ready for discussion"
+```
+
+## 7. Read SPECS.md + update PIPELINE-STATE
+
+Extract Goal / In-scope / Out-of-scope / Constraints / Success criteria from SPECS.md. Hold in memory for all 5 rounds.
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/pipeline-state-update.py \
+  --phase "${PHASE_NUMBER}" --step scope --status in_progress 2>/dev/null || true
+```
+
+## 8. Emit tasklist + sign evidence + TodoWrite (HARD-GATE)
+
+```bash
+SESSION="$(cat .vg/active-runs/$(ls .vg/active-runs/ 2>/dev/null | head -1) 2>/dev/null \
+           | python3 -c 'import sys,json; print(json.load(sys.stdin).get("session_id","unknown"))')"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${SESSION:0:8}"
+
+mkdir -p ".vg/runs/${RUN_ID}"
+
+python3 scripts/emit-tasklist.py \
+  --command vg:scope \
+  --profile "${PROFILE}" \
+  --phase "${PHASE_NUMBER}" \
+  --out ".vg/runs/${RUN_ID}/tasklist-contract.json"
+
+CONTRACT_SHA=$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" \
+  ".vg/runs/${RUN_ID}/tasklist-contract.json")
+
+python3 scripts/vg-orchestrator-emit-evidence-signed.py \
+  --out ".vg/runs/${RUN_ID}/tasklist-evidence.json" \
+  --payload "{\"contract_sha256\":\"${CONTRACT_SHA}\",\"todowrite_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+vg-orchestrator emit-event scope.tasklist_shown --phase "${PHASE_NUMBER}"
+```
+
+**THEN IMMEDIATELY** call `TodoWrite` with one todo per checklist group from `tasklist-contract.json`. The PreToolUse Bash hook BLOCKS subsequent step-active calls until TodoWrite has been called.
+
+After TodoWrite returns:
+
+```bash
+vg-orchestrator emit-event scope.native_tasklist_projected --phase "${PHASE_NUMBER}"
+```
+
+## 9. Mark step + emit started
+
+```bash
+vg-orchestrator mark-step scope 0_parse_and_validate
+vg-orchestrator emit-event scope.started --phase "${PHASE_NUMBER}"
+```
+
+Proceed to STEP 2 — Read `_shared/scope/discussion-overview.md`.
