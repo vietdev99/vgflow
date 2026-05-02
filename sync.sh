@@ -251,6 +251,28 @@ if [ "$MODE_CHECK" = "false" ]; then
 fi
 echo ""
 
+# R1a pilot: sync custom subagents + install R1a enforcement hooks into settings.json
+echo "2b-r1a. Sync R1a subagents + install R1a hooks"
+if [ -d "$SCRIPT_DIR/agents" ]; then
+  sync_tree "$SCRIPT_DIR/agents" "$TARGET_ROOT/.claude/agents" "claude-agent"
+  if [ "$MODE_CHECK" = "false" ]; then
+    chmod +x "$TARGET_ROOT/.claude/scripts/hooks/"*.sh 2>/dev/null || true
+  fi
+fi
+# Install R1a hooks into .claude/settings.json (idempotent merge).
+# Disable with VG_INSTALL_HOOKS=0 if user manages settings.json manually.
+if [ "${VG_INSTALL_HOOKS:-1}" = "1" ] && [ "$MODE_CHECK" = "false" ] \
+    && [ -f "$SCRIPT_DIR/scripts/hooks/install-hooks.sh" ]; then
+  if VG_PLUGIN_ROOT="$SCRIPT_DIR" bash "$SCRIPT_DIR/scripts/hooks/install-hooks.sh" \
+        --target "$TARGET_ROOT/.claude/settings.json" \
+        >/tmp/vgflow-r1a-hooks-install.log 2>&1; then
+    echo "  OK: R1a hooks merged into .claude/settings.json"
+  else
+    note "FAILED: R1a hook install; see /tmp/vgflow-r1a-hooks-install.log"
+  fi
+fi
+echo ""
+
 echo "2c. Ensure Playwright MCP workers"
 MCP_VALIDATOR="$SCRIPT_DIR/scripts/validators/verify-playwright-mcp-config.py"
 if [ -z "$PYTHON_BIN" ]; then
