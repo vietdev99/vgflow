@@ -454,3 +454,19 @@ This spec is round 3 (after R1 blueprint pilot and R2 build+test). Reasons:
 - Dispatch script: `scripts/spawn_recursive_probe.py` (1,303 LOC, parallel-safe)
 - Aggregator: `scripts/aggregate_recursive_goals.py`
 - Anthropic multi-agent research pattern: https://www.anthropic.com/engineering/multi-agent-research-system
+
+---
+
+## UX baseline (mandatory cross-flow)
+
+This flow MUST honor the 3 UX requirements baked into R1a blueprint pilot:
+- **Per-task artifact split** — large artifacts (PLAN, contracts, goals,
+  results) write Layer 1 per-unit + Layer 2 index + Layer 3 flat concat.
+  Consumers use `scripts/vg-load.sh` for partial loads.
+- **Subagent spawn narration** — every `Agent()` call wrapped with
+  `bash scripts/vg-narrate-spawn.sh <name> {spawning|returned|failed}` for
+  GSD-style green/cyan/red chip UX.
+- **Compact hook stderr** — success silent, block 3-line + file pointer.
+  Full diagnostic to `.vg/blocks/{run_id}/{gate_id}.md`.
+
+Source: `docs/superpowers/specs/_shared-ux-baseline.md` (full pattern + code).

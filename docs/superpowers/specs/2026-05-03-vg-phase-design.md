@@ -201,3 +201,19 @@ All blocks follow blueprint pilot §4.5. Phase-specific:
 - Inherits from: `2026-05-03-vg-blueprint-pilot-design.md`
 - Existing phase.md: `commands/vg/phase.md` (240 lines)
 - All sub-command specs (R1-R4) must add VG_PARENT_RUN_ID detection in their slim entries
+
+---
+
+## UX baseline (mandatory cross-flow)
+
+This flow MUST honor the 3 UX requirements baked into R1a blueprint pilot:
+- **Per-task artifact split** — large artifacts (PLAN, contracts, goals,
+  results) write Layer 1 per-unit + Layer 2 index + Layer 3 flat concat.
+  Consumers use `scripts/vg-load.sh` for partial loads.
+- **Subagent spawn narration** — every `Agent()` call wrapped with
+  `bash scripts/vg-narrate-spawn.sh <name> {spawning|returned|failed}` for
+  GSD-style green/cyan/red chip UX.
+- **Compact hook stderr** — success silent, block 3-line + file pointer.
+  Full diagnostic to `.vg/blocks/{run_id}/{gate_id}.md`.
+
+Source: `docs/superpowers/specs/_shared-ux-baseline.md` (full pattern + code).

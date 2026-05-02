@@ -259,3 +259,19 @@ External review by Codex (gpt-5.5) flagged 5 spec-wide issues:
 5. **State-machine validator** — Per blueprint pilot spec amendment §4.4c. Stop hook invokes `vg-state-machine-validator.py` to verify event ORDER matches expected sequence per command — beyond mere event count.
 
 Implementation plans for this command MUST incorporate all 5 corrections.
+
+---
+
+## UX baseline (mandatory cross-flow)
+
+This flow MUST honor the 3 UX requirements baked into R1a blueprint pilot:
+- **Per-task artifact split** — large artifacts (PLAN, contracts, goals,
+  results) write Layer 1 per-unit + Layer 2 index + Layer 3 flat concat.
+  Consumers use `scripts/vg-load.sh` for partial loads.
+- **Subagent spawn narration** — every `Agent()` call wrapped with
+  `bash scripts/vg-narrate-spawn.sh <name> {spawning|returned|failed}` for
+  GSD-style green/cyan/red chip UX.
+- **Compact hook stderr** — success silent, block 3-line + file pointer.
+  Full diagnostic to `.vg/blocks/{run_id}/{gate_id}.md`.
+
+Source: `docs/superpowers/specs/_shared-ux-baseline.md` (full pattern + code).
