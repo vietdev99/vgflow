@@ -337,7 +337,7 @@ fi
 
 ---
 
-## STEP 4.5 — Expand TEST-GOALS from CRUD-SURFACES (2b5d)
+## STEP 4.5 — Expand TEST-GOALS from CRUD-SURFACES (2b5d_expand_from_crud_surfaces)
 
 After TEST-GOALS.md (manual) and CRUD-SURFACES.md (resource contract) are
 written, expand goal layer with per-resource × per-operation × per-role ×
@@ -349,6 +349,8 @@ codegen consumes alongside `TEST-GOALS.md` (manual) + `TEST-GOALS-DISCOVERED.md`
 (runtime).
 
 ```bash
+vg-orchestrator step-active 2b5d_expand_from_crud_surfaces
+
 echo ""
 echo "━━━ 2b5d — Expand TEST-GOALS from CRUD-SURFACES ━━━"
 
@@ -369,15 +371,190 @@ else
     echo "  ⚠ Expansion failed (rc=${EXPAND_RC}) — codegen falls back to TEST-GOALS.md only"
   fi
 fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b5d_expand_from_crud_surfaces" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b5d_expand_from_crud_surfaces.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b5d_expand_from_crud_surfaces 2>/dev/null || true
 ```
 
 ---
 
-## STEP 4.6 — final telemetry
+## STEP 4.6 — flow detect (2b7_flow_detect, profile-gated web only)
+
+**Purpose:** Detect goal dependency chains ≥3 in TEST-GOALS.md. When found,
+auto-generate `${PHASE_DIR}/FLOW-SPEC.md` skeleton so `/vg:test` step
+5c-flow has flows to verify. Without this, multi-page state-machine bugs
+(login → create → edit → delete) slip through because per-goal tests verify
+each step independently but miss continuity failures.
+
+**Skip conditions:**
+- TEST-GOALS.md does not exist (blueprint hasn't generated goals yet)
+- Profile is `web-backend-only` / `cli-tool` / `library` (no UI flows)
+
+```bash
+vg-orchestrator step-active 2b7_flow_detect
+
+# Profile gate — skip if backend-only / non-web
+case "${PHASE_PROFILE:-feature}" in
+  web-fullstack|web-frontend-only|feature) ;;
+  *) echo "  Profile=${PHASE_PROFILE} — skip flow detect (no UI flows)"
+     mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+     (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b7_flow_detect" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b7_flow_detect.done"
+     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b7_flow_detect 2>/dev/null || true
+     return 0 2>/dev/null || true ;;
+esac
+
+if [ ! -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+  echo "  (no TEST-GOALS.md — skip flow detect)"
+else
+  echo ""
+  echo "━━━ 2b7 — FLOW-SPEC auto-detect ━━━"
+
+  # Step 1: Parse dependency graph from TEST-GOALS.md (deterministic, no AI)
+  CHAIN_OUTPUT=$(${PYTHON_BIN:-python3} - "${PHASE_DIR}/TEST-GOALS.md" <<'PYEOF'
+import sys, re, json
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding='utf-8')
+
+# Parse goals: ID, title, priority, dependencies
+goals = {}
+current = None
+for line in text.splitlines():
+    m = re.match(r'^## Goal (G-\d+):\s*(.+?)(?:\s*\(D-\d+\))?$', line)
+    if m:
+        current = m.group(1)
+        goals[current] = {'title': m.group(2).strip(), 'deps': [], 'priority': 'important'}
+        continue
+    if current:
+        dm = re.match(r'\*\*Dependencies:\*\*\s*(.+)', line)
+        if dm:
+            deps_str = dm.group(1).strip()
+            if deps_str.lower() not in ('none', 'none (root goal)', ''):
+                goals[current]['deps'] = re.findall(r'G-\d+', deps_str)
+        pm = re.match(r'\*\*Priority:\*\*\s*(\w+)', line)
+        if pm:
+            goals[current]['priority'] = pm.group(1).strip()
+
+# Build dependency chains via DFS — find all maximal chains
+def find_chains(goal_id, visited=None):
+    if visited is None:
+        visited = []
+    visited = visited + [goal_id]
+    dependents = [g for g, info in goals.items() if goal_id in info['deps'] and g not in visited]
+    if not dependents:
+        return [visited]
+    chains = []
+    for dep in dependents:
+        chains.extend(find_chains(dep, visited))
+    return chains
+
+# Root goals (no deps)
+roots = [g for g, info in goals.items() if not info['deps']]
+all_chains = []
+for root in roots:
+    all_chains.extend(find_chains(root))
+
+# Filter chains ≥3 goals (multi-step business flows)
+long_chains = [c for c in all_chains if len(c) >= 3]
+seen = set()
+unique_chains = []
+for chain in sorted(long_chains, key=len, reverse=True):
+    key = tuple(chain[:2])  # dedup by first 2 elements
+    if key not in seen:
+        seen.add(key)
+        unique_chains.append(chain)
+
+output = {
+    'total_goals': len(goals),
+    'total_chains': len(unique_chains),
+    'chains': [{'goals': c, 'length': len(c),
+                'titles': [goals[g]['title'] for g in c if g in goals]}
+               for c in unique_chains],
+    'goals': {g: info for g, info in goals.items()}
+}
+print(json.dumps(output, indent=2))
+PYEOF
+  )
+
+  CHAIN_COUNT=$(echo "$CHAIN_OUTPUT" | ${PYTHON_BIN:-python3} -c "import sys,json; print(json.load(sys.stdin)['total_chains'])" 2>/dev/null || echo "0")
+
+  if [ "$CHAIN_COUNT" -eq 0 ]; then
+    echo "Flow detect: no dependency chains ≥3 found. Skipping FLOW-SPEC generation."
+    # No FLOW-SPEC.md = /vg:test 5c-flow will skip (expected for simple phases)
+  else
+    echo "Flow detect: $CHAIN_COUNT chains ≥3 goals found. Generating FLOW-SPEC.md skeleton..."
+
+    # Bootstrap rule injection — project rules targeting blueprint fire here
+    source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+    BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint")
+    vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint" "${PHASE_NUMBER}"
+
+    # Spawn agent to generate FLOW-SPEC.md skeleton
+    # Agent(subagent_type="general-purpose", model="${MODEL_TEST_GOALS}"):
+    #   prompt:
+    #     <bootstrap_rules>
+    #     ${BOOTSTRAP_RULES_BLOCK}
+    #     </bootstrap_rules>
+    #
+    #     Generate FLOW-SPEC.md for phase ${PHASE_NUMBER}. Multi-page test flows
+    #     for the flow-runner skill.
+    #
+    #     Input — detected dependency chains:
+    #     ${CHAIN_OUTPUT}
+    #
+    #     Input — full TEST-GOALS.md:
+    #     @${PHASE_DIR}/TEST-GOALS.md
+    #
+    #     Input — API-CONTRACTS.md (for endpoint details):
+    #     @${PHASE_DIR}/API-CONTRACTS.md
+    #
+    #     RULES:
+    #     1. Each chain becomes 1 flow (ordered sequence of steps).
+    #     2. Each step maps to 1 goal in the chain.
+    #     3. Step has: action (what user does), expected (what system shows),
+    #        checkpoint (what to save for next step).
+    #     4. Use goal success criteria + mutation evidence as step expected/checkpoint.
+    #     5. Do NOT invent steps outside the chain.
+    #     6. Do NOT specify selectors/CSS classes/exact clicks — describe WHAT not HOW.
+    #     7. Flow names describe business operation: "Site CRUD lifecycle",
+    #        "Campaign create-to-launch".
+    #
+    #     Output format:
+    #     # Flow Specs — Phase {PHASE}
+    #     Generated from: TEST-GOALS.md dependency chains ≥3
+    #     Total: {N} flows
+    #
+    #     ## Flow F-01: {Business operation name}
+    #     **Chain:** {G-00 → G-01 → G-03 → G-05}
+    #     **Priority:** critical | important
+    #     **Roles:** [{roles involved}]
+    #
+    #     ### Step 1: {Action name} (G-00)
+    #     **Action:** {what user does}
+    #     **Expected:** {what system shows — from goal success criteria}
+    #     **Checkpoint:** {state to verify/save — from mutation evidence}
+    #
+    #     ## Flow Coverage
+    #     | Flow | Goals covered | Priority |
+    #
+    #     Write to: ${PHASE_DIR}/FLOW-SPEC.md
+  fi
+fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b7_flow_detect" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b7_flow_detect.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b7_flow_detect 2>/dev/null || true
+```
+
+---
+
+## STEP 4.7 — final telemetry
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event blueprint.contracts_generated --phase "${PHASE_NUMBER}" 2>/dev/null || true
 ```
 
-After all 4 markers (2b_contracts, 2b5_test_goals, 2b5a_codex, 2b5d) touched,
-return to entry SKILL.md → STEP 5 (verify).
+After all 6 markers (2b_contracts, 2b5_test_goals, 2b5a_codex,
+2b5d_expand_from_crud_surfaces, 2b7_flow_detect) touched, return to entry
+SKILL.md → STEP 5 (verify).

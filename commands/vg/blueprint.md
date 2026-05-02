@@ -40,8 +40,10 @@ runtime_contract:
     - "2b6c_view_decomposition"
     - "2b6_ui_spec"
     - "2a_plan"
+    - "2a5_cross_system_check"
     - "2b_contracts"
     - "2b5_test_goals"
+    - "2b5d_expand_from_crud_surfaces"
     - "2c_verify"
     - "2c_verify_plan_paths"
     - "2c_utility_reuse"
@@ -52,10 +54,11 @@ runtime_contract:
     - "2e_bootstrap_reflection"
     - "3_complete"
     # Profile-gated markers (only run for specified profiles).
-    # 2b7_flow_detect dropped in slim refactor (not in _shared/blueprint/design.md).
     - name: "2_fidelity_profile_lock"
       profile: "web-fullstack,web-frontend-only"
     - name: "2b6b_ui_map"
+      profile: "web-fullstack,web-frontend-only"
+    - name: "2b7_flow_detect"
       profile: "web-fullstack,web-frontend-only"
     # Flag-gated markers (skip via override flag with debt entry)
     - name: "2b5a_codex_test_goal_lane"

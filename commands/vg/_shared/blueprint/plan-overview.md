@@ -464,4 +464,115 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event blueprint.plan_written --phase "${PHASE_NUMBER}" 2>/dev/null || true
 ```
 
-After marker touched, return to entry SKILL.md → STEP 4 (contracts).
+---
+
+## STEP 3.4 — cross-system check (2a5_cross_system_check)
+
+Scan existing codebase + prior phases to detect conflicts/overlaps BEFORE
+contracts/code generation. Prevents phase isolation blindness.
+
+**5 grep checks (no AI, <10 sec) + caller graph build:**
+
+```bash
+vg-orchestrator step-active 2a5_cross_system_check
+
+API_ROUTES="${CONFIG_CODE_PATTERNS_API_ROUTES:-apps/api/src}"
+WEB_PAGES="${CONFIG_CODE_PATTERNS_WEB_PAGES:-apps/web/src}"
+
+# Check 1: Route conflicts — flag routes that already exist
+EXISTING_ROUTES=$(grep -r "router\.\(get\|post\|put\|delete\|patch\)" "$API_ROUTES" \
+  --include="*.ts" --include="*.js" -h 2>/dev/null | grep -oE "'/[^']+'" | sort -u)
+if [ -n "$EXISTING_ROUTES" ]; then
+  ROUTE_CONFLICTS=0
+  while IFS= read -r ep; do
+    [ -z "$ep" ] && continue
+    path=$(echo "$ep" | awk '{print $2}')
+    if echo "$EXISTING_ROUTES" | grep -qF "'$path'"; then
+      echo "⚠ route conflict: ${ep} — already exists in code, plan must UPDATE not CREATE"
+      ROUTE_CONFLICTS=$((ROUTE_CONFLICTS + 1))
+    fi
+  done <<< "$(grep -oE '^### (POST|GET|PUT|DELETE|PATCH) /\S+' "${PHASE_DIR}/CONTEXT.md" 2>/dev/null)"
+fi
+
+# Check 2: Schema/model field conflicts (warn-only — model overlap requires AI judgment)
+EXISTING_SCHEMAS=$(grep -r "z\.object\|Schema\|interface\s" "$API_ROUTES" \
+  --include="*.ts" --include="*.js" -l 2>/dev/null | wc -l | tr -d ' ')
+echo "Existing schema files in code: ${EXISTING_SCHEMAS}"
+
+# Check 3: Shared component impact — high-traffic imports affecting other pages
+SHARED_IMPACT=$(grep -r "import.*from.*components" "$WEB_PAGES" \
+  --include="*.tsx" --include="*.jsx" -h 2>/dev/null | sort | uniq -c | sort -rn | head -20)
+if [ -n "$SHARED_IMPACT" ]; then
+  echo "Top-20 shared component imports (touch with care):"
+  echo "$SHARED_IMPACT"
+fi
+
+# Check 4: Prior phase overlap — files this phase touches that prior SUMMARY*.md mentioned
+PRIOR_OVERLAP=""
+for summary in $(ls "${PHASES_DIR:-.vg/phases}"/*/SUMMARY*.md 2>/dev/null | tail -5); do
+  if grep -lq "$(basename ${PHASE_DIR})" "$summary" 2>/dev/null; then
+    PRIOR_OVERLAP="${PRIOR_OVERLAP}\n   - ${summary}"
+  fi
+done
+[ -n "$PRIOR_OVERLAP" ] && printf "Prior phase overlap detected:%b\n" "$PRIOR_OVERLAP"
+
+# Check 5: Database collection conflicts (mongo-style)
+COLL_HOTSPOTS=$(grep -r "collection\(\|\.find\|\.insertOne\|\.updateOne" "$API_ROUTES" \
+  --include="*.ts" --include="*.js" -h 2>/dev/null | grep -oE "'[^']+'" | sort | uniq -c | sort -rn | head -10)
+[ -n "$COLL_HOTSPOTS" ] && echo "Top collection hotspots: $COLL_HOTSPOTS"
+
+echo ""
+echo "Cross-System Check summary:"
+echo "  Route conflicts: ${ROUTE_CONFLICTS:-0}"
+echo "  Existing schema files: ${EXISTING_SCHEMAS:-0}"
+echo "  Prior phase overlap: $(echo -e "${PRIOR_OVERLAP:-}" | grep -c . || echo 0)"
+echo "  Warnings injected into PLAN.md as <!-- cross-system-warning: ... -->"
+echo ""
+echo "No BLOCK — warnings only. Planner should address each in task descriptions."
+```
+
+**Caller graph build (semantic regression — Phase 13 retro fix):**
+
+Build `.callers.json` mapping each PLAN task's `<edits-*>` symbols to all
+downstream files using them. Build step 4e consumes this; commit-msg hook
+enforces caller update or citation.
+
+```bash
+if [ "$(vg_config_get semantic_regression.enabled true)" = "true" ]; then
+  GRAPHIFY_FLAG=""
+  if [ "${GRAPHIFY_ACTIVE:-false}" = "true" ]; then
+    GRAPHIFY_FLAG="--graphify-graph $GRAPHIFY_GRAPH_PATH"
+  fi
+
+  ${PYTHON_BIN} .claude/scripts/build-caller-graph.py \
+    --phase-dir "${PHASE_DIR}" \
+    --config .claude/vg.config.md \
+    $GRAPHIFY_FLAG \
+    --output "${PHASE_DIR}/.callers.json"
+
+  CALLER_COUNT=$(jq '.affected_callers | length' "${PHASE_DIR}/.callers.json" 2>/dev/null || echo 0)
+  TOOLS_USED=$(jq -r '.tools_used | join(",")' "${PHASE_DIR}/.callers.json" 2>/dev/null || echo "")
+  echo "Semantic regression: tracked ${CALLER_COUNT} downstream callers (tools: ${TOOLS_USED})"
+
+  # Sanity: graphify active but tools_used missing 'graphify' = grep-only fallback fired
+  if [ "${GRAPHIFY_ACTIVE:-false}" = "true" ] && ! echo "$TOOLS_USED" | grep -q graphify; then
+    echo "⚠ GRAPHIFY ENRICHMENT FAILED — graph active but caller-graph used grep-only."
+    echo "  Inspect: ${PHASE_DIR}/.callers.json"
+    echo "  Run: ${PYTHON_BIN} -c 'import json; json.load(open(\"$GRAPHIFY_GRAPH_PATH\"))'"
+  fi
+fi
+```
+
+**Phase 13 retro reminder:** when planner produces 22 tasks but only 3 have
+`<edits-*>` annotations, caller script can only compute blast-radius for those
+3. Other 19 silently get zero callers — appearing safe when many have downstream
+impact. See `vg-planner-rules.md` — EVERY code-touching task MUST have ≥1
+`<edits-*>` attribute.
+
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2a5_cross_system_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2a5_cross_system_check.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2a5_cross_system_check 2>/dev/null || true
+```
+
+After 2a5 marker touched, return to entry SKILL.md → STEP 4 (contracts).
