@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.47.2 — `verify-no-no-verify` self-flagging fix (Issue #87)
+
+Critical hotfix on top of v2.47.1. `verify-no-no-verify.py` validator was self-flagging its own test fixture, gate-manifest.json, and educational comments in source — returning BLOCK with 30+ violations on a clean v2.47.1 install. This blocked every `/vg:* run-complete` because no `--skip-verify-no-no-verify` flag existed. Workaround was `vg-orchestrator run-abort` after every run.
+
+### Fixed (Issue #87)
+- **Allowlist anchored to wrong path layout**: pre-fix `^\.claude/scripts/...` regex matched only user installs, not vgflow-repo source layout. The validator's own file, its own test fixture, and `gate-manifest.json` all self-flagged when scanned from source. Now uses `(^|/)scripts/validators/...` which matches both layouts.
+- **`gate-manifest.json` allowlisted** — contains the literal `--no-verify` string inside frozen gate-block hash data (not as an executable command). Pre-fix flagged as 1 BLOCK.
+- **`tests/test_no_no_verify.py` + `scripts/tests/test_no_no_verify.py` allowlisted** — these intentionally carry `--no-verify` literals as repro fixtures.
+- **`is_in_negative_example()` extended for source-code prose**: added markers `MUST NOT`, `must not`, `Bypass:`, `bypass:`, `anti --no-verify`, `no-no-verify`, `non-negotiable`, `(already banned)`, `already banned`. Now docstrings/comments educating about the rule (e.g. `vg-orchestrator/__main__.py:2762-2766` comment "anti --no-verify bypass... Source code MUST NOT contain --no-verify", `verify-rule-cards-fresh-hook.py:29` docstring "Bypass: git commit --no-verify (already banned)") are recognized as legitimate.
+- **Source-code severity routing rewritten**: pre-fix any `--no-verify` mention in `.py`/`.sh`/`.ts` was unconditionally BLOCK. Now: negative-example marker on same line → skip; `#`/`//`/docstring comment without marker → WARN (advisory); plain code → BLOCK (real bypass intent).
+
+### Triaged
+- **Issue #85** stays open as tracker (matrix-evidence-link non-UI goals schema gap; same status as v2.47.1).
+- **PR #86** — reporter pushed an additional commit (`99d7232`: fail-closed build truthcheck + OpenAPI evidence gate) but did NOT fix the bypass-test conflict. CI still red on `test_bypass_negative.py` 7/10. Held until reporter aligns tests OR refactors run-complete to distinguish "orphan recoverable" from "no run at all" with separate exit codes.
+
+### Internal
+- Validator post-fix: WARN verdict with 2 advisory entries (was BLOCK with 30+). Pipeline `run-complete` now passes on a clean install.
+- 628 tests pass.
+- `VGFLOW-VERSION` + `VERSION` → 2.47.2 (patch — single hotfix).
+- Credit: Issue #87 from @vietnhprintway (PrintwayV3 dogfood, 2026-05-02).
+
 ## v2.47.1 — 3 dogfood-found schema-violations (Issues #82 #83 #84)
 
 Patch release fixing 3 of 4 v2.47.0 schema_violation issues filed by PrintwayV3 dogfood. Issue #85 (matrix-evidence-link non-UI goals schema gap) deferred — reporter shipped a workaround in PR #86 (currently CI-red); upstream fix is follow-up. PR #86 itself NOT merged yet — `test_bypass_negative.py` 7/10 fails because orphan-run-blocking fix changed run-complete exit code semantics, needs test alignment.
