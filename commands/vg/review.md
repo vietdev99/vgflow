@@ -210,6 +210,14 @@ Provider adapters:
 - **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text. Update the active/completed item before/after each step.
 - **Fallback:** only if the runtime exposes no native task UI, use `vg-orchestrator run-status --pretty` before and after each step and record adapter `fallback`.
 
+Lifecycle:
+- `replace-on-start`: the first native projection MUST replace any stale task
+  list from a previous workflow. Never append current review items onto a
+  previous workflow's list.
+- `close-on-complete`: before reporting success, mark all review checklist
+  items completed. Then clear the native list if supported; otherwise replace
+  it with one completed sentinel item: `vg:review phase ${PHASE_NUMBER} complete`.
+
 Mandatory binding:
 1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.
 2. Project every contract item to the runtime-native task UI before phase execution continues.
@@ -1059,7 +1067,8 @@ Per TASKLIST_POLICY, the tasklist shown by `emit-tasklist.py` is a binding contr
 
 1. Read `.vg/runs/{run_id}/tasklist-contract.json` from the current run.
 2. Project every contract item to native task UI:
-   - Claude CLI: `TodoWrite` one item per checklist group, then update the
+   - Claude CLI: `TodoWrite` replaces the whole tasklist with one item per
+     checklist group, then updates the
      same list as steps move active/completed. `TaskCreate`/`TaskUpdate` is
      acceptable only when that runtime exposes those native task tools.
    - Codex CLI: use Codex native tasklist/plan UI with the same item ids, then update items as steps move active/completed.

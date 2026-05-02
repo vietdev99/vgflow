@@ -160,6 +160,14 @@ Provider adapters:
 - **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text.
 - **Fallback:** if no native task UI is exposed, use `vg-orchestrator run-status --pretty` before/after each step and record adapter `fallback`.
 
+Lifecycle:
+- `replace-on-start`: the first native projection MUST replace any stale task
+  list from a previous workflow. Never append current build items onto a
+  previous workflow's list.
+- `close-on-complete`: before reporting success, mark all build checklist items
+  completed. Then clear the native list if supported; otherwise replace it with
+  one completed sentinel item: `vg:build phase ${PHASE_NUMBER} complete`.
+
 Mandatory binding:
 1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.
 2. Project every contract item to the runtime-native task UI before build execution continues.
@@ -486,7 +494,8 @@ checklists (`build_preflight`, `build_context`, `build_execute`,
 Before proceeding:
 1. Project every checklist group to Claude/Codex native task UI per
    TASKLIST_POLICY. On Claude Code, use `TodoWrite` unless
-   `TaskCreate`/`TaskUpdate` is the exposed native adapter.
+   `TaskCreate`/`TaskUpdate` is the exposed native adapter. This projection is
+   replace-on-start, not append.
 2. Call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
 3. Keep `.step-markers/*.done` as the durable enforcement signal.
 

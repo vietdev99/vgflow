@@ -338,6 +338,11 @@ def _write_contract(
         "mode": mode,
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "projection_required": True,
+        "lifecycle": {
+            "projection_mode": "replace-on-start",
+            "close_on_complete": True,
+            "clear_strategy": "empty-list-or-completed-sentinel",
+        },
         "checklists": checklists,
         "native_adapters": {
             "claude": "TodoWrite/native tasklist (TaskCreate/TaskUpdate if exposed)",
@@ -395,6 +400,7 @@ def _print_tasklist(
     print("  Markers required: .step-markers/{name}.done")
     print("  Native task UI projection required before execution.")
     print("  Claude adapter: TodoWrite one item per checklist group.")
+    print("  Tasklist lifecycle: replace-on-start; close-on-complete.")
     print("  Missing marker at run end = runtime contract violation.")
     print("━" * 78)
     print("")

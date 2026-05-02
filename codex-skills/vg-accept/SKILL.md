@@ -156,6 +156,14 @@ Invoke this skill as `$vg-accept`. Treat all user text after the skill name as a
 - Fallback: print `vg-orchestrator run-status --pretty`, but still emit
   `accept.native_tasklist_projected`.
 
+Lifecycle:
+- `replace-on-start`: the first native projection MUST replace any stale task
+  list from a previous workflow. Never append current accept items onto a
+  previous workflow's list.
+- `close-on-complete`: before reporting success, mark all accept checklist
+  items completed. Then clear the native list if supported; otherwise replace
+  it with one completed sentinel item: `vg:accept phase ${PHASE_NUMBER} complete`.
+
 Every checklist item and step must retain the IDs from the contract. Every
 step must call `vg-orchestrator step-active` at start and `vg-orchestrator
 mark-step accept {step}` at finish. Missing markers are a runtime contract
@@ -268,9 +276,10 @@ profile-filtered accept step to its checklist. The contract is authoritative;
 do not invent UAT gates or skip listed ones.
 
 Adapter requirements:
-- Claude Code: use `TodoWrite` once for the checklist projection, then update
-  the same todo list as gates/steps start or complete. `TaskCreate`/`TaskUpdate`
-  is acceptable only when that runtime exposes those native task tools.
+- Claude Code: use `TodoWrite` once for the checklist projection, replacing
+  the whole previous native list, then update the same todo list as gates/steps
+  start or complete. `TaskCreate`/`TaskUpdate` is acceptable only when that
+  runtime exposes those native task tools.
 - Codex CLI: use the native plan/tasklist UI or Codex adapter. Checklist IDs
   and step IDs must match `tasklist-contract.json`.
 - Fallback: print `vg-orchestrator run-status --pretty`, then continue only

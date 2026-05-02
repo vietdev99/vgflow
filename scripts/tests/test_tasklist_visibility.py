@@ -164,6 +164,12 @@ class TestCommandWiring:
             assert "tasklist-contract.json" in text, (
                 f"{cmd}.md must bind native tasklist to tasklist-contract.json"
             )
+            assert "replace-on-start" in text, (
+                f"{cmd}.md must replace stale native tasklists at workflow start"
+            )
+            assert "close-on-complete" in text, (
+                f"{cmd}.md must close/clear native tasklists at workflow completion"
+            )
 
     def test_emit_tasklist_invocation_passes_command_arg(self, cmd):
         """Invocation must pass --command vg:{cmd} matching the skill name.
@@ -212,6 +218,11 @@ def test_tasklist_shown_event_not_in_reserved_prefixes():
     # Must NOT include tasklist prefix
     assert '"tasklist"' not in reserved
     assert "tasklist_shown" not in reserved
+
+
+def test_emit_tasklist_prints_lifecycle_contract():
+    out = _emit_tasklist("vg:blueprint", "web-fullstack")
+    assert "Tasklist lifecycle: replace-on-start; close-on-complete." in out
 
 
 def _emit_tasklist(command: str, profile: str = "web-fullstack", mode: str | None = None) -> str:

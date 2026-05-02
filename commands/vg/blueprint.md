@@ -113,6 +113,14 @@ Provider adapters:
 - **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text.
 - **Fallback:** if no native task UI is exposed, use `vg-orchestrator run-status --pretty` before/after each step and record adapter `fallback`.
 
+Lifecycle:
+- `replace-on-start`: the first native projection MUST replace any stale task
+  list from a previous workflow. Never append current blueprint items onto a
+  previous workflow's list.
+- `close-on-complete`: before reporting success, mark all blueprint checklist
+  items completed. Then clear the native list if supported; otherwise replace
+  it with one completed sentinel item: `vg:blueprint phase ${PHASE_NUMBER} complete`.
+
 Mandatory binding:
 1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.
 2. Project every contract item to the runtime-native task UI before blueprint generation continues.
@@ -510,11 +518,14 @@ Required behavior:
 
 Claude projection shape:
 - Read `.vg/runs/<run_id>/tasklist-contract.json`.
-- Create one visible task per `checklists[]` entry.
+- Replace the whole native tasklist with one visible task per `checklists[]`
+  entry.
 - Task text starts with `{checklist.id}: {checklist.title}`.
 - Status is `pending`, `in_progress`, or `completed`.
 - Keep step IDs in the task note/body when the adapter supports notes; otherwise
   retain them in the visible command output and orchestrator events.
+- At normal completion, close/clear this projected tasklist per
+  `close-on-complete`.
 
 ```bash
 # R7 step marker (v1.14.4+ — enforced via 3_complete gate)

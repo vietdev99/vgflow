@@ -21,6 +21,12 @@ was replaced by a stricter contract-based rule:
 
 - Only project tasks from `.vg/runs/<run_id>/tasklist-contract.json`.
 - Do not create ad-hoc todos/tasks.
+- Use `replace-on-start`: the first native tasklist projection of a command
+  MUST replace the previous native list, not append to it.
+- Use `close-on-complete`: on normal completion, mark every current contract
+  checklist completed, then clear the native list if the runtime accepts an
+  empty list. If the runtime rejects empty lists, replace it with one completed
+  sentinel item: `vg:<command> phase <phase> complete`.
 - On Claude Code, prefer `TodoWrite` with one todo per checklist group. If the
   runtime exposes `TaskCreate`/`TaskUpdate`, that adapter is also acceptable.
 - On Codex, use the native plan/tasklist UI when available; otherwise use the
@@ -44,7 +50,9 @@ Root causes remain real:
 5. **Subagent tasklist ≠ parent tasklist** — child conversations do not reliably update parent UI.
 
 The fix is not "no native task UI"; the fix is "native task UI must be a
-projection of the harness contract and backed by markers/events."
+projection of the harness contract and backed by markers/events." A new
+workflow run always owns the full native tasklist; stale items from a prior run
+must never be carried forward.
 
 ### Use these together
 

@@ -78,6 +78,8 @@ def test_shared_lifecycle_allows_contract_backed_native_tasklist():
     assert "Native tasklist projection is REQUIRED" in text
     assert "tasklist-contract.json" in text
     assert "Do not create ad-hoc todos/tasks" in text
+    assert "replace-on-start" in text
+    assert "close-on-complete" in text
     assert "DO NOT USE TodoWrite / TaskCreate / TaskUpdate" not in text
 
 

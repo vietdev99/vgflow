@@ -255,6 +255,12 @@ Claude Code native projection: use `TodoWrite` to create these 6 visible
 pipeline tasks. If this Claude runtime exposes `TaskCreate`/`TaskUpdate`,
 that adapter is also acceptable.
 
+Lifecycle: the first native projection is `replace-on-start` and MUST replace
+any stale tasklist from a previous workflow. On normal completion, use
+`close-on-complete`: mark all phase pipeline items completed, then clear the
+native list if supported; otherwise replace it with one completed sentinel item:
+`vg:phase phase ${PHASE_NUMBER} complete`.
+
 TaskCreate/TodoWrite item: "Step 1/6: scope — extract decisions"        (activeForm: "Running scope...")
 TaskCreate/TodoWrite item: "Step 2/6: blueprint — plan + API contracts"  (activeForm: "Running blueprint...")
 TaskCreate/TodoWrite item: "Step 3/6: build — execute code"              (activeForm: "Running build...")

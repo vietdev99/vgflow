@@ -158,6 +158,14 @@ project that contract into the active AI runtime:
 - Fallback: print `vg-orchestrator run-status --pretty`, but still emit
   `test.native_tasklist_projected`.
 
+Lifecycle:
+- `replace-on-start`: the first native projection MUST replace any stale task
+  list from a previous workflow. Never append current test items onto a
+  previous workflow's list.
+- `close-on-complete`: before reporting success, mark all test checklist items
+  completed. Then clear the native list if supported; otherwise replace it with
+  one completed sentinel item: `vg:test phase ${PHASE_NUMBER} complete`.
+
 Every profile-applicable step MUST call `vg-orchestrator step-active` when it
 starts and `vg-orchestrator mark-step test {step}` when it finishes. The
 final `complete` step recomputes the profile-filtered step list and BLOCKS if
@@ -434,8 +442,9 @@ profile-filtered step to its checklist. Do not invent steps; the contract is
 authoritative.
 
 Adapter requirements:
-- Claude Code: use `TodoWrite` once for the checklist projection, then update
-  the same todo list when each checklist/step starts or completes.
+- Claude Code: use `TodoWrite` once for the checklist projection, replacing
+  the whole previous native list, then update the same todo list when each
+  checklist/step starts or completes.
   `TaskCreate`/`TaskUpdate` is acceptable only when that runtime exposes those
   native task tools.
 - Codex CLI: use the native plan/tasklist UI or Codex adapter. Checklist IDs
