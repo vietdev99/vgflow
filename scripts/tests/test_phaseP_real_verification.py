@@ -217,6 +217,7 @@ def test_review_api_precheck_requires_fresh_artifact_and_telemetry(review_text):
 
 
 def test_review_requires_native_tasklist_projection(review_text):
+    assert "TodoWrite" in review_text
     assert "TaskCreate" in review_text
     assert "TaskUpdate" in review_text
     assert 'event_type: "review.native_tasklist_projected"' in review_text

@@ -13,27 +13,44 @@ This helper fixes that via:
 3. **Stale state sweep** — detect + clean leftover `.{cmd}-state.json` from previous interrupted runs
 4. **Port sweep** — kill orphan dev servers on target port before starting new one
 
-## Narration policy (CRITICAL — read first if executing review/test/build)
+## Tasklist Projection Policy (CRITICAL — read first if executing review/test/build)
 
-**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate in pipeline commands** (`/vg:review`, `/vg:test`, `/vg:build`).
+**Native tasklist projection is REQUIRED for pipeline commands** when the
+runtime exposes a native task UI. The old blanket ban on TodoWrite/TaskCreate
+was replaced by a stricter contract-based rule:
 
-### Why we banned TodoWrite
+- Only project tasks from `.vg/runs/<run_id>/tasklist-contract.json`.
+- Do not create ad-hoc todos/tasks.
+- On Claude Code, prefer `TodoWrite` with one todo per checklist group. If the
+  runtime exposes `TaskCreate`/`TaskUpdate`, that adapter is also acceptable.
+- On Codex, use the native plan/tasklist UI when available; otherwise use the
+  fallback adapter.
+- Immediately record projection with
+  `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
+- At step start/end, update the native task UI and emit
+  `vg-orchestrator step-active` / `vg-orchestrator mark-step`.
 
-TodoWrite items persist in Claude Code's status tail box across sessions. The symptom: items like "Phase 2b-1: Navigator", "Start pnpm dev + wait health" hang for runs after the original session ended. Root causes (8 separate bugs, all real):
+### Why ad-hoc tasklists remain banned
 
-1. **Conditional policy gets skipped** — model rationalizes "I won't use TodoWrite this run" then uses it anyway
-2. **Long Task subagent (30 min) blocks updates** — orchestrator marks 3 items `in_progress`, spawns subagent, can't update until it returns; if user Ctrl+C, items stuck forever
-3. **Bash echo lands in tool result block** — only visible after Bash returns, not during 5-min runs
-4. **`session_start` banner same problem** — echo doesn't displace the status tail box
-5. **EXIT trap is bash-only** — can't call TodoWrite (model-only tool) to clear items
-6. **Subagent's TodoWrite ≠ parent UI** — Task spawns separate conversation, parent UI stays frozen
-7. **No live progress during subagent runs** — 30-min Task = 30 min of nothing visible
-8. **4 narration layers conflict** — TodoWrite, env var, echo, banner — no single source of truth
+Uncontracted TodoWrite/TaskCreate items can persist in Claude Code's status tail
+box across sessions. The symptom: items like "Phase 2b-1: Navigator" or
+"Start pnpm dev + wait health" hang for runs after the original session ended.
+Root causes remain real:
 
-### Use these instead
+1. **Conditional policy gets skipped** — model rationalizes "I won't use tasklist this run" then uses it anyway.
+2. **Long Task subagent blocks updates** — parent UI can stay frozen while subagents run.
+3. **Bash echo lands in tool result block** — useful for audit, weak for live UI.
+4. **EXIT trap is bash-only** — it cannot call model-only task tools after interruption.
+5. **Subagent tasklist ≠ parent tasklist** — child conversations do not reliably update parent UI.
+
+The fix is not "no native task UI"; the fix is "native task UI must be a
+projection of the harness contract and backed by markers/events."
+
+### Use these together
 
 | Need | Tool | Why |
 |------|------|-----|
+| Checklist/tasklist UI | `TodoWrite` or native Task adapter from `tasklist-contract.json` | Visible progress tied to the harness contract |
 | Step header user sees during run | **Markdown `## ━━━ Phase X ━━━` in your text output** between tool calls | Appears in message stream, doesn't persist after session |
 | Progress during long Bash (>30s) | **`run_in_background: true` + `BashOutput` polls** | User sees stdout live |
 | Long Task subagent (>2 min) | **1-line text BEFORE spawning + 1-line summary AFTER** | Both visible in message stream |

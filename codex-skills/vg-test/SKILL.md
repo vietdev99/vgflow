@@ -150,7 +150,9 @@ Invoke this skill as `$vg-test`. Treat all user text after the skill name as arg
 `.vg/runs/<run_id>/tasklist-contract.json` containing profile-filtered
 checklists and steps. Before any test execution beyond `create_task_tracker`,
 project that contract into the active AI runtime:
-- Claude Code: create/update native tasks with `TaskCreate` / `TaskUpdate`.
+- Claude Code: create/update native tasks with `TodoWrite` using one todo per
+  checklist group. `TaskCreate` / `TaskUpdate` is acceptable only when this
+  Claude runtime exposes those native task tools.
 - Codex CLI: use native plan/tasklist UI or the Codex adapter exposed by the
   harness; every step start/end must be visible.
 - Fallback: print `vg-orchestrator run-status --pretty`, but still emit
@@ -432,8 +434,10 @@ profile-filtered step to its checklist. Do not invent steps; the contract is
 authoritative.
 
 Adapter requirements:
-- Claude Code: use `TaskCreate` once for the checklist projection, then
-  `TaskUpdate` when each checklist/step starts or completes.
+- Claude Code: use `TodoWrite` once for the checklist projection, then update
+  the same todo list when each checklist/step starts or completes.
+  `TaskCreate`/`TaskUpdate` is acceptable only when that runtime exposes those
+  native task tools.
 - Codex CLI: use the native plan/tasklist UI or Codex adapter. Checklist IDs
   and step IDs must match `tasklist-contract.json`.
 - Fallback: print `vg-orchestrator run-status --pretty`, then continue only

@@ -62,6 +62,7 @@ def test_test_and_accept_project_native_tasklist():
         assert "tasklist-contract.json" in text
         assert "tasklist-projected" in text
         assert f"{cmd}.native_tasklist_projected" in text
+        assert "TodoWrite" in _frontmatter(text)
         assert "TaskCreate" in _frontmatter(text)
         assert "TaskUpdate" in _frontmatter(text)
 
@@ -70,6 +71,14 @@ def test_test_policy_no_longer_bans_native_tasks():
     text = _command_text("test")
     assert "DO NOT USE TodoWrite / TaskCreate / TaskUpdate" not in text
     assert "NO TaskCreate" not in text
+
+
+def test_shared_lifecycle_allows_contract_backed_native_tasklist():
+    text = (CMDS_DIR / "_shared" / "session-lifecycle.md").read_text(encoding="utf-8")
+    assert "Native tasklist projection is REQUIRED" in text
+    assert "tasklist-contract.json" in text
+    assert "Do not create ad-hoc todos/tasks" in text
+    assert "DO NOT USE TodoWrite / TaskCreate / TaskUpdate" not in text
 
 
 def test_filtered_test_steps_are_declared_as_contract_markers():

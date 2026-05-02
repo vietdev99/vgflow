@@ -251,33 +251,37 @@ Steps before `START_STEP` that have artifacts → mark as `completed`.
 The `START_STEP` itself → leave as `pending` (will be marked `in_progress` when it runs).
 
 ```
-TaskCreate: "Step 1/6: scope — extract decisions"        (activeForm: "Running scope...")
-TaskCreate: "Step 2/6: blueprint — plan + API contracts"  (activeForm: "Running blueprint...")
-TaskCreate: "Step 3/6: build — execute code"              (activeForm: "Running build...")
-TaskCreate: "Step 4/6: review — discovery + fix loop"      (activeForm: "Running review...")
-TaskCreate: "Step 5/6: test — goal verification"           (activeForm: "Running test...")
-TaskCreate: "Step 6/6: accept — human UAT"                (activeForm: "Running accept...")
+Claude Code native projection: use `TodoWrite` to create these 6 visible
+pipeline tasks. If this Claude runtime exposes `TaskCreate`/`TaskUpdate`,
+that adapter is also acceptable.
+
+TaskCreate/TodoWrite item: "Step 1/6: scope — extract decisions"        (activeForm: "Running scope...")
+TaskCreate/TodoWrite item: "Step 2/6: blueprint — plan + API contracts"  (activeForm: "Running blueprint...")
+TaskCreate/TodoWrite item: "Step 3/6: build — execute code"              (activeForm: "Running build...")
+TaskCreate/TodoWrite item: "Step 4/6: review — discovery + fix loop"      (activeForm: "Running review...")
+TaskCreate/TodoWrite item: "Step 5/6: test — goal verification"           (activeForm: "Running test...")
+TaskCreate/TodoWrite item: "Step 6/6: accept — human UAT"                (activeForm: "Running accept...")
 ```
 
 Store task IDs as: `TASK_SCOPE`, `TASK_BLUEPRINT`, `TASK_BUILD`, `TASK_REVIEW`, `TASK_TEST`, `TASK_ACCEPT`.
 
 For each step with existing artifact (before START_STEP):
 ```
-TaskUpdate: taskId={TASK_ID}, status="completed"
+TodoWrite/TaskUpdate: mark taskId={TASK_ID} status="completed"
 ```
 </step>
 
 <step name="3_execute_pipeline">
 Run steps sequentially. **For each step:**
 
-1. `TaskUpdate: taskId={TASK_ID}, status="in_progress"` — spinner shows activeForm
+1. `TodoWrite`/`TaskUpdate: taskId={TASK_ID}, status="in_progress"` — spinner shows activeForm
 2. Invoke the command via SlashCommand
 3. Check step succeeded (artifact created)
 4. If **failed** → STOP:
-   - `TaskUpdate: taskId={TASK_ID}, status="pending"` (reset, not completed)
+   - `TodoWrite`/`TaskUpdate: taskId={TASK_ID}, status="pending"` (reset, not completed)
    - Display: "Resume with `/vg:phase {phase} --from={current_step}`"
 5. If **succeeded**:
-   - `TaskUpdate: taskId={TASK_ID}, status="completed"`
+   - `TodoWrite`/`TaskUpdate: taskId={TASK_ID}, status="completed"`
    - If auto mode → proceed to next step
    - If interactive mode → pause:
      ```
@@ -297,7 +301,7 @@ Run steps sequentially. **For each step:**
      | test | accept needs *-SANDBOX-TEST.md (verdict != FAILED) | SANDBOX-TEST.md |
 
      ```bash
-     # Run before TaskUpdate completed. If block triggered, display:
+     # Run before native task completion update. If block triggered, display:
      echo "⛔ Cannot skip ${step_name} — downstream step ${next_step} requires artifacts that haven't been built:"
      echo "   Missing: ${MISSING_ARTIFACTS}"
      echo "   Options:"
@@ -307,7 +311,7 @@ Run steps sequentially. **For each step:**
      # Do NOT mark task completed. Do NOT advance.
      ```
 
-     - If prerequisites ARE satisfied (e.g., artifacts from prior manual work exist) → `TaskUpdate: taskId={NEXT_TASK_ID}, status="completed"` and move to step after.
+     - If prerequisites ARE satisfied (e.g., artifacts from prior manual work exist) → `TodoWrite`/`TaskUpdate: taskId={NEXT_TASK_ID}, status="completed"` and move to step after.
 
 **Step sequence:**
 
@@ -329,7 +333,7 @@ Before starting, assess scope complexity:
     - options:
       - "Yes — skip review (phase nhỏ, ít drift risk)"
       - "No — chạy full pipeline có review (safer)"
-  Không auto-skip. Nếu user chọn Yes → `TaskUpdate: taskId=TASK_REVIEW, status="completed"` (mark skipped + log reason to override-debt: "user-approved skip for small scope").
+  Không auto-skip. Nếu user chọn Yes → `TodoWrite`/`TaskUpdate: taskId=TASK_REVIEW, status="completed"` (mark skipped + log reason to override-debt: "user-approved skip for small scope").
 - Medium/large change → full pipeline (không hỏi, review luôn chạy)
 </step>
 

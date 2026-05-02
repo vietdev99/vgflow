@@ -152,7 +152,11 @@ Source of truth:
 3. `${PHASE_DIR}/.step-markers/...` — durable completion markers.
 
 Provider adapters:
-- **Claude CLI:** create one `TaskCreate` item per contract item; preserve each contract `id` at the start of the task title. Use `TaskUpdate` to mark the current item active before each step and completed after its marker is written.
+- **Claude CLI:** use native Claude tasklist projection. Prefer `TodoWrite`
+  with one todo per checklist group from the contract; each todo `content`
+  MUST start with the contract checklist `id`. If this Claude runtime exposes
+  `TaskCreate`/`TaskUpdate`, that adapter is also acceptable. Do not create
+  ad-hoc todos outside `tasklist-contract.json`.
 - **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text. Update the active/completed item before/after each step.
 - **Fallback:** only if the runtime exposes no native task UI, use `vg-orchestrator run-status --pretty` before and after each step and record adapter `fallback`.
 
@@ -1005,7 +1009,9 @@ Per TASKLIST_POLICY, the tasklist shown by `emit-tasklist.py` is a binding contr
 
 1. Read `.vg/runs/{run_id}/tasklist-contract.json` from the current run.
 2. Project every contract item to native task UI:
-   - Claude CLI: `TaskCreate` one item per contract item, then `TaskUpdate` as steps move active/completed.
+   - Claude CLI: `TodoWrite` one item per checklist group, then update the
+     same list as steps move active/completed. `TaskCreate`/`TaskUpdate` is
+     acceptable only when that runtime exposes those native task tools.
    - Codex CLI: use Codex native tasklist/plan UI with the same item ids, then update items as steps move active/completed.
 3. Bind the projection to orchestrator telemetry:
    ```bash

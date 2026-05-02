@@ -152,7 +152,11 @@ Source of truth:
 3. `${PHASE_DIR}/.step-markers/...` — durable completion markers.
 
 Provider adapters:
-- **Claude CLI:** create one `TaskCreate` item per contract item; preserve each contract `id` at the start of the task title. Use `TaskUpdate` to mark active/completed around each step.
+- **Claude CLI:** use native Claude tasklist projection. Prefer `TodoWrite`
+  with one todo per checklist group from the contract; each todo `content`
+  MUST start with the contract checklist `id`. If this Claude runtime exposes
+  `TaskCreate`/`TaskUpdate`, that adapter is also acceptable. Do not create
+  ad-hoc todos outside `tasklist-contract.json`.
 - **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text.
 - **Fallback:** if no native task UI is exposed, use `vg-orchestrator run-status --pretty` before/after each step and record adapter `fallback`.
 
@@ -542,11 +546,22 @@ checklists (`blueprint_preflight`, `blueprint_design`, `blueprint_plan`,
 filtered step IDs.
 
 Required behavior:
-1. Project every item to Claude/Codex native task UI per TASKLIST_POLICY.
+1. Project every checklist group to Claude/Codex native task UI per
+   TASKLIST_POLICY. On Claude Code, the first action in this step is a
+   `TodoWrite` call unless `TaskCreate`/`TaskUpdate` is the runtime's exposed
+   native adapter.
 2. Call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
 3. Keep `.step-markers/*.done` as the durable enforcement signal.
 4. At each sub-step, set the matching task active before work and completed
    after the marker is written.
+
+Claude projection shape:
+- Read `.vg/runs/<run_id>/tasklist-contract.json`.
+- Create one visible task per `checklists[]` entry.
+- Task text starts with `{checklist.id}: {checklist.title}`.
+- Status is `pending`, `in_progress`, or `completed`.
+- Keep step IDs in the task note/body when the adapter supports notes; otherwise
+  retain them in the visible command output and orchestrator events.
 
 ```bash
 # R7 step marker (v1.14.4+ — enforced via 3_complete gate)

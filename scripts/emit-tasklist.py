@@ -340,7 +340,7 @@ def _write_contract(
         "projection_required": True,
         "checklists": checklists,
         "native_adapters": {
-            "claude": "TaskCreate/TaskUpdate",
+            "claude": "TodoWrite/native tasklist (TaskCreate/TaskUpdate if exposed)",
             "codex": "native tasklist/plan UI",
             "fallback": "vg-orchestrator run-status --pretty",
         },
@@ -394,6 +394,7 @@ def _print_tasklist(
     print("━" * 78)
     print("  Markers required: .step-markers/{name}.done")
     print("  Native task UI projection required before execution.")
+    print("  Claude adapter: TodoWrite one item per checklist group.")
     print("  Missing marker at run end = runtime contract violation.")
     print("━" * 78)
     print("")

@@ -11,6 +11,7 @@ allowed-tools:
   - Grep
   - AskUserQuestion
   - Task
+  - TodoWrite
   - TaskCreate
   - TaskUpdate
 runtime_contract:
@@ -73,7 +74,9 @@ runtime_contract:
 `emit-tasklist.py` writes the authoritative profile-filtered
 `.vg/runs/<run_id>/tasklist-contract.json`. Before UAT gates continue past
 `create_task_tracker`, project that contract into the active runtime:
-- Claude Code: use `TaskCreate` / `TaskUpdate`.
+- Claude Code: use `TodoWrite` with one todo per checklist group.
+  `TaskCreate` / `TaskUpdate` is acceptable only when this Claude runtime
+  exposes those native task tools.
 - Codex CLI: use the native plan/tasklist UI or Codex adapter.
 - Fallback: print `vg-orchestrator run-status --pretty`, but still emit
   `accept.native_tasklist_projected`.
@@ -190,8 +193,9 @@ profile-filtered accept step to its checklist. The contract is authoritative;
 do not invent UAT gates or skip listed ones.
 
 Adapter requirements:
-- Claude Code: use `TaskCreate` once for the checklist projection, then
-  `TaskUpdate` as gates/steps start or complete.
+- Claude Code: use `TodoWrite` once for the checklist projection, then update
+  the same todo list as gates/steps start or complete. `TaskCreate`/`TaskUpdate`
+  is acceptable only when that runtime exposes those native task tools.
 - Codex CLI: use the native plan/tasklist UI or Codex adapter. Checklist IDs
   and step IDs must match `tasklist-contract.json`.
 - Fallback: print `vg-orchestrator run-status --pretty`, then continue only

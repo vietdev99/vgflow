@@ -152,7 +152,11 @@ Source of truth:
 3. `${PHASE_DIR}/.step-markers/...` — durable completion markers.
 
 Provider adapters:
-- **Claude CLI:** create one `TaskCreate` item per contract item; preserve each contract `id` at the start of the task title. Use `TaskUpdate` to mark active/completed around each step.
+- **Claude CLI:** use native Claude tasklist projection. Prefer `TodoWrite`
+  with one todo per checklist group from the contract; each todo `content`
+  MUST start with the contract checklist `id`. If this Claude runtime exposes
+  `TaskCreate`/`TaskUpdate`, that adapter is also acceptable. Do not create
+  ad-hoc todos outside `tasklist-contract.json`.
 - **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text.
 - **Fallback:** if no native task UI is exposed, use `vg-orchestrator run-status --pretty` before/after each step and record adapter `fallback`.
 
@@ -480,7 +484,9 @@ checklists (`build_preflight`, `build_context`, `build_execute`,
 `build_verify`, `build_close`) plus the exact filtered step IDs.
 
 Before proceeding:
-1. Project every item to Claude/Codex native task UI per TASKLIST_POLICY.
+1. Project every checklist group to Claude/Codex native task UI per
+   TASKLIST_POLICY. On Claude Code, use `TodoWrite` unless
+   `TaskCreate`/`TaskUpdate` is the exposed native adapter.
 2. Call `vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`.
 3. Keep `.step-markers/*.done` as the durable enforcement signal.
 

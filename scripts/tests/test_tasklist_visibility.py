@@ -157,6 +157,13 @@ class TestCommandWiring:
             assert re.search(native_pattern, text), (
                 f"{cmd}.md runtime_contract missing {short}.native_tasklist_projected"
             )
+            frontmatter = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL).group(1)
+            assert "TodoWrite" in frontmatter, (
+                f"{cmd}.md must expose Claude Code's native TodoWrite tasklist tool"
+            )
+            assert "tasklist-contract.json" in text, (
+                f"{cmd}.md must bind native tasklist to tasklist-contract.json"
+            )
 
     def test_emit_tasklist_invocation_passes_command_arg(self, cmd):
         """Invocation must pass --command vg:{cmd} matching the skill name.
