@@ -51,14 +51,31 @@ if command -v vg-orchestrator >/dev/null 2>&1; then
 fi
 
 if [ "${#failures[@]}" -gt 0 ]; then
-  echo "═══════════════════════════════════════════" >&2
-  echo "STOP BLOCKED — runtime contract incomplete for run ${run_id} (${command})" >&2
-  echo "═══════════════════════════════════════════" >&2
-  for f in "${failures[@]}"; do
-    echo "  ✗ $f" >&2
-  done
-  echo "" >&2
-  echo "Resolve each above before completing the run." >&2
+  gate_id="Stop-runtime-contract"
+  block_dir=".vg/blocks/${run_id}"
+  block_file="${block_dir}/${gate_id}.md"
+
+  mkdir -p "$block_dir" 2>/dev/null
+  {
+    echo "# Block diagnostic — ${gate_id}"
+    echo ""
+    echo "## Cause"
+    echo "Runtime contract incomplete for run ${run_id} (${command})."
+    echo ""
+    echo "## Failures (${#failures[@]})"
+    for f in "${failures[@]}"; do
+      echo "- $f"
+    done
+    echo ""
+    echo "## Required fix"
+    echo "Resolve each failure above. Common patterns:"
+    echo "- UNHANDLED DIAGNOSTIC → emit \`vg.block.handled\` for each unpaired \`vg.block.fired\`."
+    echo "- STATE MACHINE → events emitted out of expected order; investigate which step ran late."
+    echo "- CONTRACT → check \`runtime_contract.must_write\` artifacts + \`must_touch_markers\`."
+  } > "$block_file"
+
+  printf "⛔ %s: %d failure(s) for run %s (%s)\n→ Read %s for details + fix\n" \
+    "$gate_id" "${#failures[@]}" "$run_id" "$command" "$block_file" >&2
   exit 2
 fi
 

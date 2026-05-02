@@ -15,17 +15,51 @@ if [[ "$subagent" == vg-* ]]; then
   exit 0
 fi
 
+emit_block() {
+  local cause="$1"
+  local gate_id="PreToolUse-Agent-allowlist"
+  local session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+  local run_file=".vg/active-runs/${session_id}.json"
+  local run_id
+  run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file" 2>/dev/null || echo unknown)"
+  local block_dir=".vg/blocks/${run_id}"
+  local block_file="${block_dir}/${gate_id}.md"
+
+  mkdir -p "$block_dir" 2>/dev/null
+  cat > "$block_file" <<EOF
+# Block diagnostic — ${gate_id}
+
+## Cause
+${cause}
+
+## Allowed subagents
+- \`general-purpose\` — generic task delegation
+- \`Explore\` — read-only code search
+- \`Plan\` — implementation planning (read-only)
+- \`vg-*\` — VG custom agents (vg-blueprint-planner, vg-blueprint-contracts, vg-haiku-scanner, etc.)
+- \`gsd-debugger\` — GSD debug session manager
+
+## Required fix
+Switch \`subagent_type\` to one in the allow-list above.
+\`gsd-*\` agents (except gsd-debugger) are blocked because R1a scope is VG-only.
+
+## Narration template (use session language)
+[VG diagnostic] Spawn subagent bị chặn vì kiểu '${subagent}' không trong allow-list.
+EOF
+
+  printf "⛔ %s: %s\n→ Read %s for allowed list\n" "$gate_id" "$cause" "$block_file" >&2
+
+  if command -v vg-orchestrator >/dev/null 2>&1; then
+    vg-orchestrator emit-event vg.block.fired \
+      --gate "$gate_id" --cause "$cause" >/dev/null 2>&1 || true
+  fi
+  exit 2
+}
+
 # Block gsd-* explicitly (except gsd-debugger handled above).
 if [[ "$subagent" == gsd-* ]]; then
-  cat >&2 <<MSG
-ERROR: subagent type '${subagent}' not allowed.
-Only general-purpose, Explore, Plan, vg-*, gsd-debugger are allowed.
-MSG
-  exit 2
+  emit_block "subagent type '${subagent}' not allowed (R1a scope is VG-only)"
 fi
 
 # Default deny unknown.
-cat >&2 <<MSG
-ERROR: unknown subagent type '${subagent}'. Allowed: general-purpose, Explore, Plan, vg-*, gsd-debugger.
-MSG
-exit 2
+emit_block "unknown subagent type '${subagent}'"

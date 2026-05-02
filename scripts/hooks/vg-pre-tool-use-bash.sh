@@ -26,36 +26,46 @@ key_path="${VG_EVIDENCE_KEY_PATH:-.vg/.evidence-key}"
 
 emit_block() {
   local cause="$1"
-  cat >&2 <<MSG
-═══════════════════════════════════════════
-DIAGNOSTIC REQUIRED — Gate: PreToolUse-tasklist
-═══════════════════════════════════════════
+  local gate_id="PreToolUse-tasklist"
+  local block_dir=".vg/blocks/${run_id}"
+  local block_file="${block_dir}/${gate_id}.md"
 
-CAUSE:
-  ${cause}
+  # Full diagnostic written to file (AI reads on demand, not pasted to chat).
+  mkdir -p "$block_dir" 2>/dev/null
+  cat > "$block_file" <<EOF
+# Block diagnostic — ${gate_id}
 
-REQUIRED FIX:
-  1. Read .vg/runs/${run_id}/tasklist-contract.json
-  2. Call TodoWrite with each checklist group as one todo item
-  3. Verify PostToolUse hook wrote signed evidence file
-  4. Retry the blocked vg-orchestrator step-active call
+## Cause
+${cause}
 
-YOU MUST DO ALL THREE BEFORE CONTINUING:
-  A) Tell user (in session language) using template:
-     "[VG diagnostic] Bước <step> đang bị chặn. Lý do: chưa gọi TodoWrite.
-      Đang xử lý: project tasklist-contract. Sẽ tiếp tục sau khi xong."
-  B) Bash: vg-orchestrator emit-event vg.block.handled \\
-            --gate PreToolUse-tasklist \\
-            --resolution "TodoWrite called, evidence regenerated"
-  C) Retry the original tool call.
+## Required fix
+1. Read \`.vg/runs/${run_id}/tasklist-contract.json\`
+2. Call TodoWrite with each \`projection_items[]\` entry as one todo
+   (32 items for vg:blueprint web-fullstack: 6 group headers + 26 sub-steps)
+3. PostToolUse hook auto-writes signed evidence file
+4. Retry the blocked \`vg-orchestrator step-active\` call
 
-If this gate has blocked ≥3 times this run, you MUST call AskUserQuestion
-instead of retrying.
-═══════════════════════════════════════════
-MSG
+## Narration template (use session language)
+[VG diagnostic] Bước <step> đang bị chặn. Lý do: chưa gọi TodoWrite.
+Đang xử lý: project tasklist-contract. Sẽ tiếp tục sau khi xong.
+
+## After fix
+\`\`\`
+vg-orchestrator emit-event vg.block.handled \\
+  --gate ${gate_id} \\
+  --resolution "TodoWrite called, evidence regenerated"
+\`\`\`
+
+If this gate blocked ≥3 times this run, MUST call AskUserQuestion instead of retrying.
+EOF
+
+  # Compact stderr — 3 lines max.
+  printf "⛔ %s: %s\n→ Read %s for fix\n→ After fix: vg-orchestrator emit-event vg.block.handled --gate %s\n" \
+    "$gate_id" "$cause" "$block_file" "$gate_id" >&2
+
   if command -v vg-orchestrator >/dev/null 2>&1; then
     vg-orchestrator emit-event vg.block.fired \
-      --gate PreToolUse-tasklist --cause "$cause" >/dev/null 2>&1 || true
+      --gate "$gate_id" --cause "$cause" >/dev/null 2>&1 || true
   fi
   exit 2
 }

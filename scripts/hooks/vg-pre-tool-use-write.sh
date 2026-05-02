@@ -23,34 +23,46 @@ protected_patterns=(
 
 for pattern in "${protected_patterns[@]}"; do
   if [[ "$file_path" =~ $pattern ]]; then
-    cat >&2 <<MSG
-═══════════════════════════════════════════
-DIAGNOSTIC REQUIRED — Gate: PreToolUse-Write-protected
-═══════════════════════════════════════════
+    gate_id="PreToolUse-Write-protected"
+    session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+    run_file=".vg/active-runs/${session_id}.json"
+    run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file" 2>/dev/null || echo unknown)"
+    block_dir=".vg/blocks/${run_id}"
+    block_file="${block_dir}/${gate_id}.md"
+    cause="direct write to protected path: $file_path"
 
-CAUSE:
-  Direct write to protected evidence path:
-    ${file_path}
-  This path holds harness-controlled evidence; direct writes would
-  forge the harness's view of what AI did.
+    mkdir -p "$block_dir" 2>/dev/null
+    cat > "$block_file" <<EOF
+# Block diagnostic — ${gate_id}
 
-REQUIRED FIX:
-  Use scripts/vg-orchestrator-emit-evidence-signed.py to write signed
-  evidence, OR use vg-orchestrator subcommand for markers/events.
+## Cause
+${cause}
 
-YOU MUST DO ALL THREE BEFORE CONTINUING:
-  A) Tell user: "[VG diagnostic] Bước hiện tại bị chặn vì cố ghi vào
-     đường dẫn được bảo vệ. Đang xử lý: dùng helper signed."
-  B) Bash: vg-orchestrator emit-event vg.block.handled \\
-            --gate PreToolUse-Write-protected \\
-            --resolution "switched to signed helper"
-  C) Retry with the signed helper.
-═══════════════════════════════════════════
-MSG
+This path holds harness-controlled evidence; direct writes would forge
+the harness's view of what AI did.
+
+## Required fix
+- For evidence files: use \`scripts/vg-orchestrator-emit-evidence-signed.py\`
+- For markers: use \`vg-orchestrator mark-step <command> <step>\`
+- For events: use \`vg-orchestrator emit-event <type> --payload <json>\`
+
+## Narration template (use session language)
+[VG diagnostic] Bước hiện tại bị chặn vì cố ghi vào đường dẫn được bảo vệ.
+Đang xử lý: dùng helper signed.
+
+## After fix
+\`\`\`
+vg-orchestrator emit-event vg.block.handled --gate ${gate_id} \\
+  --resolution "switched to signed helper"
+\`\`\`
+EOF
+
+    printf "⛔ %s: %s\n→ Read %s for fix\n→ After fix: vg-orchestrator emit-event vg.block.handled --gate %s\n" \
+      "$gate_id" "$cause" "$block_file" "$gate_id" >&2
+
     if command -v vg-orchestrator >/dev/null 2>&1; then
       vg-orchestrator emit-event vg.block.fired \
-        --gate PreToolUse-Write-protected \
-        --cause "direct write to $file_path" >/dev/null 2>&1 || true
+        --gate "$gate_id" --cause "$cause" >/dev/null 2>&1 || true
     fi
     exit 2
   fi
