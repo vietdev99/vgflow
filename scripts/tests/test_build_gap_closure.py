@@ -31,20 +31,106 @@ import contracts  # type: ignore  # noqa: E402
 
 BUILD_MD = (Path(__file__).resolve().parents[2]
             / "commands" / "vg" / "build.md")
+BUILD_REFS_DIR = (Path(__file__).resolve().parents[2]
+                  / "commands" / "vg" / "_shared" / "build")
+
+
+_REF_SENTINEL = "<!--__VG_BUILD_REF_BOUNDARY__-->"
+
+
+def _combined_build_text() -> str:
+    """Slim entry + all refs concatenated — equivalent to pre-R2 monolithic view.
+
+    R2 split build.md (4571 -> 203 lines) by moving step bodies into refs under
+    _shared/build/. Tests that grep step content must read across both surfaces.
+
+    A sentinel comment is inserted between the entry and each ref so the
+    fallback step extractor can split by ref boundary without colliding with
+    ``# foo`` lines inside bash code blocks (which are NOT real H1 headings).
+
+    Refs are appended in *runtime* order (entry STEP 1..7) rather than alphabetical
+    so cross-step assertions like "build.completed appears after the crossai step"
+    reflect the actual /vg:build pipeline ordering.
+    """
+    runtime_order = [
+        "preflight.md",
+        "context.md",
+        "validate-blueprint.md",
+        "waves-overview.md",
+        "waves-delegation.md",
+        "post-execution-overview.md",
+        "post-execution-delegation.md",
+        "crossai-loop.md",
+        "close.md",
+    ]
+    parts = [BUILD_MD.read_text(encoding="utf-8")]
+    seen: set[str] = set()
+    for fname in runtime_order:
+        ref = BUILD_REFS_DIR / fname
+        if ref.exists():
+            parts.append(_REF_SENTINEL)
+            parts.append(ref.read_text(encoding="utf-8"))
+            seen.add(fname)
+    # Append any refs not in the canonical order so they remain searchable
+    for ref in sorted(BUILD_REFS_DIR.glob("*.md")):
+        if ref.name not in seen:
+            parts.append(_REF_SENTINEL)
+            parts.append(ref.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 @pytest.fixture(scope="module")
 def build_text() -> str:
-    return BUILD_MD.read_text(encoding="utf-8")
+    return _combined_build_text()
 
 
 def _extract_step(text: str, name: str) -> str:
+    """Extract a step body by name.
+
+    Supports both the legacy XML form ``<step name="X">...</step>`` from
+    pre-R2 monolithic build.md AND the post-R2 markdown form where step
+    bodies live under headings like ``## STEP 3.2 — handle branching (X)``
+    inside refs under ``commands/vg/_shared/build/``. The body extends from
+    the matched heading until the next ``## `` heading or end-of-file.
+
+    Final fallback (post-R2 only): a step whose body fills an entire ref file
+    (e.g., 9_post_execution lives in post-execution-overview.md without a
+    parenthesised heading). Combined-text concatenation lets us slice from the
+    first occurrence of the bare step name to the next ``# `` heading that
+    starts a new file body.
+    """
+    # Legacy XML form
     match = re.search(
         rf'<step name="{re.escape(name)}"[^>]*>(.+?)</step>',
         text, re.DOTALL,
     )
-    assert match, f'step "{name}" missing'
-    return match.group(1)
+    if match:
+        return match.group(1)
+
+    # Post-R2 markdown form: heading containing (NAME) up to the next ## heading
+    pattern = (
+        rf'^##[^\n]*\({re.escape(name)}\)[^\n]*\n'
+        rf'(.+?)(?=^## |\Z)'
+    )
+    match = re.search(pattern, text, re.DOTALL | re.MULTILINE)
+    if match:
+        return match.group(1)
+
+    # Final fallback: a step body fills an entire ref file. _combined_build_text
+    # joins refs with _REF_SENTINEL; pick the ref slice with the most occurrences
+    # of the step name (that ref owns the step body) and return it whole.
+    chunks = text.split(_REF_SENTINEL)
+    best_slice = ""
+    best_count = 0
+    for chunk in chunks:
+        count = len(re.findall(rf'\b{re.escape(name)}\b', chunk))
+        if count > best_count:
+            best_count = count
+            best_slice = chunk
+    if best_count > 0:
+        return best_slice
+
+    raise AssertionError(f'step "{name}" missing')
 
 
 # ═══════════════════════════ B6: step 5 real bash ═══════════════════════════
@@ -250,8 +336,15 @@ def test_build_validates_interface_standards(build_text):
 
 
 def test_build_completed_event_emitted_after_crossai_step(build_text):
-    """build.completed is the final build signal, not a pre-CrossAI signal."""
-    crossai_idx = build_text.index('<step name="11_crossai_build_verify_loop">')
+    """build.completed is the final build signal, not a pre-CrossAI signal.
+
+    R2: original assertion grepped for ``<step name="11_crossai_..." >`` open
+    tag in the monolithic build.md. Post-R2 the step body lives in
+    ``crossai-loop.md`` under ``## STEP 6.1 — invoke crossai-build-verify
+    (11_crossai_build_verify_loop)``. The relative-position assertion is the
+    same; only the anchor string moves to the post-R2 surface.
+    """
+    crossai_idx = build_text.index("(11_crossai_build_verify_loop)")
     completed_idx = build_text.index('emit-event "build.completed"')
     assert completed_idx > crossai_idx
     assert '\\"after_crossai\\":true' in build_text

@@ -12,7 +12,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = REPO_ROOT / "scripts" / "validators" / "build-graphify-required.py"
 ORCH = REPO_ROOT / "scripts" / "vg-orchestrator" / "__main__.py"
 BUILD_MD = REPO_ROOT / "commands" / "vg" / "build.md"
+BUILD_REFS_DIR = REPO_ROOT / "commands" / "vg" / "_shared" / "build"
 GRAPHIFY_SAFE = REPO_ROOT / "commands" / "vg" / "_shared" / "lib" / "graphify-safe.sh"
+
+
+def _combined_build_text() -> str:
+    """Slim entry + all refs concatenated — equivalent to pre-R2 monolithic view.
+
+    R2 split build.md (4571 -> 203 lines) by moving step bodies into refs under
+    _shared/build/. Tests that grep step content / wave markers / config flags
+    must read across both surfaces.
+    """
+    parts = [BUILD_MD.read_text(encoding="utf-8")]
+    for ref in sorted(BUILD_REFS_DIR.glob("*.md")):
+        parts.append(ref.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 def _repo(tmp_path: Path, *, enabled: bool = True, graph: bool = True) -> Path:
@@ -105,7 +119,7 @@ def test_graphify_disabled_skips_gate(tmp_path: Path) -> None:
 
 
 def test_build_workflow_wires_graphify_cold_wave_final_and_validator() -> None:
-    build = BUILD_MD.read_text(encoding="utf-8")
+    build = _combined_build_text()
     orch = (REPO_ROOT / "scripts" / "vg-orchestrator" / "__main__.py").read_text(encoding="utf-8")
     graphify_safe = GRAPHIFY_SAFE.read_text(encoding="utf-8")
 
