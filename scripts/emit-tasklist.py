@@ -201,6 +201,26 @@ CHECKLIST_DEFS = {
         ]),
         ("accept_close", "Complete", ["7_post_accept_actions"]),
     ],
+    "vg:roam": [
+        ("roam_preflight", "Roam Preflight", [
+            "0_parse_and_validate", "0aa_resume_check",
+        ]),
+        ("roam_config_gate", "Config Gate (env/model/mode)", [
+            "0a_backfill_env_pref", "0a_detect_platform_tools",
+            "0a_enrich_env_options", "0a_confirm_env_model_mode",
+            "0a_persist_config",
+        ]),
+        ("roam_discovery", "Surface Discovery And Briefs", [
+            "1_discover_surfaces", "2_compose_briefs",
+        ]),
+        ("roam_execute", "Spawn Executors And Aggregate", [
+            "3_spawn_executors", "4_aggregate_logs",
+        ]),
+        ("roam_analyze", "Commander Analysis", ["5_analyze_findings"]),
+        ("roam_artifacts", "Emit Artifacts", ["6_emit_artifacts"]),
+        ("roam_fix_loop", "Optional Fix Loop", ["7_optional_fix_loop"]),
+        ("roam_close", "Complete", ["complete"]),
+    ],
 }
 
 
