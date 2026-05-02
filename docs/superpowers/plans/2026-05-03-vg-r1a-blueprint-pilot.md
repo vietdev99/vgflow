@@ -20,11 +20,13 @@ Built ONCE in this pilot, inherited by R1b/c/d + R2-R5. Order: foundational help
 
 ### Task 1: HMAC evidence helper script
 
+**Status:** ✅ Shipped — `3103642` (initial) + `e74aa68` (hardening)
+
 **Files:**
 - Create: `scripts/vg-orchestrator-emit-evidence-signed.py`
 - Test: `scripts/tests/test_evidence_helper_signs_hmac.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_evidence_helper_signs_hmac.py
@@ -66,7 +68,7 @@ def test_emit_evidence_signed_rejects_when_key_missing(tmp_path, monkeypatch):
     assert "evidence key" in result.stderr.lower()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
@@ -74,7 +76,7 @@ pytest scripts/tests/test_evidence_helper_signs_hmac.py -v
 ```
 Expected: FAIL with "No such file or directory: 'scripts/vg-orchestrator-emit-evidence-signed.py'"
 
-- [ ] **Step 3: Implement helper**
+- [x] **Step 3: Implement helper**
 
 ```python
 #!/usr/bin/env python3
@@ -138,14 +140,14 @@ if __name__ == "__main__":
 chmod +x scripts/vg-orchestrator-emit-evidence-signed.py
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 ```bash
 pytest scripts/tests/test_evidence_helper_signs_hmac.py -v
 ```
 Expected: 2 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/vg-orchestrator-emit-evidence-signed.py scripts/tests/test_evidence_helper_signs_hmac.py
@@ -161,11 +163,13 @@ evidence — closes AI evidence-forgery bypass."
 
 ### Task 2: State-machine validator script
 
+**Status:** ✅ Shipped — `6f698e3`
+
 **Files:**
 - Create: `scripts/vg-state-machine-validator.py`
 - Test: `scripts/tests/test_state_machine_validator.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_state_machine_validator.py
@@ -225,14 +229,14 @@ def test_blueprint_events_out_of_order_fails(tmp_path):
     assert "out of order" in result.stderr.lower() or "expected" in result.stderr.lower()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_state_machine_validator.py -v
 ```
 Expected: FAIL with file-not-found.
 
-- [ ] **Step 3: Implement validator**
+- [x] **Step 3: Implement validator**
 
 ```python
 #!/usr/bin/env python3
@@ -306,14 +310,14 @@ if __name__ == "__main__":
 chmod +x scripts/vg-state-machine-validator.py
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_state_machine_validator.py -v
 ```
 Expected: 2 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/vg-state-machine-validator.py scripts/tests/test_state_machine_validator.py
@@ -330,10 +334,12 @@ crossai.verdict → completed."
 
 ### Task 3: vg-meta-skill.md content (SessionStart inject)
 
+**Status:** ✅ Shipped — `a0de7bd`
+
 **Files:**
 - Create: `scripts/hooks/vg-meta-skill.md`
 
-- [ ] **Step 1: Write the meta-skill text**
+- [x] **Step 1: Write the meta-skill text**
 
 ```bash
 cat > scripts/hooks/vg-meta-skill.md <<'META_SKILL'
@@ -386,14 +392,14 @@ NOT `Task`) when instructed.
 META_SKILL
 ```
 
-- [ ] **Step 2: Verify file exists**
+- [x] **Step 2: Verify file exists**
 
 ```bash
 test -f scripts/hooks/vg-meta-skill.md && wc -l scripts/hooks/vg-meta-skill.md
 ```
 Expected: file exists, ~40 lines.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/hooks/vg-meta-skill.md
@@ -408,11 +414,13 @@ Adopted from superpowers using-superpowers pattern."
 
 ### Task 4: SessionStart hook script
 
+**Status:** ✅ Shipped — `2e888bf` + `692203c` (PLUGIN_ROOT resolve fix)
+
 **Files:**
 - Create: `scripts/hooks/vg-session-start.sh`
 - Test: `scripts/tests/test_session_start_reinjects_open_diagnostics.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_session_start_reinjects_open_diagnostics.py
@@ -480,14 +488,14 @@ def test_session_start_compact_reinjects_open_diagnostics(tmp_path, monkeypatch)
     assert "PreToolUse-tasklist" in ctx
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_session_start_reinjects_open_diagnostics.py -v
 ```
 Expected: FAIL — script does not exist.
 
-- [ ] **Step 3: Implement hook script**
+- [x] **Step 3: Implement hook script**
 
 ```bash
 cat > scripts/hooks/vg-session-start.sh <<'HOOK'
@@ -536,14 +544,14 @@ HOOK
 chmod +x scripts/hooks/vg-session-start.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_session_start_reinjects_open_diagnostics.py -v
 ```
 Expected: 2 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/vg-session-start.sh scripts/tests/test_session_start_reinjects_open_diagnostics.py
@@ -558,11 +566,13 @@ run (Layer 4 of diagnostic flow). Pattern adopted from superpowers."
 
 ### Task 5: UserPromptSubmit hook script (start-of-run gate)
 
+**Status:** ✅ Shipped — `1b7d634`
+
 **Files:**
 - Create: `scripts/hooks/vg-user-prompt-submit.sh`
 - Test: `scripts/tests/test_user_prompt_submit_creates_run.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_user_prompt_submit_creates_run.py
@@ -605,14 +615,14 @@ def test_user_prompt_no_op_for_non_vg(tmp_path, monkeypatch):
     assert not run_file.exists()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_user_prompt_submit_creates_run.py -v
 ```
 Expected: FAIL — script does not exist.
 
-- [ ] **Step 3: Implement hook**
+- [x] **Step 3: Implement hook**
 
 ```bash
 cat > scripts/hooks/vg-user-prompt-submit.sh <<'HOOK'
@@ -663,14 +673,14 @@ HOOK
 chmod +x scripts/hooks/vg-user-prompt-submit.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_user_prompt_submit_creates_run.py -v
 ```
 Expected: 2 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/vg-user-prompt-submit.sh scripts/tests/test_user_prompt_submit_creates_run.py
@@ -686,11 +696,13 @@ by answering before invocation registered."
 
 ### Task 6: PreToolUse on Write/Edit hook (protect evidence paths)
 
+**Status:** ✅ Shipped — `b2e7b67`
+
 **Files:**
 - Create: `scripts/hooks/vg-pre-tool-use-write.sh`
 - Test: `scripts/tests/test_pre_tool_use_write_blocks_protected.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_pre_tool_use_write_blocks_protected.py
@@ -738,14 +750,14 @@ def test_allowed_paths_pass():
         assert result.returncode == 0, f"expected pass for {path}, got rc={result.returncode}, stderr={result.stderr}"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_pre_tool_use_write_blocks_protected.py -v
 ```
 Expected: FAIL — script does not exist.
 
-- [ ] **Step 3: Implement hook**
+- [x] **Step 3: Implement hook**
 
 ```bash
 cat > scripts/hooks/vg-pre-tool-use-write.sh <<'HOOK'
@@ -813,14 +825,14 @@ HOOK
 chmod +x scripts/hooks/vg-pre-tool-use-write.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_pre_tool_use_write_blocks_protected.py -v
 ```
 Expected: 3 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/vg-pre-tool-use-write.sh scripts/tests/test_pre_tool_use_write_blocks_protected.py
@@ -836,11 +848,13 @@ AI must use signed helper or vg-orchestrator subcommands instead."
 
 ### Task 7: PreToolUse on Bash hook (tasklist evidence gate)
 
+**Status:** ✅ Shipped — `d39799c` + `5f5ba9c` (path quoting + payload schema tolerance)
+
 **Files:**
 - Create: `scripts/hooks/vg-pre-tool-use-bash.sh`
 - Test: `scripts/tests/test_hook_pretooluse_blocks.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_hook_pretooluse_blocks.py
@@ -927,14 +941,14 @@ def test_passes_for_unrelated_bash(tmp_path, monkeypatch):
     assert result.returncode == 0
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_hook_pretooluse_blocks.py -v
 ```
 Expected: FAIL.
 
-- [ ] **Step 3: Implement hook**
+- [x] **Step 3: Implement hook**
 
 ```bash
 cat > scripts/hooks/vg-pre-tool-use-bash.sh <<'HOOK'
@@ -1037,14 +1051,14 @@ HOOK
 chmod +x scripts/hooks/vg-pre-tool-use-bash.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_hook_pretooluse_blocks.py -v
 ```
 Expected: 3 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/vg-pre-tool-use-bash.sh scripts/tests/test_hook_pretooluse_blocks.py
@@ -1060,11 +1074,13 @@ pairing tracking."
 
 ### Task 8: PostToolUse on TodoWrite hook (capture + sign evidence)
 
+**Status:** ✅ Shipped — `e4e698e`
+
 **Files:**
 - Create: `scripts/hooks/vg-post-tool-use-todowrite.sh`
 - Test: `scripts/tests/test_hook_posttooluse_writes_evidence.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_hook_posttooluse_writes_evidence.py
@@ -1120,14 +1136,14 @@ def test_post_tool_use_writes_signed_evidence(tmp_path, monkeypatch):
     assert evidence["payload"]["match"] is True
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_hook_posttooluse_writes_evidence.py -v
 ```
 Expected: FAIL — script does not exist.
 
-- [ ] **Step 3: Implement hook**
+- [x] **Step 3: Implement hook**
 
 ```bash
 cat > scripts/hooks/vg-post-tool-use-todowrite.sh <<'HOOK'
@@ -1187,14 +1203,14 @@ HOOK
 chmod +x scripts/hooks/vg-post-tool-use-todowrite.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_hook_posttooluse_writes_evidence.py -v
 ```
 Expected: 1 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/vg-post-tool-use-todowrite.sh scripts/tests/test_hook_posttooluse_writes_evidence.py
@@ -1210,11 +1226,13 @@ step-active. Emits <cmd>.native_tasklist_projected telemetry event."
 
 ### Task 9: PreToolUse on Agent hook (spawn-count placeholder)
 
+**Status:** ✅ Shipped — `da94063`
+
 **Files:**
 - Create: `scripts/hooks/vg-pre-tool-use-agent.sh`
 - Test: `scripts/tests/test_pre_tool_use_agent_matcher.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_pre_tool_use_agent_matcher.py
@@ -1262,14 +1280,14 @@ def test_agent_hook_passes_for_general_purpose():
     assert result.returncode == 0
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_pre_tool_use_agent_matcher.py -v
 ```
 Expected: FAIL.
 
-- [ ] **Step 3: Implement hook**
+- [x] **Step 3: Implement hook**
 
 ```bash
 cat > scripts/hooks/vg-pre-tool-use-agent.sh <<'HOOK'
@@ -1308,14 +1326,14 @@ HOOK
 chmod +x scripts/hooks/vg-pre-tool-use-agent.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_pre_tool_use_agent_matcher.py -v
 ```
 Expected: 3 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/vg-pre-tool-use-agent.sh scripts/tests/test_pre_tool_use_agent_matcher.py
@@ -1331,11 +1349,13 @@ deferred to R2 build spec."
 
 ### Task 10: Stop hook (contract verify + state-machine + diagnostic pairing)
 
+**Status:** ✅ Shipped — `eedcbf4`
+
 **Files:**
 - Create: `scripts/hooks/vg-stop.sh`
 - Test: `scripts/tests/test_stop_hook_requires_block_handled_pair.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_stop_hook_requires_block_handled_pair.py
@@ -1396,14 +1416,14 @@ def test_stop_blocks_on_unpaired_block(tmp_path, monkeypatch):
     assert "UNHANDLED DIAGNOSTIC" in result.stderr or "vg.block" in result.stderr
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_stop_hook_requires_block_handled_pair.py -v
 ```
 Expected: FAIL.
 
-- [ ] **Step 3: Implement hook**
+- [x] **Step 3: Implement hook**
 
 ```bash
 cat > scripts/hooks/vg-stop.sh <<'HOOK'
@@ -1467,14 +1487,14 @@ HOOK
 chmod +x scripts/hooks/vg-stop.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_stop_hook_requires_block_handled_pair.py -v
 ```
 Expected: 2 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/vg-stop.sh scripts/tests/test_stop_hook_requires_block_handled_pair.py
@@ -1490,11 +1510,13 @@ if available. Failures → exit 2 with explicit list."
 
 ### Task 11: install-hooks.sh (idempotent merge into settings.json)
 
+**Status:** ✅ Shipped — `fe17db7`
+
 **Files:**
 - Create: `scripts/hooks/install-hooks.sh`
 - Test: `scripts/tests/test_install_hooks_idempotent.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 # scripts/tests/test_install_hooks_idempotent.py
@@ -1559,14 +1581,14 @@ def test_install_preserves_existing_user_hooks(tmp_path, monkeypatch):
     assert "Bash" in matchers  # VG hook added
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 pytest scripts/tests/test_install_hooks_idempotent.py -v
 ```
 Expected: FAIL.
 
-- [ ] **Step 3: Implement install script**
+- [x] **Step 3: Implement install script**
 
 ```bash
 cat > scripts/hooks/install-hooks.sh <<'HOOK'
@@ -1639,14 +1661,14 @@ HOOK
 chmod +x scripts/hooks/install-hooks.sh
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 ```bash
 pytest scripts/tests/test_install_hooks_idempotent.py -v
 ```
 Expected: 3 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/hooks/install-hooks.sh scripts/tests/test_install_hooks_idempotent.py
@@ -1664,11 +1686,13 @@ hooks into PrintwayV3 .claude/settings.json."
 
 ### Task 12: Backup current blueprint.md + measure baseline
 
+**Status:** ✅ Shipped — `030299e`
+
 **Files:**
 - Create: `commands/vg/.blueprint.md.r1a-backup` (rename of original)
 - Modify: `commands/vg/blueprint.md` (will be replaced after refs created)
 
-- [ ] **Step 1: Backup original**
+- [x] **Step 1: Backup original**
 
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
@@ -1677,7 +1701,7 @@ wc -l commands/vg/.blueprint.md.r1a-backup
 ```
 Expected: 3970 lines.
 
-- [ ] **Step 2: Commit backup**
+- [x] **Step 2: Commit backup**
 
 ```bash
 git add commands/vg/.blueprint.md.r1a-backup
@@ -1690,10 +1714,12 @@ Preserved as .blueprint.md.r1a-backup for diff/rollback during pilot."
 
 ### Task 13: Create `_shared/blueprint/preflight.md`
 
+**Status:** ✅ Shipped — `8b088f3` (initial 8 refs) + `d340099` (real bash from backup) + `dbb6f44` (slim marker schema)
+
 **Files:**
 - Create: `commands/vg/_shared/blueprint/preflight.md`
 
-- [ ] **Step 1: Create the reference file**
+- [x] **Step 1: Create the reference file**
 
 ```bash
 mkdir -p commands/vg/_shared/blueprint
@@ -1783,7 +1809,7 @@ wc -l commands/vg/_shared/blueprint/preflight.md
 ```
 Expected: file exists, ≤300 lines.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add commands/vg/_shared/blueprint/preflight.md
@@ -1799,10 +1825,12 @@ Read on this file."
 
 ### Task 14: Create `_shared/blueprint/design.md`
 
+**Status:** ✅ Shipped — `8b088f3` + `60e8c26` (real bash from backup)
+
 **Files:**
 - Create: `commands/vg/_shared/blueprint/design.md`
 
-- [ ] **Step 1: Create reference**
+- [x] **Step 1: Create reference**
 
 ```bash
 cat > commands/vg/_shared/blueprint/design.md <<'REF'
@@ -1862,7 +1890,7 @@ After all 4 markers touched, return to entry SKILL.md and proceed to STEP 3.
 REF
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add commands/vg/_shared/blueprint/design.md
@@ -1876,11 +1904,13 @@ Profile-aware (skipped for backend-only/cli/library)."
 
 ### Task 15: Create `_shared/blueprint/plan-overview.md` + `plan-delegation.md`
 
+**Status:** ✅ Shipped — `8b088f3` + `d4d2912` (real bash + planner contract)
+
 **Files:**
 - Create: `commands/vg/_shared/blueprint/plan-overview.md`
 - Create: `commands/vg/_shared/blueprint/plan-delegation.md`
 
-- [ ] **Step 1: Create both refs (FLAT structure per Codex fix #4)**
+- [x] **Step 1: Create both refs (FLAT structure per Codex fix #4)**
 
 ```bash
 cat > commands/vg/_shared/blueprint/plan-overview.md <<'REF'
@@ -1956,7 +1986,7 @@ do NOT mark step done. Re-spawn after fixing input.
 REF
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add commands/vg/_shared/blueprint/plan-overview.md commands/vg/_shared/blueprint/plan-delegation.md
@@ -1971,11 +2001,13 @@ NO nested directory — kept FLAT per Anthropic 1-level guidance."
 
 ### Task 16: Create `_shared/blueprint/contracts-overview.md` + `contracts-delegation.md`
 
+**Status:** ✅ Shipped — `8b088f3` + `43fb7ae` (real bash + subagent contract)
+
 **Files:**
 - Create: `commands/vg/_shared/blueprint/contracts-overview.md`
 - Create: `commands/vg/_shared/blueprint/contracts-delegation.md`
 
-- [ ] **Step 1: Create both refs**
+- [x] **Step 1: Create both refs**
 
 ```bash
 cat > commands/vg/_shared/blueprint/contracts-overview.md <<'REF'
@@ -2049,7 +2081,7 @@ cat > commands/vg/_shared/blueprint/contracts-delegation.md <<'REF'
 REF
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add commands/vg/_shared/blueprint/contracts-overview.md commands/vg/_shared/blueprint/contracts-delegation.md
@@ -2064,10 +2096,12 @@ contracts-delegation.md: produces API-CONTRACTS.md + INTERFACE-STANDARDS
 
 ### Task 17: Create `_shared/blueprint/verify.md`
 
+**Status:** ✅ Shipped — `8b088f3` + `3eebdaf` (real bash) + `2cb4fa2` (verify.md 500-line exception)
+
 **Files:**
 - Create: `commands/vg/_shared/blueprint/verify.md`
 
-- [ ] **Step 1: Create reference**
+- [x] **Step 1: Create reference**
 
 ```bash
 cat > commands/vg/_shared/blueprint/verify.md <<'REF'
@@ -2140,7 +2174,7 @@ After all 7 markers, return to entry SKILL.md → STEP 6.
 REF
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add commands/vg/_shared/blueprint/verify.md
@@ -2151,10 +2185,12 @@ git commit -m "feat(r1a): blueprint verify reference (7 grep/path checks)"
 
 ### Task 18: Create `_shared/blueprint/close.md`
 
+**Status:** ✅ Shipped — `8b088f3` + `3c4e3be` (real bash from backup)
+
 **Files:**
 - Create: `commands/vg/_shared/blueprint/close.md`
 
-- [ ] **Step 1: Create reference**
+- [x] **Step 1: Create reference**
 
 ```bash
 cat > commands/vg/_shared/blueprint/close.md <<'REF'
@@ -2204,7 +2240,7 @@ list (preferred) or replace with one sentinel: "vg:blueprint phase ${PHASE_NUMBE
 REF
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add commands/vg/_shared/blueprint/close.md
@@ -2215,10 +2251,12 @@ git commit -m "feat(r1a): blueprint close reference (reflection + run-complete +
 
 ### Task 19: Create `vg-blueprint-planner` subagent SKILL.md
 
+**Status:** ✅ Shipped — `742ed89`
+
 **Files:**
 - Create: `agents/vg-blueprint-planner/SKILL.md`
 
-- [ ] **Step 1: Create the subagent definition**
+- [x] **Step 1: Create the subagent definition**
 
 ```bash
 mkdir -p agents/vg-blueprint-planner
@@ -2277,7 +2315,7 @@ You MUST NOT ask the user questions — your input is the contract.
 SKILL
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add agents/vg-blueprint-planner/SKILL.md
@@ -2292,10 +2330,12 @@ plus mandatory binding citations as <!-- vg-binding: --> comments."
 
 ### Task 20: Create `vg-blueprint-contracts` subagent SKILL.md
 
+**Status:** ✅ Shipped — `742ed89`
+
 **Files:**
 - Create: `agents/vg-blueprint-contracts/SKILL.md`
 
-- [ ] **Step 1: Create the subagent definition**
+- [x] **Step 1: Create the subagent definition**
 
 ```bash
 mkdir -p agents/vg-blueprint-contracts
@@ -2377,7 +2417,7 @@ Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching
 SKILL
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add agents/vg-blueprint-contracts/SKILL.md
@@ -2392,10 +2432,12 @@ return. Mandatory binding citation comments."
 
 ### Task 21: Replace blueprint.md body with slim entry
 
+**Status:** ✅ Shipped — `b6eaeb1` (3970→145 lines) + `dbb6f44` (marker schema) + `8145197` (restore 3 dropped steps)
+
 **Files:**
 - Modify: `commands/vg/blueprint.md` (full rewrite)
 
-- [ ] **Step 1: Write failing static-test for slim size**
+- [x] **Step 1: Write failing static-test for slim size**
 
 ```python
 # scripts/tests/test_blueprint_slim_size.py
@@ -2441,14 +2483,14 @@ def test_blueprint_refs_listed_directly():
         assert ref in body, f"entry SKILL.md must directly list leaf ref: {ref}"
 ```
 
-- [ ] **Step 2: Run test to verify it fails (current blueprint.md is 3970 lines)**
+- [x] **Step 2: Run test to verify it fails (current blueprint.md is 3970 lines)**
 
 ```bash
 pytest scripts/tests/test_blueprint_slim_size.py -v
 ```
 Expected: FAIL — line count exceeds 600.
 
-- [ ] **Step 3: Replace blueprint.md with slim entry**
+- [x] **Step 3: Replace blueprint.md with slim entry**
 
 ```bash
 cat > commands/vg/blueprint.md <<'BLUEPRINT'
@@ -2598,7 +2640,7 @@ After context compaction, SessionStart hook re-injects open diagnostics (Layer 4
 BLUEPRINT
 ```
 
-- [ ] **Step 4: Run static tests**
+- [x] **Step 4: Run static tests**
 
 ```bash
 pytest scripts/tests/test_blueprint_slim_size.py -v
@@ -2606,7 +2648,7 @@ wc -l commands/vg/blueprint.md
 ```
 Expected: 3 PASSED. Line count ≤500.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add commands/vg/blueprint.md scripts/tests/test_blueprint_slim_size.py
@@ -2627,12 +2669,14 @@ no should/may/will), refs_listed_directly (8 leaf refs in entry)."
 
 ### Task 22: Static test for subagents + flat refs
 
+**Status:** ✅ Shipped — `1007b51`
+
 **Files:**
 - Create: `scripts/tests/test_subagent_definitions_exist.py`
 - Create: `scripts/tests/test_blueprint_references_exist.py`
 - Create: `scripts/tests/test_blueprint_refs_flat_structure.py`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
 
 ```python
 # scripts/tests/test_subagent_definitions_exist.py
@@ -2702,7 +2746,7 @@ def test_no_nested_subdirs():
         )
 ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
 ```bash
 pytest scripts/tests/test_subagent_definitions_exist.py \
@@ -2711,7 +2755,7 @@ pytest scripts/tests/test_subagent_definitions_exist.py \
 ```
 Expected: ALL PASSED.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/tests/test_subagent_definitions_exist.py \
@@ -2728,10 +2772,12 @@ Flat structure: no nested subdirs (Codex fix #4)."
 
 ### Task 23: Hook scripts executable test
 
+**Status:** ✅ Shipped — `1007b51`
+
 **Files:**
 - Create: `scripts/tests/test_hook_scripts_executable.py`
 
-- [ ] **Step 1: Write test**
+- [x] **Step 1: Write test**
 
 ```python
 # scripts/tests/test_hook_scripts_executable.py
@@ -2765,14 +2811,14 @@ def test_helpers_executable():
         assert os.access(str(p), os.X_OK), f"helper not executable: {path}"
 ```
 
-- [ ] **Step 2: Run test**
+- [x] **Step 2: Run test**
 
 ```bash
 pytest scripts/tests/test_hook_scripts_executable.py -v
 ```
 Expected: 2 PASSED.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/tests/test_hook_scripts_executable.py
@@ -2785,17 +2831,19 @@ git commit -m "test(r1a): all hook scripts + helpers have +x bit"
 
 ### Task 24: Update sync.sh to copy hooks + agents
 
+**Status:** ✅ Shipped — `e32e349`
+
 **Files:**
 - Modify: `sync.sh`
 
-- [ ] **Step 1: Inspect current sync.sh**
+- [x] **Step 1: Inspect current sync.sh**
 
 ```bash
 grep -n "scripts/hooks\|agents/" sync.sh | head -20
 ```
 If hooks/agents not currently synced, proceed to step 2.
 
-- [ ] **Step 2: Add hook + agent sync logic**
+- [x] **Step 2: Add hook + agent sync logic**
 
 Edit `sync.sh` to include after the existing scripts/ rsync block:
 
@@ -2821,14 +2869,14 @@ if [ "${VG_INSTALL_HOOKS:-1}" = "1" ]; then
 fi
 ```
 
-- [ ] **Step 3: Run sync.sh check (no DEV_ROOT, just verify script parses)**
+- [x] **Step 3: Run sync.sh check (no DEV_ROOT, just verify script parses)**
 
 ```bash
 bash -n sync.sh && echo "sync.sh syntax ok"
 ```
 Expected: `sync.sh syntax ok`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add sync.sh
@@ -2844,9 +2892,11 @@ VG_INSTALL_HOOKS=0 if user manages hooks manually."
 
 ### Task 25: Run full pytest suite (regression check)
 
+**Status:** ✅ Shipped — pytest regression confirmed (no separate commit, run alongside Tasks 22-23)
+
 **Files:** none — verify only.
 
-- [ ] **Step 1: Run all VG tests**
+- [x] **Step 1: Run all VG tests**
 
 ```bash
 pytest -q scripts/tests/ 2>&1 | tail -20
@@ -2855,7 +2905,7 @@ Expected: All tests pass. Existing 138 tests + new R1a tests should sum to ~150+
 
 If any prior test fails, investigate — should not happen since R1a only adds new files (no edits to existing test paths). If a prior test fails, debug before proceeding.
 
-- [ ] **Step 2: Commit any test fixes**
+- [x] **Step 2: Commit any test fixes**
 
 If fixes needed:
 ```bash
@@ -2869,9 +2919,11 @@ If no fixes needed, proceed.
 
 ### Task 26: Sync to PrintwayV3 + verify install
 
+**Status:** ✅ Shipped — PrintwayV3 sync confirmed by user
+
 **Files:** none — operational.
 
-- [ ] **Step 1: Generate evidence key (one-time)**
+- [x] **Step 1: Generate evidence key (one-time)**
 
 ```bash
 PRINTWAY="/Users/dzungnguyen/Vibe Code/Code/PrintwayV3"
@@ -2883,14 +2935,14 @@ if [ ! -f "$PRINTWAY/.vg/.evidence-key" ]; then
 fi
 ```
 
-- [ ] **Step 2: Sync via sync.sh**
+- [x] **Step 2: Sync via sync.sh**
 
 ```bash
 DEV_ROOT="$PRINTWAY" ./sync.sh --no-global
 ```
 Expected: prints "synced hooks", "synced agents", "installed VG hooks".
 
-- [ ] **Step 3: Verify install**
+- [x] **Step 3: Verify install**
 
 ```bash
 ls "$PRINTWAY/.claude/scripts/hooks/" | head
@@ -2899,34 +2951,36 @@ python3 -c "import json; print(json.dumps(json.load(open('$PRINTWAY/.claude/sett
 ```
 Expected: hook scripts present, agents present, settings.json contains UserPromptSubmit/SessionStart/PreToolUse/PostToolUse/Stop.
 
-- [ ] **Step 4: Run sync check**
+- [x] **Step 4: Run sync check**
 
 ```bash
 DEV_ROOT="$PRINTWAY" ./sync.sh --check --no-global
 ```
 Expected: `All in sync`.
 
-- [ ] **Step 5: No commit needed (operational only)**
+- [x] **Step 5: No commit needed (operational only)**
 
 ---
 
 ### Task 27: Dogfood `/vg:blueprint 2` on PrintwayV3
 
+**Status:** ✅ Shipped — `/vg:blueprint 2` dogfood confirmed by user
+
 **Files:** none — execution + observation.
 
-- [ ] **Step 1: Open fresh Claude Code session**
+- [x] **Step 1: Open fresh Claude Code session**
 
 User must restart Claude Code in PrintwayV3 directory. Communicate this:
 > "Open a NEW Claude Code session in /Users/dzungnguyen/Vibe Code/Code/PrintwayV3. Do NOT reuse the current session — command text is cached per session."
 
-- [ ] **Step 2: User invokes the pilot**
+- [x] **Step 2: User invokes the pilot**
 
 User types in fresh session:
 ```
 /vg:blueprint 2
 ```
 
-- [ ] **Step 3: Observe + record outcomes**
+- [x] **Step 3: Observe + record outcomes**
 
 While AI runs, watch for:
 - Tasklist appears immediately (UserPromptSubmit + SessionStart fired correctly)
@@ -2936,7 +2990,7 @@ While AI runs, watch for:
 - PLAN.md + API-CONTRACTS.md materialize with real content
 - Stop hook allows clean completion
 
-- [ ] **Step 4: Query metrics post-run**
+- [x] **Step 4: Query metrics post-run**
 
 ```bash
 PRINTWAY="/Users/dzungnguyen/Vibe Code/Code/PrintwayV3"
@@ -2949,7 +3003,7 @@ ORDER BY 2 DESC;
 SQL
 ```
 
-- [ ] **Step 5: Verify exit criteria checklist**
+- [x] **Step 5: Verify exit criteria checklist**
 
 Compare results to spec §5.4 criteria 1-13. For each, mark PASS/FAIL:
 
@@ -2978,7 +3032,7 @@ EOF
 cat /tmp/r1a-pilot-results.md
 ```
 
-- [ ] **Step 6: Commit results to repo**
+- [x] **Step 6: Commit results to repo**
 
 ```bash
 cp /tmp/r1a-pilot-results.md docs/superpowers/plans/2026-05-03-vg-r1a-blueprint-pilot-results.md
@@ -2986,7 +3040,7 @@ git add docs/superpowers/plans/2026-05-03-vg-r1a-blueprint-pilot-results.md
 git commit -m "docs(r1a): blueprint pilot results — <PASS|FAIL>"
 ```
 
-- [ ] **Step 7: Verdict gate**
+- [x] **Step 7: Verdict gate**
 
 If ALL 13 criteria PASS → R1a passes. Proceed to plan R1b (phase orchestrator).
 If ANY criterion FAILS → R1a fails. Return to design phase. DO NOT scale to other commands.
@@ -2997,9 +3051,9 @@ If ANY criterion FAILS → R1a fails. Return to design phase. DO NOT scale to ot
 
 The author of this plan must check before handoff:
 
-- [ ] **Spec coverage**: every spec §1-§7 has at least one task? (Verified: hooks §4.4 → Tasks 4-10, slim entry §4.1 → Task 21, subagents §4.3 → Tasks 19-20, refs §4.2 → Tasks 13-18, install §4.4 → Task 11, helpers §4.4b/c → Tasks 1-2, 5-layer diagnostic embedded in hook impls, multi-canary R1 §5.5 noted in Task 27 verdict gate.)
-- [ ] **Placeholder scan**: no TBD/TODO/etc in steps. (Verified inline.)
-- [ ] **Type consistency**: signed evidence schema (`payload`/`hmac_sha256`/`signed_at`) used consistently across helper, PostToolUse hook, PreToolUse Bash hook, tests. State machine `events` table schema (`ts/event_type/phase/command/run_id/payload`) used consistently in tests.
+- [x] **Spec coverage**: every spec §1-§7 has at least one task? (Verified: hooks §4.4 → Tasks 4-10, slim entry §4.1 → Task 21, subagents §4.3 → Tasks 19-20, refs §4.2 → Tasks 13-18, install §4.4 → Task 11, helpers §4.4b/c → Tasks 1-2, 5-layer diagnostic embedded in hook impls, multi-canary R1 §5.5 noted in Task 27 verdict gate.)
+- [x] **Placeholder scan**: no TBD/TODO/etc in steps. (Verified inline.)
+- [x] **Type consistency**: signed evidence schema (`payload`/`hmac_sha256`/`signed_at`) used consistently across helper, PostToolUse hook, PreToolUse Bash hook, tests. State machine `events` table schema (`ts/event_type/phase/command/run_id/payload`) used consistently in tests.
 
 ---
 
@@ -3014,3 +3068,626 @@ Two execution options:
 2. **Inline Execution** — Execute tasks in this session using executing-plans, batch with checkpoints. Best if you want to watch each commit live.
 
 **Which approach?**
+
+---
+
+## Phase E — Post-pilot follow-on (history-only, NOT executable)
+
+> Phase E documents commits that landed AFTER the original 27 tasks shipped, but within the same blueprint pilot scope. Each surfaced as a dogfood finding requiring an immediate fix or affordance. Recorded here as `Status: ✅ Shipped` so the next-batch designers (R1b/c/d + R2-R5) can see what the pilot revealed needed fixing once the harness was running. No executable steps — these are already in main.
+
+### Task E1: Hierarchical tasklist projection
+
+**Status:** ✅ Shipped — `30c9a05`
+
+**Why it landed:** Original Task 21 emitted a flat 30-step tasklist. AI agents did not visually distinguish step groups (preflight vs. design vs. plan vs. ...). User reported it was hard to glance-scan progress.
+
+**What changed:** `scripts/emit-tasklist.py` now projects 6 group headers (one per checklist group) with sub-steps shown as `↳` indented. PreToolUse Bash gate still verifies signed evidence, but TodoWrite payload accepts the hierarchical form.
+
+**Lesson for batch:** Tasklist projection is per-command; group headers must come from the runtime contract, not be hardcoded. Each future command (review, test, accept, ...) needs its own group structure.
+
+### Task E2: Green-tag spawn narration (GSD-style chip)
+
+**Status:** ✅ Shipped — `21b28d7`
+
+**Why it landed:** Original Task 21 step "spawn subagent" had no user-visible signal. Subagent transitions were silent in chat. Pilot dogfood showed users could not tell when an Agent call started/returned/failed.
+
+**What changed:** Added `scripts/vg-narrate-spawn.sh` — emits ANSI green/cyan/red pill before/after each Agent call. Required by all `Agent(subagent_type=...)` calls per meta-skill. Hook does not enforce; operator courtesy.
+
+**Lesson for batch:** Subagent UX is a cross-cutting concern. Every command spawning subagents must wire up narration. Add to meta-skill checklist for R1b/c/d.
+
+### Task E3: Compact stderr output (silent success + 3-line block)
+
+**Status:** ✅ Shipped — `118dc25`
+
+**Why it landed:** PreToolUse Bash hook emitted multi-line success messages. Stderr clutter on every step-active call drowned out actual block messages.
+
+**What changed:** Hook now silent on success. On block: 3-line stderr (gate id, cause, fix). Layer 1 diagnostic format crystallized.
+
+**Lesson for batch:** Hooks must default to silence on success. Verbose-on-success was the single biggest UX regression in the pilot.
+
+### Task E4: Phase-profile schema regex bugfix port
+
+**Status:** ✅ Shipped — `a3f874d`
+
+**Why it landed:** PrintwayV3 phase 3.2 used a phase ID format the original `filter-steps.py` regex did not match (decimal phase like `7.14`). Caught during dogfood Task 27.
+
+**What changed:** Ported regex fix from PrintwayV3 fork. Phase ID resolver now tolerates decimal + alphanumeric variants. `dbb6f44` was the related fix on the marker schema side.
+
+**Lesson for batch:** Phase ID parsing is shared infra. R1b orchestrator + all downstream commands must use the same canonical resolver.
+
+### Task E5: Per-task split + `vg-load` helper for context budget
+
+**Status:** ✅ Shipped — `3c538b7`
+
+**Why it landed:** Pilot dogfood revealed that downstream commands consuming `PLAN.md` and `API-CONTRACTS.md` would Read the entire 100KB+ file into AI context. AI skim risk is real and confirmed by Codex review.
+
+**What changed:** Blueprint now writes 3-layer artifacts:
+- Layer 1: per-task / per-endpoint / per-goal split (`PLAN/task-NN.md`, `API-CONTRACTS/<slug>.md`, `TEST-GOALS/G-NN.md`)
+- Layer 2: index files (slim TOC)
+- Layer 3: flat concat (legacy backward compat)
+
+`scripts/vg-load.sh` is the unified loader: `vg-load --phase N --artifact contracts --endpoint <slug>` returns just one section.
+
+**Lesson for batch:** `vg-load` is the new contract for downstream consumers. **Phase F below makes this real** — the helper exists but no downstream command uses it yet.
+
+### Task E6: Bake 3 UX requirements into 9 future-flow specs
+
+**Status:** ✅ Shipped — `86b59c0`
+
+**Why it landed:** Pilot dogfood produced 3 cross-cutting UX requirements (silent stderr default, narration chips, hierarchical tasklist) that needed to be baked into the 9 future-flow specs (project, scope, build, review, test, roam, accept, phase, batch) before R1b/c/d planning.
+
+**What changed:** Each spec in `docs/superpowers/specs/2026-05-03-vg-*-design.md` now has a `_shared-ux-baseline` reference, and the baseline doc was created at `docs/superpowers/specs/_shared-ux-baseline.md`.
+
+**Lesson for batch:** UX baseline must be shared, not re-discovered per command. Future spec authors reference `_shared-ux-baseline.md` instead of re-deriving.
+
+---
+
+## Phase F — Downstream split-file consumption (NEW EXECUTABLE)
+
+> Phase F addresses the Phase E5 finding: blueprint produces split files but no downstream command (build/review/test/roam/accept) consumes them. AI executors still receive the full flat 100KB blob and the skim risk is unchanged. This phase migrates downstream consumption to `vg-load`, with backward compat for legacy phases that have only flat files.
+
+> Order: Task 28 audits → Task 29 canaries `vg:build` (main offender) → Task 30 propagates to remaining commands → Task 31 adds size-warning + backward-compat tests → Task 32 documents convention.
+
+### Task 28: Audit downstream flow file-reading patterns
+
+**Files:**
+- Create: `docs/audits/2026-05-03-downstream-flat-vs-split.md`
+- Read: `.claude/commands/vg/{build,review,test,roam,accept}.md`
+
+- [ ] **Step 1: Grep flat-file references per command**
+
+```bash
+cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
+for cmd in build review test roam accept; do
+  echo "=== $cmd.md ==="
+  grep -nE "API-CONTRACTS\.md|PLAN\.md|TEST-GOALS\.md|cat \\\$\\{?PHASE_DIR\\}?|Read .*\\.md" \
+    .claude/commands/vg/$cmd.md
+done > /tmp/downstream-grep.txt
+cat /tmp/downstream-grep.txt
+```
+
+Expected: ~30+ hits across 4 of the 5 commands (`vg:roam` has only 1 PLAN.md ref).
+
+- [ ] **Step 2: Classify each hit into MIGRATE vs KEEP-FLAT**
+
+For each grep hit, decide:
+- **MIGRATE**: hit is read directly into AI context (executor capsule, prompt body, agent input)
+- **KEEP-FLAT**: hit is a deterministic transform (grep validator, mtime check, size-stat) that does not enter AI context
+
+Rule of thumb: if a `cat` or `Read` result becomes part of an Agent prompt or an AI-visible string, MIGRATE. If it feeds a regex / size check / mtime compare, KEEP-FLAT.
+
+- [ ] **Step 3: Write the audit report**
+
+```markdown
+# Downstream flat-file consumption audit (2026-05-03)
+
+## vg:build (HIGH — main offender)
+
+| Line | Snippet | Classification | Notes |
+|------|---------|----------------|-------|
+| 162 | `executors read API-CONTRACTS.md to ensure...` | MIGRATE | Executor capsule input |
+| 501 | `CONTRACTS=$(ls "${PHASE_DIR}"/API-CONTRACTS.md...)` | KEEP-FLAT | Existence check only |
+| 595-602 | `PLAN_FILE` / `CONTRACTS_FILE` mtime stale check | KEEP-FLAT | mtime compare |
+| 783 | `Read API-CONTRACTS.md per task ... extract endpoint sections` | MIGRATE | Per-task contract injection |
+| 1136-1147 | `Contract ref: API-CONTRACTS.md line X-Y` | MIGRATE | Capsule comment — should be vg-load command |
+| 2274 | `PLAN.md task block re-extracted now` | MIGRATE | Wave executor input |
+| 2427 | `Gate 4: Contract verify (grep built code vs API-CONTRACTS.md)` | KEEP-FLAT | grep validator |
+| 3465-3470 | `new/changed endpoints vs API-CONTRACTS.md` | KEEP-FLAT | Surface scan grep |
+| 3580 | `build-time API docs ... from API-CONTRACTS` | MIGRATE | Generator input — could chunk |
+
+## vg:review
+
+(...similar table...)
+
+## vg:test
+
+(...similar table...)
+
+## vg:accept
+
+(...similar table...)
+
+## vg:roam
+
+| Line | Snippet | Classification | Notes |
+|------|---------|----------------|-------|
+| 600 | `Read PLAN.md + CONTEXT.md + RUNTIME-MAP.md` | MIGRATE | CRUD surface identification |
+
+## Migration scope summary
+
+- vg:build — N MIGRATE / M KEEP-FLAT (main canary)
+- vg:review — ...
+- vg:test — ...
+- vg:accept — ...
+- vg:roam — 1 MIGRATE / 0 KEEP-FLAT (small surface)
+
+Total MIGRATE: ~K hits across 5 commands.
+```
+
+- [ ] **Step 4: Commit audit report**
+
+```bash
+git add docs/audits/2026-05-03-downstream-flat-vs-split.md
+git commit -m "audit(r1a-phase-f): downstream flat-file consumption inventory
+
+Classified every flat-file Read/cat reference across vg:build,
+vg:review, vg:test, vg:roam, vg:accept into MIGRATE (enters AI context)
+vs KEEP-FLAT (deterministic transform). Drives Tasks 29-30 migration
+scope. vg:build is the main offender; vg:roam is trivial."
+```
+
+---
+
+### Task 29: Migrate `vg:build` to vg-load (HIGH — canary main offender)
+
+**Files:**
+- Modify: `.claude/commands/vg/build.md` (and `commands/vg/build.md` mirror)
+- Test: `scripts/tests/test_build_uses_vg_load.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+# scripts/tests/test_build_uses_vg_load.py
+"""Static check: vg:build executor capsules use vg-load instead of cat $PHASE_DIR/{PLAN,API-CONTRACTS}.md."""
+from pathlib import Path
+import re
+
+
+BUILD_MD = Path(".claude/commands/vg/build.md")
+ALLOWED_FLAT_LINES = {
+    # KEEP-FLAT classifications from audit Task 28 — these are deterministic transforms
+    # not AI-context inputs. List the line ranges per audit report.
+}
+
+
+def _flat_reads(text: str):
+    """Yield (lineno, snippet) for each cat/Read of PLAN.md or API-CONTRACTS.md."""
+    pat = re.compile(r"(cat\s+[\"']?\$\{?PHASE_DIR\}?[/\"']?(?:PLAN|API-CONTRACTS|TEST-GOALS)\.md|Read\s+\S*(?:PLAN|API-CONTRACTS|TEST-GOALS)\.md)")
+    for i, line in enumerate(text.splitlines(), 1):
+        m = pat.search(line)
+        if m:
+            yield i, line.strip()
+
+
+def test_build_executor_capsules_use_vg_load():
+    text = BUILD_MD.read_text()
+    flat_hits = [(n, s) for n, s in _flat_reads(text) if n not in ALLOWED_FLAT_LINES]
+    # Migration: every executor-context read must go through vg-load
+    assert not flat_hits, (
+        "vg:build still has flat-file reads in AI-context paths:\n"
+        + "\n".join(f"  L{n}: {s}" for n, s in flat_hits)
+    )
+
+
+def test_build_references_vg_load_helper():
+    """Sanity: build.md must mention vg-load if Task 29 shipped."""
+    text = BUILD_MD.read_text()
+    assert "vg-load" in text, "build.md does not reference vg-load helper"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+```bash
+pytest scripts/tests/test_build_uses_vg_load.py -v
+```
+Expected: FAIL — both assertions trip (no vg-load reference, multiple flat reads).
+
+- [ ] **Step 3: Migrate executor capsule generation to vg-load**
+
+In `.claude/commands/vg/build.md` (and mirror), replace each MIGRATE-classified hit (per Task 28 audit) with vg-load invocation. Examples:
+
+Before (line ~783):
+```
+Read `${PHASE_DIR}/API-CONTRACTS.md`. Per plan task, extract only endpoint sections the task touches (grep for endpoint paths task mentions).
+```
+
+After:
+```
+For each plan task, identify endpoints it touches (from `vg-load --phase ${PHASE_NUMBER} --artifact plan --task NN`),
+then load only those endpoint contracts:
+  vg-load --phase ${PHASE_NUMBER} --artifact contracts --endpoint <slug>
+
+Do NOT cat the flat API-CONTRACTS.md file — it loads 100KB+ into context and AI will skim.
+Fallback: if PHASE_DIR/API-CONTRACTS/ subdir does not exist (legacy phase), vg-load --full reverts to flat read with a stderr WARN.
+```
+
+Repeat the pattern for each MIGRATE hit. Update the "Contract ref" capsule template (lines ~1136-1147) to embed the vg-load command instead of `line X-Y` references.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+```bash
+pytest scripts/tests/test_build_uses_vg_load.py -v
+```
+Expected: 2 PASSED.
+
+- [ ] **Step 5: Dogfood on PrintwayV3 phase 2**
+
+```bash
+cd /path/to/PrintwayV3
+# Sync the migrated build.md
+bash /Users/dzungnguyen/Vibe\ Code/Code/vgflow-bugfix/sync.sh
+# Run build with instrumentation to log per-executor context size
+VG_DEBUG_CONTEXT_SIZE=1 /vg:build 2
+```
+
+Expected: per-executor context ≤ 30KB (vs. 100KB+ pre-migration). Capture metric in commit message.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add .claude/commands/vg/build.md commands/vg/build.md \
+        scripts/tests/test_build_uses_vg_load.py
+git commit -m "feat(r1a-phase-f): migrate vg:build executors to vg-load split read
+
+Each wave executor now receives only the task + endpoint contracts it
+touches via vg-load --task / --endpoint. Flat API-CONTRACTS.md no longer
+enters AI context (KEEP-FLAT classifications retained for grep validators
++ mtime checks per audit Task 28). Backward compat: vg-load --full
+fallback handles legacy phases with no split files.
+
+Dogfood PrintwayV3 phase 2: per-executor context X KB → Y KB."
+```
+
+---
+
+### Task 30: Migrate `vg:review` + `vg:test` + `vg:roam` + `vg:accept` to vg-load
+
+**Files:**
+- Modify: `.claude/commands/vg/{review,test,roam,accept}.md` (and mirrors)
+- Test: `scripts/tests/test_downstream_uses_vg_load.py`
+
+- [ ] **Step 1: Write failing test (parameterized across 4 commands)**
+
+```python
+# scripts/tests/test_downstream_uses_vg_load.py
+"""Static check: vg:review/test/roam/accept use vg-load for AI-context blueprint reads."""
+from pathlib import Path
+import pytest, re
+
+
+COMMANDS = ["review", "test", "roam", "accept"]
+
+
+def _flat_reads(text: str):
+    pat = re.compile(r"(cat\s+[\"']?\$\{?PHASE_DIR\}?[/\"']?(?:PLAN|API-CONTRACTS|TEST-GOALS)\.md|Read\s+\S*(?:PLAN|API-CONTRACTS|TEST-GOALS)\.md)")
+    for i, line in enumerate(text.splitlines(), 1):
+        if pat.search(line):
+            yield i, line.strip()
+
+
+@pytest.mark.parametrize("cmd", COMMANDS)
+def test_command_references_vg_load(cmd):
+    text = Path(f".claude/commands/vg/{cmd}.md").read_text()
+    assert "vg-load" in text, f"{cmd}.md does not reference vg-load"
+
+
+@pytest.mark.parametrize("cmd", COMMANDS)
+def test_command_no_unaudited_flat_reads(cmd):
+    """Every flat read must be in the per-command ALLOWED set (audit-classified KEEP-FLAT).
+    Audit doc: docs/audits/2026-05-03-downstream-flat-vs-split.md."""
+    text = Path(f".claude/commands/vg/{cmd}.md").read_text()
+    allowed_per_cmd = {
+        # Fill from Task 28 audit per-command KEEP-FLAT classifications.
+        "review": set(),
+        "test": set(),
+        "roam": set(),
+        "accept": set(),
+    }
+    flat_hits = [(n, s) for n, s in _flat_reads(text) if n not in allowed_per_cmd[cmd]]
+    assert not flat_hits, f"{cmd}.md flat reads not in audit allow-list:\n" + "\n".join(f"  L{n}: {s}" for n, s in flat_hits)
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+```bash
+pytest scripts/tests/test_downstream_uses_vg_load.py -v
+```
+Expected: 8 FAIL (4 commands × 2 tests).
+
+- [ ] **Step 3: Apply migration pattern to each command**
+
+Same pattern as Task 29, applied per command:
+
+- **vg:review** — Phase 4 GOAL COMPARISON loads goals via `vg-load --artifact goals --priority critical` then per-goal as needed; profile-aware prerequisite gate uses `vg-load --index` for size check.
+- **vg:test** — codegen loads per-goal (`--goal G-NN`); endpoint scan uses `--list` then per-endpoint.
+- **vg:roam** — single Read at L600 → `vg-load --artifact plan --index` (PLAN/index.md is enough for CRUD surface identification; per-task lazy load if surface drill-down needed).
+- **vg:accept** — UAT generator: `vg-load --artifact goals --list` for checklist, lazy per-goal on user expand.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+```bash
+pytest scripts/tests/test_downstream_uses_vg_load.py -v
+```
+Expected: 8 PASSED.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add .claude/commands/vg/{review,test,roam,accept}.md \
+        commands/vg/{review,test,roam,accept}.md \
+        scripts/tests/test_downstream_uses_vg_load.py
+git commit -m "feat(r1a-phase-f): migrate review/test/roam/accept to vg-load
+
+Each command now reads blueprint artifacts via vg-load with appropriate
+filter (--goal G-NN, --endpoint <slug>, --task NN, --index, --list)
+based on the audit-classified MIGRATE hits. KEEP-FLAT classifications
+(grep validators, mtime checks) retained per audit doc. Backward compat
+via vg-load --full fallback for legacy flat-only phases."
+```
+
+---
+
+### Task 31: Backward compat + size-warning validator
+
+**Files:**
+- Create: `scripts/validators/verify-blueprint-split-size.py`
+- Test: `scripts/tests/test_split_size_validator.py`
+- Test: `scripts/tests/test_vg_load_backward_compat.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# scripts/tests/test_vg_load_backward_compat.py
+"""Verify vg-load works on 3 phase shapes: flat-only (legacy), split-only, both."""
+import subprocess, tempfile
+from pathlib import Path
+
+
+def _make_phase(tmp: Path, *, flat=False, split=False):
+    pdir = tmp / "phase-7"
+    pdir.mkdir()
+    if flat:
+        (pdir / "API-CONTRACTS.md").write_text("# Flat API\n## POST /api/x\nfoo\n## GET /api/y\nbar\n")
+    if split:
+        sub = pdir / "API-CONTRACTS"
+        sub.mkdir()
+        (sub / "index.md").write_text("- post-api-x\n- get-api-y\n")
+        (sub / "post-api-x.md").write_text("# POST /api/x\nfoo split\n")
+        (sub / "get-api-y.md").write_text("# GET /api/y\nbar split\n")
+    return pdir
+
+
+def test_legacy_flat_only_phase_falls_back(tmp_path):
+    pdir = _make_phase(tmp_path, flat=True)
+    out = subprocess.run(
+        ["bash", "scripts/vg-load.sh", "--phase", str(pdir), "--artifact", "contracts", "--full", "--quiet"],
+        capture_output=True, text=True, check=True,
+    )
+    assert "Flat API" in out.stdout
+
+
+def test_split_only_phase_endpoint_load(tmp_path):
+    pdir = _make_phase(tmp_path, split=True)
+    out = subprocess.run(
+        ["bash", "scripts/vg-load.sh", "--phase", str(pdir), "--artifact", "contracts", "--endpoint", "post-api-x", "--quiet"],
+        capture_output=True, text=True, check=True,
+    )
+    assert "foo split" in out.stdout
+
+
+def test_both_present_split_takes_precedence(tmp_path):
+    pdir = _make_phase(tmp_path, flat=True, split=True)
+    out = subprocess.run(
+        ["bash", "scripts/vg-load.sh", "--phase", str(pdir), "--artifact", "contracts", "--endpoint", "post-api-x", "--quiet"],
+        capture_output=True, text=True, check=True,
+    )
+    # Endpoint filter must hit the split file, not the flat
+    assert "foo split" in out.stdout
+    assert "Flat API" not in out.stdout
+
+
+# scripts/tests/test_split_size_validator.py
+import subprocess, tempfile
+from pathlib import Path
+
+
+def test_warns_when_flat_large_and_split_missing(tmp_path):
+    pdir = tmp_path / "phase-9"
+    pdir.mkdir()
+    (pdir / "API-CONTRACTS.md").write_text("X" * 35_000)  # > 30 KB
+    out = subprocess.run(
+        ["python3", "scripts/validators/verify-blueprint-split-size.py", "--phase-fir", str(pdir)],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0  # WARN, not BLOCK
+    assert "WARN" in out.stderr
+    assert "split files missing" in out.stderr
+
+
+def test_silent_when_split_present(tmp_path):
+    pdir = tmp_path / "phase-10"
+    pdir.mkdir()
+    (pdir / "API-CONTRACTS.md").write_text("X" * 35_000)
+    sub = pdir / "API-CONTRACTS"; sub.mkdir()
+    (sub / "index.md").write_text("ok\n")
+    (sub / "ep1.md").write_text("ep1\n")
+    out = subprocess.run(
+        ["python3", "scripts/validators/verify-blueprint-split-size.py", "--phase-fir", str(pdir)],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0
+    assert "WARN" not in out.stderr
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+pytest scripts/tests/test_vg_load_backward_compat.py scripts/tests/test_split_size_validator.py -v
+```
+Expected: backward-compat tests likely PASS (vg-load already supports `--full`); validator tests FAIL (script does not exist).
+
+- [ ] **Step 3: Implement size-warning validator**
+
+```python
+#!/usr/bin/env python3
+# scripts/validators/verify-blueprint-split-size.py
+"""WARN if flat blueprint artifact > 30 KB AND split subdir missing.
+
+Exit 0 always — this is advisory, not a block. Goal: surface re-blueprint
+opportunities for legacy phases without breaking the build.
+"""
+import argparse, sys
+from pathlib import Path
+
+THRESHOLD_BYTES = 30 * 1024  # 30 KB ≈ 7K tokens — empirical AI-skim boundary
+ARTIFACTS = [
+    ("API-CONTRACTS.md", "API-CONTRACTS"),
+    ("PLAN.md", "PLAN"),
+    ("TEST-GOALS.md", "TEST-GOALS"),
+]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--phase-fir", required=True)
+    args = ap.parse_args()
+    pdir = Path(args.phase_dir)
+    for flat_name, split_name in ARTIFACTS:
+        flat = pdir / flat_name
+        split = pdir / split_name
+        if flat.exists() and flat.stat().st_size > THRESHOLD_BYTES and not split.exists():
+            sys.stderr.write(
+                f"WARN: {flat} is {flat.stat().st_size // 1024} KB but split files missing.\n"
+                f"      Consider re-running /vg:blueprint to regenerate split layout — "
+                f"AI consumers will skim this file at current size.\n"
+            )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 4: Run tests to verify all pass**
+
+```bash
+pytest scripts/tests/test_vg_load_backward_compat.py scripts/tests/test_split_size_validator.py -v
+```
+Expected: 5 PASSED.
+
+- [ ] **Step 5: Wire validator into pre-build gate (WARN level)**
+
+In `.claude/commands/vg/build.md`, add to the prerequisite-check block:
+
+```bash
+# Advisory: warn if blueprint artifacts are stale flat-only
+python3 scripts/validators/verify-blueprint-split-size.py --phase-fir "${PHASE_DIR}" || true
+```
+
+(Note: `|| true` because validator exits 0 either way — wired here for stderr surfacing only.)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add scripts/validators/verify-blueprint-split-size.py \
+        scripts/tests/test_vg_load_backward_compat.py \
+        scripts/tests/test_split_size_validator.py \
+        .claude/commands/vg/build.md commands/vg/build.md
+git commit -m "feat(r1a-phase-f): backward compat tests + flat-size WARN validator
+
+Verifies vg-load works on flat-only / split-only / both phase shapes.
+Adds advisory validator that WARNs (no block) when a flat artifact
+exceeds 30 KB without a split subdir — surfaces re-blueprint opportunity
+for legacy phases. Wired into vg:build pre-check at WARN level."
+```
+
+---
+
+### Task 32: Document split-file convention
+
+**Files:**
+- Modify: `.claude/skills/vg-meta-skill.md`
+- Modify: `CHANGELOG.md` (or equivalent)
+
+- [ ] **Step 1: Add convention to meta-skill**
+
+Append section to `.claude/skills/vg-meta-skill.md`:
+
+```markdown
+## Blueprint artifact convention (R1a Phase F)
+
+Blueprint writes 3-layer artifacts: per-task/endpoint/goal split (Layer 1) +
+index files (Layer 2) + flat concat (Layer 3, legacy compat).
+
+**Downstream commands MUST prefer `vg-load` over flat read.** Direct
+`cat $PHASE_DIR/{PLAN,API-CONTRACTS,TEST-GOALS}.md` is forbidden in
+AI-context paths (executor capsules, agent prompts, codegen inputs)
+because the flat file enters AI context as a 100KB+ blob and triggers
+skim. Use:
+
+  vg-load --phase N --artifact plan --task NN
+  vg-load --phase N --artifact contracts --endpoint <slug>
+  vg-load --phase N --artifact goals --goal G-NN
+
+Deterministic transforms (grep validators, mtime checks, surface scans)
+MAY keep flat reads — they don't enter AI context. Audit doc
+`docs/audits/2026-05-03-downstream-flat-vs-split.md` is the canonical
+classification.
+
+Threshold: flat artifact > 30 KB without split subdir triggers a WARN
+(advisory, not block) via `verify-blueprint-split-size.py`. 30 KB ≈ 7K
+tokens — empirical AI-skim boundary.
+
+Backward compat: `vg-load --full` falls back to flat for legacy phases.
+```
+
+- [ ] **Step 2: Add CHANGELOG entry**
+
+```markdown
+## Phase F — Downstream split-file consumption (2026-05-03)
+
+- Migrated `vg:build`, `vg:review`, `vg:test`, `vg:roam`, `vg:accept` to read
+  blueprint artifacts via `vg-load` instead of flat `Read`/`cat`. AI
+  executor context per-task drops from ~100KB+ to ≤30KB.
+- Added `verify-blueprint-split-size.py` advisory validator (WARN level)
+  for legacy phases with flat artifacts but missing split subdirs.
+- Audit doc `docs/audits/2026-05-03-downstream-flat-vs-split.md` is the
+  canonical MIGRATE-vs-KEEP-FLAT classification.
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add .claude/skills/vg-meta-skill.md CHANGELOG.md
+git commit -m "docs(r1a-phase-f): canonize vg-load convention + Phase F changelog
+
+Meta-skill section: downstream commands MUST prefer vg-load over flat
+read in AI-context paths; deterministic transforms may keep flat. 30 KB
+threshold rationale documented (~7K tokens, empirical AI-skim boundary).
+Backward compat via vg-load --full fallback noted."
+```
+
+---
+
+## Phase F Verdict Gate
+
+After Tasks 28-32 ship, verify:
+
+- [ ] Per-executor context size on PrintwayV3 phase 2 dropped ≥ 50% (Task 29 dogfood metric).
+- [ ] All 5 downstream commands reference `vg-load` (Tasks 29-30 tests pass).
+- [ ] Backward compat tests green (Task 31).
+- [ ] Size-warning validator surfaces correctly on a legacy flat-only phase (Task 31 manual verify).
+- [ ] Meta-skill + CHANGELOG updated (Task 32).
+- [ ] No regression in Phase A/B test suite (`pytest scripts/tests/ -v`).
+
+If verdict PASS → R1a Phase F complete; pattern ready to replicate to R2-R5 batch refactor. If FAIL on dogfood metric → revisit chunking strategy in Task 29 before shipping Tasks 30-32.
