@@ -103,6 +103,7 @@ def _verify_artifact_run_binding(artifact_path: Path, run_id: str,
     """
     import hashlib as _hashlib
     import json as _json
+    import subprocess
     from pathlib import Path as _Path
 
     def _sha256(p: _Path) -> str | None:
