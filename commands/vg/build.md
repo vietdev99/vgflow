@@ -1,7 +1,7 @@
 ---
 name: vg:build
 description: Execute phase plans with contract-aware wave-based parallel execution
-argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status]"
+argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck]"
 allowed-tools:
   - Read
   - Write
@@ -80,6 +80,7 @@ runtime_contract:
     - "--allow-missing-commits"
     - "--allow-r5-violation"
     - "--force"
+    - "--skip-truthcheck"
 ---
 
 <NARRATION_POLICY>
@@ -227,7 +228,7 @@ Sync chain flag:
 # (GSD auto-chain is N/A — VG uses explicit /vg:next routing)
 
 # Flag allowlist (v1.14.4+ — typo guard). Unknown flag = hard BLOCK, not silent skip.
-VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-context-rebuild|resume|allow-missing-commits|allow-r5-violation|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|allow-ux-violations|override-reason|force|help)$'
+VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-context-rebuild|resume|skip-truthcheck|allow-missing-commits|allow-r5-violation|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|allow-ux-violations|override-reason|force|help)$'
 UNKNOWN_FLAGS=""
 for tok in ${ARGUMENTS:-}; do
   case "$tok" in
@@ -243,7 +244,7 @@ done
 if [ -n "$UNKNOWN_FLAGS" ]; then
   echo "⛔ Unknown flag(s):${UNKNOWN_FLAGS}"
   echo "   Valid flags: --wave, --only, --status, --gaps-only, --interactive, --auto,"
-  echo "                --reset-queue, --skip-design-check, --skip-context-rebuild, --resume,"
+  echo "                --reset-queue, --skip-design-check, --skip-context-rebuild, --resume, --skip-truthcheck,"
   echo "                --allow-missing-commits, --allow-r5-violation, --override-reason=<text>, --force, --help"
   echo "   Có thể bạn gõ sai chính tả (typo). Check lại arguments trước khi chạy."
   exit 1
@@ -4123,31 +4124,6 @@ if [ -f "$ROUTE_SCHEMA_VAL" ] && [ -d "apps/api/src" ]; then
   fi
 fi
 
-# RFC v9 PR-D — OpenAPI export evidence step.
-# After route schemas validated, boot API briefly to dump openapi.json.
-# This makes the contract machine-readable for FE codegen, FIXTURES
-# generation, Haiku scanner form-fill, and review-time drift detection.
-# Best-effort — skip silently if API not bootable in this env.
-OPENAPI_EXPORT_OUT="apps/api/openapi.json"
-if [ -d "apps/api/src" ] && [ "${VG_OPENAPI_EXPORT:-true}" = "true" ]; then
-  echo "━━━ PR-D — OpenAPI evidence export ━━━"
-  OPENAPI_URL_PROBE="${VG_OPENAPI_PROBE_URL:-http://localhost:4000/api/v1/openapi.json}"
-  # Quick probe: is API already up?
-  if curl -fsS --max-time 3 "$OPENAPI_URL_PROBE" -o /tmp/openapi-probe.json 2>/dev/null; then
-    cp /tmp/openapi-probe.json "$OPENAPI_EXPORT_OUT"
-    OPENAPI_PATHS=$(${PYTHON_BIN:-python3} -c "
-import json
-try: print(len(json.load(open('$OPENAPI_EXPORT_OUT'))['paths']))
-except Exception as e: print('?')
-")
-    echo "  PR-D: openapi.json exported (${OPENAPI_PATHS} paths) → ${OPENAPI_EXPORT_OUT}"
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.openapi_exported" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"paths\":${OPENAPI_PATHS:-0}}" >/dev/null 2>&1 || true
-  else
-    echo "  PR-D: skipped — API not running at ${OPENAPI_URL_PROBE}"
-    echo "         (set VG_OPENAPI_PROBE_URL or boot API for export to fire)"
-  fi
-fi
-
 # RFC v9 PR-E — API truthcheck loop (1-command 3-phase build).
 # After BE+FE code committed and openapi.json exported, run every backend
 # mutation goal that has FIXTURES through recipe_executor with hard
@@ -4175,105 +4151,231 @@ fi
 #   --resume=truthcheck                re-run truthcheck only (skip BE/FE)
 TRUTHCHECK_OUT="${PHASE_DIR}/.api-truthcheck.json"
 TRUTHCHECK_ENABLED=$(vg_config_get "build.api_truthcheck.enabled" "true" 2>/dev/null || echo "true")
+TRUTHCHECK_SKIP_REASON=""
+TRUTHCHECK_SUMMARY='{"verdict":"SKIP","reason":"not-run"}'
 
 if [[ "${ARGUMENTS}" =~ --skip-truthcheck ]]; then
-  echo "  PR-E: SKIPPED via --skip-truthcheck (override-debt logged)"
+  if [[ ! "${ARGUMENTS}" =~ --override-reason=([^[:space:]]+) ]]; then
+    echo "⛔ --skip-truthcheck requires --override-reason=<issue-id-or-url>"
+    exit 1
+  fi
+  TRUTHCHECK_SKIP_REASON="${BASH_REMATCH[1]}"
+  if type -t log_override_debt >/dev/null 2>&1; then
+    log_override_debt "--skip-truthcheck" "$PHASE_NUMBER" \
+      "build.api-truthcheck.skipped" "$TRUTHCHECK_SKIP_REASON" \
+      "build-api-truthcheck-skipped" >/dev/null 2>&1 || true
+  fi
+  echo "  PR-E: SKIPPED via --skip-truthcheck (override-debt logged: ${TRUTHCHECK_SKIP_REASON})"
+  TRUTHCHECK_SUMMARY=$(TRUTHCHECK_SKIP_REASON="$TRUTHCHECK_SKIP_REASON" ${PYTHON_BIN:-python3} -c "import json,os; print(json.dumps({'verdict':'SKIP','reason':'--skip-truthcheck','override_reason':os.environ.get('TRUTHCHECK_SKIP_REASON','')}))")
+  printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "build.api_truthcheck_skipped" \
+    --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"reason\":$(printf '%s' "$TRUTHCHECK_SKIP_REASON" | ${PYTHON_BIN:-python3} -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" \
+    >/dev/null 2>&1 || true
   TRUTHCHECK_ENABLED="false"
 fi
 
-if [ "$TRUTHCHECK_ENABLED" = "true" ] && [ -d "${PHASE_DIR}/FIXTURES" ] && \
-   [ -f "${REPO_ROOT}/scripts/runtime/recipe_executor.py" ] && \
-   [ -f "$OPENAPI_EXPORT_OUT" ]; then
-  echo "━━━ PR-E — API truthcheck loop (max 5 iter) ━━━"
-
-  # Build list of mutation goals with FIXTURES present.
-  TRUTHCHECK_GOALS=$(ls "${PHASE_DIR}/FIXTURES"/G-*.yaml 2>/dev/null | \
-    xargs -n1 basename 2>/dev/null | sed 's/\.yaml$//' | tr '\n' ' ')
-  TRUTHCHECK_COUNT=$(echo "$TRUTHCHECK_GOALS" | wc -w | tr -d ' ')
-
-  if [ "${TRUTHCHECK_COUNT:-0}" -eq 0 ]; then
-    echo "  PR-E: no fixture goals — skip truthcheck"
+# RFC v9 PR-D — OpenAPI export evidence step.
+# Truthcheck-enabled runs are fail-closed: must have machine-readable OpenAPI.
+OPENAPI_EXPORT_OUT="apps/api/openapi.json"
+OPENAPI_EXPORT_OK="false"
+if [ -d "apps/api/src" ] && [ "${VG_OPENAPI_EXPORT:-true}" = "true" ]; then
+  echo "━━━ PR-D — OpenAPI evidence export ━━━"
+  OPENAPI_URL_PROBE="${VG_OPENAPI_PROBE_URL:-http://localhost:4000/api/v1/openapi.json}"
+  if curl -fsS --max-time 3 "$OPENAPI_URL_PROBE" -o /tmp/openapi-probe.json 2>/dev/null; then
+    cp /tmp/openapi-probe.json "$OPENAPI_EXPORT_OUT"
+    OPENAPI_PATHS=$(${PYTHON_BIN:-python3} -c "
+import json
+try: print(len(json.load(open('$OPENAPI_EXPORT_OUT'))['paths']))
+except Exception: print('?')
+")
+    echo "  PR-D: openapi.json exported (${OPENAPI_PATHS} paths) → ${OPENAPI_EXPORT_OUT}"
+    OPENAPI_EXPORT_OK="true"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.openapi_exported" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"paths\":${OPENAPI_PATHS:-0}}" >/dev/null 2>&1 || true
   else
-    echo "  PR-E: ${TRUTHCHECK_COUNT} fixture goal(s) to verify"
+    echo "  PR-D: probe failed at ${OPENAPI_URL_PROBE}"
+  fi
+fi
 
-    TRUTHCHECK_BASE_URL="${VG_BASE_URL:-${VG_OPENAPI_PROBE_URL%/api/v1/openapi.json}}"
-    TRUTHCHECK_ITER=0
-    TRUTHCHECK_MAX_ITER=5
-    TRUTHCHECK_FAILED_GOALS="$TRUTHCHECK_GOALS"
+if [ "$OPENAPI_EXPORT_OK" != "true" ] && [ -f "$OPENAPI_EXPORT_OUT" ]; then
+  OPENAPI_EXPORT_OK="true"
+  echo "  PR-D: using existing ${OPENAPI_EXPORT_OUT} (probe unavailable)"
+fi
 
-    while [ "$TRUTHCHECK_ITER" -lt "$TRUTHCHECK_MAX_ITER" ] && \
-          [ -n "$TRUTHCHECK_FAILED_GOALS" ]; do
-      TRUTHCHECK_ITER=$((TRUTHCHECK_ITER + 1))
-      echo "  PR-E iter ${TRUTHCHECK_ITER}/${TRUTHCHECK_MAX_ITER}: running ${TRUTHCHECK_FAILED_GOALS}"
+if [ "$TRUTHCHECK_ENABLED" = "true" ] && [ "$OPENAPI_EXPORT_OK" != "true" ]; then
+  echo "⛔ PR-D/PR-E BLOCK: truthcheck enabled but openapi evidence unavailable."
+  echo "   Required: boot API so ${VG_OPENAPI_PROBE_URL:-http://localhost:4000/api/v1/openapi.json} responds,"
+  echo "   or provide ${OPENAPI_EXPORT_OUT} before /vg:review."
+  exit 1
+fi
 
-      # Run recipe_executor for each failing goal, collect results.
-      # Captured store (FIXTURES-CACHE.json) is populated for goals that
-      # succeed — those become input for /vg:review form-fill.
-      ITER_FAILED=""
-      for gid in $TRUTHCHECK_FAILED_GOALS; do
-        ${PYTHON_BIN:-python3} - <<PY 2>&1 | sed "s/^/    [${gid}] /"
-import os, sys, json
-sys.path.insert(0, os.path.join(os.environ['REPO_ROOT'], 'scripts'))
+if [ "$TRUTHCHECK_ENABLED" = "true" ]; then
+  if [ ! -d "${PHASE_DIR}/FIXTURES" ]; then
+    echo "  PR-E: no FIXTURES directory — skip truthcheck"
+    TRUTHCHECK_SUMMARY='{"verdict":"SKIP","reason":"no-fixtures-dir"}'
+    printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
+  elif [ ! -f "${REPO_ROOT}/scripts/runtime/recipe_executor.py" ]; then
+    echo "⛔ PR-E BLOCK: scripts/runtime/recipe_executor.py missing"
+    exit 1
+  else
+    echo "━━━ PR-E — API truthcheck loop (max 5 iter) ━━━"
+
+    TRUTHCHECK_GOALS=$(ls "${PHASE_DIR}/FIXTURES"/G-*.yaml 2>/dev/null | \
+      xargs -n1 basename 2>/dev/null | sed 's/\.yaml$//' | tr '\n' ' ')
+    TRUTHCHECK_COUNT=$(echo "$TRUTHCHECK_GOALS" | wc -w | tr -d ' ')
+
+    if [ "${TRUTHCHECK_COUNT:-0}" -eq 0 ]; then
+      echo "  PR-E: no fixture goals — skip truthcheck"
+      TRUTHCHECK_SUMMARY='{"verdict":"SKIP","reason":"no-fixture-goals"}'
+      printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
+    else
+      echo "  PR-E: ${TRUTHCHECK_COUNT} fixture goal(s) to verify"
+      TRUTHCHECK_BASE_URL="${VG_BASE_URL:-${VG_OPENAPI_PROBE_URL:-http://localhost:4000/api/v1/openapi.json}}"
+      TRUTHCHECK_BASE_URL="${TRUTHCHECK_BASE_URL%/api/v1/openapi.json}"
+      if [ -z "$TRUTHCHECK_BASE_URL" ]; then
+        echo "⛔ PR-E BLOCK: cannot resolve TRUTHCHECK_BASE_URL (set VG_BASE_URL)."
+        exit 1
+      fi
+
+      TRUTHCHECK_ITER=0
+      TRUTHCHECK_MAX_ITER=5
+      TRUTHCHECK_FAILED_GOALS="$TRUTHCHECK_GOALS"
+
+      while [ "$TRUTHCHECK_ITER" -lt "$TRUTHCHECK_MAX_ITER" ] && \
+            [ -n "$TRUTHCHECK_FAILED_GOALS" ]; do
+        TRUTHCHECK_ITER=$((TRUTHCHECK_ITER + 1))
+        echo "  PR-E iter ${TRUTHCHECK_ITER}/${TRUTHCHECK_MAX_ITER}: running ${TRUTHCHECK_FAILED_GOALS}"
+
+        ITER_FAILED=""
+        for gid in $TRUTHCHECK_FAILED_GOALS; do
+          PHASE_DIR="$PHASE_DIR" PHASE_NUMBER="$PHASE_NUMBER" REPO_ROOT="$REPO_ROOT" \
+          TRUTHCHECK_BASE_URL="$TRUTHCHECK_BASE_URL" GID="$gid" PYTHON_BIN="${PYTHON_BIN:-python3}" \
+          ${PYTHON_BIN:-python3} - <<'PY' 2>&1 | sed "s/^/    [${gid}] /"
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+
+from runtime.fixture_cache import acquire_lease, release_lease, recipe_hash, write_captured
+from runtime.recipe_executor import RecipeRunner
+from runtime.recipe_loader import load_recipe
+
+phase_dir = Path(os.environ["PHASE_DIR"])
+phase = os.environ.get("PHASE_NUMBER") or "unknown"
+repo_root = Path(os.environ["REPO_ROOT"])
+base_url = os.environ["TRUTHCHECK_BASE_URL"]
+gid = os.environ["GID"]
+
+def load_credentials_map(config_path: Path) -> dict:
+    if config_path.exists():
+        text = config_path.read_text(encoding="utf-8")
+        m = re.search(r"^credentials:\s*\n(?P<body>(?:[ \t].*\n)+)", text, re.MULTILINE)
+        if m:
+            try:
+                import yaml  # type: ignore
+                full = yaml.safe_load("credentials:\n" + m.group("body"))
+                if isinstance(full, dict):
+                    creds = full.get("credentials")
+                    if isinstance(creds, dict):
+                        return creds
+            except Exception:
+                pass
+    env_creds = os.environ.get("VG_CREDENTIALS_JSON")
+    if env_creds:
+        try:
+            parsed = json.loads(env_creds)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+config_path = repo_root / ".claude" / "vg.config.md"
+credentials_map = load_credentials_map(config_path)
+if not credentials_map:
+    raise RuntimeError(
+        f"credentials_map empty — load from {config_path} OR set VG_CREDENTIALS_JSON"
+    )
+
+fixture_path = phase_dir / "FIXTURES" / f"{gid}.yaml"
+recipe = load_recipe(fixture_path)
+recipe_text = fixture_path.read_text(encoding="utf-8")
+owner_session = f"build-{phase}-{os.getpid()}"
+
+acquire_lease(
+    phase_dir, gid,
+    owner_session=owner_session,
+    consume_semantics=(recipe.get("consume_semantics") or "read_only"),
+    recipe_hash_value=recipe_hash(recipe_text),
+)
 try:
-    from runtime.recipe_loader import load_recipe
-    from runtime.recipe_executor import RecipeRunner
-    fixture_path = os.path.join(
-        os.environ['PHASE_DIR'], 'FIXTURES', '${gid}.yaml',
-    )
-    recipe = load_recipe(fixture_path)
     runner = RecipeRunner(
-        base_url='${TRUTHCHECK_BASE_URL}',
-        env=os.environ.get('VG_ENV', 'sandbox'),
-        credentials_map={},  # vg.config credentials loaded by recipe_auth
+        base_url=base_url,
+        env=os.environ.get("VG_ENV", "sandbox"),
+        credentials_map=credentials_map,
     )
-    result = runner.run(recipe)
-    print(f"PASS — captured: {sorted(result.store.keys())}")
-except Exception as e:
-    print(f"FAIL — {type(e).__name__}: {e}")
-    sys.exit(1)
+    captured = runner.run(recipe)
+    write_captured(
+        phase_dir, gid, captured,
+        owner_session=owner_session,
+        recipe_hash_value=recipe_hash(recipe_text),
+    )
+    print(f"PASS — captured: {sorted(captured.keys())}")
+finally:
+    release_lease(phase_dir, gid, owner_session)
 PY
-        if [ $? -ne 0 ]; then
-          ITER_FAILED="$ITER_FAILED $gid"
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+            ITER_FAILED="$ITER_FAILED $gid"
+          fi
+        done
+
+        TRUTHCHECK_FAILED_GOALS=$(echo "$ITER_FAILED" | xargs)
+        if [ -z "$TRUTHCHECK_FAILED_GOALS" ]; then
+          echo "  PR-E: all goals PASS at iter ${TRUTHCHECK_ITER}"
+          TRUTHCHECK_SUMMARY=$(${PYTHON_BIN:-python3} -c "import json; print(json.dumps({'verdict':'PASS','iterations':${TRUTHCHECK_ITER},'goals':${TRUTHCHECK_COUNT}}))")
+          printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
+          "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+            "build.api_truthcheck_passed" \
+            --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"iterations\":${TRUTHCHECK_ITER},\"goals\":${TRUTHCHECK_COUNT}}" \
+            >/dev/null 2>&1 || true
+          break
         fi
       done
 
-      TRUTHCHECK_FAILED_GOALS=$(echo "$ITER_FAILED" | xargs)
-      if [ -z "$TRUTHCHECK_FAILED_GOALS" ]; then
-        echo "  PR-E: all goals PASS at iter ${TRUTHCHECK_ITER}"
-        break
-      fi
-    done
-
-    # Hit cap with failures remaining → diagnostic L2 fallback.
-    if [ -n "$TRUTHCHECK_FAILED_GOALS" ]; then
-      echo "  PR-E: iter cap hit, ${TRUTHCHECK_FAILED_GOALS} still failing"
-      if [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; then
-        echo "  PR-E: spawning diagnostic_l2 for residual failures"
-        echo "$TRUTHCHECK_FAILED_GOALS" > "${PHASE_DIR}/.api-truthcheck-failed.txt"
-        "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" \
-          --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
-          --gate-id "build.api_truthcheck" \
-          --evidence-file "${PHASE_DIR}/.api-truthcheck-failed.txt" 2>&1 | sed 's/^/    /' || true
-        # Open DEFECT-LOG entries for each failed goal
-        if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
-          for gid in $TRUTHCHECK_FAILED_GOALS; do
-            "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" \
-              defect new --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
-              --title "[API-TRUTHCHECK] ${gid} fails recipe execution after ${TRUTHCHECK_MAX_ITER} iter" \
-              --severity major --found-in build \
-              --goals "$gid" \
-              --notes "L2 proposal pending; see .api-truthcheck-failed.txt" 2>/dev/null || true
-          done
+      if [ -n "$TRUTHCHECK_FAILED_GOALS" ]; then
+        TRUTHCHECK_SUMMARY=$(${PYTHON_BIN:-python3} -c "import json; print(json.dumps({'verdict':'BLOCK','iterations':${TRUTHCHECK_MAX_ITER},'failed':'$TRUTHCHECK_FAILED_GOALS'}))")
+        printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
+        echo "  PR-E: iter cap hit, ${TRUTHCHECK_FAILED_GOALS} still failing"
+        if [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; then
+          echo "  PR-E: spawning diagnostic_l2 for residual failures"
+          echo "$TRUTHCHECK_FAILED_GOALS" > "${PHASE_DIR}/.api-truthcheck-failed.txt"
+          "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" \
+            --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
+            --gate-id "build.api_truthcheck" \
+            --evidence-file "${PHASE_DIR}/.api-truthcheck-failed.txt" 2>&1 | sed 's/^/    /' || true
+          if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
+            for gid in $TRUTHCHECK_FAILED_GOALS; do
+              "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" \
+                defect new --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
+                --title "[API-TRUTHCHECK] ${gid} fails recipe execution after ${TRUTHCHECK_MAX_ITER} iter" \
+                --severity major --found-in build \
+                --goals "$gid" \
+                --notes "L2 proposal pending; see .api-truthcheck-failed.txt" 2>/dev/null || true
+            done
+          fi
         fi
+        echo "  PR-E: BLOCK — fix path:"
+        echo "    1. User accept L2 proposal → re-run /vg:build --resume=truthcheck"
+        echo "    2. /vg:build --skip-truthcheck --override-reason=\"...\" (debt)"
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+          "build.api_truthcheck_blocked" \
+          --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"failed\":\"$TRUTHCHECK_FAILED_GOALS\"}" \
+          >/dev/null 2>&1 || true
+        exit 1
       fi
-      echo "  PR-E: BLOCK — fix path:"
-      echo "    1. User accept L2 proposal → re-run /vg:build --resume=truthcheck"
-      echo "    2. /vg:build --skip-truthcheck --override-reason=\"...\" (debt)"
-      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-        "build.api_truthcheck_blocked" \
-        --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"failed\":\"$TRUTHCHECK_FAILED_GOALS\"}" \
-        >/dev/null 2>&1 || true
-      exit 1
     fi
   fi
 fi
