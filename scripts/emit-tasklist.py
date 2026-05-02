@@ -83,6 +83,29 @@ CHECKLIST_DEFS = {
         ]),
         ("specs_close", "Commit And Next", ["commit_and_next"]),
     ],
+    "vg:scope": [
+        ("scope_preflight", "Scope Preflight", [
+            "0_parse_and_validate",
+        ]),
+        ("scope_discussion", "Deep Discussion (5 Rounds + Deep Probe)", [
+            "1_deep_discussion",
+        ]),
+        ("scope_env_preference", "Env Preference (Sandbox/Staging/Prod)", [
+            "1b_env_preference",
+        ]),
+        ("scope_artifact", "Artifact Generation (CONTEXT + DISCUSSION-LOG + Per-Decision Split)", [
+            "2_artifact_generation",
+        ]),
+        ("scope_validation", "Completeness Validation (4 Checks)", [
+            "3_completeness_validation",
+        ]),
+        ("scope_crossai", "CrossAI Review + Reflection + Test-Strategy", [
+            "4_crossai_review", "4_5_bootstrap_reflection", "4_6_test_strategy",
+        ]),
+        ("scope_close", "Close (Contract Pin, Decisions-Trace, Commit, Run-Complete)", [
+            "5_commit_and_next",
+        ]),
+    ],
     "vg:blueprint": [
         ("blueprint_preflight", "Blueprint Preflight", [
             "0_design_discovery", "0_amendment_preflight", "1_parse_args",
