@@ -106,3 +106,16 @@ Threshold: flat artifact > 30 KB without split subdir triggers a WARN
 
 Backward compat: `vg-load --full` falls back to flat read for legacy
 phases that pre-date the per-task split.
+
+---
+
+## Scope-specific Red Flags (R4 pilot, 2026-05-03)
+
+| Thought | Reality |
+|---|---|
+| "Skip challenger to speed up round" | Per-answer trigger; skipping = blind spot risk (Codex review confirmed) |
+| "Skip expander on small round" | Per-round end gate; missing = critical_missing undetected |
+| "Auto-accept all challenger findings" | User must choose Address / Acknowledge / Defer per finding (not blanket) |
+| "Profile branch is suggestion" | Profile branch enforces R4 skip for backend-only — don't override |
+| "Per-decision split optional" | UX baseline R1 — blueprint depends on `vg-load.sh --decision D-NN` |
+| "Spawn Task() for challenger" | Tool name is `Agent` (Codex correction #1) |
