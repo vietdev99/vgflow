@@ -74,6 +74,8 @@ challenger_record_user_choice "${PHASE_NUMBER}" "round-${ROUND}" "phase-scope" "
 
 Loop guard: if `challenger_count_for_phase` ≥ `${config.scope.adversarial_max_rounds:-3}`, helper auto-skips remaining (no manual gate).
 
+**Rapid-prototyping disable** (config-level, not per-round): set `config.scope.adversarial_check: false` in `.claude/vg.config.md` to fully disable challenger across all rounds. Trivial answers (Y/N, single-word) already auto-skip via `challenger_is_trivial` (helper-internal) — wrapper returns rc=2.
+
 ## §B. Per-round expander pattern (re-used at EVERY round end)
 
 After ALL answers + challengers in a round are done, BEFORE advancing:
@@ -98,7 +100,9 @@ If `critical_missing[]` non-empty → AskUserQuestion (3 options):
 - **Acknowledge** → append dimensions under `## Acknowledged gaps` in CONTEXT.md.staged
 - **Defer** → append under `## Open questions` for blueprint to re-raise
 
-Loop guard: `dimension_expand_max` (default 6) — helper skips after limit.
+Loop guard: `${config.scope.dimension_expand_max:-6}` (default 6 = 5 rounds + 1 deep probe) — helper skips after limit.
+
+**Rapid-prototyping disable**: set `config.scope.dimension_expand_check: false` in `.claude/vg.config.md` to disable expander across all rounds. Unlike challenger, expander runs ONCE per round (not per-answer) — cost bounded.
 
 ## §C. Decision lock pattern (every round)
 
