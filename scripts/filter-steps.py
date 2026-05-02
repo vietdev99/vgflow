@@ -143,6 +143,59 @@ def parse_steps(text: str):
         yield name, profile_set, mode_set
 
 
+def parse_steps_from_frontmatter(text: str):
+    """Fallback parser for slim entry SKILL.md format (no <step> XML tags).
+
+    Reads runtime_contract.must_touch_markers from YAML frontmatter. Each entry is:
+      - bare string "name"                                → universal step
+      - {name: "x", profile: "web-*,..."}                 → profile-gated step
+      - {name: "x", required_unless_flag: "--skip-foo"}   → optional step (returned regardless;
+                                                              caller deals with skip)
+
+    Returns list of (name, profile_set | None, mode_set | None) — same shape as parse_steps.
+    """
+    if not text.startswith("---\n"):
+        return []
+    try:
+        end = text.index("\n---\n", 4)
+    except ValueError:
+        return []
+    fm_text = text[4:end]
+    try:
+        import yaml  # PyYAML
+    except ImportError:
+        return []
+    try:
+        fm = yaml.safe_load(fm_text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(fm, dict):
+        return []
+    contract = fm.get("runtime_contract", {})
+    if not isinstance(contract, dict):
+        return []
+    markers = contract.get("must_touch_markers", [])
+    if not isinstance(markers, list):
+        return []
+
+    out = []
+    for entry in markers:
+        if isinstance(entry, str):
+            out.append((entry, None, None))
+        elif isinstance(entry, dict):
+            name = entry.get("name")
+            if not name:
+                continue
+            profile_value = entry.get("profile")
+            if profile_value:
+                tokens = [p.strip() for p in str(profile_value).split(",")]
+                profile_set = expand_wildcards(tokens)
+            else:
+                profile_set = None
+            out.append((name, profile_set, None))
+    return out
+
+
 def filter_for_profile(steps, profile: str, mode=None):
     """Return list of step names applicable to the given profile/mode."""
     applicable = []
@@ -188,7 +241,26 @@ def main() -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 3
 
+    # Fallback: slim entry SKILL.md format has no <step> XML tags. Read step
+    # list from runtime_contract.must_touch_markers in YAML frontmatter.
+    if not steps:
+        steps = parse_steps_from_frontmatter(text)
+
     applicable = filter_for_profile(steps, args.profile, args.mode)
+
+    # Hard-fail when zero steps — prevents silent telemetry violation downstream.
+    # If the command file genuinely has no steps for this profile, that is a
+    # config bug (or the file uses an unsupported format).
+    if not applicable:
+        print(
+            f"ERROR: 0 steps applicable for profile '{args.profile}' in {cmd_path}.\n"
+            f"  total parsed steps: {len(steps)}\n"
+            f"  hint: command file must have either <step> XML tags OR\n"
+            f"        runtime_contract.must_touch_markers in YAML frontmatter.\n"
+            f"        Profile-gated entries use {{name: ..., profile: 'csv'}}.",
+            file=sys.stderr,
+        )
+        return 4
 
     if args.output_count:
         print(len(applicable))
