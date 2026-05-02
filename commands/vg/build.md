@@ -4089,6 +4089,65 @@ if [ "$COMPLIANCE_RC" -ne 0 ]; then
   fi
 fi
 
+# RFC v9 PR-D — Route schema coverage gate (P1.D-24/54).
+# Every Fastify route must attach a Zod schema (validation + auto-OpenAPI).
+# Profile gate: only runs for web-fullstack / web-backend-only with apps/api
+# present. Pre-2026-05-01 phases get warn-mode (legacy gap tolerated);
+# baseline file tracks per-phase coverage to BLOCK only on regression.
+ROUTE_SCHEMA_VAL=".claude/scripts/validators/verify-route-schema-coverage.py"
+if [ -f "$ROUTE_SCHEMA_VAL" ] && [ -d "apps/api/src" ]; then
+  RSC_BASELINE=".vg/baselines/route-schema-coverage.json"
+  RSC_FLAGS=( --severity block --threshold 0.8 --baseline-file "$RSC_BASELINE" )
+  [[ "${ARGUMENTS}" =~ --allow-coverage-regression ]] && \
+    RSC_FLAGS+=( --allow-coverage-regression )
+  # Pre-cutoff phases: WARN mode to migrate gradually
+  GOALS_FIRST_COMMIT_TS=$(git log --reverse --format=%ct -- \
+    "${PHASE_DIR}/TEST-GOALS.md" 2>/dev/null | head -1)
+  GRANDFATHER_CUTOFF=$(date -u -j -f "%Y-%m-%d" "2026-05-01" +%s 2>/dev/null \
+    || date -u -d "2026-05-01" +%s 2>/dev/null || echo "0")
+  if [ -n "$GOALS_FIRST_COMMIT_TS" ] && [ "$GOALS_FIRST_COMMIT_TS" -lt "$GRANDFATHER_CUTOFF" ]; then
+    RSC_FLAGS=( --severity warn --threshold 0.8 --baseline-file "$RSC_BASELINE" )
+  fi
+  ${PYTHON_BIN:-python3} "$ROUTE_SCHEMA_VAL" "${RSC_FLAGS[@]}" \
+    --report-md "${PHASE_DIR}/.route-schema-coverage.md"
+  RSC_RC=$?
+  if [ "$RSC_RC" -ne 0 ]; then
+    echo "⛔ Route schema coverage gate failed."
+    echo "   Existing legacy gap (e.g. PrintwayV3 1% baseline) is tolerated"
+    echo "   via --baseline-file; only REGRESSIONS block. Fix path:"
+    echo "     1. Wrap routes with .withTypeProvider<ZodTypeProvider>()"
+    echo "     2. Attach { schema: { body, querystring, response } } to each route"
+    echo "     3. Or override: --allow-coverage-regression --override-reason='...'"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.route_schema_blocked" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# RFC v9 PR-D — OpenAPI export evidence step.
+# After route schemas validated, boot API briefly to dump openapi.json.
+# This makes the contract machine-readable for FE codegen, FIXTURES
+# generation, Haiku scanner form-fill, and review-time drift detection.
+# Best-effort — skip silently if API not bootable in this env.
+OPENAPI_EXPORT_OUT="apps/api/openapi.json"
+if [ -d "apps/api/src" ] && [ "${VG_OPENAPI_EXPORT:-true}" = "true" ]; then
+  echo "━━━ PR-D — OpenAPI evidence export ━━━"
+  OPENAPI_URL_PROBE="${VG_OPENAPI_PROBE_URL:-http://localhost:4000/api/v1/openapi.json}"
+  # Quick probe: is API already up?
+  if curl -fsS --max-time 3 "$OPENAPI_URL_PROBE" -o /tmp/openapi-probe.json 2>/dev/null; then
+    cp /tmp/openapi-probe.json "$OPENAPI_EXPORT_OUT"
+    OPENAPI_PATHS=$(${PYTHON_BIN:-python3} -c "
+import json
+try: print(len(json.load(open('$OPENAPI_EXPORT_OUT'))['paths']))
+except Exception as e: print('?')
+")
+    echo "  PR-D: openapi.json exported (${OPENAPI_PATHS} paths) → ${OPENAPI_EXPORT_OUT}"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.openapi_exported" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"paths\":${OPENAPI_PATHS:-0}}" >/dev/null 2>&1 || true
+  else
+    echo "  PR-D: skipped — API not running at ${OPENAPI_URL_PROBE}"
+    echo "         (set VG_OPENAPI_PROBE_URL or boot API for export to fire)"
+  fi
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
 RUN_RC=$?
 if [ $RUN_RC -ne 0 ]; then

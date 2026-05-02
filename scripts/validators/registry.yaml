@@ -1140,3 +1140,14 @@ validators:
     runtime_target_ms: 200
     added_in: v2.43
     description: 'SUMMARY.md must contain Vietnamese narration covering each completed task (not English-only bullet list). Pairs with human-language-response to enforce VI-first communication.'
+
+  # ──── RFC v9 PR-D — OpenAPI discipline (2026-05-02) ────
+
+  - id: route-schema-coverage
+    path: scripts/validators/verify-route-schema-coverage.py
+    severity: block
+    phases_active: [build]
+    domain: contract
+    runtime_target_ms: 1500
+    added_in: v2.48
+    description: 'Fastify routes must attach Zod schema (validation + auto-OpenAPI generation per fastify-type-provider-zod). Default 80% coverage threshold; baseline-file mode tolerates legacy gap, blocks only on regression. Closes the "openapi.json published but empty" gap that drives 4xx noise during /vg:review (Haiku scanner has no schema → fills bogus form values → backend reject → AI misclassifies as feature bug). Override: --allow-coverage-regression.'
