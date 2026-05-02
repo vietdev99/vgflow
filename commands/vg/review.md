@@ -6469,6 +6469,73 @@ if [ -f "$ALIGN_VAL" ]; then
   fi
 fi
 
+# RFC v9 D21 — DEFECT-LOG.md generation (tester pro).
+# After GOAL-COVERAGE-MATRIX is final, parse the matrix and create one
+# Defect entry per goal with status ∈ {BLOCKED, UNREACHABLE, FAILED, SUSPECTED}
+# that does NOT already have an open defect in .tester-pro/defects.json.
+# Severity inferred from priority + block_family heuristics.
+TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+if [ -f "$TESTER_PRO_CLI" ] && [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
+  echo "━━━ D21 — Defect log generation ━━━"
+  ${PYTHON_BIN:-python3} - <<'PYDEFECT' 2>&1 | sed 's/^/  D21: /' || true
+import json, os, re, subprocess, sys
+phase_dir = os.environ['PHASE_DIR']
+phase_no = os.environ['PHASE_NUMBER']
+matrix = open(os.path.join(phase_dir, 'GOAL-COVERAGE-MATRIX.md'),
+              encoding='utf-8').read()
+cli = os.path.join(os.environ['REPO_ROOT'], 'scripts', 'tester-pro-cli.py')
+# Parse rows `| G-XX | priority | surface | STATUS | evidence |`
+row_re = re.compile(
+    r"^\|\s*(G-[\w.-]+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|"
+    r"\s*([A-Z_]+)\s*\|\s*(.+?)\s*\|", re.MULTILINE,
+)
+fail_states = {"BLOCKED", "UNREACHABLE", "FAILED", "SUSPECTED"}
+# Load existing open defects to skip duplicates by (goal, title-prefix)
+defects_path = os.path.join(phase_dir, '.tester-pro', 'defects.json')
+existing = []
+if os.path.exists(defects_path):
+    try: existing = json.load(open(defects_path, encoding='utf-8'))
+    except: pass
+def is_open_for(gid, title_prefix):
+    return any(
+        d.get('related_goals') and gid in d['related_goals']
+        and d.get('title','').startswith(title_prefix)
+        and not d.get('closed_at')
+        for d in existing
+    )
+opened = 0
+for m in row_re.finditer(matrix):
+    gid, prio, surf, status, ev = m.groups()
+    if status not in fail_states:
+        continue
+    title_prefix = f"[{status}]"
+    if is_open_for(gid, title_prefix):
+        continue
+    # Severity heuristic: critical priority → critical; backend mutation → major;
+    # else minor.
+    prio_l = prio.strip().lower()
+    surf_l = surf.strip().lower()
+    if prio_l == 'critical':
+        sev = 'critical'
+    elif any(s in surf_l for s in ('api', 'data', 'integration')):
+        sev = 'major'
+    else:
+        sev = 'minor'
+    title = f"[{status}] {gid} — {ev[:80]}"
+    cmd = [
+        sys.executable, cli, 'defect', 'new',
+        '--phase', phase_no, '--title', title,
+        '--severity', sev, '--found-in', 'review',
+        '--goals', gid,
+        '--notes', f"surface={surf} priority={prio} status={status}. Auto-opened from GOAL-COVERAGE-MATRIX.",
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0:
+        opened += 1
+print(f"opened {opened} new defect(s) from matrix")
+PYDEFECT
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
 RUN_RC=$?
 if [ $RUN_RC -ne 0 ]; then

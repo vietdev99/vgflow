@@ -1264,6 +1264,33 @@ See `.claude/commands/vg/_shared/reflection-trigger.md` for full spawn template 
 ```
 </step>
 
+<step name="4_6_test_strategy">
+## Step 4.6 — TEST-STRATEGY.md (RFC v9 D17, tester pro discipline)
+
+Generate a draft `TEST-STRATEGY.md` declaring **test types in scope**,
+**risk assessment**, **coverage targets per priority/test_type**, and
+**defect severity classification**. Closes the "AI bịa goal/coverage"
+gap surfaced in 3.2 dogfood — without an explicit strategy contract,
+/vg:blueprint and /vg:test have nothing to validate goal coverage against.
+
+CLI reads SPECS.md + CONTEXT.md and writes a starting draft. User edits
+to refine domain-specific risks. Existing file preserved on re-run
+(pass `--force` to overwrite).
+
+```bash
+if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
+  "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" \
+    strategy generate --phase "${PHASE_NUMBER}" 2>&1 | sed 's/^/  D17: /' || true
+fi
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 4_6_test_strategy 2>/dev/null || true
+```
+
+> **Tại sao ở scope, không phải blueprint**: TEST-STRATEGY là *contract*
+> /vg:blueprint dùng để validate (D18 test_type coverage gate). Phải tồn
+> tại trước blueprint, nếu không blueprint không có gì để bind goal
+> classification vào. Sinh dạng draft để user chỉnh trước khi blueprint chạy.
+</step>
+
 <step name="5_commit_and_next">
 ## Step 5: Commit + suggest next
 
