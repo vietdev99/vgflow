@@ -16,12 +16,13 @@ Two-part assertion:
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
-import stat
+import re
+import secrets
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -93,7 +94,6 @@ class TestContractDeclaration:
     )
     def test_test_md_frontmatter_declares_todowrite(self):
         """test.md frontmatter must expose TodoWrite for native tasklist."""
-        import re
         assert _TEST_MD.exists(), f"Missing {_TEST_MD}"
         text = _TEST_MD.read_text(encoding="utf-8")
         m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
@@ -248,8 +248,6 @@ class TestHookIntegration:
         # 3. Create evidence key (required by emit-evidence-signed.py)
         vg_dir = tmp_path / ".vg"
         key_path = vg_dir / ".evidence-key"
-        import secrets
-        import base64
         key_bytes = base64.b64encode(secrets.token_bytes(32))
         key_path.write_bytes(key_bytes)
         key_path.chmod(0o600)
@@ -353,7 +351,6 @@ class TestHookIntegration:
 
         vg_dir = tmp_path / ".vg"
         key_path = vg_dir / ".evidence-key"
-        import secrets, base64
         key_path.write_bytes(base64.b64encode(secrets.token_bytes(32)))
         key_path.chmod(0o600)
 
@@ -416,7 +413,6 @@ class TestHookIntegration:
 
         vg_dir = tmp_path / ".vg"
         key_path = vg_dir / ".evidence-key"
-        import secrets, base64
         key_path.write_bytes(base64.b64encode(secrets.token_bytes(32)))
         key_path.chmod(0o600)
 
