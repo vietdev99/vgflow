@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HMAC-signed evidence emitter — only path that writes protected paths.
+"""HMAC-signed evidence emitter — intended to be the only path that writes protected paths; verifier hook enforces this by rejecting unsigned evidence.
 
 Usage:
     vg-orchestrator-emit-evidence-signed.py --out <path> --payload <json>
@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 DEFAULT_KEY_PATH = ".vg/.evidence-key"
+MAX_PAYLOAD_BYTES = 64 * 1024
 
 
 def load_key() -> bytes:
@@ -26,7 +27,15 @@ def load_key() -> bytes:
     if (key_path.stat().st_mode & 0o077) != 0:
         sys.stderr.write(f"ERROR: evidence key {key_path} must be mode 0600\n")
         sys.exit(2)
-    return key_path.read_bytes().strip()
+    # NOTE: key remains in memory for process lifetime; helper is short-lived by design (intentional).
+    key = key_path.read_bytes().strip()
+    if len(key) < 32:
+        sys.stderr.write(
+            f"ERROR: evidence key at {key_path} too short ({len(key)} bytes, need >=32)\n"
+            f"Run: openssl rand -base64 32 > {key_path} && chmod 600 {key_path}\n"
+        )
+        sys.exit(2)
+    return key
 
 
 def main() -> None:
@@ -34,6 +43,10 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--payload", required=True, help="JSON string")
     args = ap.parse_args()
+
+    if len(args.payload.encode()) > MAX_PAYLOAD_BYTES:
+        sys.stderr.write(f"ERROR: payload exceeds {MAX_PAYLOAD_BYTES} bytes\n")
+        sys.exit(2)
 
     payload = json.loads(args.payload)
     key = load_key()
