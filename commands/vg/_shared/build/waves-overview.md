@@ -1,0 +1,1034 @@
+# build waves (STEP 4 — HEAVY)
+
+This is the orchestrator-side body of the build pipeline's wave-execution
+step (`8_execute_waves`) plus the per-wave bootstrap-reflection sub-step
+(`8_5_bootstrap_reflection_per_wave`). It is heavy: backup spec ~880 lines,
+multiple verifier sub-steps, mobile gate matrix, debugger retry loop, and
+post-wave reconciliation.
+
+Read `waves-delegation.md` for the input/output JSON contract of the
+`vg-build-task-executor` subagent. This file describes the orchestrator's
+responsibilities ONLY — pre-spawn checklist, spawn site narration,
+post-spawn aggregation, gate matrix, retry handling, marker emission.
+
+<HARD-GATE>
+You MUST spawn N parallel `vg-build-task-executor` subagents in ONE
+assistant message — where N = `expected.length` from
+`.vg/runs/${RUN_ID}/.wave-spawn-plan.json` (parallel batch only;
+sequential_groups serialize as documented in 8c).
+You CANNOT execute tasks inline. You MUST NOT paraphrase the task body
+into your own implementation — every plan task is a subagent spawn.
+
+The PreToolUse Agent hook (`scripts/vg-agent-spawn-guard.py`, Task 1
+commit `6135701`) DENIES the Agent tool call when:
+  - `subagent_type` != `vg-build-task-executor` (wrong agent type or typo)
+  - `task_id` missing from prompt envelope
+  - `task_id` not in `remaining[]` of `.vg/runs/${RUN_ID}/.spawn-count.json`
+  - capsule file `.task-capsules/task-${N}.capsule.json` missing on disk
+
+The Stop hook asserts `spawned.length == expected.length` post-wave; a
+shortfall (N-1 spawned, N expected) is a HARD BLOCK — operator sees the
+deny message and must complete the missing spawn before the wave closes.
+
+You MUST narrate every spawn via `bash scripts/vg-narrate-spawn.sh`
+(green pill per R1a UX baseline Req 2). Skipping narration breaks
+operator UX visibility but does NOT block; missing spawn DOES block.
+</HARD-GATE>
+
+---
+
+## Per-wave orchestration order
+
+For each wave (subject to `WAVE_FILTER` gate):
+1. **Pre-spawn checklist** (8a / 8a.5 / 8b / 8c PRE-FLIGHT) — wave context
+   write, SUMMARY init, wave-start tag + progress init, capsule
+   materialization via `pre-executor-check.py`, L1 design-pixel gate,
+   spawn plan write to `.wave-spawn-plan.json`.
+2. **Spawn site** (8c spawn block) — narrate + spawn ALL N parallel
+   subagents in ONE assistant message, then narrate returns/failures.
+3. **Post-spawn aggregation** (8d) — R5 spawn-plan honor check, commit
+   count audit, attribution audit, integrity reconcile, UI-MAP injection
+   audit, task-fidelity audit, gate matrix (typecheck/build/test/contract/
+   goal-test-binding/utility-dup + mobile gates 6-10), debugger retry
+   loop, wave-verify divergence check, fixture wave-verify, post-wave
+   graphify refresh.
+4. **Resume-recovery** branch when `--gaps-only` or `--resume` is set —
+   uses `vg-load --artifact plan --task NN` instead of awk-extracting
+   from flat `PLAN*.md` (per audit doc line 1232 migration).
+5. **Step exit** — emit `wave.completed` event, write step marker.
+
+After ALL waves complete (or after the single Wave N completes when
+`WAVE_FILTER` is set), run sub-step `8_5_bootstrap_reflection_per_wave`
+(reflect-after-each-wave), then exit step 8 and return to entry
+`build.md` → STEP 5 (post-execution: `9_post_execution`).
+
+---
+
+## Per-wave pre-spawn checklist
+
+Mark step active and gate on `WAVE_FILTER`:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 8_execute_waves
+
+# WAVE_FILTER gate (v2.2): execute ONLY filtered wave then exit to step 9.
+if [ -n "${WAVE_FILTER:-}" ]; then
+  echo "▸ --wave ${WAVE_FILTER} mode: orchestrator will execute ONLY Wave ${WAVE_FILTER} then exit to step 9."
+fi
+```
+
+### Step 1 — Load wave plan slice (R1a UX baseline Req 1, partial load)
+
+Use the loader instead of `cat`-ing the flat PLAN file:
+
+```bash
+vg-load --phase ${PHASE_NUMBER} --artifact plan --wave ${N}
+```
+
+Per audit doc `docs/audits/2026-05-04-build-flat-vs-split.md`, this
+replaces the historical flat-PLAN read pattern in resume-recovery (see
+"Resume-recovery handling" below). The loader returns the wave's task
+list and per-task plan slices without dumping the full PLAN.md into AI
+context.
+
+### Step 2 — Generate `wave-{N}-context.md` (8a)
+
+Orchestrator writes `${PHASE_DIR}/wave-{N}-context.md` listing siblings.
+Each executor in the wave reads this for cross-task field alignment.
+
+```markdown
+# Wave {N} Context — Phase {PHASE}
+
+Tasks running in parallel this wave:
+
+## Task <N1> — <task title from PLAN>
+  File: <task.file_path>
+  Endpoint: <method + path>           (if BE task — from <edits-endpoint> attribute)
+  Request fields: <field list>         (from contract section)
+  Response fields: <field list>
+  Contract ref: API-CONTRACTS.md line <start>-<end>
+
+## Task <N2> — <task title>
+  File: <task.file_path>
+  Consumes: <upstream endpoint> (Task <N1>)         (if FE task consuming a wave-mate's API)
+  MUST use same field names as Task <N1> request
+  Contract ref: API-CONTRACTS.md line <start>-<end>
+
+## Task <N3> — <task title>
+  File: <task.file_path>
+  Shares <storage backend> collection/table with Task <N1>    (if relevant)
+  Contract ref: API-CONTRACTS.md line <start>-<end>
+```
+
+Generated deterministically from PLAN*.md tasks (parse `<file-path>`,
+`<edits-endpoint>`, `<contract-ref>`, `<edits-collection>` attributes —
+no project hardcode). The `Contract ref: API-CONTRACTS.md line X-Y` is a
+locator pointer string (KEEP-FLAT per audit doc) — the executor receives
+it for traceability; no flat read happens.
+
+### Step 3 — Initialize SUMMARY.md (first wave only) (8a.5)
+
+```bash
+SUMMARY_FILE="${PHASE_DIR}/SUMMARY.md"
+if [ ! -f "$SUMMARY_FILE" ]; then
+  cat > "$SUMMARY_FILE" << EOF
+# Build Summary — Phase ${PHASE_NUMBER}
+
+**Started:** $(date -Iseconds)
+**Plan:** ${PLAN_FILE}
+**Model:** ${MODEL_EXECUTOR}
+
+EOF
+  echo "SUMMARY.md initialized at ${SUMMARY_FILE}"
+fi
+```
+
+Executors append their task summary sections to this file (per
+`vg-executor-rules.md` "Task summary output"). After all waves, step 9
+verifies every task has a section.
+
+### Step 4 — Tag wave start + init progress file (8b)
+
+```bash
+git tag "vg-build-${PHASE}-wave-${N}-start" HEAD
+WAVE_TAG="vg-build-${PHASE}-wave-${N}-start"
+
+# Init compact-safe progress file — survives context compacts + crashes.
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/build-progress.sh"
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/typecheck-light.sh"
+
+# Bootstrap typecheck cache once per build session (cold 3-5 min, but makes
+# subsequent per-task + wave-gate checks fast 10-30s). Heuristic: distinct
+# app names from PLAN file-paths.
+BOOTSTRAP_PKGS=$(grep -hoE '<file-path>apps/[^/]+' "${PHASE_DIR}"/PLAN*.md 2>/dev/null \
+  | sed 's|<file-path>apps/||' | sort -u)
+for pkg in $BOOTSTRAP_PKGS; do
+  if vg_typecheck_should_bootstrap "$pkg"; then
+    echo "▸ Bootstrapping typecheck cache for $pkg (1-shot, ~3-5 min)..."
+    vg_typecheck_bootstrap "$pkg"
+  fi
+done
+
+# Apply --only filter if set (resume subset of wave tasks)
+WAVE_TASK_LIST="${WAVE_TASKS[@]}"
+if [ -n "${ONLY_TASKS:-}" ]; then
+  FILTERED=""
+  for t in $WAVE_TASK_LIST; do
+    if echo "$ONLY_TASKS" | tr ',' '\n' | grep -qx "$t"; then
+      FILTERED="${FILTERED} $t"
+    fi
+  done
+  WAVE_TASK_LIST="${FILTERED# }"
+  echo "▸ --only filter — running tasks: $WAVE_TASK_LIST (skipping others)"
+fi
+
+vg_build_progress_init "$PHASE_DIR" "$N" "$WAVE_TAG" $WAVE_TASK_LIST
+export VG_BUILD_PHASE_DIR="$PHASE_DIR"
+```
+
+### Step 5 — Pre-flight: verify step 4 artifacts (8c PRE-FLIGHT)
+
+Before spawning, the orchestrator MUST verify step 4 artifacts exist. If
+missing, run step 4 NOW:
+
+```
+CHECK these files exist (not empty):
+  1. ${PHASE_DIR}/.callers.json     (from step 4e — semantic regression)
+  2. ${PHASE_DIR}/.wave-context/    (from step 4c — sibling detection)
+
+IF EITHER missing:
+  1. Read .claude/vg.config.md — extract graphify.enabled, semantic_regression.enabled
+  2. Run step 4c: find-siblings.py for each task (creates .wave-context/siblings-task-{N}.json)
+  3. Run step 4e: build-caller-graph.py (creates .callers.json)
+  4. Run step 4d: vg-load --artifact plan --task NN per task in wave
+     (per-task split is the canonical source; loader falls back to flat
+      parse only if split missing — per audit doc 2026-05-04 line 1232)
+
+This prevents resume from skipping context injection — executor without
+sibling/caller context produces code that may break cross-module dependencies.
+```
+
+### Step 6 — File conflict detection + spawn plan write
+
+Parse `<file-path>` from each task in the current wave. If 2+ tasks edit
+the SAME file, those tasks MUST run sequentially (not parallel) to
+prevent git staging race conditions.
+
+```bash
+# Collect file paths per task in wave
+WAVE_FILES=()
+for task_num in "${WAVE_TASKS[@]}"; do
+  TASK_FILE="${PHASE_DIR}/.wave-tasks/task-${task_num}.md"
+  if [ -f "$TASK_FILE" ]; then
+    FILE_PATH=$(grep -oP '<file-path>\K[^<]+' "$TASK_FILE" | head -1)
+  else
+    # Fallback: vg-load per-task slice when wave-tasks shard missing
+    FILE_PATH=$(vg-load --phase ${PHASE_NUMBER} --artifact plan --task ${task_num} 2>/dev/null \
+      | grep -oP '<file-path>\K[^<]+' | head -1)
+  fi
+  [ -n "$FILE_PATH" ] && WAVE_FILES+=("${task_num}:${FILE_PATH}")
+done
+
+# Detect conflicts — same file in 2+ tasks
+SEEN_FILES=$(printf '%s\n' "${WAVE_FILES[@]}" | cut -d: -f2 | sort | uniq -d)
+if [ -n "$SEEN_FILES" ]; then
+  echo "⚠ File conflict in wave ${N}:"
+  for file in $SEEN_FILES; do
+    TASKS=$(printf '%s\n' "${WAVE_FILES[@]}" | grep ":${file}$" | cut -d: -f1 | tr '\n' ',')
+    echo "  ${file} → Tasks ${TASKS}"
+  done
+  echo "  → Conflicting tasks will run SEQUENTIALLY within this wave."
+fi
+
+# R5 enforcement: write explicit spawn plan (orchestrator MUST honor)
+SPAWN_PLAN="${PHASE_DIR}/.wave-spawn-plan.json"
+
+PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - <<PY > "$SPAWN_PLAN"
+import json, sys
+wave_files = """$(printf '%s\n' "${WAVE_FILES[@]}")"""
+pairs = [line.split(':', 1) for line in wave_files.strip().split('\n') if ':' in line]
+file_to_tasks = {}
+for t, f in pairs:
+    try:
+        file_to_tasks.setdefault(f, []).append(int(t))
+    except ValueError:
+        pass
+seq_groups = [sorted(set(tasks)) for tasks in file_to_tasks.values() if len(tasks) >= 2]
+seq_flat = {t for grp in seq_groups for t in grp}
+all_tasks = []
+for t, _ in pairs:
+    try:
+        all_tasks.append(int(t))
+    except ValueError:
+        pass
+parallel = sorted(set(all_tasks) - seq_flat)
+plan = {
+    "wave": "${N:-unknown}",
+    "parallel": parallel,
+    "sequential_groups": seq_groups,
+    "conflict_files": sorted(set(f for f, tasks in file_to_tasks.items() if len(tasks) >= 2)),
+}
+print(json.dumps(plan, indent=2))
+PY
+
+echo "✓ Wave ${N} spawn plan: $SPAWN_PLAN"
+```
+
+**SPAWN PLAN ENFORCEMENT (orchestrator MUST follow):**
+
+Read `${PHASE_DIR}/.wave-spawn-plan.json` and spawn in 2 groups:
+1. **`parallel[]`** — spawn `vg-build-task-executor` for every task in
+   ONE assistant message (multiple Agent tool calls in the same turn).
+   Wait for all returns before next message.
+2. **`sequential_groups[][]`** — within each inner group, spawn one
+   task, wait for return, then spawn next.
+
+```
+Example plan:
+{
+  "parallel": [1, 2, 5],
+  "sequential_groups": [[3, 4], [6, 7, 8]]
+}
+Spawn order:
+  Message 1: Agent(task 1) + Agent(task 2) + Agent(task 5)   # parallel batch
+  Message 2: Agent(task 3), wait, Agent(task 4)             # group [3,4] serial
+  Message 3: Agent(task 6), wait, Agent(task 7), wait, Agent(task 8)   # group [6,7,8] serial
+```
+
+Step 8d (post-spawn) compares `.build-progress.json` timestamps vs
+plan. If `sequential_groups` overlap (parallel execution) → R5
+violation, BLOCK wave.
+
+### Step 7 — Materialize per-task capsules via `pre-executor-check.py`
+
+For EACH task in the wave (parallel or sequential), run
+`pre-executor-check.py` to write the per-task capsule that the spawn-guard
+validates BEFORE allowing the Agent tool call:
+
+```bash
+# Record task as in-flight BEFORE Agent() spawn (compact-safe)
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/build-progress.sh"
+vg_build_progress_start_task "$PHASE_DIR" "$TASK_NUM" "pending-agent"
+
+# Materialize capsule — pre-executor-check.py is the deterministic
+# producer of .task-capsules/task-${N}.capsule.json. The PreToolUse Agent
+# hook (vg-agent-spawn-guard, Task 1 commit 6135701) BLOCKS spawn when
+# this capsule file is missing on disk.
+TASK_CAPSULE_DIR="${PHASE_DIR}/.task-context-capsules"
+mkdir -p "$TASK_CAPSULE_DIR" 2>/dev/null
+TASK_CAPSULE_PATH="${TASK_CAPSULE_DIR}/task-${TASK_NUM}.json"
+CONTEXT_JSON=$(${PYTHON_BIN} .claude/scripts/pre-executor-check.py \
+  --phase-dir "${PHASE_DIR}" \
+  --task-num ${TASK_NUM} \
+  --config .claude/vg.config.md \
+  --capsule-out "$TASK_CAPSULE_PATH")
+
+# Parse output into variables for the spawn payload (passed to subagent).
+# pre-executor-check.py uses vg-load --artifact contracts --endpoint <slug>
+# semantics for CONTRACT_CONTEXT (per audit doc line 783 migration);
+# CONTRACT_CONTEXT is the JSON-shaped per-endpoint slice, NOT a full-file read.
+TASK_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['task_context'])")
+CONTRACT_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['contract_context'])")
+GOALS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['goals_context'])")
+INTERFACE_STANDARDS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin).get('interface_standards_context','INTERFACE-STANDARDS.md not found'))")
+TASK_CONTEXT_CAPSULE=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.dumps(json.load(sys.stdin)['task_context_capsule'], indent=2, ensure_ascii=False))")
+TASK_SIBLINGS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['sibling_context'])")
+TASK_CALLERS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['downstream_callers'])")
+DESIGN_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['design_context'])")
+DESIGN_IMAGE_PATHS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print('\n'.join(json.load(sys.stdin).get('design_image_paths', []) or []))")
+DESIGN_IMAGE_REQUIRED=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print('1' if json.load(sys.stdin).get('design_image_required') else '0')")
+BUILD_CONFIG=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.dumps(json.load(sys.stdin)['build_config']))")
+```
+
+### Step 8 — L1 design-pixel gate (per task with `<design-ref>`)
+
+```bash
+if [ "$DESIGN_IMAGE_REQUIRED" = "1" ]; then
+  if [ -z "$DESIGN_IMAGE_PATHS" ]; then
+    echo "⛔ L1 design-pixel gate: task ${TASK_NUM} declares <design-ref> but no PNG resolved." >&2
+    echo "   Likely cause: slug missing from manifest. Run: /vg:design-extract --refresh" >&2
+    if [[ ! "$ARGUMENTS" =~ --skip-design-pixel-gate ]]; then exit 1; fi
+    echo "⚠ --skip-design-pixel-gate set — executor will be blind to layout." >&2
+  else
+    L1_MISSING=""
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      [ ! -f "$p" ] && L1_MISSING="${L1_MISSING}\n  - ${p}"
+    done <<< "$DESIGN_IMAGE_PATHS"
+    if [ -n "$L1_MISSING" ]; then
+      echo -e "⛔ L1 design-pixel gate: required PNG(s) missing on disk:${L1_MISSING}" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-design-pixel-gate ]]; then exit 1; fi
+    else
+      L1_COUNT=$(printf '%s\n' "$DESIGN_IMAGE_PATHS" | grep -c .)
+      echo "✓ L1 design-pixel gate: ${L1_COUNT} PNG(s) verified on disk for task ${TASK_NUM}"
+      if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+        emit_telemetry_v2 "build_l1_design_pixel" "${PHASE_NUMBER}" "build.8c" \
+          "design_pixel_verified" "PASS" "{\"task\":${TASK_NUM},\"png_count\":${L1_COUNT}}"
+      fi
+    fi
+  fi
+fi
+```
+
+### Step 9 — Capsule existence gate (HARD BLOCK)
+
+This is the spawn-guard's dependency. Without a capsule on disk, the
+PreToolUse Agent hook denies the spawn — surface that locally so the
+build fails fast instead of waiting for the deny message:
+
+```bash
+if [ ! -s "$TASK_CAPSULE_PATH" ]; then
+  echo "⛔ Task context capsule missing for task ${TASK_NUM}: $TASK_CAPSULE_PATH" >&2
+  echo "   pre-executor-check.py must write this before spawning. Do not spawn with ad-hoc context." >&2
+  exit 1
+fi
+```
+
+---
+
+## Spawn site (8c spawn block)
+
+For the `parallel[]` task list from `.wave-spawn-plan.json`, in a SINGLE
+assistant message the orchestrator emits:
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-build-task-executor spawning "task-${N} wave-${W}"
+```
+
+then calls (one Agent tool per task, all in the same assistant turn):
+
+```
+Agent(subagent_type="vg-build-task-executor", prompt=<rendered from waves-delegation.md template>)
+```
+
+After each subagent returns, the orchestrator narrates the outcome:
+
+```bash
+# On success
+bash scripts/vg-narrate-spawn.sh vg-build-task-executor returned "task-${N} commit ${SHA}"
+
+# On failure (subagent returned error JSON)
+bash scripts/vg-narrate-spawn.sh vg-build-task-executor failed "task-${N}: <one-line cause>"
+```
+
+Read `waves-delegation.md` for the EXACT input envelope, prompt
+template, and output JSON contract.
+
+For `sequential_groups[][]`, repeat the narrate→spawn→narrate cycle one
+task at a time, waiting for each return before the next spawn.
+
+**WAVE_CONTEXT block also injected into each spawn:** the orchestrator
+reads `${PHASE_DIR}/wave-${N}-context.md` (written in Step 2 above) and
+includes it in the rendered prompt — this is how parallel wave-mates
+align field names. See waves-delegation.md prompt template for the
+literal injection point.
+
+---
+
+## Post-spawn aggregation (8d)
+
+**⛔ MANDATORY — orchestrator MUST run ALL steps below after EVERY wave.
+Skipping = build on broken code.**
+
+After ALL N subagents return (across both `parallel` and
+`sequential_groups`), validate spawn-budget contract before any gate
+runs (R5 spawn-count check enforced by spawn-guard's Stop hook check —
+Task 1 commit `6135701`).
+
+### 8d.0 — R5 spawn plan honor check (MANDATORY, run FIRST)
+
+Verify orchestrator honored `.wave-spawn-plan.json` —
+`sequential_groups` must have run one-at-a-time (no timestamp overlap).
+If violated → commit race likely → BLOCK before commit count check
+masks the issue.
+
+```bash
+SPAWN_PLAN_FILE="${PHASE_DIR}/.wave-spawn-plan.json"
+PROGRESS_FILE="${PHASE_DIR}/.build-progress.json"
+
+if [ -f "$SPAWN_PLAN_FILE" ] && [ -f "$PROGRESS_FILE" ]; then
+  PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - "$SPAWN_PLAN_FILE" "$PROGRESS_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+
+plan = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+progress = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+
+tasks_info = {}
+for t in progress.get('tasks', []):
+    try:
+        tid = int(t.get('task_num', 0))
+    except (TypeError, ValueError):
+        continue
+    tasks_info[tid] = {
+        'started_at': t.get('started_at') or '',
+        'finished_at': t.get('finished_at') or '',
+    }
+
+seq_groups = plan.get('sequential_groups') or []
+if not seq_groups:
+    print("✓ R5 check: no sequential groups in this wave (all parallel)")
+    sys.exit(0)
+
+violations = []
+for group in seq_groups:
+    with_ts = [(t, tasks_info.get(t, {})) for t in group]
+    with_ts = [(t, info) for t, info in with_ts if info.get('started_at')]
+    if len(with_ts) < 2:
+        continue
+    with_ts.sort(key=lambda x: x[1]['started_at'])
+    for i in range(len(with_ts) - 1):
+        t_curr, info_curr = with_ts[i]
+        t_next, info_next = with_ts[i+1]
+        curr_end = info_curr.get('finished_at') or ''
+        next_start = info_next.get('started_at') or ''
+        if curr_end and next_start and next_start < curr_end:
+            violations.append(
+                f"Tasks {t_curr} + {t_next} overlapped: "
+                f"task-{t_curr} finished={curr_end}, task-{t_next} started={next_start}"
+            )
+
+if violations:
+    print(f"⛔ R5 VIOLATION: {len(violations)} sequential group(s) ran in PARALLEL despite spawn plan:")
+    for v in violations:
+        print(f"   - {v}")
+    sys.exit(1)
+else:
+    print(f"✓ R5 check: all {len(seq_groups)} sequential group(s) ran one-at-a-time")
+PY
+
+  R5_RC=$?
+  if [ "$R5_RC" != "0" ]; then
+    echo "R5-violation wave=${N} phase=${PHASE_NUMBER} at=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
+    if [[ "$ARGUMENTS" =~ --allow-r5-violation ]]; then
+      type -t log_override_debt >/dev/null 2>&1 && \
+        log_override_debt "build-r5-violation" "${PHASE_NUMBER}" "sequential group ran in parallel, commit race possible" "$PHASE_DIR"
+      echo "⚠ --allow-r5-violation set — proceeding despite R5 breach, logged to debt register."
+    else
+      exit 1
+    fi
+  fi
+fi
+```
+
+### 8d.1 — Commit count audit + spawn-budget validation (MANDATORY)
+
+After all wave agents complete, count commits since wave tag. Each task
+MUST produce exactly 1 commit. The spawn-guard's Stop hook ALSO checks
+`spawned == expected`; this gate provides the orchestrator-side
+correlation with git log.
+
+```bash
+WAVE_TAG="vg-build-${PHASE_NUMBER}-wave-${N}-start"
+EXPECTED_COMMITS=${#WAVE_TASKS[@]}
+ACTUAL_COMMITS=$(git log --oneline "${WAVE_TAG}..HEAD" | wc -l | tr -d ' ')
+
+# Sync progress file with actual git log (compact-safe).
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/build-progress.sh"
+while IFS= read -r line; do
+  sha="${line%% *}"
+  subject="${line#* }"
+  if [[ "$subject" =~ ^[a-z]+\([0-9]+(\.[0-9]+)*-([0-9]+)\): ]]; then
+    tnum="${BASH_REMATCH[2]}"
+    vg_build_progress_commit_task "$PHASE_DIR" "$tnum" "$sha"
+  fi
+done < <(git log --format='%H %s' "${WAVE_TAG}..HEAD" 2>/dev/null)
+
+# Mark expected-but-missing tasks as failed
+for task_num in "${WAVE_TASKS[@]}"; do
+  if ! git log --oneline "${WAVE_TAG}..HEAD" | grep -q "${PHASE_NUMBER}-$(printf '%02d' $task_num)"; then
+    vg_build_progress_fail_task "$PHASE_DIR" "$task_num" "no-commit-found"
+  fi
+done
+
+if [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ]; then
+  echo "⛔ COMMIT MISMATCH: wave ${N} expected ${EXPECTED_COMMITS} commits, got ${ACTUAL_COMMITS}"
+  MISSING_TASKS=""
+  for task_num in "${WAVE_TASKS[@]}"; do
+    if ! git log --oneline "${WAVE_TAG}..HEAD" | grep -q "${PHASE_NUMBER}-$(printf '%02d' $task_num)"; then
+      echo "  - Task ${task_num}: NO COMMIT FOUND"
+      MISSING_TASKS="${MISSING_TASKS} ${task_num}"
+    fi
+  done
+
+  # Tightened 2026-04-17: silent agent failure = silent bad wave.
+  # Block-resolver L1 attempts re-dispatch; if still short → exit 1.
+  if [[ "$ARGUMENTS" =~ --allow-missing-commits ]]; then
+    RATGUARD_RESULT=$(rationalization_guard_check "wave-commits" \
+      "Gate blocks wave if commits < tasks. Silent agent failures cause broken waves if bypassed without concrete reason." \
+      "missing_tasks=[${MISSING_TASKS}] user_arg=--allow-missing-commits")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "wave-commits" "--allow-missing-commits" "$PHASE_NUMBER" "build.wave-${N}" "${MISSING_TASKS}"; then
+      exit 1
+    fi
+    echo "⚠ --allow-missing-commits set — recording missing tasks and proceeding."
+    echo "wave-${N}: MISSING_COMMITS tasks=[${MISSING_TASKS}] allowed-by=--allow-missing-commits ts=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
+  else
+    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh" 2>/dev/null || true
+    if type -t block_resolve >/dev/null 2>&1; then
+      export VG_CURRENT_PHASE="$PHASE_NUMBER" VG_CURRENT_STEP="build.wave-${N}"
+      BR_CTX="Wave ${N} expected ${EXPECTED_COMMITS} commits, got ${ACTUAL_COMMITS}. Silent agent failure possible — re-dispatch missing tasks before treating as fatal."
+      BR_EV=$(printf '{"expected":%d,"actual":%d,"missing_tasks":"%s","wave":%d}' "$EXPECTED_COMMITS" "$ACTUAL_COMMITS" "${MISSING_TASKS}" "$N")
+      BR_CANDS='[{"id":"redispatch-missing","cmd":"echo L1-SAFE: orchestrator would re-dispatch missing tasks via Agent tool; skipping in shell resolver safe mode","confidence":0.55,"rationale":"missing commits usually = transient agent failure, safe to retry once"}]'
+      BR_RES=$(block_resolve "wave-commits" "$BR_CTX" "$BR_EV" "$PHASE_DIR" "$BR_CANDS")
+      BR_LVL=$(echo "$BR_RES" | ${PYTHON_BIN} -c "import json,sys; print(json.loads(sys.stdin.read()).get('level',''))" 2>/dev/null)
+      if [ "$BR_LVL" = "L1" ]; then
+        echo "✓ Block resolver L1 re-dispatched missing tasks — re-count commits"
+        ACTUAL_COMMITS=$(git log --oneline "${WAVE_TAG}..HEAD" | wc -l | tr -d ' ')
+        [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ] && { echo "⛔ Still short after L1 retry ($ACTUAL_COMMITS / $EXPECTED_COMMITS)"; exit 1; }
+      elif [ "$BR_LVL" = "L2" ]; then
+        block_resolve_l2_handoff "wave-commits" "$BR_RES" "$PHASE_DIR"
+        exit 2
+      else
+        echo "  Fix: re-run missing tasks manually, then /vg:build ${PHASE_NUMBER} --resume"
+        exit 1
+      fi
+    else
+      echo "  Fix: re-run missing tasks manually, then /vg:build ${PHASE_NUMBER} --resume"
+      exit 1
+    fi
+  fi
+fi
+```
+
+### 8d.2 — Commit attribution audit (MANDATORY after count check)
+
+Catches the parallel-executor `.git/index` race (agent A's add lands
+before agent B's commit → agent B absorbs A's files silently). Count
+passes (N=N), but attribution is corrupted.
+
+```bash
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || \
+  echo "⚠ override-debt.sh missing — overrides will log to build-state.log only"
+
+ATTR_SCRIPT=".claude/scripts/verify-commit-attribution.py"
+if [ -f "$ATTR_SCRIPT" ]; then
+  if ! ${PYTHON_BIN:-python} "$ATTR_SCRIPT" \
+       --phase-dir "${PHASE_DIR}" \
+       --wave-tag "${WAVE_TAG}" \
+       --wave-number "${N}" \
+       --strict; then
+    echo "⛔ Commit attribution violations detected in wave ${N}."
+    OVERRIDE_REASON=""
+    if [[ "${ARGUMENTS:-}" =~ --override-reason=([^[:space:]]+) ]]; then
+      OVERRIDE_REASON="${BASH_REMATCH[1]}"
+    fi
+    if [ -n "$OVERRIDE_REASON" ] && [ ${#OVERRIDE_REASON} -ge 4 ]; then
+      echo "⚠ Attribution gate OVERRIDDEN (reason: $OVERRIDE_REASON)"
+      echo "attribution-violations: wave-${N} override=${OVERRIDE_REASON} ts=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
+      type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
+        "--override-reason" "$PHASE_NUMBER" "build.attribution.wave-${N}" "$OVERRIDE_REASON" "build-attribution-wave-${N}"
+    else
+      exit 1
+    fi
+  fi
+else
+  echo "⚠ verify-commit-attribution.py missing — skipping attribution audit (older install)"
+fi
+```
+
+### 8d.3 — Wave integrity reconciliation (MANDATORY, survives crashes)
+
+Runs `verify-wave-integrity.py` against progress file + git log +
+filesystem. Catches crash scenarios where agent work exists on disk but
+progress file never recorded it.
+
+```bash
+INTEGRITY_SCRIPT=".claude/scripts/verify-wave-integrity.py"
+if [ -f "$INTEGRITY_SCRIPT" ]; then
+  echo "━━━ Wave ${N} integrity reconciliation ━━━"
+  ${PYTHON_BIN:-python3} "$INTEGRITY_SCRIPT" \
+    --phase-dir "${PHASE_DIR}" --wave "${N}" --repo-root "${REPO_ROOT:-.}"
+  INTEG_EXIT=$?
+  case "$INTEG_EXIT" in
+    0) echo "✓ Integrity verdict: clean" ;;
+    *)
+      echo "⛔ Integrity verdict: corruption detected (exit ${INTEG_EXIT})."
+      OVERRIDE_REASON=""
+      if [[ "${ARGUMENTS:-}" =~ --override-reason=([^[:space:]]+) ]]; then
+        OVERRIDE_REASON="${BASH_REMATCH[1]}"
+      fi
+      if [ -n "$OVERRIDE_REASON" ] && [ ${#OVERRIDE_REASON} -ge 4 ]; then
+        echo "⚠ Integrity gate OVERRIDDEN (reason: $OVERRIDE_REASON)"
+        type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
+          "--override-reason" "$PHASE_NUMBER" "build.integrity.wave-${N}" "$OVERRIDE_REASON" "build-integrity-wave-${N}"
+      else
+        exit 1
+      fi
+      ;;
+  esac
+fi
+```
+
+### 8d.4 — UI-MAP + design-ref injection audit (Phase 15 D-12a)
+
+Audits the executor prompts persisted at spawn time to confirm BOTH
+`## UI-MAP-SUBTREE-FOR-THIS-WAVE` and `## DESIGN-REF` H2 sections were
+injected for every UI-touching task.
+
+```bash
+INJ_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-uimap-injection.py"
+WAVE_PROMPT_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
+if [ -x "$INJ_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
+  ${PYTHON_BIN} "$INJ_VAL" --phase "${PHASE_NUMBER}" \
+      --prompts-dir "$WAVE_PROMPT_DIR" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/uimap-injection-w${N}.json" 2>&1 || true
+  IV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/uimap-injection-w${N}.json" 2>/dev/null)
+  case "$IV" in
+    PASS|WARN) echo "✓ D-12a UI-MAP+design-ref injection audit: $IV" ;;
+    BLOCK)
+      echo "⛔ D-12a injection audit: BLOCK — see ${VG_TMP}/uimap-injection-w${N}.json" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-uimap-injection-audit ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ D-12a injection audit: $IV" ;;
+  esac
+fi
+```
+
+### 8d.5 — Task fidelity audit (Phase 16 D-06)
+
+Post-spawn 3-way hash audit: re-extracted PLAN task block vs `.meta.json`
+sidecar vs `.body.md` prompt body. Detects orchestrator paraphrase /
+truncation of task body.
+
+```bash
+TF_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-task-fidelity.py"
+WAVE_PROMPT_DIR="${PHASE_DIR}/.build/wave-${N}/executor-prompts"
+if [ -x "$TF_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
+  ${PYTHON_BIN} "$TF_VAL" --phase "${PHASE_NUMBER}" \
+      --prompts-dir "$WAVE_PROMPT_DIR" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-fidelity-w${N}.json" 2>&1 || true
+  TFV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-fidelity-w${N}.json" 2>/dev/null)
+  case "$TFV" in
+    PASS|WARN) echo "✓ D-06 task fidelity audit: $TFV" ;;
+    BLOCK)
+      echo "⛔ D-06 task fidelity audit: BLOCK — orchestrator likely paraphrased task body" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-task-fidelity-audit ]]; then exit 1; fi
+      ;;
+    *) echo "ℹ D-06 task fidelity audit: $TFV" ;;
+  esac
+fi
+```
+
+### 8d.6 — Post-wave gate matrix (typecheck/build/test/contract/goals/utility)
+
+Run gates 1-5 in order, BLOCK on first failure. Adaptive typecheck
+auto-selects full vs narrow per package size + OOM history.
+
+```bash
+WAVE_TAG="vg-build-${PHASE_NUMBER}-wave-${N}-start"
+FAILED_GATE=""
+
+# Gate 1: Typecheck (mandatory, adaptive per-package)
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/typecheck-light.sh" 2>/dev/null || true
+if type -t vg_typecheck_adaptive >/dev/null 2>&1; then
+  WAVE_PKGS=$(git diff --name-only "${WAVE_TAG}" HEAD -- 'apps/*/src/**' 'packages/*/src/**' 2>/dev/null \
+    | sed -E 's|^(apps\|packages)/([^/]+)/.*|\2|' | sort -u)
+  GATE1_FAIL=0
+  for pkg in $WAVE_PKGS; do
+    vg_typecheck_adaptive "$pkg" "${WAVE_TAG}" || GATE1_FAIL=$((GATE1_FAIL + 1))
+  done
+  [ "$GATE1_FAIL" -gt 0 ] && FAILED_GATE="typecheck"
+else
+  TYPECHECK_CMD=$(vg_config_get build_gates.typecheck_cmd "")
+  [ -n "$TYPECHECK_CMD" ] && ! eval "$TYPECHECK_CMD" && FAILED_GATE="typecheck"
+fi
+
+# Gate 2: Build
+if [ -z "$FAILED_GATE" ]; then
+  BUILD_CMD=$(vg_config_get build_gates.build_cmd "")
+  [ -n "$BUILD_CMD" ] && ! eval "$BUILD_CMD" && FAILED_GATE="build"
+fi
+
+# Gate 3: Unit tests (affected only)
+if [ -z "$FAILED_GATE" ]; then
+  UNIT_CMD=$(vg_config_get build_gates.test_unit_cmd "")
+  UNIT_REQ=$(vg_config_get build_gates.test_unit_required "true")
+  # ... [auto-detect from package.json + first-time bootstrap leniency,
+  #     block-resolver handoff if test_unit_required=true + missing] ...
+  if [ -n "$UNIT_CMD" ]; then
+    CHANGED=$(git diff --name-only "${WAVE_TAG}" HEAD -- 'apps/**/src/**' 'packages/**/src/**' 2>/dev/null || true)
+    AFFECTED_TESTS=""
+    for f in $CHANGED; do
+      MOD=$(dirname "$f")
+      AFFECTED_TESTS="$AFFECTED_TESTS $(grep -rl "from.*${MOD}\|require.*${MOD}" \
+        --include='*.test.ts' --include='*.test.tsx' \
+        --include='*.spec.ts' --include='*.spec.tsx' \
+        apps/ packages/ 2>/dev/null || true)"
+    done
+    AFFECTED_TESTS=$(echo "$AFFECTED_TESTS" | tr ' ' '\n' | sort -u | grep -v '^$' || true)
+    if [ -n "$AFFECTED_TESTS" ]; then
+      ! eval "$UNIT_CMD $AFFECTED_TESTS" && FAILED_GATE="test_unit"
+    fi
+  fi
+fi
+
+# Gate 4: Contract verify (grep built code vs API-CONTRACTS.md — KEEP-FLAT
+# per audit doc line 2427: comment for contract_verify_grep validator,
+# deterministic grep, not AI-context read)
+if [ -z "$FAILED_GATE" ]; then
+  CONTRACT_VERIFY_CMD=$(vg_config_get build_gates.contract_verify_grep "")
+  [ -n "$CONTRACT_VERIFY_CMD" ] && ! eval "$CONTRACT_VERIFY_CMD" && FAILED_GATE="contract_verify"
+fi
+
+# Gate 5: Goal-test binding (mode: strict | warn | off)
+if [ -z "$FAILED_GATE" ]; then
+  GTB_MODE=$(vg_config_get build_gates.goal_test_binding "warn")
+  if [ "$GTB_MODE" != "off" ]; then
+    GTB_ARGS="--phase-dir ${PHASE_DIR} --wave-tag ${WAVE_TAG} --wave-number ${N}"
+    [ "$GTB_MODE" = "warn" ] && GTB_ARGS="${GTB_ARGS} --lenient"
+    if ! ${PYTHON_BIN} .claude/scripts/verify-goal-test-binding.py ${GTB_ARGS}; then
+      FAILED_GATE="goal_test_binding"
+    fi
+  fi
+fi
+
+# Gate U: Utility duplication (wave-scope AST scan, threshold-block=3)
+if [ -z "$FAILED_GATE" ] && [ -f ".claude/scripts/verify-utility-duplication.py" ]; then
+  DUP_PROJECT_MD="${PLANNING_DIR}/PROJECT.md"
+  if [ -f "$DUP_PROJECT_MD" ]; then
+    ${PYTHON_BIN} .claude/scripts/verify-utility-duplication.py \
+      --since-tag "${WAVE_TAG}" --project "$DUP_PROJECT_MD" \
+      --repo-root "${REPO_ROOT:-.}" --threshold-block 3 --threshold-warn 2
+    case $? in 0) ;; 2) echo "⚠ Utility duplication WARNs logged" ;; 1) FAILED_GATE="utility_duplication" ;; esac
+  fi
+fi
+```
+
+### 8d.7 — Mobile gate matrix (gates 6-10, mobile profiles only)
+
+Fires when `$PROFILE` ∈ {mobile-rn, mobile-flutter, mobile-native-ios,
+mobile-native-android, mobile-hybrid}. For web profiles these gates
+silently skip.
+
+- Gate 6: `verify-mobile-permissions.py` (iOS plist / Android manifest /
+  Expo config)
+- Gate 7: `verify-cert-expiry.py` (signing cert warn/block days)
+- Gate 8: `verify-privacy-manifest.py` (privacy manifest consistency)
+- Gate 9: `verify-native-modules.py` (autolinking / pods / gradle)
+- Gate 10: `verify-bundle-size.py` (IPA / APK / AAB MB budget)
+
+Each gate reads its config from `mobile.gates.<gate_name>` in
+`.claude/vg.config.md` via the awk parser pattern preserved verbatim
+from backup lines 2510-2693. Skipped silently when `enabled != true`.
+
+### 8d.8 — Failure handling (max 2 debugger retries)
+
+If `$FAILED_GATE` set, spawn `gsd-debugger` (allow-listed gsd-* agent
+for debug retries, NOT a wave executor):
+
+```
+RETRY_COUNT=0
+MAX_RETRIES=2
+
+while [ "$FAILED_GATE" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+  RETRY_COUNT=$((RETRY_COUNT + 1))
+  Agent(subagent_type="gsd-debugger", model="${MODEL_DEBUGGER}"):
+    prompt: |
+      Wave ${N} of phase ${PHASE_NUMBER} failed post-wave gate.
+      Failed gate: ${FAILED_GATE}
+      Wave tag (rollback point): ${WAVE_TAG}
+      Plans executed in wave: ${WAVE_PLAN_LIST}
+
+      Diagnose root cause and apply minimal fix. Commit with prefix
+      `fix(${PHASE_NUMBER}-wave-${N}): `.
+
+      Constraints:
+      - Do NOT rewrite existing wave commits
+      - Do NOT use --no-verify
+      - Cite root cause in commit body: "Root cause: <1 sentence>"
+      - Re-run failed gate after fix — your fix must make it pass
+
+  # Re-run failed gate only
+  case "$FAILED_GATE" in
+    typecheck) CMD=$(vg_config_get build_gates.typecheck_cmd "") ;;
+    build) CMD=$(vg_config_get build_gates.build_cmd "") ;;
+    test_unit) CMD=$(vg_config_get build_gates.test_unit_cmd "") ;;
+    contract_verify) CMD=$(vg_config_get build_gates.contract_verify_grep "") ;;
+    goal_test_binding)
+      CMD="${PYTHON_BIN} .claude/scripts/verify-goal-test-binding.py --phase-dir ${PHASE_DIR} --wave-tag ${WAVE_TAG} --wave-number ${N}"
+      ;;
+    mobile_permissions|cert_expiry|privacy_manifest|native_module_linking|bundle_size)
+      # ... mobile-gate-specific re-run command ...
+      ;;
+  esac
+
+  if eval "$CMD"; then
+    FAILED_GATE=""
+    echo "Gate recovered after retry ${RETRY_COUNT}."
+  fi
+done
+
+if [ -n "$FAILED_GATE" ]; then
+  # HARD GATE: --override-reason required (≥4 chars), rationalization-guard
+  # adjudicates concrete-enough; otherwise BLOCK with rollback fix paths.
+  exit 1
+fi
+```
+
+### 8d.9 — Wave-verify divergence + fixture wave-verify
+
+Spawn isolated subprocess to re-run typecheck/tests/contract scoped to
+wave's changed files. Compare with executor's claims in commit messages.
+Divergence → rollback wave via `git reset --soft` + set FAILED_GATE.
+
+```bash
+if [ -z "$FAILED_GATE" ] && [ "${CONFIG_INDEPENDENT_VERIFY_ENABLED:-true}" = "true" ]; then
+  WAVE_TAG="vg-build-${PHASE_NUMBER}-wave-${N}-start"
+  VERIFY_OUT=$(${PYTHON_BIN:-python3} \
+    .claude/scripts/validators/wave-verify-isolated.py \
+    --phase "${PHASE_NUMBER}" --wave-tag "${WAVE_TAG}" 2>&1)
+  VERIFY_RC=$?
+  if [ "$VERIFY_RC" -ne 0 ]; then
+    if [[ "$ARGUMENTS" =~ --allow-verify-divergence ]]; then
+      echo "⚠ Wave ${N} verify divergence — OVERRIDE accepted"
+      type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
+        "--allow-verify-divergence" "$PHASE_NUMBER" "build.wave-${N}.verify" \
+        "executor claim vs subprocess divergence accepted by user" \
+        "build-wave-${N}-verify"
+    else
+      echo "⛔ Wave ${N} verify divergence — rolling back"
+      git reset --soft "${WAVE_TAG}" 2>/dev/null
+      FAILED_GATE="wave-verify-divergence"
+    fi
+  fi
+
+  # RFC v9 PR-B fixture wave-verify — every mutation goal touched by this
+  # wave must have FIXTURES/{G-XX}.yaml. BLOCKS on missing/parse-error.
+  # Fixture verifier reads ${PHASE_DIR}/TEST-GOALS.md via [-f] presence
+  # check + Python regex parse (KEEP-FLAT per audit doc line 2874, 2880 —
+  # deterministic, not AI-context read).
+  # ... [fixture-backfill script invocation, exit 1 unless --allow-missing-fixtures] ...
+fi
+```
+
+### 8d.10 — Post-wave graphify refresh
+
+```bash
+if [ -z "$FAILED_GATE" ] && [ "${GRAPHIFY_ENABLED:-false}" = "true" ]; then
+  source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/graphify-safe.sh"
+  if vg_graphify_rebuild_safe "$GRAPHIFY_GRAPH_PATH" "build-wave-${N}-complete"; then
+    GRAPHIFY_ACTIVE="true"
+  elif [ "${GRAPHIFY_FALLBACK:-true}" = "false" ]; then
+    echo "⛔ Graphify post-wave rebuild failed and fallback_to_grep=false"
+    exit 1
+  fi
+fi
+```
+
+### 8d.11 — Record wave result + emit `wave.completed` event
+
+```bash
+echo "wave-${N}: ${FAILED_GATE:-passed} (retries: ${RETRY_COUNT})" >> "${PHASE_DIR}/build-state.log"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event build.wave_completed \
+  --phase "${PHASE_NUMBER}" --wave "${N}" 2>/dev/null || true
+```
+
+Only proceed to next wave if `$FAILED_GATE` empty.
+
+---
+
+## Resume-recovery handling (`--gaps-only` / `--resume`)
+
+Per audit doc `docs/audits/2026-05-04-build-flat-vs-split.md` row for
+backup line 1232 (MIGRATE), the historical resume-recovery instruction
+"`Run step 4d: extract task sections from PLAN*.md`" used an awk parser
+over the full flat PLAN file as AI-context input. This is replaced with
+the per-task `vg-load` invocation:
+
+**Before (backup line 1232):**
+```
+4. Run step 4d: extract task sections from PLAN*.md
+```
+
+**After (this ref):**
+```
+4. Run step 4d: vg-load --phase ${PHASE_NUMBER} --artifact plan --task <N>
+   per task in wave (per-task split is the canonical source; loader falls
+   back to flat parse only if split missing).
+```
+
+Concretely, when `$ARGUMENTS` contains `--gaps-only` or `--resume`:
+
+```bash
+if [[ "$ARGUMENTS" =~ --gaps-only|--resume ]]; then
+  # For each remaining task in the resumed wave, load its slice via vg-load.
+  # The loader resolves split form .vg/phases/${PHASE}/PLAN/task-${N}.md
+  # first, falling back to flat PLAN.md AWK extract only if split missing.
+  for task_num in "${WAVE_TASKS[@]}"; do
+    if [ ! -f "${PHASE_DIR}/.wave-tasks/task-${task_num}.md" ]; then
+      vg-load --phase ${PHASE_NUMBER} --artifact plan --task ${task_num} \
+        > "${PHASE_DIR}/.wave-tasks/task-${task_num}.md"
+    fi
+  done
+
+  # .callers.json + .wave-context/ regenerated via step 4e + 4c on demand
+  # (see "Step 5 — Pre-flight" above).
+fi
+```
+
+This keeps the resume path consistent with the fresh-build path: both
+populate `.wave-tasks/task-${N}.md` before pre-executor-check.py reads
+it for capsule assembly.
+
+---
+
+## Step exit + bootstrap reflection sub-step
+
+After ALL waves complete (or after Wave N when `WAVE_FILTER` set):
+
+```bash
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "8_execute_waves" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/8_execute_waves.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build 8_execute_waves 2>/dev/null || true
+```
+
+### Sub-step `8_5_bootstrap_reflection_per_wave`
+
+Unlike scope/blueprint/review (reflect once per step), `/vg:build`
+reflects **after each wave completes** — build is long-running and
+multiple learnings may emerge mid-step (typecheck OOM, test flakiness,
+commit discipline).
+
+Skip silently if `.vg/bootstrap/` absent. Per wave (orchestrator runs
+this AFTER step 8d.11 emits `wave.completed` and BEFORE the loop
+proceeds to the next wave):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 8_5_bootstrap_reflection_per_wave
+
+if [ -d ".vg/bootstrap" ]; then
+  REFLECT_STEP="wave-${WAVE_NUMBER}"
+  REFLECT_TS=$(date -u +%Y%m%dT%H%M%SZ)
+  REFLECT_OUT="${PHASE_DIR}/reflection-${REFLECT_STEP}-${REFLECT_TS}.yaml"
+  echo "📝 End-of-wave ${WAVE_NUMBER} reflection..."
+
+  # Explicit marker for orchestrator (v1.14.4+ — was implicit prose-only)
+  echo "▸ REFLECTION_TRIGGER_REQUIRED step=${REFLECT_STEP} out=${REFLECT_OUT}"
+  echo "  Orchestrator MUST: read .claude/commands/vg/_shared/reflection-trigger.md → Agent spawn vg-reflector"
+  echo "  Skip allowed via: --skip-reflection (logs override-debt)"
+
+  # Telemetry — reflection requested (will pair with reflection_completed in step 9 verify)
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    emit_telemetry_v2 "reflection_requested" "${PHASE_NUMBER}" "build.8_5" "wave-${WAVE_NUMBER}" "PENDING" \
+      "{\"wave\":${WAVE_NUMBER},\"out\":\"${REFLECT_OUT}\"}"
+  fi
+fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "8_5_bootstrap_reflection_per_wave" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/8_5_bootstrap_reflection_per_wave.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build 8_5_bootstrap_reflection_per_wave 2>/dev/null || true
+```
+
+**Rate limit:** max 1 reflection per wave. If 0 candidates → silent.
+
+**Post-wave verify (deferred to step 9 `9_post_execution`):**
+- If `.vg/bootstrap/` present + wave succeeded → `reflection-wave-N-*.yaml` MUST exist
+- Missing reflection file = WARN (not block) + log telemetry `reflection_skipped`
+- Override: `--skip-reflection` flag bypasses warn, logs override-debt
+
+---
+
+After step 8 + 8.5 markers touched for ALL waves, return to entry
+`build.md` → STEP 5 (post-execution: `9_post_execution`).
