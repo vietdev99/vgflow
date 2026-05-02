@@ -10,7 +10,7 @@ applies_to_element_classes:
 applies_to_phase_profiles:
   - feature
   - hotfix
-strix_reference: list-state coverage (Strix list-page exhaustive)
+strix_reference: VG-specific roam table-interaction lens
 severity_default: warn
 estimated_action_budget: 40
 output_schema_version: 3

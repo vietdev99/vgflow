@@ -10,7 +10,7 @@ applies_to_phase_profiles:
   - feature
   - hotfix
   - bugfix
-strix_reference: full-CRUD exploratory pass (Strix workflow analogue)
+strix_reference: VG-specific roam form-lifecycle lens
 severity_default: warn
 estimated_action_budget: 60
 output_schema_version: 3

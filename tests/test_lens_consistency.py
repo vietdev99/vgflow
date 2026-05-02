@@ -8,7 +8,7 @@ LENS_DIR = REPO_ROOT / "commands" / "vg" / "_shared" / "lens-prompts"
 
 VALID_BUG_CLASSES = {
     "authz", "injection", "auth", "bizlogic",
-    "server-side", "redirect", "ui-mechanic"
+    "server-side", "redirect", "ui-mechanic", "state-coherence"
 }
 
 # Element classes that have lens probes (Tier 1 + Tier 2 active in v2.41).
@@ -23,6 +23,10 @@ ACTIVE_ELEMENT_CLASSES = {
     # Tier 2 (promoted in v2.41)
     "redirect_url_param", "url_fetch_param", "auth_endpoint",
     "payment_or_workflow", "error_response",
+    # Roam/state-coherence lenses
+    "mutation_action", "approval_flow", "status_transition",
+    "form_root", "submit_button", "table_root", "list_view",
+    "filter_bar", "pagination_control",
 }
 
 # Still-deferred element classes (Tier 2+ surfaces awaiting downstream wiring).
@@ -30,8 +34,8 @@ FUTURE_ELEMENT_CLASSES = {
     "tab", "path_param",
 }
 
-# v2.40 ships exactly 16 lens files (Tier 1 through Tier 7)
-EXPECTED_LENS_COUNT = 16
+# v2.48 ships 16 security/UI lenses plus 3 roam state-coherence lenses.
+EXPECTED_LENS_COUNT = 19
 
 ALL_LENS_FILES = sorted(LENS_DIR.glob("lens-*.md"))
 
@@ -127,8 +131,8 @@ def test_severity_default_is_warn_for_v240():
 
 
 def test_all_phase_profiles_subset():
-    """applies_to_phase_profiles must be subset of {feature, feature-legacy, hotfix} for v2.40."""
-    valid = {"feature", "feature-legacy", "hotfix"}
+    """applies_to_phase_profiles must be subset of supported lens profiles."""
+    valid = {"feature", "feature-legacy", "hotfix", "bugfix", "migration"}
     for lens, fm in all_frontmatter():
         profiles = set(fm.get("applies_to_phase_profiles", []))
         assert profiles.issubset(valid), \
@@ -137,7 +141,7 @@ def test_all_phase_profiles_subset():
 
 
 def test_total_lens_files_present():
-    """v2.40 ships exactly 16 lens files (Tier 1 through Tier 7 per design doc)."""
+    """Lens catalog includes security/UI lenses plus roam state-coherence lenses."""
     count = len(ALL_LENS_FILES)
     assert count == EXPECTED_LENS_COUNT, \
         f"Expected {EXPECTED_LENS_COUNT} lens files, found {count}"
@@ -157,6 +161,7 @@ def test_bug_class_distribution_per_design():
         "server-side": 2,     # ssrf, info-disclosure
         "ui-mechanic": 1,     # modal-state
         "redirect": 1,        # open-redirect
+        "state-coherence": 3, # business-coherence, form-lifecycle, table-interaction
     }
     for bc, expected_count in expected.items():
         actual = counts.get(bc, 0)

@@ -10,7 +10,7 @@ applies_to_phase_profiles:
   - feature
   - bugfix
   - migration
-strix_reference: workflow consistency (Strix exploitation analogue, defensive lens)
+strix_reference: VG-specific roam state-coherence lens
 severity_default: warn
 estimated_action_budget: 50
 output_schema_version: 3
