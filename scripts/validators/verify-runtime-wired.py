@@ -110,6 +110,12 @@ def discover_validators(repo: Path) -> list[Artifact]:
     for p in sorted(v.glob("*.py")):
         if p.name.startswith("_"):
             continue
+        # Convention: validators are `verify-X.py`. Other .py files in this
+        # dir are CLI helpers (audit-rule-cards, register-validator,
+        # dispatch-validators-by-context, inventory-skill-rules) — invoked
+        # ad-hoc by devs, not auto-dispatched. Don't flag as orphan.
+        if not p.name.startswith("verify-"):
+            continue
         out.append(Artifact(kind="validator", name=p.stem, path=p,
                             public_symbols=["_module"]))
     return out

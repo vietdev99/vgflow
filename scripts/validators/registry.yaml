@@ -972,3 +972,171 @@ validators:
     runtime_target_ms: 500
     added_in: v2.46
     description: 'Codex-HIGH-3 regression guard. When goal has FIXTURES-CACHE.captured but its generated .spec.ts does not reference FIXTURE.* identifiers, codegen-fixture-inject did not run. Override via --allow-no-fixture-ref (override-debt logged).'
+
+  # ──── RFC v9 follow-up wire-up batch (PR-B, 2026-05-02) ────
+  # 18 validators that shipped as code without registry entry —
+  # surfaced by verify-runtime-wired.py audit. Each entry binds the
+  # validator to one or more pipeline phases so vg-orchestrator
+  # auto-dispatches it instead of relying on ad-hoc manual invocation.
+
+  - id: runtime-wired
+    path: scripts/validators/verify-runtime-wired.py
+    severity: warn
+    phases_active: [preflight, release]
+    domain: orchestrator
+    runtime_target_ms: 1500
+    added_in: v2.48
+    description: 'Audits orphan modules (runtime/validators/lens/lib) for wire-up to skills + entry scripts. Two-stage detection (presence + per-symbol). Excludes Error/Exception classes from PARTIAL noise. Transitive wiring resolved. Run at preflight to catch new orphans before release.'
+
+  - id: backend-mutation-evidence
+    path: scripts/validators/verify-backend-mutation-evidence.py
+    severity: block
+    phases_active: [review, test]
+    domain: evidence
+    runtime_target_ms: 800
+    added_in: v2.46
+    description: 'RFC v9 PR-Z — backend mutation goals (surface=api|data|integration) must carry replay-style evidence in RUNTIME-MAP.goal_sequences (replay.method/endpoint/status/captured_at + evidence.source/artifact_hash). Pre-RFC-v9 phases bypass via .legacy-surface-probe.json + --allow-legacy-surface-probe.'
+
+  - id: auth-flow-smoke
+    path: scripts/validators/verify-auth-flow-smoke.py
+    severity: block
+    phases_active: [review, test]
+    domain: security
+    runtime_target_ms: 1200
+    added_in: v2.42
+    description: 'Smoke check that auth flow (login → cookie set → /me → logout) succeeds end-to-end against target env. Catches auth misconfig before deeper goal verification spends tokens.'
+
+  - id: idempotency-coverage
+    path: scripts/validators/verify-idempotency-coverage.py
+    severity: warn
+    phases_active: [review, test]
+    domain: contract
+    runtime_target_ms: 500
+    added_in: v2.42
+    description: 'Mutation goals must declare idempotency_key handling — replay test (same key twice → identical response, count unchanged). Warn-mode to migrate; block planned for new phases.'
+
+  - id: rollback-procedure
+    path: scripts/validators/verify-rollback-procedure.py
+    severity: block
+    phases_active: [accept]
+    domain: artifact
+    runtime_target_ms: 400
+    added_in: v2.42
+    description: 'Migration phases (phase_profile=migration) must ship ROLLBACK.md with down-migration steps + verification commands. Block at accept if missing for migration profile.'
+
+  - id: vps-deploy-evidence
+    path: scripts/validators/verify-vps-deploy-evidence.py
+    severity: block
+    phases_active: [review, test]
+    domain: evidence
+    runtime_target_ms: 600
+    added_in: v2.43
+    description: 'When env=sandbox|staging|prod, deploy must record DEPLOY-STATE.json with SSH evidence (commit_sha, deploy_ts, health_url 200, smoke_pass). Block review/test if claimed env without evidence.'
+
+  - id: hardcode-register-drift
+    path: scripts/validators/verify-hardcode-register-drift.py
+    severity: warn
+    phases_active: [build, review]
+    domain: lint
+    runtime_target_ms: 700
+    added_in: v2.40
+    description: 'Detect hardcoded values (URLs, paths, magic numbers) in skill .md/lib .sh that should reference vg.config.md. Drift register tracked across runs.'
+
+  - id: human-language-response
+    path: scripts/validators/verify-human-language-response.py
+    severity: warn
+    phases_active: [accept]
+    domain: lint
+    runtime_target_ms: 300
+    added_in: v2.43
+    description: 'User-facing AI prose must use Vietnamese with English term explanations in parentheses (per term-glossary). Catches bot-tone responses that confuse non-technical users.'
+
+  - id: narration-coverage
+    path: scripts/validators/verify-narration-coverage.py
+    severity: warn
+    phases_active: [release]
+    domain: lint
+    runtime_target_ms: 400
+    added_in: v2.43
+    description: 'Validator Evidence messages must use _i18n.t() for narration (per narration-strings-validators.yaml). Catches hardcoded English in Evidence.message that bypasses translation pipeline.'
+
+  - id: no-hardcoded-paths
+    path: scripts/validators/verify-no-hardcoded-paths.py
+    severity: warn
+    phases_active: [build, release]
+    domain: lint
+    runtime_target_ms: 600
+    added_in: v2.42
+    description: 'Skills + scripts must not hardcode absolute paths (/Users/, /home/, C:\\). Use ${REPO_ROOT}, ${HOME}, or resolved relatives. Catches portability breaks across machines.'
+
+  - id: no-legacy-manifest-creation
+    path: scripts/validators/verify-no-legacy-manifest-creation.py
+    severity: block
+    phases_active: [build, release]
+    domain: lint
+    runtime_target_ms: 300
+    added_in: v2.5.2.1
+    description: 'v2.5.2.1 Fix 3 — skills must not create .planning/ legacy manifest files (GSD pre-VG path). Block to prevent regression after planning-migrator ran.'
+
+  - id: no-no-verify
+    path: scripts/validators/verify-no-no-verify.py
+    severity: block
+    phases_active: [build]
+    domain: lint
+    runtime_target_ms: 200
+    added_in: v2.40
+    description: 'Reject git commit --no-verify in skill .md unless user explicitly authorized via --allow-skip-hooks override. Pre-commit/pre-push hooks exist for reasons.'
+
+  - id: no-untracked-source
+    path: scripts/validators/verify-no-untracked-source.py
+    severity: warn
+    phases_active: [release]
+    domain: lint
+    runtime_target_ms: 400
+    added_in: v2.43
+    description: 'Source files referenced in skills must be git-tracked (no untracked .py/.sh in scripts/ that skills source). Catches local-only changes that break installations.'
+
+  - id: rule-cards-fresh-hook
+    path: scripts/validators/verify-rule-cards-fresh-hook.py
+    severity: block
+    phases_active: [preflight]
+    domain: bootstrap
+    runtime_target_ms: 400
+    added_in: v2.43
+    description: 'Pre-commit drift gate: rule cards generated by extract-rule-cards.py must be re-extracted when source skill .md changes. Block commit if cards out-of-date relative to source mtime.'
+
+  - id: rule-phase-scope
+    path: scripts/validators/verify-rule-phase-scope.py
+    severity: warn
+    phases_active: [release]
+    domain: lint
+    runtime_target_ms: 300
+    added_in: v2.43
+    description: 'Skill rule cards must declare phase scope (which workflow steps the rule applies in) to avoid universal-rule sprawl across pipeline.'
+
+  - id: skill-invariants
+    path: scripts/validators/verify-skill-invariants.py
+    severity: block
+    phases_active: [release]
+    domain: orchestrator
+    runtime_target_ms: 500
+    added_in: v2.7
+    description: 'Phase P validator — every skill .md must declare runtime_contract (must_write/must_touch_markers/must_emit_telemetry). Block release if any skill lacks contract since hooks would have nothing to verify.'
+
+  - id: spec-selectors-against-impl
+    path: scripts/validators/verify-spec-selectors-against-impl.py
+    severity: warn
+    phases_active: [test]
+    domain: contract
+    runtime_target_ms: 800
+    added_in: v2.43
+    description: 'Generated .spec.ts selectors (data-testid, aria-label, getByText) must exist in the implementation source. Catches stale codegen after FE refactor renamed elements.'
+
+  - id: summary-vi-coverage
+    path: scripts/validators/verify-summary-vi-coverage.py
+    severity: warn
+    phases_active: [accept]
+    domain: artifact
+    runtime_target_ms: 200
+    added_in: v2.43
+    description: 'SUMMARY.md must contain Vietnamese narration covering each completed task (not English-only bullet list). Pairs with human-language-response to enforce VI-first communication.'
