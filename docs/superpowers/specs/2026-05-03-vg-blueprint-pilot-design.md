@@ -301,7 +301,96 @@ You MUST NOT ask the user questions — your input is the contract.
 
 **Hook installation strategy:** sync via `install-hooks.sh` which idempotently merges the hooks block into target `.claude/settings.json`. Existing user hooks preserved. Re-running install does not duplicate.
 
-### 4.5 SessionStart meta-skill content (`vg-meta-skill.md`)
+### 4.5 Diagnostic flow when blocked (5 layers, prevents silent fail / context loss)
+
+When a hook blocks (PreToolUse exit 2, Stop exit 2), AI must NOT silently retry. The design enforces 5 layers:
+
+#### Layer 1 — Block message is a structured diagnostic prompt, not an error
+
+Hook stderr is formatted as an imperative prompt that obligates AI to do 3 things in order:
+
+```
+═══════════════════════════════════════════
+DIAGNOSTIC REQUIRED — Gate: <gate_id>
+═══════════════════════════════════════════
+
+CAUSE:
+  <human-readable explanation, e.g.: "TodoWrite has not been called for run
+  abc-123. tasklist-contract.json was written at .vg/runs/abc-123/ with
+  checksum X, but evidence file .tasklist-projected.evidence.json does not
+  exist.">
+
+REQUIRED FIX:
+  1. Read .vg/runs/abc-123/tasklist-contract.json
+  2. Call TodoWrite with each checklist group as one todo item
+  3. Verify PostToolUse hook wrote evidence file
+  4. Retry the blocked Bash call
+
+YOU MUST DO ALL THREE BEFORE CONTINUING:
+  A) Tell user using this narrative template (in session language):
+     "[VG diagnostic] Bước <step> đang bị chặn. Lý do: <one-sentence cause>.
+      Đang xử lý: <one-sentence fix>. Sẽ tiếp tục sau khi xong."
+  B) Bash: vg-orchestrator emit-event vg.block.handled \
+            --gate <gate_id> --resolution "<summary>"
+  C) Retry the original tool call
+
+If this gate has blocked ≥3 times this run, you MUST call AskUserQuestion
+instead of retrying.
+═══════════════════════════════════════════
+```
+
+AI cannot silently retry — the message contractually requires narration + event emission + retry, in that order.
+
+#### Layer 2 — Block event tracking (no silent skip)
+
+- Hook script, before exit 2, emits event `vg.block.fired` (gate_id, run_id, timestamp, cause).
+- Diagnostic acknowledgement = event `vg.block.handled` with same gate_id (emitted by AI bash after narrating to user).
+- **Stop hook compares**: `count(vg.block.fired) == count(vg.block.handled)`. Mismatch → exit 2 with list of unhandled blocks.
+
+If AI retries without narrating, Stop hook BLOCKs run-complete with: "3 blocks fired, only 1 handled. Missing diagnostic for: [PreToolUse-tasklist, ...]". Run cannot end.
+
+#### Layer 3 — Escalation after N blocks on same gate (prevents infinite loop)
+
+- Hook counts `block-per-gate-per-run` (read from events.db at hook time).
+- Block 1, 2: stderr = diagnostic prompt as Layer 1.
+- Block 3+: stderr appends: "**This gate has blocked 3 times. You MUST call AskUserQuestion before retrying.**"
+- AI tries to retry on block 4 → hook blocks again with same escalation message.
+
+Forces user-in-the-loop when a gate cannot resolve automatically.
+
+#### Layer 4 — Re-inject open diagnostics on context compaction (AI cannot forget)
+
+- SessionStart hook fires on `startup`, `clear`, AND `compact` events.
+- Hook script, when fired, does TWO things:
+  1. Inject base `vg-meta-skill.md` content
+  2. Query events.db for active run, find `vg.block.fired` without paired `vg.block.handled`, inject inline:
+     ```
+     OPEN DIAGNOSTICS for current run <run_id>:
+       - Gate: <gate_id_1> blocked at <timestamp> — cause: <...>
+       - Gate: <gate_id_2> blocked at <timestamp> — cause: <...>
+     You MUST complete diagnostic for each before continuing other work.
+     ```
+- `vg-meta-skill.md` has section "Open diagnostic threads" explaining the mechanism.
+
+After context compaction, AI immediately re-sees pending diagnostics. Cannot "forget" them.
+
+#### Layer 5 — User narrative requirement (prevents silent fail toward user)
+
+- `vg-meta-skill.md` (SessionStart-injected) contains rule:
+  ```
+  WHEN a hook blocks your tool call, you MUST narrate to the user in
+  session language what is happening BEFORE retrying. Use the template
+  provided in the block message. NEVER retry silently.
+
+  WHY: User must understand workflow state. Silent retry causes user to
+  think the tool is hung or AI is confused. This violates the workflow
+  transparency contract.
+  ```
+- Layer 1's diagnostic prompt **inline provides the narrative template** AI must use → no need for AI to invent format.
+
+A non-tech user reads: `[VG diagnostic] Bước 2a_plan đang bị chặn. Lý do: chưa gọi TodoWrite. Đang xử lý: project tasklist-contract. Sẽ tiếp tục sau khi xong.` Understandable immediately.
+
+### 4.6 SessionStart meta-skill content (`vg-meta-skill.md`)
 
 Injected as `additionalContext` per Anthropic SessionStart hook spec. Content:
 
@@ -326,6 +415,23 @@ fulfill the missing prerequisite, then retry. Do not work around the gate.
 | "Subagent overkill for this small step" | Heavy step has empirical 96.5% skip rate without subagent |
 | "TodoWrite is just UI, the contract is in events" | Hook checks TodoWrite payload against contract checksum |
 | "I can mark step done now and finish content later" | Stop hook reads must_write content_min_bytes; placeholder fails |
+| "The block was a one-off, retrying should work" | Each block emits vg.block.fired; Stop hook blocks if unhandled |
+| "I'll just retry, no need to tell the user" | Layer 5 rule: narrate in session language using template, never retry silently |
+
+## Open diagnostic threads (Layer 4 mechanism)
+
+If this injected context contains "OPEN DIAGNOSTICS for current run", you
+have unresolved blocks from earlier in this run (possibly across context
+compactions). For each open diagnostic, you MUST:
+
+1. Read the cause + required fix from the original block message (still in
+   events.db, query: `vg-orchestrator query-events --event-type vg.block.fired`)
+2. Apply the fix
+3. Narrate to user in session language using the template from the original block
+4. Bash: `vg-orchestrator emit-event vg.block.handled --gate <gate_id> --resolution "<summary>"`
+
+You CANNOT do other work until all open diagnostics are closed. Stop hook
+will refuse run-complete if any vg.block.fired is unpaired with vg.block.handled.
 
 ## Pipeline commands governed by VGFlow
 
@@ -341,12 +447,14 @@ Read references when instructed. Spawn subagents when instructed.
 
 ### 5.1 Error handling
 
-- **Hook script crash** — exit code passed to Claude, stderr visible. Hook scripts use `set -euo pipefail`.
-- **Missing evidence (PreToolUse fail)** — block with stderr: "TodoWrite has not been called for run `<run_id>`. Project tasklist-contract.json before continuing. See `.vg/runs/<run_id>/tasklist-contract.json`."
-- **Checksum mismatch (TodoWrite payload differs from contract)** — block with diff output showing expected vs actual checklist items.
-- **Subagent failure (Task tool returns error)** — main Claude retries up to 2 times. After 2 retries, escalate via AskUserQuestion.
-- **Subagent returns invalid artifact** — step-end validator checks artifact format. If invalid, mark step incomplete, force re-do.
-- **Stop hook violation** — exit 2 with explicit list of missing artifacts/markers/events. Format: `MISSING: must_write/PLAN.md (file does not exist)\nMISSING: must_touch_markers/2c_verify (marker not present)\nMISSING: must_emit_telemetry/blueprint.contracts_generated (event count 0, expected ≥1)`.
+All block messages follow the diagnostic flow defined in §4.5 (5-layer mechanism). Specifics:
+
+- **Hook script crash** — exit code passed to Claude, stderr visible. Hook scripts use `set -euo pipefail`. Crashes still emit `vg.block.fired` so they are tracked.
+- **Missing evidence (PreToolUse fail)** — block with stderr formatted per §4.5 Layer 1 (CAUSE / REQUIRED FIX / 3-step obligation). Cause text: "TodoWrite has not been called for run `<run_id>`."
+- **Checksum mismatch (TodoWrite payload differs from contract)** — block with diff output showing expected vs actual checklist items, formatted per §4.5 Layer 1.
+- **Subagent failure (Task tool returns error)** — main Claude retries up to 2 times (Layer 3 escalation: 3rd failure forces AskUserQuestion). Each failure emits `vg.subagent.failed` event.
+- **Subagent returns invalid artifact** — step-end validator checks artifact format. If invalid, mark step incomplete, force re-do. Counts toward Layer 3 escalation.
+- **Stop hook violation** — exit 2 with explicit list of missing artifacts/markers/events AND list of unhandled `vg.block.fired` events. Format: `MISSING: must_write/PLAN.md (file does not exist)\nMISSING: must_touch_markers/2c_verify\nMISSING: must_emit_telemetry/blueprint.contracts_generated (count 0, expected ≥1)\nUNHANDLED DIAGNOSTIC: gate=PreToolUse-tasklist-checksum (fired at <ts>, no vg.block.handled paired)`.
 
 ### 5.2 Migration / backward compat
 
@@ -363,9 +471,13 @@ Read references when instructed. Spawn subagents when instructed.
 - `test_blueprint_imperative_language.py` — grep for "MUST", "Do NOT", "STEP X" in instruction context; fail if "should", "may", "will" found in instruction context
 - `test_subagent_definitions_exist.py` — assert 2 agent SKILL.md files with valid frontmatter (name, description, tools, model)
 - `test_hook_scripts_executable.py` — assert +x bit on all 4 hook scripts
-- `test_hook_pretooluse_blocks.py` — simulate run with missing evidence file, assert hook exits 2 with expected stderr message
+- `test_hook_pretooluse_blocks.py` — simulate run with missing evidence file, assert hook exits 2 with stderr matching §4.5 Layer 1 format (CAUSE / REQUIRED FIX / 3-step obligation)
 - `test_hook_posttooluse_writes_evidence.py` — simulate TodoWrite tool input, assert evidence file written with correct schema and checksums
 - `test_install_hooks_idempotent.py` — run install-hooks.sh twice, assert settings.json hooks block has no duplicate entries
+- `test_hook_emits_block_event.py` — simulate PreToolUse exit 2, assert `vg.block.fired` event written to events.db with gate_id, run_id, cause
+- `test_stop_hook_requires_block_handled_pair.py` — simulate run with 1 vg.block.fired and 0 vg.block.handled, assert Stop hook exits 2 with "UNHANDLED DIAGNOSTIC" line
+- `test_repeated_block_escalation.py` — simulate 3 blocks on same gate, assert 3rd stderr contains "MUST call AskUserQuestion before retrying"
+- `test_session_start_reinjects_open_diagnostics.py` — simulate run with unhandled block + compact event, assert SessionStart hook output contains "OPEN DIAGNOSTICS for current run" with the block listed
 
 **Empirical dogfood (manual run + automated metric query):**
 - Sync to PrintwayV3 via `DEV_ROOT=".../PrintwayV3" ./sync.sh --no-global`
@@ -380,9 +492,11 @@ Read references when instructed. Spawn subagents when instructed.
 3. All 18+ step markers touched without override flag
 4. PLAN.md and API-CONTRACTS.md exist with non-placeholder content (content_min_bytes met)
 5. Two Task subagent invocation events present (one per heavy step)
-6. Manual test: simulate skipping TodoWrite, PreToolUse hook blocks with comprehensible stderr
+6. Manual test: simulate skipping TodoWrite, PreToolUse hook blocks with diagnostic stderr formatted per §4.5 Layer 1
 7. User (sếp) reads workflow narration end-to-end and reports understanding each step's purpose (qualitative)
 8. Stop hook fires without exit 2 (run-complete contract satisfied)
+9. Manual test: triggered block produces user-facing narration in session language using §4.5 Layer 5 template (not silent retry)
+10. Stop hook fails closed if `vg.block.fired` events are not paired with `vg.block.handled` (verify with manual induce-and-skip test)
 
 Pilot FAILS if any criterion missed. Failure path: return to design phase. **Do not scale to other commands.**
 
