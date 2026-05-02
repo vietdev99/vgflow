@@ -5,7 +5,9 @@
 
 set -euo pipefail
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-scripts/hooks}"
+# Default PLUGIN_ROOT to the directory containing this script — vg-meta-skill.md
+# sits next to it. Avoids relative-path failure when hook fires from arbitrary CWD.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")" && pwd)}"
 META_SKILL_PATH="${PLUGIN_ROOT}/vg-meta-skill.md"
 EVENTS_DB="${VG_EVENTS_DB:-.vg/events.db}"
 ACTIVE_RUN_PATH=".vg/active-runs/${CLAUDE_HOOK_SESSION_ID:-default}.json"
