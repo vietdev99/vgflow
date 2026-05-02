@@ -133,9 +133,30 @@ detect_phase_profile() {
       # migrations/* is allowed in feature specs (e.g., "we'll touch
       # migrations/123.sql when bumping a single column") without
       # forcing the migration profile.
+      #
+      # v2.47.3 (Issues #89 #90):
+      # - #89: narrow path regex — pre-fix bare 'schema' substring matched
+      #   Mongoose model files (`models/UserSchema.js`, `schemas/userSchema.js`),
+      #   GraphQL types (`graphql/schema.ts`), Joi/Yup validators
+      #   (`validation/schema.json`) — none of which are DB migrations.
+      #   PrintwayV3 P3.2 (Mongoose-backed payment phase) had ≥2 such files
+      #   in PLAN.md → wrongly classified as migration → required ROLLBACK.md.
+      #   Now require: actual migrations/ or migrate/ directory, prisma/schema.prisma
+      #   exact filename, db/schema.{rb,sql} (Rails-style), or .sql at end of path.
+      # - #90: replace `grep -cE ... || echo 0` (which produced "0\n0" when
+      #   grep found 0 matches and exited 1, breaking integer comparison)
+      #   with a 2-stage extract+count using grep -o + a wc-l fallback.
       local mig_path_count
-      mig_path_count=$(grep -cE '<file-path>[^<]*(migrations|schema|\.sql)[^<]*</file-path>' "$plan" 2>/dev/null || echo 0)
-      if [ "$mig_path_count" -ge 2 ]; then
+      mig_path_count=$(
+        {
+          grep -oE '<file-path>[^<]+</file-path>' "$plan" 2>/dev/null \
+            | sed -E 's@</?file-path>@@g' \
+            | grep -cE '(^|/)(migrations?|migrate)/|(^|/)prisma/schema\.prisma$|(^|/)db/schema\.(rb|sql)$|\.sql$' \
+            || true
+        }
+      )
+      mig_path_count="${mig_path_count:-0}"
+      if [ "$mig_path_count" -ge 2 ] 2>/dev/null; then
         echo "migration"
         return 0
       fi

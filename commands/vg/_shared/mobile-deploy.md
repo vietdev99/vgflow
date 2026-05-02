@@ -62,7 +62,7 @@ mobile_deploy_effective_provider() {
   detected=$(mobile_deploy_provider_detect)
 
   target_platforms=$(awk '/^target_platforms:/{print;exit}' .claude/vg.config.md \
-                     | sed 's/.*\[\(.*\)\].*/\1/' | tr -d '"')
+                     | sed 's/.*\[\(.*\)\].*/\1/' | tr -d '"\r')
 
   if echo "$target_platforms" | grep -q ios && [ "$HOST_OS" != "darwin" ]; then
     fallback_enabled=$(awk '/^mobile:/{m=1;next} m && /^  deploy:/{d=1;next}

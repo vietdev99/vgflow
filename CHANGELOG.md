@@ -1,5 +1,61 @@
 # Changelog
 
+## v2.48.0 — RFC v9 follow-up (PR #86) + 3 dogfood-found phase-profile/CRLF fixes (Issues #88 #89 #90)
+
+Mixed feature + patch release. **PR #86** (RFC v9 follow-up: fail-closed build truthcheck + OpenAPI evidence gate, held in v2.47.x because of bypass-test conflicts) merged green. On top of it, 3 new dogfood reports from PrintwayV3 surfaced after #87 was patched: 2 in `phase-profile.sh` migration detection, 1 in config-loader CRLF handling. Issues #91-#98 were filed at the same time but were already addressed by PR #86 / v2.47.1 / v2.47.2 — they are closed as "fixed in this release" without code changes (see Triage below).
+
+### Added (PR #86 — RFC v9 follow-up)
+- **Fail-closed build truthcheck + OpenAPI evidence gate** in `/vg:build`: contract-bearing wave failures BLOCK; route-schema coverage and goal-grounding now enforced before late UI scan loops.
+- **RFC v9 tester-pro gates** wired through `/vg:scope`, `/vg:blueprint`, `/vg:review`, `/vg:test` — `tester-pro-cli.py`, `route-schema-backfill.py`, `migrate-backend-surface-probe.py`, `review-api-contract-probe.py`, `backfill-goal-traceability.py`.
+- **Diagnostic L2 fallback wiring** for `/vg:review` Phase 3 fix loop (`spawn-diagnostic-l2.py` + `runtime/__init__.py` integration).
+- **Orchestrator `no-session` resolution fix** — synthetic `session-unknown-*` runs can now be completed by later subprocesses instead of orphaning telemetry on CI runners without `CLAUDE_SESSION_ID`.
+- **3 new validators**: `verify-route-schema-coverage.py`, `verify-goal-grounding.py`, `verify-runtime-wired.py`.
+- **`sync.sh` ships `catalog/edge-cases/*.md`** so fresh installs include the seed pattern store consumed by `runtime/pattern_catalog.py`.
+- **Codex skill mirrors regenerated** for all 70 skills with the new RFC v9 gates.
+
+### Fixed (Issue #89) — `phase-profile.sh` Rule 5 schema-path false positive on Mongoose / GraphQL / Joi files
+- `commands/vg/_shared/lib/phase-profile.sh` migration detection counted any PLAN.md `<file-path>` containing the substring `schema` as a migration signal. PrintwayV3 Phase 3.2 (Mongoose-backed payment gateway) had ≥2 model files like `apps/api/src/models/topup.schema.js`, `apps/api/src/models/withdraw.schema.js` — passed the v2.47.1 quorum (≥2) trivially → wrongly classified as migration → required ROLLBACK.md → user forced manual override at every `/vg:review`.
+- Fix: narrow the path regex from generic `(migrations|schema|\.sql)` substring to actual migration paths only:
+  - `(^|/)(migrations?|migrate)/` — Knex/Sequelize/Rails-style migration directories.
+  - `(^|/)prisma/schema\.prisma$` — Prisma schema, exact filename only.
+  - `(^|/)db/schema\.(rb|sql)$` — Rails-style schema dumps.
+  - `\.sql$` — raw SQL files (kept for backward compat with v2.47.1 fixtures).
+- Mongoose model files (`models/UserSchema.js`, `schemas/userSchema.js`), GraphQL types (`graphql/schema.ts`), Joi/Yup validators (`validation/schema.json`) NO LONGER trigger migration profile.
+- Verified via 4 fixture tests: Mongoose schemas → feature; real `migrations/*.sql` → migration; single `prisma/schema.prisma` → feature (no quorum); zero-match PLAN → feature.
+
+### Fixed (Issue #90) — `phase-profile.sh` `grep -cE ... || echo 0` produced double-zero
+- Same line as #89: `mig_path_count=$(grep -cE '...' "$plan" 2>/dev/null || echo 0)`. When grep finds 0 matches, it prints `0` and exits with rc=1 → the `|| echo 0` clause appended a SECOND `0` → `mig_path_count="0\n0"` → `[ "$mig_path_count" -ge 2 ]` triggered shell integer-comparison warnings ("integer expression expected") on every phase-profile detection that hit Rule 5's prose match.
+- Fix: replaced with a 2-stage extract (`grep -oE` → `sed`) feeding `grep -cE` inside `{ ...; || true; }` braces. Result: clean `0` / `N` integer, no double-zero, no rc=1 leak. Wrapped the integer test with `2>/dev/null` for defense-in-depth on legacy Bash variants.
+
+### Fixed (Issue #88) — config-loader CRLF stripping for Windows-checkout repos
+- `.claude/vg.config.md` parsed by awk patterns across `config-loader.md`, `commands/vg/{blueprint,build,review,test}.md`, `commands/vg/_shared/mobile-deploy.md`. On Windows-checkout repos with CRLF line endings, awk's `print` produced shell vars with embedded `\r` — e.g. `PLANNING_DIR=".vg\r"` → `resolve_phase_dir` looked for `.vg\r/phases/<phase>` which never exists → BLOCK on every Codex `/vg:review` run with `resolve_phase_dir: phases directory missing at '.vg\r/phases'`.
+- Fix (defense-in-depth):
+  - **BOM-strip stage** in `config-loader.md` now also strips `\r$` line-by-line: `sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' .claude/vg.config.md > "$CONFIG_CLEAN"`.
+  - **All `tr -d '"'` pipelines** changed to `tr -d '"\r'` (config-loader graphify/model awk, blueprint UI_MAP_*, build UI_MAP_*/MAX_*, test STORAGE_*/LOGIN_STRATEGY, mobile-deploy target_platforms).
+  - **`vg_config_get` + `vg_config_get_array` awk gsub** extended from `gsub(/["]/, "")` to `gsub(/["\r]/, "")`.
+  - **`commands/vg/review.md` mobile DEVICE awk gsub** + `commands/vg/test.md` ROLES awk gsub extended with `\r`.
+  - **`GRAPHIFY_STALE_WARN`** (only awk-based, no `tr`) gained a `| tr -d '\r'` postfilter.
+  - **`commands/vg/test.md` STORAGE_TTL** (numeric, no `tr`) gained a `| tr -d '\r'` postfilter.
+
+### Triaged — already fixed, closed without code changes
+| Issue | Sig | Verdict | Why already fixed |
+|-------|-----|---------|---|
+| #91 | matrix-staleness-na-formatting-false-positive | Fixed by PR #86 | `verify-matrix-staleness.py` already has `READONLY_GOAL_CLASSES = {readonly, read-only, read_only, display, formatting}` + `_meaningful()` rejecting `n/a` prefix. |
+| #92 | mutation-validators-na-formatting | Fixed by PR #86 | `verify-mutation-actually-submitted.py` `_meaningful()` already rejects `n/a` prefix and `EMPTY_FIELD_VALUES`. |
+| #93 | matrix-evidence-link-blocked-status | Fixed by v2.47.1 (Issue #84) | `STATUSES_WITHOUT_RUNTIME` already includes `BLOCKED`; alignment short-circuit at line 198-203 handles the `result=blocked` case. Reporter was on v2.47.0 missing the v2.47.1 fix. |
+| #94 | runtime-crud-depth-readonly-formatting | Fixed by PR #86 | `verify-runtime-map-crud-depth.py` already has `readonly = goal_class in {...}` guard with `heuristic = False if readonly and not explicit else ...`. |
+| #95 | matrix-staleness-readonly-na-formatting | Duplicate of #91 | Same fix path as #91. |
+| #96 | no-no-verify-validator-fixture-ancestor | Fixed by v2.47.2 + PR #86 | `verify-no-no-verify.py` allowlist already covers `^\.claude/vgflow-ancestor/`, `(^\|/)scripts/validators/registry\.yaml$`, `(^\|/)gate-manifest\.json$`, plus `is_in_negative_example` markers + comment-line skip. |
+| #97 | matrix-staleness-readonly-na-formatting (variant) | Duplicate of #91 | Same fix path as #91. |
+| #98 | no-no-verify-comment-test-fixture | Duplicate of #96 | Same fix path as #96. |
+
+### Internal
+- VERSION + VGFLOW-VERSION → 2.48.0 (minor — feature batch from PR #86 + 3 patch fixes).
+- 1580 of `.claude/scripts/tests/` pass; 93 pre-existing Windows-shell failures (phase15/16/17 acceptance, block-resolver-l2) untouched by this release. Targeted `test_profile_aware_contracts` (10/10) and 4 manual `phase-profile.sh` fixture tests pass green.
+- Codex skill mirrors regenerated via `scripts/generate-codex-skills.sh --force` (70 skills).
+- Local `.claude/` mirrors refreshed via `bash sync.sh --no-global` (291 changes).
+- Credit: Issues #88-#98 from @vietnhprintway (PrintwayV3 dogfood, 2026-05-02).
+
 ## v2.47.2 — `verify-no-no-verify` self-flagging fix (Issue #87)
 
 Critical hotfix on top of v2.47.1. `verify-no-no-verify.py` validator was self-flagging its own test fixture, gate-manifest.json, and educational comments in source — returning BLOCK with 30+ violations on a clean v2.47.1 install. This blocked every `/vg:* run-complete` because no `--skip-verify-no-no-verify` flag existed. Workaround was `vg-orchestrator run-abort` after every run.

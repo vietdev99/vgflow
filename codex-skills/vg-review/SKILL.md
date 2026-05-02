@@ -4171,9 +4171,9 @@ For each platform in `$DISCOVERY_PLATFORMS` and each role in
 ```bash
 # a) Launch app on the target device (name from config.mobile.devices)
 if [ "$PLATFORM" = "ios" ]; then
-  DEVICE=$(awk '/^\s+ios:/{f=1;next} /^\s+[a-z]+:/{f=0} f && /simulator_name:/{gsub(/["'"'"']/,"");print $2;exit}' .claude/vg.config.md)
+  DEVICE=$(awk '/^\s+ios:/{f=1;next} /^\s+[a-z]+:/{f=0} f && /simulator_name:/{gsub(/["'"'"'\r]/,"");print $2;exit}' .claude/vg.config.md)
 elif [ "$PLATFORM" = "android" ]; then
-  DEVICE=$(awk '/^\s+android:/{f=1;next} /^\s+[a-z]+:/{f=0} f && /emulator_name:/{gsub(/["'"'"']/,"");print $2;exit}' .claude/vg.config.md)
+  DEVICE=$(awk '/^\s+android:/{f=1;next} /^\s+[a-z]+:/{f=0} f && /emulator_name:/{gsub(/["'"'"'\r]/,"");print $2;exit}' .claude/vg.config.md)
 fi
 
 if [ -z "$DEVICE" ]; then

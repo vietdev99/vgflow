@@ -1572,9 +1572,9 @@ if [ -n "$E2E_DIR" ]; then
   fi
 
   # Read vg.config.test.* and export as env vars for global-setup + helpers
-  STORAGE_PATH=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /storage_state_path:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | tr -d '"')
-  STORAGE_TTL=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /storage_state_ttl_hours:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null)
-  LOGIN_STRATEGY=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /login_strategy:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | tr -d '"')
+  STORAGE_PATH=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /storage_state_path:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | tr -d '"\r')
+  STORAGE_TTL=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /storage_state_ttl_hours:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | tr -d '\r')
+  LOGIN_STRATEGY=$(awk '/^test:/{f=1; next} f && /^[a-z_]/{f=0} f && /login_strategy:/{print $2; exit}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | tr -d '"\r')
   export VG_STORAGE_STATE_PATH="${STORAGE_PATH:-apps/web/e2e/.auth/}"
   export VG_STORAGE_STATE_TTL_HOURS="${STORAGE_TTL:-24}"
   export VG_LOGIN_STRATEGY="${LOGIN_STRATEGY:-auto}"
@@ -1593,7 +1593,7 @@ if [ -n "$E2E_DIR" ]; then
   fi
 
   # Roles list for global-setup (defaults to all roles in vg.config)
-  ROLES=$(awk '/accounts:/{f=1; next} f && /^[a-z_]/{f=0} f && /^      [a-z_]+:$/{gsub(/[: ]/, "", $1); print $1}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | head -10 | tr '\n' ',' | sed 's/,$//')
+  ROLES=$(awk '/accounts:/{f=1; next} f && /^[a-z_]/{f=0} f && /^      [a-z_]+:$/{gsub(/[: \r]/, "", $1); print $1}' "${REPO_ROOT}/vg.config.md" 2>/dev/null | head -10 | tr '\n' ',' | sed 's/,$//')
   if [ -n "$ROLES" ]; then
     export VG_ROLES="$ROLES"
     echo "ℹ P17 D-04: VG_ROLES=$VG_ROLES (from vg.config.environments.local.accounts)"
