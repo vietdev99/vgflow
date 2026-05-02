@@ -21,7 +21,10 @@ diagnostics=""
 if [[ "${CLAUDE_HOOK_EVENT:-}" =~ ^(compact|resume)$ ]] && [ -f "$ACTIVE_RUN_PATH" ] && [ -f "$EVENTS_DB" ]; then
   run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$ACTIVE_RUN_PATH" 2>/dev/null || true)"
   if [ -n "$run_id" ]; then
-    fired="$(sqlite3 "$EVENTS_DB" "SELECT payload FROM events WHERE run_id='$run_id' AND event_type='vg.block.fired'" 2>/dev/null || true)"
+    # Production schema uses payload_json; test fixtures use payload. Try both.
+    fired="$(sqlite3 "$EVENTS_DB" "SELECT payload_json FROM events WHERE run_id='$run_id' AND event_type='vg.block.fired'" 2>/dev/null \
+            || sqlite3 "$EVENTS_DB" "SELECT payload FROM events WHERE run_id='$run_id' AND event_type='vg.block.fired'" 2>/dev/null \
+            || true)"
     if [ -n "$fired" ]; then
       diagnostics=$'\n\n## OPEN DIAGNOSTICS for current run '"${run_id}"$'\n'"${fired}"$'\nYou MUST close each diagnostic before continuing other work.\n'
     fi

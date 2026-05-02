@@ -22,7 +22,7 @@ PLUGIN_ROOT="${VG_PLUGIN_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 HOOKS_DIR="${PLUGIN_ROOT}/scripts/hooks"
 
 python3 - "$target" "$HOOKS_DIR" <<'PY'
-import json, os, sys
+import json, os, shlex, sys
 from pathlib import Path
 
 target = Path(sys.argv[1])
@@ -34,16 +34,21 @@ else:
     settings = {}
 settings.setdefault("hooks", {})
 
+# CRITICAL: hooks_dir may contain spaces (e.g., "Vibe Code") — bash word-splits
+# unquoted command. Use shlex.quote to wrap each script path in single-quotes.
+def _cmd(script_name: str) -> str:
+    return f"bash {shlex.quote(f'{hooks_dir}/{script_name}')}"
+
 VG_ENTRIES = {
-    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": f"bash {hooks_dir}/vg-user-prompt-submit.sh"}]}],
-    "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": f"bash {hooks_dir}/vg-session-start.sh"}]}],
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": _cmd("vg-user-prompt-submit.sh")}]}],
+    "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": _cmd("vg-session-start.sh")}]}],
     "PreToolUse": [
-        {"matcher": "Bash", "hooks": [{"type": "command", "command": f"bash {hooks_dir}/vg-pre-tool-use-bash.sh"}]},
-        {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": f"bash {hooks_dir}/vg-pre-tool-use-write.sh"}]},
-        {"matcher": "Agent", "hooks": [{"type": "command", "command": f"bash {hooks_dir}/vg-pre-tool-use-agent.sh"}]},
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": _cmd("vg-pre-tool-use-bash.sh")}]},
+        {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": _cmd("vg-pre-tool-use-write.sh")}]},
+        {"matcher": "Agent", "hooks": [{"type": "command", "command": _cmd("vg-pre-tool-use-agent.sh")}]},
     ],
-    "PostToolUse": [{"matcher": "TodoWrite", "hooks": [{"type": "command", "command": f"bash {hooks_dir}/vg-post-tool-use-todowrite.sh"}]}],
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": f"bash {hooks_dir}/vg-stop.sh"}]}],
+    "PostToolUse": [{"matcher": "TodoWrite", "hooks": [{"type": "command", "command": _cmd("vg-post-tool-use-todowrite.sh")}]}],
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": _cmd("vg-stop.sh")}]}],
 }
 
 def is_vg_hook(entry):
