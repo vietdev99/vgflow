@@ -53,6 +53,22 @@ CANCEL_TARGET_RE = re.compile(
     r"\b(cancel|close|dismiss|abort|back|h[uủ]y|d[oó]ng|b[oỏ]\s*qua)\b",
     re.IGNORECASE,
 )
+EMPTY_FIELD_PREFIXES = (
+    "n/a",
+    "na",
+    "none",
+    "no mutation",
+    "not applicable",
+    "read-only",
+    "readonly",
+)
+READONLY_GOAL_CLASSES = {
+    "readonly",
+    "read-only",
+    "read_only",
+    "display",
+    "formatting",
+}
 
 
 def _read(p: Path) -> str:
@@ -60,6 +76,14 @@ def _read(p: Path) -> str:
         return p.read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return ""
+
+
+def _meaningful(value: str) -> bool:
+    """Return whether a goal field declares real mutation evidence."""
+    normalized = re.sub(r"\s+", " ", value or "").strip().lower()
+    if not normalized:
+        return False
+    return not any(normalized.startswith(prefix) for prefix in EMPTY_FIELD_PREFIXES)
 
 
 def parse_goals(text: str) -> list[dict]:
@@ -82,6 +106,8 @@ def parse_goals(text: str) -> list[dict]:
         mutation_evidence = me_m.group(1).strip() if me_m else ""
         surface_m = re.search(r"\*\*Surface:\*\*\s*(\w+)", body)
         surface = surface_m.group(1).lower() if surface_m else "ui"
+        class_m = re.search(r"\*\*goal[_ -]?class:?\*\*\s*([^\n|]+)", body, re.IGNORECASE)
+        goal_class = class_m.group(1).strip().lower() if class_m else ""
         # v2.46-wave3.2.1: only browser-surface goals need submit click + 2xx via browser.
         # Backend goals (api/data/integration/time-driven/custom) are verified by:
         # - verify-mutation-actually-submitted.py (wave-1, goal_sequences-level)
@@ -90,13 +116,15 @@ def parse_goals(text: str) -> list[dict]:
         # Including them here produces ~56% false positives (Phase 3.2 dogfood:
         # 21/36 flagged were backend, not UI). Only flag ui/ui-mobile.
         is_browser_surface = surface in ("ui", "ui-mobile")
+        is_readonly = goal_class in READONLY_GOAL_CLASSES
         goals.append({
             "id": gid,
             "title": title,
             "mutation_evidence": mutation_evidence,
             "surface": surface,
+            "goal_class": goal_class,
             "needs_submit": bool(
-                is_browser_surface and mutation_evidence and len(mutation_evidence) > 10
+                is_browser_surface and not is_readonly and _meaningful(mutation_evidence)
             ),
         })
     return goals

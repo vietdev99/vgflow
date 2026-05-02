@@ -76,6 +76,7 @@ ALLOWLIST_RE = [
     re.compile(r"^vendor/"),
     re.compile(r"^\.planning/"),
     re.compile(r"^\.vg/"),
+    re.compile(r"^\.claude/vgflow-ancestor/"),
     re.compile(r"^docs/"),
     re.compile(r"\.example$"),
     # v2.47.2 (Issue #87) — allowlist patterns must work from BOTH vgflow-repo
@@ -97,6 +98,8 @@ ALLOWLIST_RE = [
     # Generated gate manifest — contains the literal flag inside hashed
     # gate body, NOT as an executable command.
     re.compile(r"(^|/)gate-manifest\.json$"),
+    # Validator registry metadata may mention the gate's own forbidden token.
+    re.compile(r"(^|/)scripts/validators/registry\.yaml$"),
     # Storybook static assets
     re.compile(r"^apps/web/storybook-static/"),
 ]
@@ -187,10 +190,10 @@ def scan_file(file_path: Path) -> list[dict]:
                     if negative_example:
                         continue
                     if is_comment_line:
-                        # Comment without explicit anti-pattern marker —
-                        # downgrade to WARN (could be example, not clearly
-                        # forbidden; reviewer can confirm).
-                        severity = "WARN"
+                        # Rule prose often spans multiple adjacent comment
+                        # lines, so the marker may be on the previous line.
+                        # A comment is never an executable hook bypass.
+                        continue
                     else:
                         severity = "BLOCK"
 
