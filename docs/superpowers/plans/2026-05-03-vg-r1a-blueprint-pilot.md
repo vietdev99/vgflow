@@ -3148,6 +3148,15 @@ Two execution options:
 
 > Order: Task 28 audits → Task 29 canaries `vg:build` (main offender) → Task 30 propagates to remaining commands → Task 31 adds size-warning + backward-compat tests → Task 32 documents convention.
 
+> **Status (2026-05-04 cross-session reconciliation):** Tasks 28, 29, 31, 32 are **ABSORBED into R2 build pilot** (`docs/superpowers/plans/2026-05-03-vg-r2-build-pilot.md`). The mapping:
+> - Task 28 (audit) → R2 Task 2b (build-scoped audit drives Phase B refs)
+> - Task 29 (vg:build migration) → R2 Phase B Tasks 4-7 (refs use vg-load) + R2 Task 16b (static enforcer) + R2 Task 20 Step 3b (context-size dogfood metric)
+> - Task 31 (compat tests + validator) → R2 Phase G Tasks 21-22
+> - Task 32 (meta-skill doc) → R2 Phase G Task 23
+> - Task 30 (review/test/roam/accept migration) **REMAINS in this plan** as forward work for R3+ batch refactor — handled by separate per-command plans (vg:test, vg:review, etc.) once their R2 pilots ship.
+>
+> Skip Tasks 28/29/31/32 in this plan; execute via R2 plan instead. Keep Task 30 as the forward-work tracker.
+
 ### Task 28: Audit downstream flow file-reading patterns
 
 **Files:**

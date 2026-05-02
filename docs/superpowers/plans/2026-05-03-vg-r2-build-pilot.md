@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Refactor `commands/vg/build.md` from 4,571 → ≤500-line slim entry + ~9 flat refs in `commands/vg/_shared/build/` + 2 custom subagents (`vg-build-task-executor`, `vg-build-post-executor`) + strengthened `vg-agent-spawn-guard.py` (spawn-count check). All 3 R1a UX baseline requirements baked in (per-task split, spawn narration, compact hook stderr). Pilot is GATE — if 12 exit criteria PASS, R2 test pilot proceeds.
+**Goal:** Refactor `commands/vg/build.md` from 4,571 → ≤500-line slim entry + ~9 flat refs in `commands/vg/_shared/build/` + 2 custom subagents (`vg-build-task-executor`, `vg-build-post-executor`) + strengthened `vg-agent-spawn-guard.py` (spawn-count check) + downstream `vg-load` consumption migration (R1a Phase F Tasks 28/29/31/32 absorbed). All 3 R1a UX baseline requirements baked in (per-task split, spawn narration, compact hook stderr). Pilot is GATE — if 12 exit criteria PASS, R2 test pilot proceeds.
 
 **Architecture:** Reuse 100% of R1a infrastructure (HMAC evidence helper, state-machine validator, 7 hooks, install-hooks.sh, vg-meta-skill, vg-narrate-spawn, vg-load). Build-specific work: 1 helper enhancement + 1 subagent pair + 1 slim entry + ~9 refs. Heavy steps (8_execute_waves at 1881 lines, 9_post_execution at 896 lines) delegated to subagents. Build wave executor uses `vg-load --wave N` to load only current wave's tasks (saves context vs reading full PLAN).
 
@@ -38,6 +38,12 @@
 | `scripts/tests/test_build_references_exist.py` | CREATE | ~60 | Per-ref ceiling assertions |
 | `scripts/tests/test_build_subagent_definitions.py` | CREATE | ~80 | Both agents valid frontmatter, narrow tools, no nested spawn |
 | `scripts/tests/test_build_runtime_contract_split.py` | CREATE | ~60 | Verify must_write includes BUILD-LOG/ + WAVE-RESULT/ globs |
+| `docs/audits/2026-05-04-build-flat-vs-split.md` | CREATE | ~120 | Task 2b — MIGRATE/KEEP-FLAT classification of backup flat reads |
+| `scripts/tests/test_build_uses_vg_load.py` | CREATE | ~80 | Task 16b — slim entry + refs only use vg-load (allow-list from audit) |
+| `scripts/tests/test_vg_load_backward_compat.py` | CREATE | ~70 | Task 21 — vg-load works on flat-only / split-only / both phases |
+| `scripts/validators/verify-blueprint-split-size.py` | CREATE | ~40 | Task 22 — WARN if flat > 30KB and split missing |
+| `scripts/tests/test_split_size_validator.py` | CREATE | ~70 | Task 22 — validator behaviour (WARN, silent) tests |
+| `scripts/hooks/vg-meta-skill.md` | MODIFY (+~25) | +25 | Task 23 — append blueprint artifact convention section |
 
 ---
 
@@ -283,6 +289,88 @@ Expected: 4571 lines.
 ```bash
 git add commands/vg/.build.md.r2-backup
 git commit -m "chore(r2): backup build.md before slim refactor (4571 lines)"
+```
+
+### Task 2b: Audit backup for flat-file reads → drives Phase B migrations
+
+> Absorbs R1a Phase F Task 28 scoped to build only. Required input for Tasks 3-9: each ref's "Step 1: Extract bash" must remove or migrate every MIGRATE-classified flat read per this audit.
+
+**Files:**
+- Create: `docs/audits/2026-05-04-build-flat-vs-split.md`
+- Read: `commands/vg/.build.md.r2-backup`
+
+- [ ] **Step 1: Grep flat-file reads in backup**
+
+```bash
+cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
+grep -nE "API-CONTRACTS\.md|PLAN\.md|TEST-GOALS\.md|cat \\\$\\{?PHASE_DIR\\}?|Read .*\\.md" \
+  commands/vg/.build.md.r2-backup > /tmp/build-flat-reads.txt
+wc -l /tmp/build-flat-reads.txt
+cat /tmp/build-flat-reads.txt | head -40
+```
+
+Expected: 30+ hits (per R1a Phase F audit summary: 11 API-CONTRACTS refs + 5 PLAN refs + others).
+
+- [ ] **Step 2: Classify each hit MIGRATE vs KEEP-FLAT**
+
+Rule: if read result enters AI context (executor capsule input, agent prompt, codegen input) → **MIGRATE** (replace with vg-load). If read feeds deterministic transform (grep validator, mtime check, size stat) → **KEEP-FLAT**.
+
+- [ ] **Step 3: Write audit doc**
+
+```markdown
+# build.md flat-file consumption audit (2026-05-04, R2 scope)
+
+Source: `commands/vg/.build.md.r2-backup` (4571 lines, snapshot before R2 refactor).
+
+## MIGRATE table (replace with vg-load in new refs)
+
+| Backup line | Snippet | Classification | Replacement |
+|---|---|---|---|
+| 162 | `executors read API-CONTRACTS.md ...` | MIGRATE | `vg-load --artifact contracts --endpoint <slug>` per task |
+| 783 | `Read API-CONTRACTS.md per task ...` | MIGRATE | `vg-load --artifact contracts --endpoint <slug>` |
+| 1136-1147 | capsule "Contract ref" template | MIGRATE | embed vg-load command in capsule |
+| 2274 | wave executor input PLAN block | MIGRATE | `vg-load --artifact plan --task NN` |
+| 3580 | API docs generator input | MIGRATE | per-endpoint vg-load |
+| ... | (fill from grep output) | ... | ... |
+
+## KEEP-FLAT table (deterministic transforms only)
+
+| Backup line | Snippet | Classification | Reason |
+|---|---|---|---|
+| 501 | `CONTRACTS=$(ls "${PHASE_DIR}"/API-CONTRACTS.md...)` | KEEP-FLAT | existence check |
+| 595-602 | mtime stale check | KEEP-FLAT | mtime compare |
+| 2427 | `grep API-CONTRACTS.md` (Gate 4) | KEEP-FLAT | grep validator |
+| 3465-3470 | surface scan grep | KEEP-FLAT | grep validator |
+| ... | (fill from grep output) | ... | ... |
+
+## Migration scope summary
+
+- Total hits: ~K
+- MIGRATE: ~M (drives Phase B refs)
+- KEEP-FLAT: ~K (allow-list for Task 16b static enforcer)
+
+## Replacement index by future ref file
+
+- `_shared/build/context.md` (Task 4): MIGRATE lines 162, 783, 1136-1147, ...
+- `_shared/build/validate-blueprint.md` (Task 5): MIGRATE lines ..., KEEP-FLAT lines ...
+- `_shared/build/waves-*.md` (Task 6): MIGRATE lines 2274, ...
+- `_shared/build/post-execution-*.md` (Task 7): MIGRATE lines 3580, ...
+- (etc.)
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+mkdir -p docs/audits
+git add docs/audits/2026-05-04-build-flat-vs-split.md
+git commit -m "audit(r2): build.md flat-file consumption inventory
+
+Classified every flat read in commands/vg/.build.md.r2-backup into
+MIGRATE (enters AI context, replace with vg-load) vs KEEP-FLAT
+(deterministic transform). Drives Phase B refs (Tasks 3-9). KEEP-FLAT
+lines feed allow-list in Task 16b static enforcer.
+
+Absorbs R1a plan Phase F Task 28 (build scope only)."
 ```
 
 ### Task 3: Create _shared/build/preflight.md
@@ -930,6 +1018,101 @@ git add scripts/tests/test_build_runtime_contract_split.py
 git commit -m "test(r2): build runtime_contract enforces 3-layer BUILD-LOG split"
 ```
 
+### Task 16b: Static test — build refs use vg-load, no unaudited flat reads
+
+> Absorbs R1a Phase F Task 29 Steps 1-2 scoped to refactored build refs. Pairs with Task 2b audit doc as the allow-list source.
+
+**Files:**
+- Create: `scripts/tests/test_build_uses_vg_load.py`
+- Read: `commands/vg/build.md` + all `commands/vg/_shared/build/*.md` + audit doc
+
+- [ ] **Step 1: Write test**
+
+```python
+# scripts/tests/test_build_uses_vg_load.py
+"""Static check: refactored build entry + refs use vg-load instead of flat
+PLAN.md / API-CONTRACTS.md / TEST-GOALS.md reads in AI-context paths.
+
+KEEP-FLAT allow-list comes from docs/audits/2026-05-04-build-flat-vs-split.md
+(deterministic transforms — grep validators, mtime checks, size stats — that
+do not enter AI context)."""
+from pathlib import Path
+import re
+
+REPO = Path(__file__).resolve().parents[2]
+ENTRY = REPO / "commands/vg/build.md"
+REFS_DIR = REPO / "commands/vg/_shared/build"
+
+# Per-file KEEP-FLAT line allow-lists. Populated from audit doc Step 3.
+# Each entry = {filename: {line_numbers}}.
+ALLOWED_FLAT_LINES = {
+    # Example structure — fill during Task 2b audit:
+    # "validate-blueprint.md": {42, 87, 91},
+    # "context.md": {15},
+}
+
+FLAT_PATTERN = re.compile(
+    r"(cat\s+[\"']?\$\{?PHASE_DIR\}?[/\"']?(?:PLAN|API-CONTRACTS|TEST-GOALS)\.md"
+    r"|Read\s+\S*(?:PLAN|API-CONTRACTS|TEST-GOALS)\.md)"
+)
+
+
+def _flat_reads(path: Path):
+    text = path.read_text()
+    for i, line in enumerate(text.splitlines(), 1):
+        if FLAT_PATTERN.search(line):
+            yield i, line.strip()
+
+
+def test_entry_references_vg_load():
+    """Sanity: build.md slim entry must mention vg-load helper."""
+    text = ENTRY.read_text()
+    assert "vg-load" in text, "build.md slim entry does not reference vg-load"
+
+
+def test_refs_reference_vg_load():
+    """At least one ref must invoke vg-load (executor capsule + plan discovery)."""
+    found = False
+    for ref in REFS_DIR.glob("*.md"):
+        if "vg-load" in ref.read_text():
+            found = True
+            break
+    assert found, "no ref under _shared/build/ references vg-load"
+
+
+def test_no_unaudited_flat_reads():
+    """Every flat read in slim entry + refs must be in audit allow-list."""
+    failures = []
+    for path in [ENTRY, *sorted(REFS_DIR.glob("*.md"))]:
+        allowed = ALLOWED_FLAT_LINES.get(path.name, set())
+        for n, snippet in _flat_reads(path):
+            if n not in allowed:
+                failures.append(f"  {path.relative_to(REPO)}:{n}: {snippet}")
+    assert not failures, (
+        "Unaudited flat reads detected (see docs/audits/2026-05-04-build-flat-vs-split.md):\n"
+        + "\n".join(failures)
+    )
+```
+
+- [ ] **Step 2: Run test**
+
+```bash
+pytest scripts/tests/test_build_uses_vg_load.py -v
+```
+Expected: 3 PASSED (after Phase B refs migrated per audit + ALLOWED_FLAT_LINES populated).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/tests/test_build_uses_vg_load.py
+git commit -m "test(r2): build refs use vg-load, no unaudited flat reads
+
+Pairs with audit doc as allow-list source. Asserts every cat/Read of
+PLAN.md|API-CONTRACTS.md|TEST-GOALS.md in slim entry or refs is either
+KEEP-FLAT (deterministic transform) per audit, or replaced with vg-load.
+Absorbs R1a Phase F Task 29 Steps 1-2."
+```
+
 ### Task 17: Update emit-tasklist.py CHECKLIST_DEFS for vg:build canonical names
 
 **Files:**
@@ -1134,6 +1317,25 @@ ls "/Users/dzungnguyen/Vibe Code/Code/PrintwayV3/.vg/phases/${PHASE}-"*/.step-ma
 ```
 Expected: all 13 hard-gate markers present (`0_gate_integrity_precheck.done`, ..., `12_run_complete.done`).
 
+- [ ] **Step 3b: Capture per-executor context-size delta (vg-load metric)**
+
+> Absorbs R1a Phase F Task 29 Step 5 dogfood metric. Compares pre-R2 (flat-read) vs post-R2 (vg-load) context budget per task executor.
+
+```bash
+PHASE_DIR=$(ls -d "/Users/dzungnguyen/Vibe Code/Code/PrintwayV3/.vg/phases/${PHASE}-"* | head -1)
+
+# Post-R2: per-task split file size (executor receives only this)
+echo "=== Post-R2 per-executor context (vg-load --task NN) ==="
+ls -l "$PHASE_DIR/PLAN/task-"*.md 2>/dev/null | awk '{sum+=$5; n++} END {printf "tasks=%d avg_per_task=%d total=%d\n", n, sum/n, sum}'
+ls -l "$PHASE_DIR/API-CONTRACTS/"*.md 2>/dev/null | awk '{sum+=$5; n++} END {printf "endpoints=%d avg_per_endpoint=%d total=%d\n", n, sum/n, sum}'
+
+# Reference: flat-file size (what executor would have received pre-R2)
+echo "=== Reference: flat blueprint file sizes ==="
+ls -l "$PHASE_DIR/PLAN.md" "$PHASE_DIR/API-CONTRACTS.md" 2>/dev/null
+```
+
+Expected: `avg_per_task` < 5KB and `avg_per_endpoint` < 3KB; flat files report 30-100KB each. Capture numbers in verdict doc.
+
 - [ ] **Step 4: Manual induce-and-fix tests for spawn-guard + Stop hook**
 
 (a) Spawn-guard shortfall test:
@@ -1184,6 +1386,305 @@ git commit -m "docs(r2): build pilot dogfood verdict + exit criteria evidence"
 
 ---
 
+## Phase G — vg-load infrastructure hardening (absorbs R1a Phase F Tasks 31-32)
+
+> Tasks 21-23 land vg-load backward-compat tests + size-warn validator + meta-skill convention. They run AFTER Phase F dogfood passes — that ordering proves the migration works on real data before we lock the contract via tests + docs. Task 30 from R1a Phase F (review/test/roam/accept migration) is OUT OF SCOPE for R2 build pilot — handled by separate R3+ plans.
+
+### Task 21: vg-load backward compat tests (3 phase shapes)
+
+**Files:**
+- Create: `scripts/tests/test_vg_load_backward_compat.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+# scripts/tests/test_vg_load_backward_compat.py
+"""Verify vg-load works on 3 phase shapes: flat-only (legacy), split-only, both."""
+import subprocess
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[2]
+VG_LOAD = REPO / "scripts/vg-load.sh"
+
+
+def _make_phase(tmp: Path, *, flat=False, split=False):
+    pdir = tmp / "phase-7"
+    pdir.mkdir()
+    if flat:
+        (pdir / "API-CONTRACTS.md").write_text("# Flat API\n## POST /api/x\nfoo flat\n## GET /api/y\nbar flat\n")
+    if split:
+        sub = pdir / "API-CONTRACTS"
+        sub.mkdir()
+        (sub / "index.md").write_text("- post-api-x\n- get-api-y\n")
+        (sub / "post-api-x.md").write_text("# POST /api/x\nfoo split\n")
+        (sub / "get-api-y.md").write_text("# GET /api/y\nbar split\n")
+    return pdir
+
+
+def test_legacy_flat_only_phase_full_load(tmp_path):
+    pdir = _make_phase(tmp_path, flat=True)
+    out = subprocess.run(
+        ["bash", str(VG_LOAD), "--phase", str(pdir), "--artifact", "contracts", "--full", "--quiet"],
+        capture_output=True, text=True, check=True,
+    )
+    assert "Flat API" in out.stdout
+
+
+def test_split_only_phase_endpoint_load(tmp_path):
+    pdir = _make_phase(tmp_path, split=True)
+    out = subprocess.run(
+        ["bash", str(VG_LOAD), "--phase", str(pdir), "--artifact", "contracts", "--endpoint", "post-api-x", "--quiet"],
+        capture_output=True, text=True, check=True,
+    )
+    assert "foo split" in out.stdout
+
+
+def test_both_present_endpoint_filter_uses_split(tmp_path):
+    pdir = _make_phase(tmp_path, flat=True, split=True)
+    out = subprocess.run(
+        ["bash", str(VG_LOAD), "--phase", str(pdir), "--artifact", "contracts", "--endpoint", "post-api-x", "--quiet"],
+        capture_output=True, text=True, check=True,
+    )
+    # Endpoint filter must hit split file, not flat
+    assert "foo split" in out.stdout
+    assert "Flat API" not in out.stdout
+```
+
+- [ ] **Step 2: Run test to verify it passes (vg-load.sh already supports all 3 shapes)**
+
+```bash
+pytest scripts/tests/test_vg_load_backward_compat.py -v
+```
+Expected: 3 PASSED. (If FAIL: vg-load.sh has a regression — fix before proceeding.)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/tests/test_vg_load_backward_compat.py
+git commit -m "test(r2-phase-g): vg-load backward compat across 3 phase shapes
+
+flat-only (legacy), split-only, both-present. Locks the contract that
+new split-aware consumers (build/test/review/etc.) can rely on the
+helper without breaking legacy phases that have no split subdir.
+
+Absorbs R1a Phase F Task 31 backward-compat test."
+```
+
+### Task 22: Size-warn validator + wire into build.md prerequisite
+
+**Files:**
+- Create: `scripts/validators/verify-blueprint-split-size.py`
+- Create: `scripts/tests/test_split_size_validator.py`
+- Modify: `commands/vg/_shared/build/preflight.md` (add WARN call to prerequisite block)
+
+- [ ] **Step 1: Write failing test**
+
+```python
+# scripts/tests/test_split_size_validator.py
+import subprocess
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[2]
+VAL = REPO / "scripts/validators/verify-blueprint-split-size.py"
+
+
+def test_warns_when_flat_large_and_split_missing(tmp_path):
+    pdir = tmp_path / "phase-9"
+    pdir.mkdir()
+    (pdir / "API-CONTRACTS.md").write_text("X" * 35_000)  # > 30 KB
+    out = subprocess.run(
+        ["python3", str(VAL), "--phase-dir", str(pdir)],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0  # WARN, not BLOCK
+    assert "WARN" in out.stderr
+    assert "split files missing" in out.stderr
+
+
+def test_silent_when_split_present(tmp_path):
+    pdir = tmp_path / "phase-10"
+    pdir.mkdir()
+    (pdir / "API-CONTRACTS.md").write_text("X" * 35_000)
+    sub = pdir / "API-CONTRACTS"
+    sub.mkdir()
+    (sub / "index.md").write_text("ok\n")
+    (sub / "ep1.md").write_text("ep1\n")
+    out = subprocess.run(
+        ["python3", str(VAL), "--phase-dir", str(pdir)],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0
+    assert "WARN" not in out.stderr
+
+
+def test_silent_when_flat_under_threshold(tmp_path):
+    pdir = tmp_path / "phase-11"
+    pdir.mkdir()
+    (pdir / "API-CONTRACTS.md").write_text("X" * 5_000)  # < 30 KB
+    out = subprocess.run(
+        ["python3", str(VAL), "--phase-dir", str(pdir)],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0
+    assert "WARN" not in out.stderr
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+```bash
+pytest scripts/tests/test_split_size_validator.py -v
+```
+Expected: 3 FAIL with `No such file or directory`.
+
+- [ ] **Step 3: Implement validator**
+
+```python
+#!/usr/bin/env python3
+# scripts/validators/verify-blueprint-split-size.py
+"""WARN if flat blueprint artifact > 30 KB AND split subdir missing.
+
+Exit 0 always — advisory, not block. Goal: surface re-blueprint
+opportunities for legacy phases without breaking the build."""
+import argparse
+import sys
+from pathlib import Path
+
+THRESHOLD_BYTES = 30 * 1024  # 30 KB ≈ 7K tokens — empirical AI-skim boundary
+ARTIFACTS = [
+    ("API-CONTRACTS.md", "API-CONTRACTS"),
+    ("PLAN.md", "PLAN"),
+    ("TEST-GOALS.md", "TEST-GOALS"),
+]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--phase-dir", required=True)
+    args = ap.parse_args()
+    pdir = Path(args.phase_dir)
+    for flat_name, split_name in ARTIFACTS:
+        flat = pdir / flat_name
+        split = pdir / split_name
+        if flat.exists() and flat.stat().st_size > THRESHOLD_BYTES and not split.exists():
+            sys.stderr.write(
+                f"WARN: {flat} is {flat.stat().st_size // 1024} KB but split files missing.\n"
+                f"      Re-run /vg:blueprint to regenerate split layout — "
+                f"AI consumers will skim this file at current size.\n"
+            )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 4: Run test to verify all pass**
+
+```bash
+chmod +x scripts/validators/verify-blueprint-split-size.py
+pytest scripts/tests/test_split_size_validator.py -v
+```
+Expected: 3 PASSED.
+
+- [ ] **Step 5: Wire validator into build preflight (advisory WARN level)**
+
+In `commands/vg/_shared/build/preflight.md`, append to the prerequisite-check block (right after blueprint freshness check):
+
+```bash
+# Advisory: warn if blueprint artifacts are stale flat-only (R2 Phase G)
+python3 scripts/validators/verify-blueprint-split-size.py --phase-dir "${PHASE_DIR}" || true
+```
+
+(`|| true` because validator exits 0 either way — wired here for stderr surfacing only.)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add scripts/validators/verify-blueprint-split-size.py \
+        scripts/tests/test_split_size_validator.py \
+        commands/vg/_shared/build/preflight.md
+git commit -m "feat(r2-phase-g): blueprint split-size WARN validator
+
+Advisory check: flat artifact > 30 KB AND split subdir missing → stderr
+WARN, exit 0 (no block). Wired into build preflight to surface
+re-blueprint opportunity for legacy phases. Threshold rationale: 30 KB
+≈ 7K tokens — empirical AI-skim boundary.
+
+Absorbs R1a Phase F Task 31 validator + wiring."
+```
+
+### Task 23: Document split-file convention in vg-meta-skill
+
+**Files:**
+- Modify: `scripts/hooks/vg-meta-skill.md` (or `.claude/skills/vg-meta-skill.md` mirror)
+
+- [ ] **Step 1: Locate canonical meta-skill source**
+
+```bash
+ls -l scripts/hooks/vg-meta-skill.md .claude/skills/vg-meta-skill.md 2>/dev/null
+```
+Pick the one sync.sh treats as source. (Per R1a setup: `scripts/hooks/vg-meta-skill.md` is canonical; sync.sh copies to `.claude/skills/`.)
+
+- [ ] **Step 2: Append blueprint artifact convention section**
+
+Add this section just before the closing "Apply rules" block in the canonical meta-skill:
+
+```markdown
+## Blueprint artifact convention (R2 — downstream consumption contract)
+
+Blueprint writes 3-layer artifacts: per-task/endpoint/goal split (Layer 1)
++ index files (Layer 2) + flat concat (Layer 3, legacy compat).
+
+**Downstream commands (build, test, review, accept, roam) MUST prefer
+`vg-load` over flat read.** Direct `cat $PHASE_DIR/{PLAN,API-CONTRACTS,
+TEST-GOALS}.md` is forbidden in AI-context paths (executor capsules,
+agent prompts, codegen inputs) because the flat file enters AI context
+as a 30-100KB+ blob and triggers skim. Use:
+
+  vg-load --phase N --artifact plan --task NN
+  vg-load --phase N --artifact contracts --endpoint <slug>
+  vg-load --phase N --artifact goals --goal G-NN
+
+Deterministic transforms (grep validators, mtime checks, surface scans)
+MAY keep flat reads — they don't enter AI context. Per-command audit
+docs under `docs/audits/` are the canonical KEEP-FLAT classification
+(e.g., `docs/audits/2026-05-04-build-flat-vs-split.md`).
+
+Threshold: flat artifact > 30 KB without split subdir triggers a WARN
+(advisory, not block) via `scripts/validators/verify-blueprint-split-size.py`.
+30 KB ≈ 7K tokens — empirical AI-skim boundary.
+
+Backward compat: `vg-load --full` falls back to flat read for legacy
+phases that pre-date the per-task split.
+```
+
+- [ ] **Step 3: Re-sync to mirror (if applicable)**
+
+If the canonical lives outside `.claude/`, run sync to refresh the mirror:
+
+```bash
+bash sync.sh --check 2>&1 | grep meta-skill
+bash sync.sh 2>&1 | tail -3
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add scripts/hooks/vg-meta-skill.md .claude/skills/vg-meta-skill.md 2>/dev/null
+git commit -m "docs(r2-phase-g): meta-skill canonizes vg-load downstream contract
+
+Section: 'Blueprint artifact convention' — downstream commands MUST
+prefer vg-load over flat reads in AI-context paths. KEEP-FLAT permitted
+for deterministic transforms per per-command audit docs. 30KB WARN
+threshold rationale documented.
+
+Absorbs R1a Phase F Task 32 meta-skill update."
+```
+
+---
+
 ## Self-review notes
 
 **Spec coverage check:**
@@ -1200,9 +1701,16 @@ git commit -m "docs(r2): build pilot dogfood verdict + exit criteria evidence"
 - §6.4 12 exit criteria — Task 20
 
 **UX baseline coverage check (per `_shared-ux-baseline.md`):**
-- Req 1 (per-task split): Task 10 writes BUILD-LOG/task-NN.md; Task 11 concats Layer 3 + Layer 2 index; Task 12 adds globs to runtime_contract; Task 16 asserts split enforced. Plan/contracts loaded via `vg-load --wave/--endpoint` (Tasks 5, 6).
+- Req 1 (per-task split): Task 10 writes BUILD-LOG/task-NN.md; Task 11 concats Layer 3 + Layer 2 index; Task 12 adds globs to runtime_contract; Task 16 asserts split enforced. Plan/contracts loaded via `vg-load --wave/--endpoint` (Tasks 5, 6). **Static enforcement**: Task 16b asserts no unaudited flat reads in slim entry + refs (allow-list from Task 2b audit).
 - Req 2 (spawn narration): Tasks 6, 7 include `bash scripts/vg-narrate-spawn.sh` calls in waves-overview + post-execution-overview spawn sites.
 - Req 3 (compact hooks): Task 1 spawn-guard new code uses `printf "⛔ ..."` + writes block file (3-line + pointer pattern), reusing R1a hook stderr convention.
+
+**R1a Phase F absorption check:**
+- Task 28 (audit) → Task 2b (build-scoped, drives Phase B refs)
+- Task 29 (vg:build migration) → Phase B refs already use vg-load (Tasks 4-7) + Task 16b static enforcer + Task 20 Step 3b context-size dogfood metric
+- Task 30 (review/test/roam/accept) → OUT OF SCOPE; separate R3+ plans
+- Task 31 (backward compat + size-warn validator) → Tasks 21, 22
+- Task 32 (meta-skill convention) → Task 23
 
 **Type/name consistency:**
 - All step IDs match `commands/vg/build.md` runtime_contract markers (verified Task 17).
