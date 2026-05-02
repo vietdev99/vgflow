@@ -24,8 +24,8 @@ User concern (verbatim from brainstorm):
 | Step | Lines | Role | Refactor approach |
 |---|---|---|---|
 | `phase2_browser_discovery` | **947** | Spawn Haiku scanners ≤5 parallel for view crawl | Dedicated subagent: `vg-review-browser-discoverer` |
-| `phase4_goal_comparison` | **829** | Weighted coverage scoring + verdict synthesis | Dedicated subagent: `vg-review-goal-scorer` |
-| `complete` | 542 | Artifact finalization | Inline ref (≤500 line ceiling met by split) |
+| `phase4_goal_comparison` | **829** | Goal → RUNTIME-MAP lookup → binary READY/BLOCKED verdict (NOT weighted scoring per audit) | **Inline ref + split** (no subagent; logic is binary lookup, complexity is from branching not formula) |
+| `complete` | 542 | Artifact finalization | Inline ref (split) |
 | `phase3_fix_loop` | 414 | Error remediation iteration | Inline ref |
 | `phase1_code_scan` | 389 | Static scan + element inventory | Inline ref |
 | `0_parse_and_validate` | 317 | Frontmatter audit | Inline ref |
@@ -67,9 +67,10 @@ Review **already has a sophisticated lens system**. Recon evidence:
 
 - Reduce `commands/vg/review.md` from 7,413 → ≤500 lines (Anthropic ceiling)
 - Apply imperative + HARD-GATE + Red Flags (review-specific)
-- 2 dedicated subagents for the 2 super-heavy steps (947 + 829 lines)
-- **Add per-lens telemetry**: emit `review.lens.<name>.dispatched` for each of 18 lenses
-- **Strengthen eligibility gate**: emit `review.lens_phase.entered` and `review.lens_phase.completed` so Stop hook can detect skip
+- **1 dedicated subagent** for `phase2_browser_discovery` (947 lines, true heavy lifting). `phase4_goal_comparison` (829 lines) is binary lookup → inline ref split (no subagent — verified by audit, no weighted formula exists)
+- **Add per-lens telemetry**: emit `review.lens.<name>.dispatched` for each lens dispatched
+- **Strengthen eligibility gate observability**: emit `review.lens_phase.entered` and `review.lens_phase.completed` so Stop hook can detect skip
+- **Add lens-plan staleness check**: compare REVIEW-LENS-PLAN.json mtime vs API-CONTRACTS.md mtime; block if stale
 - Empirically prove on PrintwayV3 phase 3.2 (the existing dogfood UI bug at billing/topup-queue)
 - Defer: lens-as-plugin pluggable architecture (nice-to-have, current LENS_MAP works)
 
@@ -96,22 +97,26 @@ Same as build spec §2 — inherits:
 
 ---
 
-## 3. Audit findings (parallel + cherry-pick safety)
+## 3. Audit findings (RIGOROUS — verified with file:line)
 
-| # | Mechanism | File:line | Verdict | Action |
+Audit run 2026-05-03 by Explore subagent against actual codebase. All verdicts evidence-backed.
+
+| # | Mechanism | Evidence | Verdict | Action |
 |---|---|---|---|---|
-| 1 | `REVIEW-LENS-PLAN.json` contract generation | `review-lens-plan.py`, build.md L41-43 | PASS | Preserve as-is |
-| 2 | 18-lens LENS_MAP hardcoded (no AI cherry-pick) | `spawn_recursive_probe.py:LENS_MAP` | PASS | Preserve as-is |
-| 3 | Per-tool subdir isolation for parallel workers | spawn_recursive_probe.py per-tool runs/ | PASS | Preserve as-is |
-| 4 | 6-precondition eligibility gate | `phase2_5_recursive_lens_probe` L3673-3679 | PASS | Preserve as-is |
-| 5 | 3-axis interactive preflight + anti-forge guard | L3705-3779 | PASS | Preserve as-is |
-| 6 | Aggregator single-writer dedup | aggregate_recursive_goals.py | PASS | Preserve as-is |
-| 7 | Per-lens telemetry events | (search result) | **FAIL** | **Strengthen** — see §5.1 |
-| 8 | Lens-phase enter/exit telemetry | (search result) | **FAIL** | **Strengthen** — see §5.1 |
-| 9 | `--skip-discovery` requires override-debt | (search result, partial) | **PARTIAL** | Audit + tighten |
-| 10 | Lens-plan staleness detection | (search result) | **FAIL** | Strengthen — recompute lens plan if API-CONTRACTS.md mtime > plan mtime |
+| 1 | LENS_MAP hardcoded (no AI cherry-pick) | `spawn_recursive_probe.py:68-83` (13 element-class mappings, no env/config bypass) | PASS | Preserve as-is |
+| 2 | 6-precondition eligibility gate | `spawn_recursive_probe.py:252-306` (rules 1-6 verified) + `review.md:3673-3679` | PASS | Preserve as-is |
+| 3 | Per-tool subdir isolation for parallel workers | `spawn_recursive_probe.py:553-570` (`runs/{tool}/{stable_hash}.json`, no race) | PASS | Preserve as-is |
+| 4 | Aggregator single-writer dedup | `aggregate_recursive_goals.py:81-82` (glob safe) | PASS | Preserve as-is |
+| 5 | 3-axis interactive preflight + anti-forge guard | `review.md:3705-3779` | PASS | Preserve as-is |
+| 6 | `--skip-discovery` requires override-debt | `review.md:184-188` (in `forbidden_without_override` list) | PASS | Preserve as-is (audit upgraded from PARTIAL to PASS) |
+| 7 | Phase2 Haiku ≤5 parallel cap | `spawn_recursive_probe.py:88-89` (`MCP_SLOTS = ["playwright1"..."playwright5"]`) + `review.md:3661` | PASS | Preserve as-is |
+| 8 | Profile filtering (4 web + 6 shortcut) | `review.md:1111-1175` (dispatcher case statement) | PASS | Preserve as-is |
+| 9 | Per-lens telemetry events (`review.lens.<name>.*`) | Grep zero matches in scripts/ + commands/vg/ | **FAIL** | **Strengthen** — §5.1 item 1 |
+| 10 | Lens-phase enter/exit telemetry | Grep zero matches | **FAIL** | **Strengthen** — §5.1 item 2 |
+| 11 | Lens-plan staleness detection (mtime check) | `review-lens-plan.py:691-693` writes fresh, no staleness check | **FAIL** | **Strengthen** — §5.1 item 3 |
+| 12 | Phase4 weighted scoring formula | `review.md:5825-6000` audit: NO weighted formula. Only binary READY/BLOCKED lookup | **PARTIAL — DOWNGRADED** | Inline ref split, no subagent (decision: §1.2) |
 
-**Summary:** 6/10 PASS, 3/10 FAIL, 1/10 PARTIAL. Architecture is sound; gaps are in observability + state freshness + override discipline.
+**Summary: 8 PASS, 3 FAIL, 1 PARTIAL.** Architecture is more complete than initial spec assumed (item 6 upgraded from PARTIAL to PASS). Phase4 simpler than initial spec assumed (item 12 downgraded from "weighted scoring" PASS to PARTIAL — no formula exists). Three actual gaps in observability + state freshness.
 
 ---
 
@@ -132,9 +137,11 @@ commands/vg/
     findings/                               nested for phase2b_collect_merge + phase3_fix_loop
       collect.md                            ~200 lines (collect+merge, post-challenge)
       fix-loop.md                           ~250 lines (route auto-fix, exploration limits, fix loop)
-    verdict/                                nested for HEAVY phase4_goal_comparison (829 lines)
-      overview.md                           ~150 lines (entry, instructs spawn vg-review-goal-scorer)
-      delegation.md                         ~200 lines (input/output for goal-scorer subagent)
+    verdict/                                nested for phase4_goal_comparison (829 lines, INLINE — split only, no subagent)
+      overview.md                           ~150 lines (entry, branching logic outline)
+      pure-backend-fastpath.md              ~150 lines (UI_GOAL_COUNT == 0 fast path)
+      web-fullstack.md                      ~250 lines (full goal lookup + verdict synthesis)
+      profile-branches.md                   ~200 lines (4 profile-specific verdict paths)
     delta-mode.md                           ~250 lines (phaseP_delta change-only mode)
     profile-shortcuts.md                    ~200 lines (infra smoke, regression, schema verify, link check)
     crossai.md                              ~150 lines (UNCHANGED behavior, defer)
@@ -142,7 +149,8 @@ commands/vg/
 
 agents/                                     EXTEND
   vg-review-browser-discoverer/SKILL.md     ~250 lines, parallel browser scan + Haiku dispatch
-  vg-review-goal-scorer/SKILL.md            ~200 lines, weighted coverage scoring + verdict synthesis
+  # NOTE: vg-review-goal-scorer NOT created — phase4 has no weighted formula
+  # per audit; binary lookup logic stays inline with verdict/ ref split
 
 scripts/
   spawn_recursive_probe.py                  STRENGTHEN — emit per-lens telemetry (§5.1)
@@ -237,7 +245,7 @@ event missing).
 |---|---|
 | "Lens dispatch tốn thời gian, làm 3-4 cái đại diện đủ"      | LENS_MAP hardcoded, AI không thể cherry-pick. Skip = skip whole phase = block |
 | "Browser discovery scan 1 view đại diện đủ"                  | phase2 spawn ≤5 Haiku scanners parallel; per-view evidence required |
-| "Goal comparison làm nhanh, không cần weighted scoring chi tiết" | phase4 weighted formula in vg-review-goal-scorer subagent — bypass = wrong verdict |
+| "Goal comparison làm nhanh, skip RUNTIME-MAP lookup" | phase4 binary verdict lookup mandatory — skip = wrong verdict (no formula, but lookup must run) |
 | "REVIEW-LENS-PLAN.json đã có rồi, dùng lại"                  | Staleness check vs API-CONTRACTS.md mtime — stale = regenerate |
 | "Fix loop iterate 1-2 lần là đủ"                             | exploration limits configurable; legitimate stop only via gate |
 
@@ -264,9 +272,11 @@ without override-debt.
 Read `_shared/review/findings/collect.md` then `fix-loop.md`. Iterate per
 exploration limit config.
 
-### STEP 6 — goal comparison + verdict (HEAVY, subagent)
-Read `_shared/review/verdict/overview.md`. Spawn `vg-review-goal-scorer`
-subagent for weighted scoring. DO NOT score inline.
+### STEP 6 — goal comparison + verdict (inline ref split, NO subagent)
+Read `_shared/review/verdict/overview.md`. Branch on profile/UI_GOAL_COUNT
+to load matching sub-ref (pure-backend-fastpath / web-fullstack /
+profile-branches). Logic is binary lookup against RUNTIME-MAP (READY/BLOCKED) —
+no weighted formula exists per audit, so inline split suffices.
 
 ### STEP 7 — CrossAI review (UNCHANGED, defer refactor)
 Read `_shared/review/crossai.md`.
@@ -339,16 +349,14 @@ Single-writer dedup, output `TEST-GOALS-DISCOVERED.md` with G-RECURSE-* entries.
 2. Bash: `vg-orchestrator mark-step review phase2_5_recursive_lens_probe`
 ```
 
-### 5.4 Custom subagents
+### 5.4 Custom subagents (1 only — phase2)
 
 **`agents/vg-review-browser-discoverer/SKILL.md`** (~250 lines):
 - Tools: [Read, Bash, Glob, Grep, Task]  (Task allowed for spawning Haiku scanners ≤5 parallel)
-- System prompt HARD-GATE: "You discover all views in scope per profile. Spawn Haiku scanners ≤5 parallel via Task tool. Return: { views_discovered, scan_artifacts: [paths], errors: [] }"
+- System prompt HARD-GATE: "You discover all views in scope per profile. Spawn Haiku scanners ≤5 parallel via Task tool (Playwright MCP slot cap enforces). Return: { views_discovered, scan_artifacts: [paths], errors: [] }"
 - Inherits binding context from input capsule (phase context, profile, scope)
 
-**`agents/vg-review-goal-scorer/SKILL.md`** (~200 lines):
-- Tools: [Read, Write, Bash, Grep]  (no Task — single-task scoring)
-- System prompt HARD-GATE: "You score goals using weighted formula from review-goal-scorer.md template. Return: { goal_coverage_matrix_path, verdict: PASS|PARTIAL|FAIL, weighted_score, evidence: [...] }"
+**Phase4 NOT subagent** — audit confirmed no weighted scoring formula exists. Logic is binary RUNTIME-MAP lookup. Inline ref split (verdict/overview.md branches to pure-backend-fastpath.md / web-fullstack.md / profile-branches.md based on profile + UI_GOAL_COUNT).
 
 ### 5.5 Hooks (SHARED with blueprint pilot)
 
@@ -390,11 +398,12 @@ All blocks follow blueprint pilot §4.5 (5-layer diagnostic). Review-specific:
 
 **Static (pytest), new for review:**
 - `test_review_slim_size.py` — assert `commands/vg/review.md` ≤ 600 lines
-- `test_review_references_exist.py` — all `_shared/review/*.md` + nested
-- `test_review_subagent_definitions.py` — 2 new subagents valid
+- `test_review_references_exist.py` — all `_shared/review/*.md` + nested (discovery/, findings/, verdict/ with 4 sub-refs)
+- `test_review_subagent_definition.py` — 1 new subagent valid (vg-review-browser-discoverer ONLY; verify NO vg-review-goal-scorer file exists)
 - `test_lens_telemetry_per_lens.py` — simulate spawn_recursive_probe.py run, assert each lens emits dispatched + completed event
 - `test_lens_phase_telemetry.py` — assert review.lens_phase.entered + completed events emitted, Stop hook blocks if missing
 - `test_lens_plan_staleness.py` — touch API-CONTRACTS.md after lens-plan, assert step blocks
+- `test_phase4_inline_split.py` — assert verdict/ has 4 sub-refs (overview, pure-backend-fastpath, web-fullstack, profile-branches), each ≤300 lines
 
 **Inherited from blueprint pilot:** all hook tests, diagnostic tests, SessionStart re-injection.
 
@@ -410,8 +419,8 @@ All blocks follow blueprint pilot §4.5 (5-layer diagnostic). Review-specific:
 3. `review.lens_phase.entered` + `review.lens_phase.completed` events both present (or `--skip-discovery` flag with override-debt entry)
 4. Per-lens dispatch events: count ≥ count of lens in REVIEW-LENS-PLAN.json (no cherry-pick)
 5. RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md + REVIEW-LENS-PLAN.json + scan-*.json all written with content_min_bytes
-6. Browser-discoverer subagent invocation event present (Task tool fired)
-7. Goal-scorer subagent invocation event present
+6. Browser-discoverer subagent invocation event present (Task tool fired for phase2)
+7. Phase4 verdict ref loaded (verify Read tool fired on `verdict/<branch>.md` matching profile)
 8. **Phase 3.2 dogfood criterion**: lens dispatch detects the filter pending bug at billing/topup-queue (must surface in TEST-GOALS-DISCOVERED.md or findings)
 9. CrossAI review runs (existing behavior, defer refactor — accept whatever produces; not a fail criterion this round)
 10. Stop hook fires without exit 2
