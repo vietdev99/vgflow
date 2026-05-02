@@ -31,7 +31,7 @@ runtime_contract:
     - "${PHASE_DIR}/roam/RUN-SUMMARY.json"
   must_touch_markers:
     - "0_parse_and_validate"
-    # Decomposed mega-gate (5 sub-steps replace single 0a_env_model_mode_gate)
+    # Decomposed mega-gate (5 sub-steps replace single 0a-mega-gate marker)
     - "0a_backfill_env_pref"
     - "0a_detect_platform_tools"
     - "0a_enrich_env_options"
