@@ -1,6 +1,6 @@
 ---
 name: vg-blueprint-planner
-description: Generate PLAN.md for one phase. Input: phase context. Output: PLAN.md path + sha256 + summary + bindings_satisfied. ONLY this task.
+description: "Generate PLAN.md for one phase. Input: phase context. Output: PLAN.md path + sha256 + summary + bindings_satisfied. ONLY this task."
 tools: [Read, Write, Bash, Grep]
 model: opus
 ---
