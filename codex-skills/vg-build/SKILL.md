@@ -15,7 +15,7 @@ Codex use the same workflow contracts, but their orchestration primitives differ
 
 | Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
-| AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it. |
+| AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
 | Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
 | TaskCreate / TaskUpdate / TodoWrite | Markdown progress + step markers | Do not rely on Claude's persistent task tail UI. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
@@ -57,6 +57,12 @@ Codex hook parity is evidence-based: `.vg/events.db`, step markers,
 `must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
 run is not complete just because the model says it is complete.
 
+Before executing command bash blocks from a Codex skill, export
+`VG_RUNTIME=codex`. This is an adapter signal, not a source replacement:
+Claude/unknown runtime keeps the canonical `AskUserQuestion` + Haiku path,
+while Codex maps only the incompatible orchestration primitives to
+Codex-native choices such as `codex-inline`.
+
 ### Codex spawn precedence
 
 When the source workflow below says `Agent(...)` or "spawn", Codex MUST
@@ -66,7 +72,7 @@ apply this table instead of treating the Claude syntax as executable:
 |---|---|---|---|---|
 | `/vg:build` wave executor, `model="${MODEL_EXECUTOR}"` | Write one prompt file per task, run `codex-spawn.sh --tier executor`; parallelize independent tasks with background processes and `wait`, serialize dependency groups | `VG_CODEX_MODEL_EXECUTOR`; leave unset to use Codex config default. Set this to the user's strongest coding model when they want Sonnet-class build quality. | `workspace-write` | child output, stdout/stderr logs, changed files, verification commands, task-fidelity prompt evidence |
 | `/vg:blueprint`, `/vg:scope`, planner/checker agents | Run `codex-spawn.sh --tier planner` or inline in the main orchestrator if the step needs interactive user answers | `VG_CODEX_MODEL_PLANNER` | `workspace-write` for artifact-writing planners, `read-only` for pure checks | requested artifacts or JSON verdict |
-| `/vg:review` navigator/scanner, `Agent(model="haiku")` | Do NOT blindly spawn `codex exec` for Playwright/Maestro work. Main Codex orchestrator owns MCP/browser/device actions. Use `codex-spawn.sh --tier scanner --sandbox read-only` only for non-MCP classification over captured snapshots/artifacts. | `VG_CODEX_MODEL_SCANNER`; set this to a cheap/fast model for review map/scanner work | `read-only` unless explicitly generating scan files from supplied evidence | same `scan-*.json`, `RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md`, and `review.haiku_scanner_spawned` telemetry event semantics |
+| `/vg:review` navigator/scanner, `Agent(model="haiku")` | Use `--scanner=codex-inline` by default. Do NOT ask to spawn Haiku or blindly spawn `codex exec` for Playwright/Maestro work. Main Codex orchestrator owns MCP/browser/device actions. Use `codex-spawn.sh --tier scanner --sandbox read-only` only for non-MCP classification over captured snapshots/artifacts. | `VG_CODEX_MODEL_SCANNER`; set this to a cheap/fast model for review map/scanner work | `read-only` unless explicitly generating scan files from supplied evidence | same `scan-*.json`, `RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md`, and `review.haiku_scanner_spawned` telemetry event semantics |
 | `/vg:review` fix agents and `/vg:test` codegen agents | Use `codex-spawn.sh --tier executor` because they edit code/tests | `VG_CODEX_MODEL_EXECUTOR` or explicit `--model` if the command selected a configured fix model | `workspace-write` | changed files, tests run, unresolved risks |
 | Rationalization guard, reflector, gap hunters | Use `codex-spawn.sh --tier scanner` for read-only classification, or `--tier adversarial` for independent challenge/review | `VG_CODEX_MODEL_SCANNER` or `VG_CODEX_MODEL_ADVERSARIAL` | `read-only` by default | compact JSON/markdown verdict; fail closed on empty/unparseable output |
 
@@ -2831,11 +2837,13 @@ except Exception:
   # fixture-recipe.v1.json. Codex-HIGH-2 fix: BLOCKS on missing/parse-error
   # (was non-blocking with `|| echo`). Override via --allow-missing-fixtures
   # logs override-debt.
-  if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
-    FIX_VERIFY_OUT=$("${PYTHON_BIN:-python3}" - 2>&1 <<'FIX_VERIFY'
+  VG_SCRIPT_ROOT="${REPO_ROOT}/.claude/scripts"
+  [ -d "${VG_SCRIPT_ROOT}/runtime" ] || VG_SCRIPT_ROOT="${REPO_ROOT}/scripts"
+  if [ -d "${VG_SCRIPT_ROOT}/runtime" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+    FIX_VERIFY_OUT=$(VG_SCRIPT_ROOT="$VG_SCRIPT_ROOT" "${PYTHON_BIN:-python3}" - 2>&1 <<'FIX_VERIFY'
 import json, os, re, sys
 from pathlib import Path
-sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+sys.path.insert(0, os.environ["VG_SCRIPT_ROOT"])
 phase_dir = Path(os.environ["PHASE_DIR"])
 test_goals = phase_dir / "TEST-GOALS.md"
 fixtures_dir = phase_dir / "FIXTURES"
@@ -4264,12 +4272,14 @@ if [ "$TRUTHCHECK_ENABLED" = "true" ] && [ "$OPENAPI_EXPORT_OK" != "true" ]; the
 fi
 
 if [ "$TRUTHCHECK_ENABLED" = "true" ]; then
+  VG_SCRIPT_ROOT="${REPO_ROOT}/.claude/scripts"
+  [ -d "${VG_SCRIPT_ROOT}/runtime" ] || VG_SCRIPT_ROOT="${REPO_ROOT}/scripts"
   if [ ! -d "${PHASE_DIR}/FIXTURES" ]; then
     echo "  PR-E: no FIXTURES directory — skip truthcheck"
     TRUTHCHECK_SUMMARY='{"verdict":"SKIP","reason":"no-fixtures-dir"}'
     printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
-  elif [ ! -f "${REPO_ROOT}/scripts/runtime/recipe_executor.py" ]; then
-    echo "⛔ PR-E BLOCK: scripts/runtime/recipe_executor.py missing"
+  elif [ ! -f "${VG_SCRIPT_ROOT}/runtime/recipe_executor.py" ]; then
+    echo "⛔ PR-E BLOCK: runtime/recipe_executor.py missing from VG workflow scripts"
     exit 1
   else
     echo "━━━ PR-E — API truthcheck loop (max 5 iter) ━━━"
@@ -4304,6 +4314,7 @@ if [ "$TRUTHCHECK_ENABLED" = "true" ]; then
         for gid in $TRUTHCHECK_FAILED_GOALS; do
           PHASE_DIR="$PHASE_DIR" PHASE_NUMBER="$PHASE_NUMBER" REPO_ROOT="$REPO_ROOT" \
           TRUTHCHECK_BASE_URL="$TRUTHCHECK_BASE_URL" GID="$gid" PYTHON_BIN="${PYTHON_BIN:-python3}" \
+          VG_SCRIPT_ROOT="$VG_SCRIPT_ROOT" \
           ${PYTHON_BIN:-python3} - <<'PY' 2>&1 | sed "s/^/    [${gid}] /"
 import json
 import os
@@ -4311,7 +4322,7 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+sys.path.insert(0, os.environ["VG_SCRIPT_ROOT"])
 
 from runtime.fixture_cache import acquire_lease, release_lease, recipe_hash, write_captured
 from runtime.recipe_executor import RecipeRunner
@@ -4403,16 +4414,20 @@ PY
         TRUTHCHECK_SUMMARY=$(${PYTHON_BIN:-python3} -c "import json; print(json.dumps({'verdict':'BLOCK','iterations':${TRUTHCHECK_MAX_ITER},'failed':'$TRUTHCHECK_FAILED_GOALS'}))")
         printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
         echo "  PR-E: iter cap hit, ${TRUTHCHECK_FAILED_GOALS} still failing"
-        if [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; then
+        DIAGNOSTIC_L2="${REPO_ROOT}/.claude/scripts/spawn-diagnostic-l2.py"
+        [ -f "$DIAGNOSTIC_L2" ] || DIAGNOSTIC_L2="${REPO_ROOT}/scripts/spawn-diagnostic-l2.py"
+        if [ -f "$DIAGNOSTIC_L2" ]; then
           echo "  PR-E: spawning diagnostic_l2 for residual failures"
           echo "$TRUTHCHECK_FAILED_GOALS" > "${PHASE_DIR}/.api-truthcheck-failed.txt"
-          "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" \
+          "${PYTHON_BIN:-python3}" "$DIAGNOSTIC_L2" \
             --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
             --gate-id "build.api_truthcheck" \
             --evidence-file "${PHASE_DIR}/.api-truthcheck-failed.txt" 2>&1 | sed 's/^/    /' || true
-          if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
+          TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
+          [ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+          if [ -f "$TESTER_PRO_CLI" ]; then
             for gid in $TRUTHCHECK_FAILED_GOALS; do
-              "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" \
+              "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" \
                 defect new --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
                 --title "[API-TRUTHCHECK] ${gid} fails recipe execution after ${TRUTHCHECK_MAX_ITER} iter" \
                 --severity major --found-in build \

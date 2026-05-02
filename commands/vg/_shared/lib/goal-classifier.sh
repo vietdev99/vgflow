@@ -255,7 +255,7 @@ PY
 #   - otherwise: heuristic classify; confidence >= 0.8 auto-assign;
 #     0.5..0.8 → orchestrator MUST invoke Haiku subagent (returns code 2 with a
 #     pending-list emitted on fd 3 so caller dispatches Task tool);
-#     < 0.5 → orchestrator MUST AskUserQuestion inline (code 3).
+#     < 0.5 -> orchestrator MUST use provider-native prompt inline (code 3).
 classify_goals_if_needed() {
   local test_goals_path="$1" phase_dir="$2"
   [ -f "$test_goals_path" ] || { echo "goal-classifier: TEST-GOALS.md missing at $test_goals_path" >&2; return 0; }

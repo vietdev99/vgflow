@@ -176,7 +176,7 @@ PY
   echo "## Semantic enrichment (v1.14.0+ migrate gates)"
   VERIFY_SCRIPT=""
   [ -f "${REPO_ROOT}/.claude/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/.claude/scripts/verify-migrate-output.py"
-  [ -f "${REPO_ROOT}/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"
+  [ -n "$VERIFY_SCRIPT" ] || { [ -f "${REPO_ROOT}/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"; }
 
   if [ -z "$VERIFY_SCRIPT" ]; then
     echo "   (validator not installed — skip semantic check)"

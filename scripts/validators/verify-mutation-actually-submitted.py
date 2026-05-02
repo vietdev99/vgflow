@@ -74,9 +74,11 @@ def _field(body: str, name: str) -> str:
 
 def _meaningful(value: str) -> bool:
     compact = re.sub(r"\s+", " ", value.strip()).lower()
-    return compact not in EMPTY_FIELD_VALUES and not compact.startswith(
-        ("none:", "n/a:", "na:")
-    )
+    if compact in EMPTY_FIELD_VALUES:
+        return False
+    if compact.startswith(("none", "n/a", "na")):
+        return False
+    return True
 
 
 def _parse_goals(text: str) -> list[dict[str, Any]]:

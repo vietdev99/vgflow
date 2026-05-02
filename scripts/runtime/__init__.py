@@ -1,101 +1,87 @@
-"""Recipe runtime — RFC v9 native Python orchestrator.
+"""Recipe runtime public surface.
 
-Modules:
-- recipe_loader: parse YAML + jsonschema validate against fixture-recipe.v1.json
-- recipe_capture: JSONPath capture with cardinality enforcement (RFC 9535)
-- recipe_interpolate: ${var} interpolation from captured store
-- recipe_executor (PR-A2): API execution + 4 auth handlers + sandbox safety
-- fixture_cache (PR-A3): FIXTURES-CACHE.json + lease management
-
-Public surface (PR-A1):
-- load_recipe(path) → dict
-- ValidationError on schema mismatch
-- capture_paths(payload, capture_spec) → dict[str, Any]
-- interpolate(template, store) → resolved string
-
-Stability: schema_version: "1.0" pinned. Major bump rejected at load time.
+The package is intentionally lazy: many commands import one runtime submodule
+for static checks, and they must not pull optional HTTP/YAML dependencies.
+Runtime-only exports are imported when accessed.
 """
-from .fixture_cache import (
-    CacheError,
-    LeaseError,
-    acquire_lease,
-    find_orphans,
-    get_captured,
-    load as cache_load,
-    reap_expired_leases,
-    reap_orphans,
-    recipe_hash,
-    release_lease,
-    save as cache_save,
-    write_captured,
-)
-from .api_index import (
-    ApiIndexError,
-    ResourceCounter,
-    count_fn_factory,
-    parse_api_index,
-)
-from .preflight import (
-    InvariantGap,
-    PreflightError,
-    fix_hint,
-    parse_env_contract,
-    required_count,
-    verify_invariants,
-)
-from .recipe_loader import load_recipe, ValidationError
-from .recipe_capture import capture_paths, CaptureError
-from .recipe_interpolate import interpolate, InterpolationError
-from .recipe_safety import (
-    SandboxEchoMissingError,
-    SandboxSafetyError,
-    assert_response_echo,
-    assert_step_safe,
-    assert_url_in_allowlist,
-    is_sentinel_value,
-)
-from .recipe_auth import authenticate, AuthContext, AuthError
-from .recipe_executor import AuthDegradedError, RecipeRunner, RecipeExecutionError
+from __future__ import annotations
 
-__all__ = [
-    "load_recipe",
-    "ValidationError",
-    "capture_paths",
-    "CaptureError",
-    "interpolate",
-    "InterpolationError",
-    "assert_step_safe",
-    "assert_url_in_allowlist",
-    "assert_response_echo",
-    "SandboxSafetyError",
-    "SandboxEchoMissingError",
-    "is_sentinel_value",
-    "AuthDegradedError",
-    "authenticate",
-    "AuthContext",
-    "AuthError",
-    "RecipeRunner",
-    "RecipeExecutionError",
-    "CacheError",
-    "LeaseError",
-    "acquire_lease",
-    "release_lease",
-    "write_captured",
-    "get_captured",
-    "find_orphans",
-    "reap_orphans",
-    "reap_expired_leases",
-    "recipe_hash",
-    "cache_load",
-    "cache_save",
-    "InvariantGap",
-    "PreflightError",
-    "parse_env_contract",
-    "required_count",
-    "verify_invariants",
-    "fix_hint",
-    "ApiIndexError",
-    "ResourceCounter",
-    "count_fn_factory",
-    "parse_api_index",
-]
+from importlib import import_module
+from typing import Any
+
+
+class _MissingRecipeValidationError(Exception):
+    """Fallback when recipe_loader dependencies are not installed."""
+
+
+def _missing_load_recipe(*_args: Any, **_kwargs: Any) -> Any:
+    raise ImportError(
+        "Recipe loading requires optional dependencies such as PyYAML. "
+        "Install workflow runtime extras before executing fixture recipes."
+    )
+
+
+_EXPORTS: dict[str, tuple[str, str]] = {
+    "CacheError": ("fixture_cache", "CacheError"),
+    "LeaseError": ("fixture_cache", "LeaseError"),
+    "acquire_lease": ("fixture_cache", "acquire_lease"),
+    "find_orphans": ("fixture_cache", "find_orphans"),
+    "get_captured": ("fixture_cache", "get_captured"),
+    "cache_load": ("fixture_cache", "load"),
+    "reap_expired_leases": ("fixture_cache", "reap_expired_leases"),
+    "reap_orphans": ("fixture_cache", "reap_orphans"),
+    "recipe_hash": ("fixture_cache", "recipe_hash"),
+    "release_lease": ("fixture_cache", "release_lease"),
+    "cache_save": ("fixture_cache", "save"),
+    "write_captured": ("fixture_cache", "write_captured"),
+    "ApiIndexError": ("api_index", "ApiIndexError"),
+    "ResourceCounter": ("api_index", "ResourceCounter"),
+    "count_fn_factory": ("api_index", "count_fn_factory"),
+    "parse_api_index": ("api_index", "parse_api_index"),
+    "InvariantGap": ("preflight", "InvariantGap"),
+    "PreflightError": ("preflight", "PreflightError"),
+    "fix_hint": ("preflight", "fix_hint"),
+    "parse_env_contract": ("preflight", "parse_env_contract"),
+    "required_count": ("preflight", "required_count"),
+    "verify_invariants": ("preflight", "verify_invariants"),
+    "load_recipe": ("recipe_loader", "load_recipe"),
+    "ValidationError": ("recipe_loader", "ValidationError"),
+    "capture_paths": ("recipe_capture", "capture_paths"),
+    "CaptureError": ("recipe_capture", "CaptureError"),
+    "interpolate": ("recipe_interpolate", "interpolate"),
+    "InterpolationError": ("recipe_interpolate", "InterpolationError"),
+    "SandboxEchoMissingError": ("recipe_safety", "SandboxEchoMissingError"),
+    "SandboxSafetyError": ("recipe_safety", "SandboxSafetyError"),
+    "assert_response_echo": ("recipe_safety", "assert_response_echo"),
+    "assert_step_safe": ("recipe_safety", "assert_step_safe"),
+    "assert_url_in_allowlist": ("recipe_safety", "assert_url_in_allowlist"),
+    "is_sentinel_value": ("recipe_safety", "is_sentinel_value"),
+    "authenticate": ("recipe_auth", "authenticate"),
+    "AuthContext": ("recipe_auth", "AuthContext"),
+    "AuthError": ("recipe_auth", "AuthError"),
+    "AuthDegradedError": ("recipe_executor", "AuthDegradedError"),
+    "RecipeRunner": ("recipe_executor", "RecipeRunner"),
+    "RecipeExecutionError": ("recipe_executor", "RecipeExecutionError"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = _EXPORTS[name]
+    try:
+        module = import_module(f"{__name__}.{module_name}")
+        value = getattr(module, attr_name)
+    except ImportError:
+        if name == "load_recipe":
+            value = _missing_load_recipe
+        elif name == "ValidationError":
+            value = _MissingRecipeValidationError
+        else:
+            raise
+
+    globals()[name] = value
+    return value

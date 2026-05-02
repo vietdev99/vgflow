@@ -104,9 +104,11 @@ def case_stop_missing_evidence():
     # Use a fake phase number that definitely has no artifacts
     fake_phase = "99999999"
     run_json.write_text(json.dumps({
+        "run_id": "selftest-missing-evidence",
         "command": "vg:blueprint",
         "phase": fake_phase,
         "args": "",
+        "session_id": "selftest",
     }), encoding="utf-8")
 
     try:

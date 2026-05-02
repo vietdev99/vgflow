@@ -88,7 +88,11 @@ def _field(body: str, name: str) -> str:
 
 def _meaningful(value: str) -> bool:
     compact = re.sub(r"\s+", " ", value.strip()).lower()
-    return compact not in EMPTY_FIELD_VALUES and not compact.startswith(("none:", "n/a:", "na:"))
+    if compact in EMPTY_FIELD_VALUES:
+        return False
+    if compact.startswith(("none", "n/a", "na")):
+        return False
+    return True
 
 
 def _parse_goals(text: str) -> list[dict[str, Any]]:
@@ -102,17 +106,20 @@ def _parse_goals(text: str) -> list[dict[str, Any]]:
         gid = match.group(1)
         title = match.group(2).strip()
         body = match.group("body") or ""
+        goal_class = _field(body, "goal_class").strip().lower()
         surface = _field(body, "Surface").split()[0].strip().lower() or "ui"
         mutation_evidence = _field(body, "Mutation evidence")
         persistence_check = _field(body, "Persistence check")
         combined = f"{title}\n{body}"
         explicit = _meaningful(mutation_evidence) or _meaningful(persistence_check)
-        heuristic = bool(MUTATION_WORD_RE.search(combined))
+        readonly = goal_class in {"readonly", "read-only", "read_only", "display", "structural"}
+        heuristic = False if readonly and not explicit else bool(MUTATION_WORD_RE.search(combined))
         goals.append(
             {
                 "id": gid,
                 "title": title,
                 "body": body,
+                "goal_class": goal_class,
                 "surface": surface,
                 "mutation_evidence": mutation_evidence,
                 "persistence_check": persistence_check,

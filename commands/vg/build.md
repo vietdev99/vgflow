@@ -2777,11 +2777,13 @@ except Exception:
   # fixture-recipe.v1.json. Codex-HIGH-2 fix: BLOCKS on missing/parse-error
   # (was non-blocking with `|| echo`). Override via --allow-missing-fixtures
   # logs override-debt.
-  if [ -d "${REPO_ROOT}/scripts/runtime" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
-    FIX_VERIFY_OUT=$("${PYTHON_BIN:-python3}" - 2>&1 <<'FIX_VERIFY'
+  VG_SCRIPT_ROOT="${REPO_ROOT}/.claude/scripts"
+  [ -d "${VG_SCRIPT_ROOT}/runtime" ] || VG_SCRIPT_ROOT="${REPO_ROOT}/scripts"
+  if [ -d "${VG_SCRIPT_ROOT}/runtime" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
+    FIX_VERIFY_OUT=$(VG_SCRIPT_ROOT="$VG_SCRIPT_ROOT" "${PYTHON_BIN:-python3}" - 2>&1 <<'FIX_VERIFY'
 import json, os, re, sys
 from pathlib import Path
-sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+sys.path.insert(0, os.environ["VG_SCRIPT_ROOT"])
 phase_dir = Path(os.environ["PHASE_DIR"])
 test_goals = phase_dir / "TEST-GOALS.md"
 fixtures_dir = phase_dir / "FIXTURES"
@@ -4210,12 +4212,14 @@ if [ "$TRUTHCHECK_ENABLED" = "true" ] && [ "$OPENAPI_EXPORT_OK" != "true" ]; the
 fi
 
 if [ "$TRUTHCHECK_ENABLED" = "true" ]; then
+  VG_SCRIPT_ROOT="${REPO_ROOT}/.claude/scripts"
+  [ -d "${VG_SCRIPT_ROOT}/runtime" ] || VG_SCRIPT_ROOT="${REPO_ROOT}/scripts"
   if [ ! -d "${PHASE_DIR}/FIXTURES" ]; then
     echo "  PR-E: no FIXTURES directory — skip truthcheck"
     TRUTHCHECK_SUMMARY='{"verdict":"SKIP","reason":"no-fixtures-dir"}'
     printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
-  elif [ ! -f "${REPO_ROOT}/scripts/runtime/recipe_executor.py" ]; then
-    echo "⛔ PR-E BLOCK: scripts/runtime/recipe_executor.py missing"
+  elif [ ! -f "${VG_SCRIPT_ROOT}/runtime/recipe_executor.py" ]; then
+    echo "⛔ PR-E BLOCK: runtime/recipe_executor.py missing from VG workflow scripts"
     exit 1
   else
     echo "━━━ PR-E — API truthcheck loop (max 5 iter) ━━━"
@@ -4250,6 +4254,7 @@ if [ "$TRUTHCHECK_ENABLED" = "true" ]; then
         for gid in $TRUTHCHECK_FAILED_GOALS; do
           PHASE_DIR="$PHASE_DIR" PHASE_NUMBER="$PHASE_NUMBER" REPO_ROOT="$REPO_ROOT" \
           TRUTHCHECK_BASE_URL="$TRUTHCHECK_BASE_URL" GID="$gid" PYTHON_BIN="${PYTHON_BIN:-python3}" \
+          VG_SCRIPT_ROOT="$VG_SCRIPT_ROOT" \
           ${PYTHON_BIN:-python3} - <<'PY' 2>&1 | sed "s/^/    [${gid}] /"
 import json
 import os
@@ -4257,7 +4262,7 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.environ["REPO_ROOT"], "scripts"))
+sys.path.insert(0, os.environ["VG_SCRIPT_ROOT"])
 
 from runtime.fixture_cache import acquire_lease, release_lease, recipe_hash, write_captured
 from runtime.recipe_executor import RecipeRunner
@@ -4349,16 +4354,20 @@ PY
         TRUTHCHECK_SUMMARY=$(${PYTHON_BIN:-python3} -c "import json; print(json.dumps({'verdict':'BLOCK','iterations':${TRUTHCHECK_MAX_ITER},'failed':'$TRUTHCHECK_FAILED_GOALS'}))")
         printf '%s\n' "$TRUTHCHECK_SUMMARY" > "$TRUTHCHECK_OUT"
         echo "  PR-E: iter cap hit, ${TRUTHCHECK_FAILED_GOALS} still failing"
-        if [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; then
+        DIAGNOSTIC_L2="${REPO_ROOT}/.claude/scripts/spawn-diagnostic-l2.py"
+        [ -f "$DIAGNOSTIC_L2" ] || DIAGNOSTIC_L2="${REPO_ROOT}/scripts/spawn-diagnostic-l2.py"
+        if [ -f "$DIAGNOSTIC_L2" ]; then
           echo "  PR-E: spawning diagnostic_l2 for residual failures"
           echo "$TRUTHCHECK_FAILED_GOALS" > "${PHASE_DIR}/.api-truthcheck-failed.txt"
-          "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" \
+          "${PYTHON_BIN:-python3}" "$DIAGNOSTIC_L2" \
             --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
             --gate-id "build.api_truthcheck" \
             --evidence-file "${PHASE_DIR}/.api-truthcheck-failed.txt" 2>&1 | sed 's/^/    /' || true
-          if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
+          TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
+          [ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+          if [ -f "$TESTER_PRO_CLI" ]; then
             for gid in $TRUTHCHECK_FAILED_GOALS; do
-              "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" \
+              "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" \
                 defect new --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
                 --title "[API-TRUTHCHECK] ${gid} fails recipe execution after ${TRUTHCHECK_MAX_ITER} iter" \
                 --severity major --found-in build \

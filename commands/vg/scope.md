@@ -1278,8 +1278,10 @@ to refine domain-specific risks. Existing file preserved on re-run
 (pass `--force` to overwrite).
 
 ```bash
-if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
-  "${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" \
+TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
+[ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+if [ -f "$TESTER_PRO_CLI" ]; then
+  "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" \
     strategy generate --phase "${PHASE_NUMBER}" 2>&1 | sed 's/^/  D17: /' || true
 fi
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 4_6_test_strategy 2>/dev/null || true

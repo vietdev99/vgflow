@@ -2,19 +2,22 @@
 """Spawn Diagnostic L2 subagent (RFC v9 PR-D3 stub-3 fix).
 
 When block-resolver L1 inline auto-fix candidates exhaust, spawn a
-Haiku-tier subagent in an isolated context window to:
+provider-native diagnostic subagent in an isolated context window to:
 1. Receive gate evidence + nearby file snippets.
 2. Return structured JSON with diagnosis + proposed_fix + confidence.
 
-We invoke via `claude -p` (cheapest path) by default; fallback chain to
-codex/gemini handled in the same way crossai-invoke.md does.
+Runtime adapter:
+- Claude/unknown runtime invokes `claude --model haiku -p` by default.
+- Codex runtime invokes `codex exec --sandbox read-only` by default.
+- `VG_DIAGNOSTIC_L2_CLI` still overrides both paths.
 
 Output (stdout): single JSON line:
   {"proposal_id": "l2-{epoch}-{rand6}", "confidence": 0.85, "decision_pending": true}
 
 Caller (block-resolver bash) reads proposal_id, invokes
-block_resolve_l3_single_advisory with the confidence — orchestrator does
-the AskUserQuestion + record_decision afterwards.
+block_resolve_l3_single_advisory with the confidence. The orchestrator then
+uses a provider-native user prompt: AskUserQuestion on Claude, main-thread
+prompt/closest Codex UI on Codex.
 
 Usage:
   scripts/spawn-diagnostic-l2.py \\
@@ -86,12 +89,34 @@ def _default_cli() -> list[str]:
     """Return CLI args for the default subagent invocation.
 
     Configurable via VG_DIAGNOSTIC_L2_CLI env var (e.g.,
-    `claude --model haiku -p` or `codex exec -m gpt-5.5`).
+    `claude --model haiku -p` or `codex exec --model gpt-5.5`).
     """
     raw = os.environ.get("VG_DIAGNOSTIC_L2_CLI")
     if raw:
         return shlex.split(raw)
+
+    runtime = _detect_runtime()
+    if runtime == "codex":
+        cli = ["codex", "exec", "--sandbox", "read-only"]
+        model = os.environ.get("VG_CODEX_MODEL_SCANNER", "").strip()
+        if model:
+            cli.extend(["--model", model])
+        return cli
+
     return ["claude", "--model", "haiku", "-p"]
+
+
+def _detect_runtime() -> str:
+    raw = (os.environ.get("VG_RUNTIME") or os.environ.get("VG_PROVIDER") or "").lower()
+    if raw.startswith("codex"):
+        return "codex"
+    if raw.startswith("claude"):
+        return "claude"
+    if any(os.environ.get(k) for k in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR")):
+        return "claude"
+    if any(os.environ.get(k) for k in ("CODEX_SANDBOX", "CODEX_CLI_SANDBOX", "CODEX_HOME")):
+        return "codex"
+    return "claude"
 
 
 # Codex-R4-HIGH-4: scrub env so spawned CLI does NOT inherit secrets.

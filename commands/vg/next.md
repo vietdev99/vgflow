@@ -129,7 +129,7 @@ fi
 ```bash
 VERIFY_SCRIPT=""
 [ -f "${REPO_ROOT}/.claude/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/.claude/scripts/verify-migrate-output.py"
-[ -f "${REPO_ROOT}/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"
+[ -n "$VERIFY_SCRIPT" ] || { [ -f "${REPO_ROOT}/scripts/verify-migrate-output.py" ] && VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"; }
 
 if [ -n "$VERIFY_SCRIPT" ] && [ -f "${PHASE_DIR}/TEST-GOALS.md" ]; then
   SEMANTIC_JSON=$(${PYTHON_BIN:-python3} "$VERIFY_SCRIPT" --json "$PHASE_DIR" 2>/dev/null)

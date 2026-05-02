@@ -79,6 +79,10 @@ def _read_json(path: Path) -> dict | None:
         return None
 
 
+def _has_run_id(run: dict | None) -> bool:
+    return bool(isinstance(run, dict) and run.get("run_id"))
+
+
 # ─── Per-session API (v2.28.0+) ────────────────────────────────────────────
 
 
@@ -101,7 +105,7 @@ def read_active_run(session_id: str | None = None) -> dict | None:
     sid = session_id or _session_id_from_env() or "unknown"
 
     run = _read_json(_active_run_path(sid))
-    if run:
+    if _has_run_id(run):
         return run
 
     # The pre-v2.28 guard `if not ACTIVE_RUNS_DIR.exists()` was too strict:
@@ -116,10 +120,24 @@ def read_active_run(session_id: str | None = None) -> dict | None:
     # cleanup. Drop the directory guard; rely on the per-session lookup
     # at line 85 to take precedence whenever the per-session file exists.
     legacy = _read_json(LEGACY_CURRENT_RUN)
-    if legacy:
+    if _has_run_id(legacy):
         legacy_sid = legacy.get("session_id")
         if not legacy_sid or legacy_sid == sid or _is_unknown_orphan_session(legacy_sid):
             return legacy
+
+    # No-env callers read as sid="unknown", while run-start stores them under
+    # a synthetic per-session file named session-unknown-{run_id_prefix}. If
+    # the legacy mirror is temporarily unavailable or belongs to a self-test
+    # session, still recover the active no-env run from active-runs/.
+    if _is_unknown_orphan_session(sid) and ACTIVE_RUNS_DIR.exists():
+        candidates = []
+        for f in sorted(ACTIVE_RUNS_DIR.glob("*.json")):
+            r = _read_json(f)
+            if _has_run_id(r) and _is_unknown_orphan_session(r.get("session_id")):
+                candidates.append(r)
+        if candidates:
+            candidates.sort(key=lambda r: r.get("started_at") or "")
+            return candidates[-1]
 
     return None
 
@@ -176,12 +194,12 @@ def list_active_runs() -> list[dict]:
     if ACTIVE_RUNS_DIR.exists():
         for f in sorted(ACTIVE_RUNS_DIR.glob("*.json")):
             r = _read_json(f)
-            if r:
+            if _has_run_id(r):
                 runs.append(r)
         return runs
 
     legacy = _read_json(LEGACY_CURRENT_RUN)
-    if legacy:
+    if _has_run_id(legacy):
         runs.append(legacy)
     return runs
 

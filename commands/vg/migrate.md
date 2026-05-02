@@ -77,8 +77,8 @@ if [[ "$ARGUMENTS" =~ --self-test ]]; then
   fi
 
   echo "Self-test: fixture at $FIXTURE_DIR"
-  VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"
-  [ -f "$VERIFY_SCRIPT" ] || VERIFY_SCRIPT="${REPO_ROOT}/.claude/scripts/verify-migrate-output.py"
+  VERIFY_SCRIPT="${REPO_ROOT}/.claude/scripts/verify-migrate-output.py"
+  [ -f "$VERIFY_SCRIPT" ] || VERIFY_SCRIPT="${REPO_ROOT}/scripts/verify-migrate-output.py"
   [ -f "$VERIFY_SCRIPT" ] || { echo "⛔ verify-migrate-output.py missing"; exit 1; }
 
   ACTUAL=$(${PYTHON_BIN:-python3} "$VERIFY_SCRIPT" "${FIXTURE_DIR}/expected/" 2>&1)

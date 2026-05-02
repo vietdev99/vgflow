@@ -654,6 +654,13 @@ def cmd_run_start(args) -> int:
             f"should propagate CLAUDE_SESSION_ID via env for full audit.",
             file=sys.stderr,
         )
+        try:
+            db.update_run_session(run_id, session_id)
+        except Exception:
+            # State file remains authoritative for active-run routing. The DB
+            # backfill is audit metadata; do not fail a valid run-start if the
+            # ledger is temporarily locked.
+            pass
 
     current_run_entry = {
         "run_id": run_id,
@@ -725,22 +732,31 @@ def cmd_run_status(_args) -> int:
     )
     current = state_mod.read_active_run(session_id)
     all_active = state_mod.list_active_runs()
+    current_run_id = current.get("run_id") if current else None
 
     other_sessions = [
         r for r in all_active
-        if r.get("session_id") and r.get("session_id") != session_id
+        if r.get("run_id") != current_run_id
+        and r.get("session_id")
+        and r.get("session_id") != session_id
     ]
 
     if not current and not other_sessions:
         print("no-active-run")
         return 0
 
-    run_row = db.get_run(current["run_id"]) if current else None
+    state_warnings = []
+    if current and not current_run_id:
+        state_warnings.append("current active-run state is missing run_id")
+
+    run_row = db.get_run(current_run_id) if current_run_id else None
     payload = {
         "this_session": session_id,
         "current_run": current,
         "run_row": run_row,
     }
+    if state_warnings:
+        payload["state_warnings"] = state_warnings
     if other_sessions:
         payload["other_sessions_active"] = [
             {"session_id": (r.get("session_id") or "")[:12],

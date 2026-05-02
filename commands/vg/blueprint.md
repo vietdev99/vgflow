@@ -3618,7 +3618,9 @@ field, AND that aggregate coverage meets thresholds from `TEST-STRATEGY.md`
 (api_contract → recipe_executor, ui_ux → browser scan, security → lens prompt).
 
 ```bash
-if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
+TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
+[ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+if [ -f "$TESTER_PRO_CLI" ]; then
   echo "━━━ Sub-step 2f — D18 test_type coverage gate ━━━"
 
   # Pre-2026-05-01 phases get WARN grandfather; new phases default BLOCK.
@@ -3634,7 +3636,7 @@ if [ -f "${REPO_ROOT}/scripts/tester-pro-cli.py" ]; then
     D18_SEVERITY="block"
   fi
 
-  D18_OUT=$("${PYTHON_BIN:-python3}" "${REPO_ROOT}/scripts/tester-pro-cli.py" \
+  D18_OUT=$("${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" \
     validate-test-types --phase "${PHASE_NUMBER}" --severity "$D18_SEVERITY" 2>&1)
   D18_RC=$?
   echo "$D18_OUT" | sed 's/^/  D18: /'

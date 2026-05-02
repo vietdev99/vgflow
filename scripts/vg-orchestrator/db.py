@@ -215,6 +215,32 @@ def create_run(command: str, phase: str, args: str = "",
     return _retry_locked(_do)
 
 
+def update_run_session(run_id: str, session_id: str) -> None:
+    """Backfill the session_id for an already-created run row.
+
+    `cmd_run_start` may need the generated run_id before it can synthesize a
+    no-env session id. Keep the DB ledger aligned with the active-run state.
+    """
+
+    def _do() -> None:
+        conn = connect()
+        try:
+            _begin_immediate(conn)
+            try:
+                conn.execute(
+                    "UPDATE runs SET session_id = ? WHERE run_id = ?",
+                    (session_id, run_id),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                _rollback_safe(conn)
+                raise
+        finally:
+            conn.close()
+
+    _retry_locked(_do)
+
+
 def complete_run(run_id: str, outcome: str = "PASS") -> None:
     ts = _utc_now()
 

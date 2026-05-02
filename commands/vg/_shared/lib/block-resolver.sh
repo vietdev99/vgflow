@@ -10,8 +10,8 @@
 #   Replace the anti-pattern "echo BLOCK; print options A/B/C; exit 1"
 #   with a 4-level resolver:
 #     L1 (inline)    — try auto-fix candidates at the gate, pass rationalization-guard
-#     L2 (architect) — spawn Haiku subagent with FULL phase context, returns structured proposal
-#     L3 (present)   — show proposal to user via AskUserQuestion
+#     L2 (architect) — spawn provider-native diagnostic subagent with FULL phase context
+#     L3 (present)   — show proposal via provider-native prompt
 #     L4 (escalate)  — only when L1+L2 exhausted AND user rejects
 #
 # Exposed functions:
@@ -29,6 +29,36 @@
 # Check if resolver enabled (config-driven, default ON)
 block_resolver_enabled() {
   [ "${CONFIG_BLOCK_RESOLVER_ENABLED:-true}" = "true" ]
+}
+
+block_resolver_runtime() {
+  case "${VG_RUNTIME:-${VG_PROVIDER:-}}" in
+    claude|claude-*) echo "claude"; return ;;
+    codex|codex-*) echo "codex"; return ;;
+  esac
+  if [ -n "${CLAUDE_SESSION_ID:-}" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    echo "claude"
+    return
+  fi
+  if [ -n "${CODEX_SANDBOX:-}" ] || [ -n "${CODEX_CLI_SANDBOX:-}" ] || [ -n "${CODEX_HOME:-}" ]; then
+    echo "codex"
+    return
+  fi
+  echo "claude"
+}
+
+block_resolver_l2_backend_label() {
+  case "$(block_resolver_runtime)" in
+    codex) echo "Codex scanner adapter" ;;
+    *) echo "Claude Haiku" ;;
+  esac
+}
+
+block_resolver_l3_prompt_label() {
+  case "$(block_resolver_runtime)" in
+    codex) echo "Codex main-thread prompt" ;;
+    *) echo "AskUserQuestion" ;;
+  esac
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -112,7 +142,7 @@ _block_resolve_l1_inline() {
 # Reads SPECS / CONTEXT / PLAN / TEST-GOALS / SUMMARY / API-CONTRACTS /
 # RUNTIME-MAP / codebase test framework state. Concatenates with section
 # headers. Truncates each artifact to MAX_ARTIFACT_CHARS (default 6000)
-# to keep prompt tractable for Haiku.
+# to keep prompt tractable for the cheap diagnostic scanner.
 _collect_phase_context() {
   local phase_dir="$1"
   local max_chars="${CONFIG_BLOCK_ARCHITECT_MAX_ARTIFACT_CHARS:-6000}"
@@ -163,15 +193,14 @@ _collect_phase_context() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════
-# L2 — Architect proposal via Haiku subagent
+# L2 — Architect proposal via provider-native diagnostic subagent
 # ═══════════════════════════════════════════════════════════════════════
 # Writes a prompt file combining:
 #   - Architect role template (_shared/lib/architect-prompt-template.md)
 #   - Gate context + evidence
 #   - Full phase context blob from _collect_phase_context
-# Emits prompt file path on fd 3; orchestrator MUST dispatch Task tool
-# (subagent_type=general-purpose, model=<architect model>) and return
-# subagent stdout (strict JSON) to caller.
+# Emits prompt file path on fd 3. Claude dispatches Haiku/Task; Codex keeps
+# the adapter path and uses codex read-only scanner when live L2 is needed.
 #
 # Fallback (Task unavailable): return "architect_unavailable" proposal.
 _block_resolve_l2_architect() {
@@ -180,7 +209,17 @@ _block_resolve_l2_architect() {
   local evidence_json="$3"
   local phase_dir="${4:-}"
 
-  local architect_model="${CONFIG_BLOCK_ARCHITECT_MODEL:-haiku}"
+  local runtime
+  runtime="$(block_resolver_runtime)"
+  local architect_model="${CONFIG_BLOCK_ARCHITECT_MODEL:-}"
+  if [ -z "$architect_model" ]; then
+    case "$runtime" in
+      codex) architect_model="${VG_CODEX_MODEL_SCANNER:-codex-default}" ;;
+      *) architect_model="haiku" ;;
+    esac
+  fi
+  local architect_backend
+  architect_backend="$(block_resolver_l2_backend_label)"
   local template="${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/architect-prompt-template.md"
   local prompt_path="${VG_TMP:-/tmp}/block-architect-$(date +%s)-$$.txt"
   mkdir -p "$(dirname "$prompt_path")" 2>/dev/null || true
@@ -222,12 +261,13 @@ _block_resolve_l2_architect() {
 
   # Emit prompt path on fd 3 for orchestrator to pick up; also stderr for debug
   echo "$prompt_path" >&3 2>/dev/null || true
-  echo "block-architect-prompt: $prompt_path (model=${architect_model})" >&2
+  echo "block-architect-prompt: $prompt_path (runtime=${runtime} backend=${architect_backend} model=${architect_model})" >&2
 
-  # RFC v9 PR-D3 stub-3 fix: try scripts/spawn-diagnostic-l2.py for live
-  # Haiku invocation. Falls back to placeholder if script unavailable, CLI
-  # not in PATH, or subagent fails.
-  local spawn_script="${REPO_ROOT:-.}/scripts/spawn-diagnostic-l2.py"
+  # RFC v9 PR-D3 stub-3 fix: try installed .claude/scripts helper for live
+  # provider-native diagnostic invocation. Falls back to placeholder if script
+  # unavailable, CLI not in PATH, or subagent fails.
+  local spawn_script="${REPO_ROOT:-.}/.claude/scripts/spawn-diagnostic-l2.py"
+  [ -f "$spawn_script" ] || spawn_script="${REPO_ROOT:-.}/scripts/spawn-diagnostic-l2.py"
   if [ -f "$spawn_script" ] && [ -n "$phase_dir" ] && [ -d "$phase_dir" ] && \
      [ "${VG_DIAGNOSTIC_L2_DISABLE:-0}" != "1" ]; then
     # Codex MEDIUM fix: block_family is the validator domain (provenance,
@@ -265,7 +305,7 @@ try:
         'type': 'diagnostic-l2',
         'summary': d.get('diagnosis', '')[:200],
         'file_structure': 'N/A — proposal stored at .l2-proposals/{}.json'.format(d.get('proposal_id','')),
-        'framework_choice': 'diagnostic_l2 subagent',
+        'framework_choice': 'diagnostic_l2 provider-native subagent',
         'decision_questions': [{
             'q': 'Apply proposed fix?',
             'recommendation': d.get('proposed_fix', '')[:300],
@@ -285,8 +325,8 @@ except Exception as e:
   fi
 
   # Fallback return when spawn unavailable: emit placeholder proposal so
-  # caller (orchestrator/Claude harness) can decide L3/L4 manually.
-  printf '{"type":"config-change","summary":"architect_unavailable — Task dispatch required","file_structure":"N/A","framework_choice":"N/A","decision_questions":[{"q":"Architect subagent could not be dispatched in this context. Proceed with manual direction?","recommendation":"Re-run command from Claude harness (Task tool available) or provide manual fix.","rationale":"Raw shell has no Task capability; orchestrator must substitute live Haiku call. Set VG_DIAGNOSTIC_L2_DRY_RUN=1 to test plumbing without invoking CLI."}],"confidence":0.1}\n'
+  # caller (orchestrator harness) can decide L3/L4 manually.
+  printf '{"type":"config-change","summary":"architect_unavailable — provider-native diagnostic dispatch required","file_structure":"N/A","framework_choice":"N/A","decision_questions":[{"q":"Architect subagent could not be dispatched in this context. Proceed with manual direction?","recommendation":"Re-run command from Claude/Codex harness or provide manual fix.","rationale":"Raw shell has no provider-native subagent capability. Claude should use Haiku/Task; Codex should use the Codex scanner adapter. Set VG_DIAGNOSTIC_L2_DRY_RUN=1 to test plumbing without invoking CLI."}],"confidence":0.1}\n'
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -301,7 +341,7 @@ except Exception as e:
 #
 # Return code:
 #   0 — L1 resolved (gate passes automatically, caller continues)
-#   2 — L2 produced proposal; caller MUST invoke AskUserQuestion (L3) before proceeding
+#   2 — L2 produced proposal; caller MUST invoke provider-native L3 prompt before proceeding
 #   1 — L4 truly stuck; caller MUST exit with human-direction message
 block_resolve() {
   local gate_id="$1"
@@ -339,7 +379,7 @@ block_resolve() {
   echo "  L1 không fix được: $(echo "$l1_result" | head -c 120)" >&2
 
   # ─── L2 ─────────────────────────────────────────────────────────────
-  echo "▸ L2 architect proposal (gợi ý cấu trúc — Haiku subagent)..." >&2
+  echo "▸ L2 architect proposal (gợi ý cấu trúc — $(block_resolver_l2_backend_label))..." >&2
   local proposal_json
   proposal_json=$(_block_resolve_l2_architect "$gate_id" "$gate_context" "$evidence_json" "$phase_dir")
 
@@ -364,7 +404,8 @@ block_resolve() {
       "{\"proposal_type\":\"$proposal_type\"}"
   fi
 
-  # Emit L2 result; caller MUST present via AskUserQuestion (L3) and decide L4 only if user rejects.
+  # Emit L2 result; caller MUST present via provider-native prompt (L3)
+  # and decide L4 only if user rejects.
   printf '{"level":"L2","action":"proposal","proposal":%s,"telemetry_event":"block_architect_proposed"}\n' "$proposal_json"
   return 2
 }
@@ -397,7 +438,7 @@ block_resolve_l4_stuck() {
 # Replaces ad-hoc `echo "▸ L2 architect proposal" >&2; exit 2` pattern with:
 #   1. Write proposal to ${PHASE_DIR}/.block-resolver-l2-brief.md
 #   2. Emit standardized marker `⛔ BLOCK_RESOLVER_L2_HANDOFF` on stderr
-#   3. Tell orchestrator explicitly to spawn Task tool + AskUserQuestion
+#   3. Tell orchestrator explicitly to use provider-native L3 prompt
 #   4. Exit 2
 #
 # Usage (in build.md/review.md/test.md):
@@ -476,7 +517,9 @@ ${p_actions:-_(architect did not provide explicit actions)_}
 Build/review/test workflow has HALTED at this gate. Before re-running the blocked command:
 
 1. **Read this brief** — understand proposal type + rationale
-2. **Present to user via AskUserQuestion tool** (L3):
+2. **Present to user via provider-native prompt** (L3):
+   - Claude Code: AskUserQuestion tool
+   - Codex: main-thread prompt or closest Codex user-input UI
    - Option A: Apply proposal (action depends on type)
    - Option B: Override with \`--override-reason="<text>"\` (logs to override-debt register)
    - Option C: Abort workflow — investigate manually
@@ -488,7 +531,7 @@ EOF
   echo "⛔ BLOCK_RESOLVER_L2_HANDOFF gate=${gate_id} brief=${brief}" >&2
   echo "   Orchestrator MUST:" >&2
   echo "     1. Read ${brief}" >&2
-  echo "     2. Invoke AskUserQuestion with proposal options (L3)" >&2
+  echo "     2. Invoke $(block_resolver_l3_prompt_label) with proposal options (L3)" >&2
   echo "     3. Execute user choice → delete brief → re-run blocked command" >&2
 
   if type -t emit_telemetry_v2 >/dev/null 2>&1; then
@@ -500,18 +543,19 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════
-# block_resolve_l3_present — emit AskUserQuestion JSON template (v1.14.4+)
+# block_resolve_l3_present — emit provider-native prompt JSON template (v1.14.4+)
 # ═══════════════════════════════════════════════════════════════════════
 # Called by orchestrator AFTER block_resolve_l2_handoff produces brief.
-# Reads .block-resolver-l2-brief.md, formats as AskUserQuestion JSON template,
-# emits to stdout for orchestrator (Claude) to read + invoke AskUserQuestion tool.
+# Reads .block-resolver-l2-brief.md, formats a prompt template, and emits to
+# stdout for the orchestrator. Claude invokes AskUserQuestion; Codex asks the
+# same choices in the main thread / closest user-input UI.
 #
 # Workflow:
 #   1. block_resolve returns L2 → block_resolve_l2_handoff writes brief + exit 2
 #   2. Orchestrator catches exit 2, sees marker BLOCK_RESOLVER_L2_HANDOFF
 #   3. Orchestrator calls block_resolve_l3_present "$gate_id" "$phase_dir"
 #   4. Helper reads brief + emits structured JSON
-#   5. Orchestrator parses JSON + calls AskUserQuestion with options
+#   5. Orchestrator parses JSON + calls provider-native user prompt with options
 #   6. After user choice, orchestrator calls block_resolve_l3_apply for telemetry
 block_resolve_l3_present() {
   local gate_id="$1"
@@ -532,12 +576,13 @@ block_resolve_l3_present() {
   # Extract suggested actions (lines under "## Suggested actions" up to next ##)
   local p_actions=$(awk '/^## Suggested actions/{flag=1; next} /^## /{flag=0} flag && /^- /' "$brief" | sed 's/^- //')
 
-  # Emit JSON template for orchestrator AskUserQuestion call
+  # Emit JSON template for orchestrator provider-native prompt call
   cat <<JSON
 {
   "marker": "BLOCK_RESOLVER_L3_PROMPT",
   "gate_id": "${gate_id}",
   "brief_path": "${brief}",
+  "prompt_contract": "provider-native: Claude AskUserQuestion; Codex main-thread prompt",
   "ask_user_question_template": {
     "question": "Gate '${gate_id}' blocked. Architect proposed: ${p_summary}",
     "header": "Block resolver L3 — apply proposal?",
@@ -561,7 +606,7 @@ block_resolve_l3_present() {
 }
 JSON
 
-  echo "▸ Orchestrator: parse JSON above, invoke AskUserQuestion với template, then call block_resolve_l3_apply '${gate_id}' '<chosen_option>'" >&2
+  echo "▸ Orchestrator: parse JSON above, invoke $(block_resolver_l3_prompt_label) with template, then call block_resolve_l3_apply '${gate_id}' '<chosen_option>'" >&2
 
   if type -t emit_telemetry_v2 >/dev/null 2>&1; then
     emit_telemetry_v2 "block_l3_prompt_emitted" "${VG_CURRENT_PHASE:-unknown}" "${VG_CURRENT_STEP:-unknown}" "$gate_id" "L3_PROMPT" \
@@ -627,6 +672,7 @@ block_resolve_l3_single_advisory() {
   "gate_id": "${gate_id}",
   "brief_path": "${brief}",
   "confidence": ${confidence},
+  "prompt_contract": "provider-native: Claude AskUserQuestion; Codex main-thread prompt",
   "ask_user_question_template": {
     "question": "Áp dụng đề xuất sửa cho '${gate_id}'? ${p_summary}",
     "header": "L3 single-advisory (confidence=${confidence})",
@@ -645,7 +691,7 @@ block_resolve_l3_single_advisory() {
 }
 JSON
 
-  echo "▸ Orchestrator: invoke AskUserQuestion with the template above, then call block_resolve_l3_apply '${gate_id}' '<chosen_option>'" >&2
+  echo "▸ Orchestrator: invoke $(block_resolver_l3_prompt_label) with the template above, then call block_resolve_l3_apply '${gate_id}' '<chosen_option>'" >&2
 
   if type -t emit_telemetry_v2 >/dev/null 2>&1; then
     emit_telemetry_v2 "block_l3_single_advisory_emitted" "${VG_CURRENT_PHASE:-unknown}" "${VG_CURRENT_STEP:-unknown}" "$gate_id" "L3_SINGLE_ADVISORY" \

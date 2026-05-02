@@ -2057,11 +2057,13 @@ The injector now does TWO passes:
    identifier (UUID-like, sentinel-prefixed, or ≥ 8 chars unique).
 
 ```bash
-if [ -f "${REPO_ROOT}/scripts/codegen-fixture-inject.py" ] && \
+CODEGEN_FIXTURE_INJECT="${REPO_ROOT}/.claude/scripts/codegen-fixture-inject.py"
+[ -f "$CODEGEN_FIXTURE_INJECT" ] || CODEGEN_FIXTURE_INJECT="${REPO_ROOT}/scripts/codegen-fixture-inject.py"
+if [ -f "$CODEGEN_FIXTURE_INJECT" ] && \
    [ -f "${PHASE_DIR}/FIXTURES-CACHE.json" ]; then
   echo "▸ RFC v9 codegen fixture inject (sweep mode, post-generation)"
   INJECT_OUT=$("${PYTHON_BIN:-python3}" \
-    "${REPO_ROOT}/scripts/codegen-fixture-inject.py" \
+    "$CODEGEN_FIXTURE_INJECT" \
     --phase "$PHASE_NUMBER" \
     --sweep "${GENERATED_TESTS_DIR:-apps/web/e2e}" \
     --substitute 2>&1)
@@ -3881,7 +3883,8 @@ fi
 
 # RFC v9 D22 + D23 — TEST-SUMMARY-REPORT.md + RTM.md (tester pro discipline).
 # Aggregate goal results + defect log + traceability into final reports.
-TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
+TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
+[ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
 if [ -f "$TESTER_PRO_CLI" ]; then
   echo "━━━ D22 — TEST-SUMMARY-REPORT.md ━━━"
   "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" summary render \
