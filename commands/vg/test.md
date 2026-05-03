@@ -51,8 +51,12 @@ runtime_contract:
       severity: "warn"
     - name: "5d_codegen"
       severity: "warn"
-    - name: "5d_binding_gate"
-      severity: "warn"
+    # 5d_binding_gate is subagent-internal (vg-test-codegen handles L1/L2
+    # binding via verify-goal-test-binding.py + block-resolver inside the
+    # subagent). It is intentionally NOT exposed as an orchestrator marker;
+    # do not list it under must_touch_markers — see
+    # _shared/test/codegen/delegation.md (Step F.3) and
+    # _shared/test/codegen/overview.md (STEP 5.7 note).
     - name: "5d_deep_probe"
       severity: "warn"
     - name: "5d_mobile_codegen"
