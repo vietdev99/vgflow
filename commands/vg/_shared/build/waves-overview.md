@@ -1,7 +1,7 @@
 # build waves (STEP 4 — HEAVY)
 
-<!-- # Exception: oversized ref (~1110 lines) — extracted verbatim from backup
-     spec line 1882; ceiling raised to 1150 in test_build_references_exist.py
+<!-- # Exception: oversized ref (~1155 lines) — extracted verbatim from backup
+     spec line 1882; ceiling raised to 1200 in test_build_references_exist.py
      per audit doc docs/audits/2026-05-04-build-flat-vs-split.md. Keeping
      verbatim avoids drift risk on R2 build pilot ship; future refactor
      splits 8d post-spawn aggregation into its own ref. -->
@@ -401,6 +401,11 @@ if [ "$DESIGN_IMAGE_REQUIRED" = "1" ]; then
     echo "⛔ L1 design-pixel gate: task ${TASK_NUM} declares <design-ref> but no PNG resolved." >&2
     echo "   Likely cause: slug missing from manifest. Run: /vg:design-extract --refresh" >&2
     if [[ ! "$ARGUMENTS" =~ --skip-design-pixel-gate ]]; then exit 1; fi
+    # R2 round-2 (A5) — declared forbidden flag must emit override.used.
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag=--skip-design-pixel-gate \
+      --reason="build.l1-design-pixel task-${TASK_NUM}: PNG slug unresolved from manifest; executor proceeding blind ts=$(date -u +%FT%TZ); see ${PHASE_DIR}/build-state.log" \
+      2>&1 || echo "⚠ vg-orchestrator override emit failed for --skip-design-pixel-gate" >&2
     echo "⚠ --skip-design-pixel-gate set — executor will be blind to layout." >&2
   else
     L1_MISSING=""
@@ -411,6 +416,11 @@ if [ "$DESIGN_IMAGE_REQUIRED" = "1" ]; then
     if [ -n "$L1_MISSING" ]; then
       echo -e "⛔ L1 design-pixel gate: required PNG(s) missing on disk:${L1_MISSING}" >&2
       if [[ ! "$ARGUMENTS" =~ --skip-design-pixel-gate ]]; then exit 1; fi
+      # R2 round-2 (A5) — second skip path (PNG missing on disk).
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--skip-design-pixel-gate \
+        --reason="build.l1-design-pixel task-${TASK_NUM}: PNG missing on disk (paths logged) ts=$(date -u +%FT%TZ); see ${PHASE_DIR}/build-state.log" \
+        2>&1 || echo "⚠ vg-orchestrator override emit failed for --skip-design-pixel-gate" >&2
     else
       L1_COUNT=$(printf '%s\n' "$DESIGN_IMAGE_PATHS" | grep -c .)
       echo "✓ L1 design-pixel gate: ${L1_COUNT} PNG(s) verified on disk for task ${TASK_NUM}"
@@ -554,6 +564,14 @@ PY
   if [ "$R5_RC" != "0" ]; then
     echo "R5-violation wave=${N} phase=${PHASE_NUMBER} at=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
     if [[ "$ARGUMENTS" =~ --allow-r5-violation ]]; then
+      # R2 round-2 (A5) — emit canonical override.used so run-complete's
+      # forbidden_without_override check (build.md frontmatter) clears.
+      # log_override_debt mirrors into the legacy debt register; both paths
+      # coexist during migration.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--allow-r5-violation \
+        --reason="build.r5-violation wave-${N}: sequential group ran in parallel, commit race possible (operator-accepted at $(date -u +%FT%TZ); ref build-state.log)" \
+        2>&1 || echo "⚠ vg-orchestrator override emit failed for --allow-r5-violation; debt register still appended" >&2
       type -t log_override_debt >/dev/null 2>&1 && \
         log_override_debt "build-r5-violation" "${PHASE_NUMBER}" "sequential group ran in parallel, commit race possible" "$PHASE_DIR"
       echo "⚠ --allow-r5-violation set — proceeding despite R5 breach, logged to debt register."
@@ -613,6 +631,12 @@ if [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ]; then
     if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "wave-commits" "--allow-missing-commits" "$PHASE_NUMBER" "build.wave-${N}" "${MISSING_TASKS}"; then
       exit 1
     fi
+    # R2 round-2 (A5) — emit canonical override.used so run-complete clears
+    # forbidden_without_override (build.md frontmatter declares this flag).
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag=--allow-missing-commits \
+      --reason="build.wave-${N} commit shortfall accepted: missing tasks=[${MISSING_TASKS}], expected=${EXPECTED_COMMITS}, actual=${ACTUAL_COMMITS} ts=$(date -u +%FT%TZ); see ${PHASE_DIR}/build-state.log" \
+      2>&1 || echo "⚠ vg-orchestrator override emit failed for --allow-missing-commits; debt register still appended" >&2
     echo "⚠ --allow-missing-commits set — recording missing tasks and proceeding."
     echo "wave-${N}: MISSING_COMMITS tasks=[${MISSING_TASKS}] allowed-by=--allow-missing-commits ts=$(date -u +%FT%TZ)" >> "${PHASE_DIR}/build-state.log"
   else
@@ -732,6 +756,11 @@ if [ -x "$INJ_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
     BLOCK)
       echo "⛔ D-12a injection audit: BLOCK — see ${VG_TMP}/uimap-injection-w${N}.json" >&2
       if [[ ! "$ARGUMENTS" =~ --skip-uimap-injection-audit ]]; then exit 1; fi
+      # R2 round-2 (A5) — declared forbidden flag must emit override.used.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--skip-uimap-injection-audit \
+        --reason="build.uimap-injection wave-${N} D-12a BLOCK accepted ts=$(date -u +%FT%TZ); see ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/uimap-injection-w${N}.json" \
+        2>&1 || echo "⚠ vg-orchestrator override emit failed for --skip-uimap-injection-audit" >&2
       ;;
     *) echo "ℹ D-12a injection audit: $IV" ;;
   esac
@@ -758,6 +787,11 @@ if [ -x "$TF_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
     BLOCK)
       echo "⛔ D-06 task fidelity audit: BLOCK — orchestrator likely paraphrased task body" >&2
       if [[ ! "$ARGUMENTS" =~ --skip-task-fidelity-audit ]]; then exit 1; fi
+      # R2 round-2 (A5) — declared forbidden flag must emit override.used.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--skip-task-fidelity-audit \
+        --reason="build.task-fidelity wave-${N} D-06 BLOCK accepted: orchestrator paraphrase tolerated ts=$(date -u +%FT%TZ); see ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/task-fidelity-w${N}.json" \
+        2>&1 || echo "⚠ vg-orchestrator override emit failed for --skip-task-fidelity-audit" >&2
       ;;
     *) echo "ℹ D-06 task fidelity audit: $TFV" ;;
   esac
@@ -950,6 +984,12 @@ if [ -z "$FAILED_GATE" ] && [ "${CONFIG_INDEPENDENT_VERIFY_ENABLED:-true}" = "tr
   if [ "$VERIFY_RC" -ne 0 ]; then
     if [[ "$ARGUMENTS" =~ --allow-verify-divergence ]]; then
       echo "⚠ Wave ${N} verify divergence — OVERRIDE accepted"
+      # R2 round-2 (A5) — declared forbidden flag must emit override.used
+      # so run-complete's forbidden_without_override check clears.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--allow-verify-divergence \
+        --reason="build.wave-${N}.verify divergence accepted: executor claim vs isolated subprocess differ ts=$(date -u +%FT%TZ); see wave-verify-isolated.py output (ref ${PHASE_DIR}/build-state.log)" \
+        2>&1 || echo "⚠ vg-orchestrator override emit failed for --allow-verify-divergence; debt register still appended" >&2
       type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
         "--allow-verify-divergence" "$PHASE_NUMBER" "build.wave-${N}.verify" \
         "executor claim vs subprocess divergence accepted by user" \

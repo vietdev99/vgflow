@@ -286,6 +286,14 @@ if [[ "${ARGUMENTS}" =~ --skip-truthcheck ]]; then
     exit 1
   fi
   TRUTHCHECK_SKIP_REASON="${BASH_REMATCH[1]}"
+  # R2 round-2 (A5) — emit canonical override.used so run-complete's
+  # forbidden_without_override check (build.md frontmatter declares
+  # --skip-truthcheck) clears. log_override_debt mirrors into the legacy
+  # debt register; both paths coexist during migration.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag=--skip-truthcheck \
+    --reason="build.api-truthcheck.skipped phase=${PHASE_NUMBER:-${PHASE_ARG}} ts=$(date -u +%FT%TZ); operator-supplied: ${TRUTHCHECK_SKIP_REASON}" \
+    2>&1 || echo "⚠ vg-orchestrator override emit failed for --skip-truthcheck; debt register still appended" >&2
   if type -t log_override_debt >/dev/null 2>&1; then
     log_override_debt "--skip-truthcheck" "$PHASE_NUMBER" \
       "build.api-truthcheck.skipped" "$TRUTHCHECK_SKIP_REASON" \

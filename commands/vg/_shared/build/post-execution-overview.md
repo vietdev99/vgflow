@@ -1,10 +1,12 @@
 # build post-execution (STEP 5 — HEAVY)
 
-<!-- # Exception: oversized ref (892 lines) — extracted verbatim from backup
-     spec lines 3030-3925; ceiling 900 in test_build_references_exist.py
+<!-- # Exception: oversized ref (~948 lines) — extracted verbatim from backup
+     spec lines 3030-3925; ceiling 980 in test_build_references_exist.py
      per audit doc docs/audits/2026-05-04-build-flat-vs-split.md. Verbatim
      preserves the i18n/a11y/cross-phase-ripple/L2-L6 fidelity sequence
-     intact; future refactor splits the L2-L6 gate slate into its own ref. -->
+     intact; future refactor splits the L2-L6 gate slate into its own ref.
+     R2 round-2 expanded the post-spawn validator with BUILD-LOG layer
+     enforcement (build_log_path/sha/index/sub_files). -->.
 
 This is the orchestrator-side body of the build pipeline's
 post-execution step (`9_post_execution`). It is heavy: backup spec
