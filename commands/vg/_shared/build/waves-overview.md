@@ -863,6 +863,10 @@ MAX_RETRIES=2
 
 while [ "$FAILED_GATE" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
   RETRY_COUNT=$((RETRY_COUNT + 1))
+  # R1a UX baseline Req 2 — narrate every Agent() spawn (green pill chip).
+  bash scripts/vg-narrate-spawn.sh gsd-debugger spawning \
+    "wave-${N} retry-${RETRY_COUNT}/${MAX_RETRIES} gate=${FAILED_GATE}"
+
   Agent(subagent_type="gsd-debugger", model="${MODEL_DEBUGGER}"):
     prompt: |
       Wave ${N} of phase ${PHASE_NUMBER} failed post-wave gate.
@@ -878,6 +882,11 @@ while [ "$FAILED_GATE" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
       - Do NOT use --no-verify
       - Cite root cause in commit body: "Root cause: <1 sentence>"
       - Re-run failed gate after fix — your fix must make it pass
+
+  # On success the gate re-run below clears FAILED_GATE; otherwise the next
+  # loop iteration narrates a new spawning chip. Final outcome (returned vs
+  # failed) is narrated AFTER the re-run so operators see whether the
+  # debugger actually fixed the gate.
 
   # Re-run failed gate only
   case "$FAILED_GATE" in
@@ -896,6 +905,11 @@ while [ "$FAILED_GATE" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
   if eval "$CMD"; then
     FAILED_GATE=""
     echo "Gate recovered after retry ${RETRY_COUNT}."
+    bash scripts/vg-narrate-spawn.sh gsd-debugger returned \
+      "wave-${N} retry-${RETRY_COUNT} gate=${FAILED_GATE_PREV:-recovered}"
+  else
+    bash scripts/vg-narrate-spawn.sh gsd-debugger failed \
+      "wave-${N} retry-${RETRY_COUNT} gate=${FAILED_GATE} still failing"
   fi
 done
 
