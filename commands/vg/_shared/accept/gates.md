@@ -630,7 +630,7 @@ if [ "$DESIGN_DEBT_RC" != "0" ] && [[ ! "$ARGUMENTS" =~ --allow-design-debt-thre
 fi
 ```
 
-**NEW command placeholder:** `/vg:override-resolve {gate_id} --wont-fix --reason='...'` — explicit decline path for overrides that will never be clean-resolved. Ships in v1.9+. Until then, use `--allow-unresolved-overrides` inline path (logs new debt entry, still blocks next accept — forces eventual confrontation).
+**Resolution helper:** `/vg:override-resolve {gate_id} --wont-fix --reason='...'` — shipped command (v1.9+, registered in skills catalog) for explicit decline of overrides that will never be clean-resolved. Inline alternative `--allow-unresolved-overrides` logs a new debt entry that still blocks the next accept, forcing eventual confrontation.
 
 Final action:
 ```bash
