@@ -87,19 +87,29 @@ else
   echo "ℹ skip_ready_reverify=false — legacy replay loop (pre-v1.14 behavior)."
 fi
 
-# Load goals via vg-load (Phase F Task 30 — NOT cat flat TEST-GOALS.md)
-GOALS_LOADED=$(vg-load --phase "${PHASE_NUMBER}" --artifact goals --priority critical 2>/dev/null)
-if [ -z "$GOALS_LOADED" ]; then
-  # Fallback: load all goals if no critical goals found
-  GOALS_LOADED=$(vg-load --phase "${PHASE_NUMBER}" --artifact goals --list 2>/dev/null)
-fi
-if [ -z "$GOALS_LOADED" ]; then
-  echo "⛔ vg-load goals returned empty — run /vg:blueprint ${PHASE_NUMBER} first."
+# Discover goal IDs via vg-load --list (cheap index), then slice ONE goal at a
+# time via `vg-load --goal G-NN` for the subagent. NEVER cat flat TEST-GOALS.md
+# for AI consumption — per-goal slice keeps verifier context bounded and lets
+# evidence cite stable goal-id paths. See review-v2 D1/D2.
+GOAL_INDEX=$(vg-load --phase "${PHASE_NUMBER}" --artifact goals --list 2>/dev/null)
+if [ -z "$GOAL_INDEX" ]; then
+  echo "⛔ vg-load --list returned empty — run /vg:blueprint ${PHASE_NUMBER} first."
   exit 1
 fi
-GOAL_COUNT=$(echo "$GOALS_LOADED" | ${PYTHON_BIN:-python3} -c \
-  "import json,sys; d=json.load(sys.stdin); print(len(d.get('goals',[])))" 2>/dev/null || echo 0)
-echo "✓ Goals loaded via vg-load: ${GOAL_COUNT} goal(s) (critical priority first)"
+GOAL_IDS=$(echo "$GOAL_INDEX" | ${PYTHON_BIN:-python3} -c \
+  "import json,sys; d=json.load(sys.stdin); print(' '.join(g.get('id','') for g in d.get('goals',[]) if g.get('id')))" 2>/dev/null)
+GOAL_COUNT=$(echo "$GOAL_IDS" | wc -w | tr -d ' ')
+[ "$GOAL_COUNT" -gt 0 ] || { echo "⛔ no goal ids parsed from vg-load --list"; exit 1; }
+
+# Pre-fetch each goal's slice once into VG_TMP — verifier reads slice files
+# (per-goal vg-load --goal output), never the flat TEST-GOALS.md.
+VG_TMP_DIR="${VG_TMP:-${PHASE_DIR}/.vg-tmp}"
+mkdir -p "${VG_TMP_DIR}/goals" 2>/dev/null
+for GID in $GOAL_IDS; do
+  vg-load --phase "${PHASE_NUMBER}" --artifact goals --goal "$GID" \
+    > "${VG_TMP_DIR}/goals/${GID}.json" 2>/dev/null || true
+done
+echo "✓ Goals sliced via vg-load --goal: ${GOAL_COUNT} goal(s) in ${VG_TMP_DIR}/goals/"
 ```
 
 ---

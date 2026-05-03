@@ -23,8 +23,19 @@ vg-orchestrator step-active 5d_mobile_codegen
 OUT_DIR="${GENERATED_TESTS_DIR}/mobile/${PHASE_NUMBER}"
 mkdir -p "$OUT_DIR"
 
-# Read goals + their runtime paths
-GOALS=$(grep -oE 'G-[0-9]+' "${PHASE_DIR}/TEST-GOALS.md" | sort -u)
+# Discover goals via vg-load --list (NEVER flat-read TEST-GOALS.md for codegen
+# consumption). Per-goal slice via `vg-load --goal G-NN` populates VG_TMP.
+# See review-v2 D1/D2 — per-goal vg-load mandate covers mobile branch too.
+VG_TMP_DIR="${VG_TMP:-${PHASE_DIR}/.vg-tmp}"
+mkdir -p "${VG_TMP_DIR}/goals" 2>/dev/null
+GOAL_INDEX=$(vg-load --phase "${PHASE_NUMBER}" --artifact goals --list 2>/dev/null)
+GOALS=$(echo "$GOAL_INDEX" | ${PYTHON_BIN:-python3} -c \
+  "import json,sys; d=json.load(sys.stdin); print('\n'.join(g.get('id','') for g in d.get('goals',[]) if g.get('id')))" 2>/dev/null | sort -u)
+for GID in $GOALS; do
+  [ -f "${VG_TMP_DIR}/goals/${GID}.json" ] || \
+    vg-load --phase "${PHASE_NUMBER}" --artifact goals --goal "$GID" \
+      > "${VG_TMP_DIR}/goals/${GID}.json" 2>/dev/null || true
+done
 RUNTIME_MAP="${PHASE_DIR}/RUNTIME-MAP.json"
 
 if [ ! -f "$RUNTIME_MAP" ]; then
@@ -49,14 +60,25 @@ BUNDLE_ID="${BUNDLE_ID:-${MAESTRO_APP_ID:-com.example.app}}"
 
 GENERATED=0
 for GID in $GOALS; do
-  # Extract goal title + success_criteria text from TEST-GOALS.md
-  GOAL_TEXT=$(awk -v g="$GID" '
-    $0 ~ "## Goal "g":" || $0 ~ "^#* *"g":" { found=1; next }
-    found && /^## Goal G-[0-9]+|^#+ G-[0-9]+:/ { exit }
-    found { print }
-  ' "${PHASE_DIR}/TEST-GOALS.md")
+  # Read goal slice (vg-load --goal output), NOT flat TEST-GOALS.md.
+  # Slice JSON has title + success_criteria + surface fields per-goal.
+  GOAL_SLICE="${VG_TMP_DIR}/goals/${GID}.json"
+  GOAL_TEXT=""
+  if [ -f "$GOAL_SLICE" ]; then
+    GOAL_TEXT=$(${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    d = json.load(open('$GOAL_SLICE', encoding='utf-8'))
+    g = (d.get('goals') or [d])[0] if isinstance(d.get('goals'), list) else d
+    print(g.get('title',''))
+    for c in (g.get('success_criteria') or []):
+        print(f'- {c}')
+except Exception:
+    pass
+" 2>/dev/null)
+  fi
 
-  [ -z "$GOAL_TEXT" ] && { echo "· skip $GID (no block in TEST-GOALS.md)"; continue; }
+  [ -z "$GOAL_TEXT" ] && { echo "· skip $GID (no slice at ${GOAL_SLICE})"; continue; }
 
   # Pull goal-sequence steps from RUNTIME-MAP.json — tap/input events
   # captured during review. Mobile equivalent of web "goal_sequences[].steps[]".
