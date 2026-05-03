@@ -280,6 +280,12 @@ if [ "$R5_TOTAL" -gt "$R5_HARD_MAX" ]; then
   if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
     exit 1
   else
+    # Canonical override.used emit — runtime_contract.forbidden_without_override
+    # requires an exact override.used.flag match for --override-reason.
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "--override-reason" \
+      --reason "blueprint R5 planner prompt ${R5_TOTAL} lines > ${R5_HARD_MAX}" \
+      >/dev/null 2>&1 || true
     type -t emit_telemetry_v2 >/dev/null 2>&1 && \
       emit_telemetry_v2 "blueprint_r5_planner_overflow" "${PHASE_NUMBER}" "blueprint.2a" "blueprint_r5_planner_overflow" "FAIL" "{}"
     type -t log_override_debt >/dev/null 2>&1 && \

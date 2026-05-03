@@ -109,6 +109,12 @@ else
   if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
     exit 1
   else
+    # Canonical override.used emit — runtime_contract.forbidden_without_override
+    # requires an exact override.used.flag match for --override-reason.
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "--override-reason" \
+      --reason "blueprint 2c grep verify: ${MISMATCHES} endpoint mismatches" \
+      >/dev/null 2>&1 || true
     type -t emit_telemetry_v2 >/dev/null 2>&1 && \
       emit_telemetry_v2 "blueprint_2c_mismatches" "${PHASE_NUMBER}" "blueprint.2c" "blueprint_2c_mismatches" "FAIL" "{}"
     type -t log_override_debt >/dev/null 2>&1 && \
@@ -210,6 +216,12 @@ if [ -f "$UTILITY_CHECKER" ] && [ -f "$PROJECT_MD" ]; then
       if [[ ! "${ARGUMENTS:-}" =~ --override-reason= ]]; then
         exit 1
       fi
+      # Canonical override.used emit — runtime_contract.forbidden_without_override
+      # requires an exact override.used.flag match for --override-reason.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag "--override-reason" \
+        --reason "blueprint 2c utility-reuse violation: PLAN redeclares shared helpers (phase ${PHASE_NUMBER})" \
+        >/dev/null 2>&1 || true
       echo "⚠ --override-reason set — proceeding with duplication debt"
       echo "utility-reuse: $(date -u +%FT%TZ) phase=${PHASE_NUMBER} override=yes" >> "${PHASE_DIR}/build-state.log"
       ;;

@@ -91,6 +91,12 @@ else
     if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
       exit 1
     else
+      # Canonical override.used emit — runtime_contract.forbidden_without_override
+      # requires an exact override.used.flag match for --override-reason.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag "--override-reason" \
+        --reason "blueprint R7 missing markers:${MISSING_MARKERS}" \
+        >/dev/null 2>&1 || true
       type -t log_override_debt >/dev/null 2>&1 && \
         log_override_debt "blueprint-r7-missing-markers" "${PHASE_NUMBER}" "steps skipped:${MISSING_MARKERS}" "$PHASE_DIR"
       echo "⚠ --override-reason set — proceeding despite R7 breach, debt logged"

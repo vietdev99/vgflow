@@ -278,6 +278,13 @@ CODEX_GOAL_DELTA="${PHASE_DIR}/TEST-GOALS.codex-delta.md"
 if [[ "$ARGUMENTS" =~ --skip-codex-test-goal-lane ]]; then
   mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
   touch "$CODEX_GOAL_SKIP_MARKER"
+  # Canonical override.used emit — runtime_contract.forbidden_without_override
+  # requires an exact override.used.flag match for --skip-codex-test-goal-lane
+  # before run-complete will pass.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--skip-codex-test-goal-lane" \
+    --reason "Codex TEST-GOALS co-author proposal/delta lane skipped (phase ${PHASE_NUMBER})" \
+    >/dev/null 2>&1 || true
   type -t log_override_debt >/dev/null 2>&1 && \
     log_override_debt "blueprint-codex-test-goal-lane-skipped" "${PHASE_NUMBER}" \
       "Codex TEST-GOALS co-author proposal/delta lane skipped" "$PHASE_DIR"

@@ -287,6 +287,12 @@ if [ -n "$FROM_STEP" ] || [[ "$ARGUMENTS" =~ --crossai-only ]]; then
     if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
       exit 1
     else
+      # Canonical override.used emit — runtime_contract.forbidden_without_override
+      # requires an exact override.used.flag match for --override-reason.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag "--override-reason" \
+        --reason "blueprint R2 skip prereq missing for --from=${FROM_STEP}: ${MISSING_PREREQ}" \
+        >/dev/null 2>&1 || true
       type -t emit_telemetry_v2 >/dev/null 2>&1 && \
         emit_telemetry_v2 "blueprint_r2_skip_missing" "${PHASE_NUMBER}" "blueprint.1" "blueprint_r2_skip_missing" "FAIL" "{}"
       type -t log_override_debt >/dev/null 2>&1 && \
