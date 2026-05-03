@@ -1,4 +1,17 @@
-# vg-accept-uat-builder — input/output contract
+# vg-accept-uat-builder — input/output contract (delegation appendix, NOT a step)
+
+<HARD-GATE>
+This file is a **non-step appendix** — it carries the input/output
+contract consumed by `overview.md` and the `vg-accept-uat-builder`
+SKILL.md. It owns NO step marker, emits NO step-active event, and runs
+NO bash on its own. Step lifecycle (step-active → spawn → mark-step) is
+performed entirely by `overview.md` against the `4_build_uat_checklist`
+marker.
+
+Read order: `overview.md` first (lifecycle), then this delegation
+contract (capsule + JSON shape). Do NOT execute any step bash from this
+file.
+</HARD-GATE>
 
 Generate `${PHASE_DIR}/uat-checklist.md` (markdown table per section) from
 8 VG artifacts. Return JSON summary so the main agent can render section

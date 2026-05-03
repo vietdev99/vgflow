@@ -1,4 +1,17 @@
-# vg-accept-cleanup — input/output contract
+# vg-accept-cleanup — input/output contract (delegation appendix, NOT a step)
+
+<HARD-GATE>
+This file is a **non-step appendix** — it carries the input/output
+contract consumed by `overview.md` and the `vg-accept-cleanup`
+SKILL.md. It owns NO step marker, emits NO step-active event, and runs
+NO bash on its own. Step lifecycle (step-active → spawn → 3 hard-exit
+gates → mark-step + accept.completed + run-complete) is performed
+entirely by `overview.md` against the `7_post_accept_actions` marker.
+
+Read order: `overview.md` first (lifecycle + post-spawn gates), then
+this delegation contract (capsule + branch-on-verdict + JSON shape).
+Do NOT execute any step bash from this file.
+</HARD-GATE>
 
 Run post-accept lifecycle cleanup for an ACCEPTED phase. Short-circuit to
 minimal updates for DEFER/REJECTED/FAILED/ABORTED verdicts.
