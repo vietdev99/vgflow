@@ -313,19 +313,88 @@ Coverage: {covered}/{total} decisions → {%}
 Write `${PHASE_DIR}/CRUD-SURFACES.md` using template
 `commands/vg/_shared/templates/CRUD-SURFACES-template.md`.
 
+**HARD-GATE — schema strictness (closes review-2 dogfood block where 225
+"crud_surface_missing_field" violations fired because base/platforms had
+empty `{}` sub-objects):**
+
+Empty dicts (`"business_flow": {}`) are treated as MISSING by validator's
+`_truthy()` check. Every required sub-field MUST contain non-empty
+content. If a control is intentionally absent for a resource, write
+`"none: <reason>"` (string, not `{}`).
+
 Required structure (top-level JSON fenced block):
-- `version: "1"`
-- `resources[]` — each has `operations`, `base`, `platforms`
-- `base` — cross-platform: roles, business_flow, security, abuse, performance
-- `platforms.web` — list/form/delete: heading, description, filter/search/sort/
-  pagination URL state, table cols/actions, loading/empty/error states, form
-  validation, duplicate-submit guard, delete confirmation
-- `platforms.mobile` — deep link state, pull-to-refresh OR load-more/infinite-scroll,
-  44px tap target, keyboard avoidance, native picker, offline/network states,
-  confirm sheet
-- `platforms.backend` — pagination max size, filter/sort allowlist, stable
-  default sort, invalid query errors, object authz, field allowlist/mass-assignment,
-  idempotency, rate-limit, audit log
+
+```json
+{
+  "version": "1",
+  "generated_from": [...],
+  "resources": [
+    {
+      "name": "<resource_name>",
+      "domain_owner": "<team or domain>",
+      "operations": ["list", "detail", "create", "update", "delete"],
+      "base": {
+        "roles": ["admin", "merchant", ...],
+        "business_flow": {
+          "lifecycle_states": ["draft", "active", "archived"],
+          "entry_points": ["admin list", "admin detail"],
+          "invariants": [
+            "<rule 1: e.g., archived → read-only>",
+            "<rule 2>"
+          ]
+        },
+        "security": {
+          "object_auth": "<e.g., 'tenant_id from session, scope=admin'>",
+          "field_auth": "<e.g., 'admins can edit pricing; merchants read-only'>",
+          "rate_limit": "<e.g., '60/min/admin' or 'none: trusted internal only'>"
+        },
+        "abuse": {
+          "enumeration_guard": "<e.g., 'cursor-based pagination' or 'none: list publicly indexable'>",
+          "replay_guard": "<e.g., 'idempotency key on create' or 'none: read-only'>"
+        },
+        "performance": {
+          "api_p95_ms": <integer, e.g., 500>
+        },
+        "delete_policy": {  // REQUIRED only if 'delete' in operations
+          "confirm": "<e.g., 'modal with type-name confirmation'>",
+          "reversible_policy": "<e.g., 'soft-delete via status flag, undeletable after 30d'>",
+          "audit_log": true
+        }
+      },
+      "platforms": {
+        "backend": {  // REQUIRED for backend phases
+          "list_endpoint": {
+            "path": "/admin/<resource>",
+            "pagination": {"max_page_size": 100, "default_page_size": 20},
+            "filter_sort_allowlist": ["created_at", "name", "status"],
+            "stable_default_sort": "-created_at",
+            "invalid_query_behavior": "400 with field-level error"
+          },
+          "mutation": {
+            "paths": ["POST /admin/<resource>", "PATCH /admin/<resource>/:id", "DELETE /admin/<resource>/:id"],
+            "validation_4xx": "zod schema, return field-level errors",
+            "object_authz": "tenant_id check + RBAC role check",
+            "mass_assignment_guard": "explicit field allowlist (no spread input)",
+            "idempotency": "<e.g., 'idempotency-key header on POST' or 'none: PATCH is idempotent by design'>",
+            "audit_log": true
+          }
+        },
+        "web": {  // REQUIRED if profile has FE
+          "list": { "route": "...", "heading": "...", "description": "...", "states": [...], "data_controls": {...}, "row_actions": [...] },
+          "form": { ... },
+          "delete": { ... }
+        },
+        "mobile": { ... }  // REQUIRED if mobile-* profile
+      }
+    }
+  ]
+}
+```
+
+**Self-validation (RECOMMENDED before return):** run
+`python3 .claude/scripts/validators/verify-crud-surface-contract.py --phase ${PHASE_NUMBER}`
+locally; if any `crud_surface_missing_field` evidence fires, fill the
+specific paths the validator names rather than returning incomplete output.
 
 If phase has NO CRUD/resource behavior:
 ```json

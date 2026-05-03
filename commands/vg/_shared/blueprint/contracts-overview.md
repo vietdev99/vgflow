@@ -126,6 +126,29 @@ if [ "${CRUD_BYTES:-0}" -lt 120 ] && [[ ! "$ARGUMENTS" =~ --crossai-only ]]; the
   echo "⛔ CRUD-SURFACES.md too small (${CRUD_BYTES} bytes < 120)"
   exit 1
 fi
+
+# Schema strictness gate (closes review-2 dogfood block: subagent emitted
+# valid JSON shape but base/platforms had empty {} sub-objects, which
+# validator's _truthy() treats as missing → 225 violations at /vg:review).
+# Run validator NOW (post-spawn) so blueprint blocks instead of review.
+if [ -f "${PHASE_DIR}/CRUD-SURFACES.md" ] && [[ ! "$ARGUMENTS" =~ --crossai-only ]]; then
+  CRUD_VALIDATOR=".claude/scripts/validators/verify-crud-surface-contract.py"
+  if [ -f "$CRUD_VALIDATOR" ]; then
+    if ! "${PYTHON_BIN:-python3}" "$CRUD_VALIDATOR" --phase "${PHASE_NUMBER}" --json > /tmp/.crud-strictness.$$ 2>&1; then
+      MISSING_COUNT=$(grep -c crud_surface_missing_field /tmp/.crud-strictness.$$ 2>/dev/null || echo 0)
+      echo "⛔ CRUD-SURFACES.md schema strictness check failed (${MISSING_COUNT} missing fields)"
+      echo "   First 5 violations:"
+      grep crud_surface_missing_field /tmp/.crud-strictness.$$ | head -5
+      echo ""
+      echo "Fix: re-spawn vg-blueprint-contracts with HARD-GATE telling AI"
+      echo "     to fill base.business_flow / security / abuse / performance"
+      echo "     (no empty {} sub-objects). See contracts-delegation.md Part 3."
+      rm -f /tmp/.crud-strictness.$$
+      exit 1
+    fi
+    rm -f /tmp/.crud-strictness.$$
+  fi
+fi
 ```
 
 ### Rule 3b: persistence check coverage gate (BLOCK)
