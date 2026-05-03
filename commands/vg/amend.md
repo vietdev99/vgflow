@@ -204,45 +204,67 @@ _Amendment #${NEXT_AMENDMENT} applied ${ISO_DATE} — see AMENDMENT-LOG.md_
 <step name="5_cascade_impact">
 ## Step 5: Cascade impact analysis
 
-Check which downstream artifacts exist and report impact:
+Cascade analysis is delegated to `vg-amend-cascade-analyzer` subagent
+(read-only). Subagent inspects PLAN/API-CONTRACTS/TEST-GOALS/SUMMARY/
+RUNTIME-MAP for references to changed decisions, returns a markdown
+impact report. Per rule 6, the report is informational — orchestrator
+displays it to user but does NOT auto-modify any artifact.
 
-**If PLAN.md exists:**
-- Read PLAN.md → find tasks that reference modified/removed D-XX decisions
-- **Matching algorithm** (deterministic, 3 strategies — union of all matches):
-  1. Grep PLAN.md for `<goals-covered>` tags containing D-XX references (e.g., `<goals-covered>G-03 (D-05)</goals-covered>`)
-  2. Grep PLAN.md for task descriptions mentioning the decision text or keywords from the changed D-XX
-  3. Grep PLAN.md for `<contract-ref>` tags if the changed decision has endpoints — match endpoint paths (e.g., `POST /api/sites`)
-- Affected tasks = union of all matches from strategies 1-3
-- List affected task numbers and file paths they touch
-- Display: "PLAN.md: tasks {N-M} reference changed decisions. Re-plan recommended."
+### 5.1 Pre-spawn narrate
 
-**If API-CONTRACTS.md exists:**
-- Read API-CONTRACTS.md → find endpoints that map to changed decisions
-- List added/removed/modified endpoints
-- Display: "API-CONTRACTS.md: {N} endpoints affected."
+```bash
+bash scripts/vg-narrate-spawn.sh vg-amend-cascade-analyzer spawning "phase=$PHASE_NUMBER decisions=$CHANGED_DECISIONS"
+```
 
-**If TEST-GOALS.md exists:**
-- Read TEST-GOALS.md → find goals that trace to changed decisions
-- Flag goals that are now invalid or need new goals added
-- Display: "TEST-GOALS.md: {N} goals invalidated, {M} new goals needed."
+### 5.2 Spawn
 
-**If SUMMARY*.md exists (code built):**
-- Warn: "Code has been built. Changes may require gap-closure build."
-- Display: "Run `/vg:build ${PHASE_NUMBER} --gaps-only` to build missing pieces."
+Construct prompt JSON and call:
 
-**If RUNTIME-MAP.json exists (reviewed):**
-- Warn: "Review completed. Re-review recommended after code changes."
+```text
+Agent(
+  subagent_type="vg-amend-cascade-analyzer",
+  prompt={
+    "phase_dir": "${PHASE_DIR}",
+    "changed_decision_ids": <JSON list of D-XX from Step 2>,
+    "change_summary": "<one-line from Step 2 user input>"
+  }
+)
+```
 
-**Suggest next action based on current step:**
+### 5.3 Post-spawn narrate
 
-| Current Step | Suggested Next |
-|---|---|
-| scoped | `/vg:blueprint ${PHASE_NUMBER}` — plan will incorporate amendments |
-| blueprinted | `/vg:blueprint ${PHASE_NUMBER} --from=2a` — re-plan affected tasks |
-| built | `/vg:build ${PHASE_NUMBER} --gaps-only` — build only new/changed parts |
-| reviewed | `/vg:build ${PHASE_NUMBER} --gaps-only` then `/vg:review ${PHASE_NUMBER} --retry-failed` |
-| tested | `/vg:build ${PHASE_NUMBER} --gaps-only` then `/vg:review ${PHASE_NUMBER}` (full re-review) |
-| accepted | Warning: phase already accepted. Consider opening a new phase instead. |
+On success (markdown report returned):
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-amend-cascade-analyzer returned "report-len=$(echo "$REPORT" | wc -l)"
+```
+
+On failure (subagent emitted error JSON or no markdown block):
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-amend-cascade-analyzer failed "<one-line cause>"
+```
+
+### 5.4 Display report to user
+
+Display the subagent's markdown report block inline in chat. Do NOT
+write the report to a file (rule 6: informational only). The
+AMENDMENT-LOG.md entry written in Step 3 already captures change context;
+the cascade report is for user's pre-commit awareness.
+
+### 5.5 If subagent failed
+
+If the subagent failed (e.g. all artifacts unreadable), surface the
+cause to user via:
+
+> Cascade analysis failed: <cause>. Continue to Step 6 commit
+> without impact report? (yes/no)
+
+On yes → proceed to Step 6.
+On no → abort entry skill (no commit, no telemetry beyond what was emitted).
+
+See `.claude/agents/vg-amend-cascade-analyzer.md` for the full subagent
+contract.
 </step>
 
 <step name="6_git_tag_and_commit">
