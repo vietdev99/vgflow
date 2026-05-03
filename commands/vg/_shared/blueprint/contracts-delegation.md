@@ -200,6 +200,42 @@ Each goal:
     Why: "ghost save" bug class — toast + 200 + console clean BUT refresh shows
     old data. Only refresh-then-read detects backend silent skip / client
     optimistic rollback. GET-only goals don't need this.
+3c. **Read-after-write invariant (REQUIRED for goal_type: mutation, Codex GPT-5.5 review 2026-05-03):**
+    Append a fenced YAML block declaring the structured invariant — single
+    source of truth consumed by review (Task 23) + codegen (Task 24).
+    Schema: `schemas/rcrurd-invariant.schema.yaml`. Example:
+
+    ````yaml-rcrurd
+    goal_type: mutation
+    read_after_write_invariant:
+      write:
+        method: PATCH
+        endpoint: /api/users/{userId}/roles
+      read:
+        method: GET
+        endpoint: /api/users/{userId}
+        cache_policy: no_store
+        settle: {mode: immediate}
+      assert:
+        - path: $.roles[*].name
+          op: contains
+          value_from: action.new_role
+      side_effects:
+        - layer: audit_log
+          path: $.events[*].type
+          op: contains
+          value_from: literal:role_granted
+    ````
+
+    `cache_policy: no_store` — read MUST bypass HTTP cache + CDN (default for
+    role/permission/billing). `settle.mode: immediate` is the read-your-writes
+    default; `poll`/`wait_event` REQUIRE explicit `timeout_ms`. `side_effects[]`
+    covers audit log, effective permission, tenant identity, auth cache —
+    each side-effect entry needs `layer:` label.
+
+    Mutation goals WITHOUT this structured block fail Rule 3b extended →
+    blueprint BLOCKED. The unstructured **Persistence check:** prose still
+    required for human readability, but the YAML block is the machine contract.
 4. Dependencies reference goal IDs (G-XX).
 5. Priority assignment (deterministic, evaluate in order):
    a. Endpoints matching config `routing.critical_goal_domains`
@@ -510,7 +546,7 @@ If phase has `no_crud_reason`:
 ```
 And EDGE-CASES.md = single line: `# Edge Cases — Phase ${PHASE_NUMBER}\n\nSkipped: <reason>`.
 
-# Return JSON envelope
+# Return JSON envelope (Part 4 only — no lens-walk fields)
 
 After all 3 files written, compute sha256 and return (shape MUST match
 `agents/vg-blueprint-contracts/SKILL.md` "Example return"):
@@ -536,6 +572,7 @@ After all 3 files written, compute sha256 and return (shape MUST match
   "edge_cases_skip_reason": null,
   "total_variants": 47,
   "variant_count_per_goal": {"G-04": 6, "G-12": 4},
+  "lens_seeds_merged_per_goal": {"G-04": 5, "G-12": 2},
   "summary": "<one paragraph>",
   "bindings_satisfied": ["PLAN:tasks", "INTERFACE-STANDARDS:error-shape", "INTERFACE-STANDARDS:response-envelope"],
   "warnings": []
@@ -546,12 +583,115 @@ If edge cases skipped (no_crud_reason or --skip-edge-cases):
 - `edge_cases_skipped: true`
 - `edge_cases_skip_reason: "<reason>"`
 - `edge_cases_path/index_path/sub_files`: empty/null
-- `total_variants: 0`, `variant_count_per_goal: {}`
+- `total_variants: 0`, `variant_count_per_goal: {}`, `lens_seeds_merged_per_goal: {}`
+
+When LENS-WALK/G-NN.md exists at edge-cases time: subagent MUST merge each
+seed row (table format described in `_shared/blueprint/lens-walk.md` schema)
+into the matching EDGE-CASES/G-NN.md category section. Each merged row
+gets a trailing comment `<!-- vg-lens-source: <lens-slug> -->` for downstream
+audit. Track count in `lens_seeds_merged_per_goal`. If LENS-WALK/G-NN.md
+absent for a goal (lens-walk skipped or zero applicable lenses), proceed
+profile-template-only — no error.
 
 `codex_proposal_path` and `codex_delta_path` are owned by the MAIN agent
 in STEP 4.4 (separate Codex CLI spawn). Do NOT generate these yourself
 and do NOT include their paths in the return JSON.
 ````
+
+---
+
+# Part 5 — LENS-WALK seeds (Option B v2.50+, runs before Part 4)
+
+This part is invoked by the orchestrator at sub-step `2b5e_a_lens_walk`,
+BEFORE `2b5e_edge_cases` (Part 4). It produces `LENS-WALK/G-NN.md` per-goal
+plus `LENS-WALK/index.md`. The output becomes seed input for Part 4.
+
+## Inputs (read-only)
+
+- `${PHASE_DIR}/TEST-GOALS/G-*.md` — goal IDs + titles + resources
+- `${PHASE_DIR}/CRUD-SURFACES.md` — resource × action × scope × element_class
+- `${PHASE_DIR}/UI-SPEC.md` if exists (frontend profiles only)
+- `.claude/commands/vg/_shared/lens-prompts/lens-*.md` — canonical lens
+  library; load only candidate lenses (use `bug_class` frontmatter to
+  filter by profile-applicable bug classes)
+
+## Profile → applicable bug_classes
+
+Orchestrator passes `applicable_bug_classes` env var. Subagent honors it:
+
+| Profile | bug_classes |
+|---|---|
+| web-fullstack | authz, injection, auth, bizlogic, state-coherence, ui-mechanic, server-side, redirect |
+| web-frontend-only | authz, auth, bizlogic, state-coherence, ui-mechanic, redirect |
+| web-backend-only | authz, injection, auth, bizlogic, state-coherence, server-side, redirect |
+| mobile-* / cli-tool / library | auth, bizlogic, state-coherence |
+
+## Per-goal × per-lens iteration
+
+For each goal G-NN, identify applicable lenses by these rules
+(see `_shared/blueprint/lens-walk.md` "Lens applicability rules" for the
+full table). Discard lenses whose `bug_class` not in `applicable_bug_classes`.
+
+For each (goal, applicable_lens) pair: read the lens's `## Probe ideas`
+section (4-8 bullets). Pick 1-3 probes most relevant to the goal — emit
+1 row per pick:
+
+```markdown
+| L-04-IDOR-1 | lens-idor | "Replay POST with peer-tenant token" | G-04-a3 | critical |
+```
+
+`seed_id` format: `L-<goal_num>-<lens_short>-<N>` where:
+- `<goal_num>`: goal id without prefix (G-04 → 04)
+- `<lens_short>`: uppercase 2-4 letter mnemonic (idor→IDOR, mass-assignment→MA,
+  business-logic→BL, input-injection→II, tenant-boundary→TB, etc.)
+- `<N>`: 1, 2, 3 within (goal × lens)
+
+`proposed variant_id` follows the lens→category mapping table in lens-walk.md.
+
+## Skip rule
+
+If a lens lists 0 probe ideas matching the goal's resource/scope, mark it
+"considered but skipped" in the per-goal file's "Lenses considered but
+skipped" section — do NOT emit empty seed rows.
+
+If a goal is read-only with no auth boundary (e.g., G-99 health check),
+mark all lenses skipped and write the per-goal file with empty seed table
+plus a `skipped: <reason>` header.
+
+## Output schema (per `_shared/blueprint/lens-walk.md`)
+
+Layer 1: `${PHASE_DIR}/LENS-WALK/G-NN.md` (per-goal, primary).
+Layer 2: `${PHASE_DIR}/LENS-WALK/index.md` (matrix TOC).
+No Layer 3 flat file (lens-walk is intermediate, not a contract).
+
+## Return JSON (Part 5)
+
+```json
+{
+  "lens_walk_path": null,
+  "lens_walk_index_path": "${PHASE_DIR}/LENS-WALK/index.md",
+  "lens_walk_sub_files": [
+    "${PHASE_DIR}/LENS-WALK/G-04.md",
+    "${PHASE_DIR}/LENS-WALK/G-12.md"
+  ],
+  "applicable_lens_per_goal": {
+    "G-04": ["lens-idor", "lens-mass-assignment", "lens-business-logic", "lens-input-injection", "lens-tenant-boundary"],
+    "G-12": ["lens-idor", "lens-bfla", "lens-tenant-boundary"]
+  },
+  "total_seed_variants": 12,
+  "goals_with_lenses_count": 2,
+  "lens_walk_skipped": false,
+  "lens_walk_skip_reason": null,
+  "summary": "<one paragraph: how many goals × lenses, dominant bug classes>",
+  "warnings": []
+}
+```
+
+If skipped (no_crud_reason or --skip-lens-walk):
+- `lens_walk_skipped: true`
+- `lens_walk_skip_reason: "<reason>"`
+- All path/sub_files: empty/null
+- `applicable_lens_per_goal: {}`, `total_seed_variants: 0`
 
 ---
 

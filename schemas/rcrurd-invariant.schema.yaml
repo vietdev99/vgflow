@@ -1,0 +1,59 @@
+$schema: "http://json-schema.org/draft-07/schema#"
+title: RCRURDInvariant
+description: |
+  Read-after-write invariant for a mutation goal. Single source of truth
+  consumed by review (Task 23) + codegen (Task 24). Authored in TEST-GOALS.md
+  per mutation goal.
+
+type: object
+required: [goal_type, read_after_write_invariant]
+properties:
+  goal_type:
+    type: string
+    enum: [mutation]
+  read_after_write_invariant:
+    type: object
+    required: [write, read, assert]
+    properties:
+      write:
+        type: object
+        required: [method, endpoint]
+        properties:
+          method:    {type: string, enum: [POST, PUT, PATCH, DELETE]}
+          endpoint:  {type: string, pattern: "^/.*"}
+      read:
+        type: object
+        required: [method, endpoint, cache_policy, settle]
+        properties:
+          method:        {type: string, enum: [GET]}
+          endpoint:      {type: string, pattern: "^/.*"}
+          cache_policy:  {type: string, enum: [no_store, cache_ok, bypass_cdn]}
+          settle:
+            type: object
+            required: [mode]
+            properties:
+              mode:         {type: string, enum: [immediate, poll, wait_event]}
+              timeout_ms:   {type: integer, minimum: 100, maximum: 60000}
+              interval_ms:  {type: integer, minimum: 50, maximum: 5000}
+      assert:
+        type: array
+        minItems: 1
+        items: {$ref: "#/definitions/assertion"}
+      precondition:
+        type: array
+        items: {$ref: "#/definitions/assertion"}
+      side_effects:
+        type: array
+        items:
+          allOf:
+            - {$ref: "#/definitions/assertion"}
+            - {type: object, required: [layer], properties: {layer: {type: string}}}
+
+definitions:
+  assertion:
+    type: object
+    required: [path, op, value_from]
+    properties:
+      path:        {type: string, pattern: "^\\$"}
+      op:          {type: string, enum: [contains, equals, matches, not_contains]}
+      value_from:  {type: string}
