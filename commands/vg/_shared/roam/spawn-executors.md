@@ -200,7 +200,7 @@ START NOW. Read first INSTRUCTION file, login, run protocol, emit JSONL.
 \`\`\`
 
 After ALL briefs complete, the JSONL files in this dir get aggregated by
-\`/vg:roam ${PHASE_NUMBER} --resume-aggregate\` (or by re-invoking roam — it'll
+\`/vg:roam ${PHASE_NUMBER} --aggregate-only\` (or by re-invoking roam — it'll
 detect existing observe-*.jsonl and skip step 3 for that model).
 EOF
 
