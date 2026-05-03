@@ -9,13 +9,42 @@
  * Source of truth: schemas/rcrurd-invariant.schema.yaml
  */
 
-import { APIRequestContext, expect } from '@playwright/test';
+import { APIRequestContext, Page, expect } from '@playwright/test';
 
 export interface Assertion {
   path: string;
   op: 'contains' | 'equals' | 'matches' | 'not_contains';
   value_from: string;
   layer?: string;
+}
+
+export type UIAssertOpName =
+  | 'count_matches_response_array'
+  | 'text_contains_all'
+  | 'each_exists_for_array_item'
+  | 'text_equals_response_value'
+  | 'text_matches_response_value'
+  | 'visible_when_response_value'
+  | 'hidden_when_response_value'
+  | 'attribute_equals_response_value'
+  | 'aria_state_matches'
+  | 'input_value_equals_response';
+
+export interface UIAssertOp {
+  op: UIAssertOpName;
+  dom_selector?: string;
+  selector_template?: string;
+  key_from?: string;
+  response_path?: string;
+  attribute?: string;
+  aria_state?: string;
+  regex?: string;
+  expected_value?: unknown;
+}
+
+export interface UIAssertBlock {
+  settle: { timeout_ms: number; poll_ms?: number };
+  ops: UIAssertOp[];
 }
 
 export interface RCRURDInvariant {
@@ -30,6 +59,7 @@ export interface RCRURDInvariant {
   assert: Assertion[];
   precondition?: Assertion[];
   side_effects?: Assertion[];
+  ui_assert?: UIAssertBlock;
 }
 
 function evalJsonPath(body: unknown, path: string): unknown[] {
@@ -78,7 +108,13 @@ function cacheHeaders(policy: string): Record<string, string> {
   return {};
 }
 
+/**
+ * `page` is REQUIRED when invariant.ui_assert is set (Task 25 R9). Pass
+ * `null` for backend-only goals (cron, worker, internal jobs) — the
+ * helper throws R9_NO_PAGE if ui_assert is declared but page === null.
+ */
 export async function expectReadAfterWrite(
+  page: Page | null,
   request: APIRequestContext,
   invariant: RCRURDInvariant,
   actionPayload: Record<string, unknown>,
@@ -153,5 +189,85 @@ export async function expectReadAfterWrite(
         `[${invariant.goal_id}] side_effect ${a.layer} failed: ${a.path} ${a.op} ${expected}`,
       ).toBeTruthy();
     }
+  }
+
+  if (invariant.ui_assert) {
+    if (page === null) {
+      throw new Error(
+        `[${invariant.goal_id}] R9_NO_PAGE: invariant has ui_assert but expectReadAfterWrite was called with page=null`,
+      );
+    }
+    const { settle, ops } = invariant.ui_assert;
+    const responseBodyForUI = await (await request.get(invariant.read.endpoint, { headers })).json().catch(() => ({}));
+
+    for (const uop of ops) {
+      await expect(async () => {
+        await evalUIOp(page, uop, responseBodyForUI, actionPayload, invariant.goal_id);
+      }).toPass({ timeout: settle.timeout_ms, intervals: [settle.poll_ms ?? 100] });
+    }
+  }
+}
+
+
+async function evalUIOp(
+  page: Page,
+  uop: UIAssertOp,
+  responseBody: unknown,
+  actionPayload: Record<string, unknown>,
+  goalId: string,
+): Promise<void> {
+  const fail = (msg: string): never => {
+    throw new Error(`[${goalId}] R9 ui_render_truth_mismatch (${uop.op}): ${msg}`);
+  };
+
+  if (uop.op === 'count_matches_response_array') {
+    const arr = evalJsonPath(responseBody, uop.response_path!);
+    const flat = arr.flat();
+    const domCount = await page.locator(uop.dom_selector!).count();
+    if (domCount !== flat.length) fail(`API has ${flat.length} items, DOM has ${domCount} at ${uop.dom_selector}`);
+  } else if (uop.op === 'text_contains_all') {
+    const arr = evalJsonPath(responseBody, uop.response_path!);
+    const flat = arr.flat();
+    const domText = await page.locator(uop.dom_selector!).innerText();
+    for (const v of flat) {
+      if (!domText.includes(String(v))) fail(`DOM ${uop.dom_selector} missing value ${JSON.stringify(v)}`);
+    }
+  } else if (uop.op === 'each_exists_for_array_item') {
+    const arr = evalJsonPath(responseBody, uop.response_path!);
+    const flat = arr.flat();
+    for (const item of flat) {
+      const keyVal = evalJsonPath(item, uop.key_from!)[0];
+      if (keyVal === undefined) fail(`item missing key_from ${uop.key_from}`);
+      const sel = uop.selector_template!.replace('{key}', String(keyVal));
+      const cnt = await page.locator(sel).count();
+      if (cnt !== 1) fail(`expected exactly 1 element at ${sel}, found ${cnt}`);
+    }
+  } else if (uop.op === 'text_equals_response_value') {
+    const expected = evalJsonPath(responseBody, uop.response_path!)[0];
+    const domText = (await page.locator(uop.dom_selector!).innerText()).trim();
+    if (domText !== String(expected)) fail(`expected "${expected}", DOM shows "${domText}"`);
+  } else if (uop.op === 'text_matches_response_value') {
+    const domText = (await page.locator(uop.dom_selector!).innerText()).trim();
+    if (!new RegExp(uop.regex!).test(domText)) fail(`DOM "${domText}" does not match /${uop.regex}/`);
+  } else if (uop.op === 'visible_when_response_value' || uop.op === 'hidden_when_response_value') {
+    const flagVal = evalJsonPath(responseBody, uop.response_path!)[0];
+    const expected = uop.expected_value;
+    const shouldBeVisible = (flagVal === expected) === (uop.op === 'visible_when_response_value');
+    const isVisible = await page.locator(uop.dom_selector!).isVisible();
+    if (isVisible !== shouldBeVisible) {
+      fail(`expected ${shouldBeVisible ? 'visible' : 'hidden'} (response=${flagVal}, expected=${expected}), DOM ${isVisible ? 'visible' : 'hidden'}`);
+    }
+  } else if (uop.op === 'attribute_equals_response_value') {
+    const expected = evalJsonPath(responseBody, uop.response_path!)[0];
+    const actual = await page.locator(uop.dom_selector!).getAttribute(uop.attribute!);
+    if (String(actual) !== String(expected)) fail(`${uop.attribute} expected ${expected}, DOM has ${actual}`);
+  } else if (uop.op === 'aria_state_matches') {
+    const expected = evalJsonPath(responseBody, uop.response_path!)[0];
+    const actual = await page.locator(uop.dom_selector!).getAttribute(uop.aria_state!);
+    if (String(actual) !== String(expected)) fail(`${uop.aria_state} expected ${expected}, DOM has ${actual}`);
+  } else if (uop.op === 'input_value_equals_response') {
+    const expected = evalJsonPath(responseBody, uop.response_path!)[0];
+    const val = await page.locator(uop.dom_selector!).inputValue();
+    if (val !== String(expected)) fail(`input.value expected ${expected}, DOM has ${val}`);
   }
 }

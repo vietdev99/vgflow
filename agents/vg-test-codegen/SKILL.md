@@ -428,3 +428,30 @@ verification. The helper enforces:
   Task 23 review-side runtime gate (single source of truth)
 - `side_effects[]` checked separately from primary assertions (multi-layer
   audit log + effective-permission verification)
+
+### R9 ui_render_truth_mismatch — when invariant has ui_assert (Task 25)
+
+If the YAML invariant in `TEST-GOALS/G-NN.md` has a `ui_assert` block,
+the generated `.spec.ts` MUST pass `page` as the first argument:
+
+```typescript
+await expectReadAfterWrite(page, request, invariantG04, { new_role: 'admin' });
+```
+
+NOT `expectReadAfterWrite(request, invariantG04, ...)` — the helper
+throws `R9_NO_PAGE` if `invariant.ui_assert` is set but `page === null`.
+Backend-only goals (worker, cron) without DOM surface pass `null` for
+the page argument and omit `ui_assert` from the YAML invariant.
+
+The `dom_selector` and `selector_template` values MUST use stable
+selectors (`data-testid` or equivalent). The validator emits
+`R9_UNTESTABLE_MISSING_STABLE_SELECTOR` ADVISORY when a `ui_assert`
+op uses text-only or class-based selectors. Override only when text
+IS the spec contract (e.g. status badge "Approved" — the literal text
+is the contract).
+
+10 supported ops cover array (count_matches/text_contains_all/
+each_exists), scalar (text_equals/text_matches), conditional
+(visible_when/hidden_when), and attribute (attribute_equals/
+aria_state_matches/input_value_equals) layers — see
+`schemas/rcrurd-invariant.schema.yaml` `ui_assert_op` definition.

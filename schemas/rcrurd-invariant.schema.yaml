@@ -48,6 +48,24 @@ properties:
           allOf:
             - {$ref: "#/definitions/assertion"}
             - {type: object, required: [layer], properties: {layer: {type: string}}}
+      ui_assert:
+        description: |
+          R9 ui_render_truth_mismatch (Task 25). UI-layer verification —
+          DOM must reflect API truth after settle. Optional (backend-only
+          goals like cron/worker skip it).
+        type: object
+        required: [settle, ops]
+        properties:
+          settle:
+            type: object
+            required: [timeout_ms]
+            properties:
+              timeout_ms: {type: integer, minimum: 100, maximum: 60000}
+              poll_ms:    {type: integer, minimum: 50, maximum: 5000}
+          ops:
+            type: array
+            minItems: 1
+            items: {$ref: "#/definitions/ui_assert_op"}
 
 definitions:
   assertion:
@@ -57,3 +75,28 @@ definitions:
       path:        {type: string, pattern: "^\\$"}
       op:          {type: string, enum: [contains, equals, matches, not_contains]}
       value_from:  {type: string}
+  ui_assert_op:
+    type: object
+    required: [op]
+    properties:
+      op:
+        type: string
+        enum:
+          - count_matches_response_array
+          - text_contains_all
+          - each_exists_for_array_item
+          - text_equals_response_value
+          - text_matches_response_value
+          - visible_when_response_value
+          - hidden_when_response_value
+          - attribute_equals_response_value
+          - aria_state_matches
+          - input_value_equals_response
+      dom_selector:      {type: string}
+      selector_template: {type: string}
+      key_from:          {type: string, pattern: "^\\$"}
+      response_path:     {type: string, pattern: "^\\$"}
+      attribute:         {type: string}
+      aria_state:        {type: string}
+      regex:             {type: string}
+      expected_value:    {}

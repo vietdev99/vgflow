@@ -22,6 +22,19 @@ _VALID_CACHE = {"no_store", "cache_ok", "bypass_cdn"}
 _VALID_SETTLE_MODE = {"immediate", "poll", "wait_event"}
 _VALID_WRITE_METHOD = {"POST", "PUT", "PATCH", "DELETE"}
 
+_VALID_UI_OPS = {
+    "count_matches_response_array",
+    "text_contains_all",
+    "each_exists_for_array_item",
+    "text_equals_response_value",
+    "text_matches_response_value",
+    "visible_when_response_value",
+    "hidden_when_response_value",
+    "attribute_equals_response_value",
+    "aria_state_matches",
+    "input_value_equals_response",
+}
+
 
 class RCRURDInvariantError(ValueError):
     """Raised when an invariant doc fails schema validation."""
@@ -57,12 +70,39 @@ class Assertion:
 
 
 @dataclass(frozen=True)
+class UISettleSpec:
+    """Independent of read.settle (Codex round 4 #5) — DOM render clock ≠ API."""
+    timeout_ms: int
+    poll_ms: int = 100
+
+
+@dataclass(frozen=True)
+class UIAssertOp:
+    op: str
+    dom_selector: str | None = None
+    selector_template: str | None = None
+    key_from: str | None = None
+    response_path: str | None = None
+    attribute: str | None = None
+    aria_state: str | None = None
+    regex: str | None = None
+    expected_value: object = None
+
+
+@dataclass(frozen=True)
+class UIAssertBlock:
+    settle: UISettleSpec
+    ops: tuple[UIAssertOp, ...]
+
+
+@dataclass(frozen=True)
 class RCRURDInvariant:
     write: WriteSpec
     read: ReadSpec
     assertions: tuple[Assertion, ...]
     preconditions: tuple[Assertion, ...] = field(default=())
     side_effects: tuple[Assertion, ...] = field(default=())
+    ui_assert: UIAssertBlock | None = None
 
 
 def parse_yaml(yaml_text: str) -> RCRURDInvariant:
@@ -86,10 +126,12 @@ def parse_yaml(yaml_text: str) -> RCRURDInvariant:
     assertions = _parse_assert_list(raw.get("assert"), "assert", min_items=1)
     preconditions = _parse_assert_list(raw.get("precondition"), "precondition", min_items=0)
     side_effects = _parse_side_effects(raw.get("side_effects"))
+    ui_assert = _parse_ui_assert(raw.get("ui_assert"))
 
     return RCRURDInvariant(
         write=write, read=read, assertions=tuple(assertions),
         preconditions=tuple(preconditions), side_effects=tuple(side_effects),
+        ui_assert=ui_assert,
     )
 
 
@@ -164,6 +206,80 @@ def _parse_assert_list(items: Any, ctx: str, min_items: int) -> list[Assertion]:
     if len(items) < min_items:
         raise RCRURDInvariantError(f"{ctx} requires at least {min_items} item(s)")
     return [_parse_one_assertion(d, f"{ctx}[{i}]") for i, d in enumerate(items)]
+
+
+def _parse_ui_settle(d: Any) -> UISettleSpec:
+    if not isinstance(d, dict):
+        raise RCRURDInvariantError("ui_assert.settle must be a mapping")
+    timeout_ms = d.get("timeout_ms")
+    if not isinstance(timeout_ms, int) or timeout_ms < 100 or timeout_ms > 60000:
+        raise RCRURDInvariantError("ui_assert.settle.timeout_ms must be int [100, 60000]")
+    poll_ms = d.get("poll_ms", 100)
+    if not isinstance(poll_ms, int) or poll_ms < 50 or poll_ms > 5000:
+        raise RCRURDInvariantError("ui_assert.settle.poll_ms must be int [50, 5000]")
+    return UISettleSpec(timeout_ms=timeout_ms, poll_ms=poll_ms)
+
+
+def _parse_ui_op(d: Any, ctx: str) -> UIAssertOp:
+    if not isinstance(d, dict):
+        raise RCRURDInvariantError(f"{ctx} item must be a mapping")
+    op = d.get("op")
+    if op not in _VALID_UI_OPS:
+        raise RCRURDInvariantError(f"{ctx}.op must be one of {sorted(_VALID_UI_OPS)}, got {op!r}")
+
+    if op == "each_exists_for_array_item":
+        for k in ("response_path", "selector_template", "key_from"):
+            if not d.get(k):
+                raise RCRURDInvariantError(f"{ctx} ({op}) requires {k}")
+    elif op in ("count_matches_response_array", "text_contains_all"):
+        for k in ("dom_selector", "response_path"):
+            if not d.get(k):
+                raise RCRURDInvariantError(f"{ctx} ({op}) requires {k}")
+    elif op == "text_matches_response_value":
+        for k in ("dom_selector", "response_path", "regex"):
+            if not d.get(k):
+                raise RCRURDInvariantError(f"{ctx} ({op}) requires {k}")
+    elif op in ("visible_when_response_value", "hidden_when_response_value"):
+        for k in ("dom_selector", "response_path", "expected_value"):
+            if d.get(k) is None:
+                raise RCRURDInvariantError(f"{ctx} ({op}) requires {k}")
+    elif op == "attribute_equals_response_value":
+        for k in ("dom_selector", "response_path", "attribute"):
+            if not d.get(k):
+                raise RCRURDInvariantError(f"{ctx} ({op}) requires {k}")
+    elif op == "aria_state_matches":
+        for k in ("dom_selector", "response_path", "aria_state"):
+            if not d.get(k):
+                raise RCRURDInvariantError(f"{ctx} ({op}) requires {k}")
+    elif op in ("text_equals_response_value", "input_value_equals_response"):
+        for k in ("dom_selector", "response_path"):
+            if not d.get(k):
+                raise RCRURDInvariantError(f"{ctx} ({op}) requires {k}")
+
+    return UIAssertOp(
+        op=op,
+        dom_selector=d.get("dom_selector"),
+        selector_template=d.get("selector_template"),
+        key_from=d.get("key_from"),
+        response_path=d.get("response_path"),
+        attribute=d.get("attribute"),
+        aria_state=d.get("aria_state"),
+        regex=d.get("regex"),
+        expected_value=d.get("expected_value"),
+    )
+
+
+def _parse_ui_assert(d: Any) -> UIAssertBlock | None:
+    if d is None:
+        return None
+    if not isinstance(d, dict):
+        raise RCRURDInvariantError("ui_assert must be a mapping or null")
+    settle = _parse_ui_settle(d.get("settle"))
+    ops_raw = d.get("ops")
+    if not isinstance(ops_raw, list) or not ops_raw:
+        raise RCRURDInvariantError("ui_assert.ops must be a non-empty list")
+    ops = tuple(_parse_ui_op(o, f"ui_assert.ops[{i}]") for i, o in enumerate(ops_raw))
+    return UIAssertBlock(settle=settle, ops=ops)
 
 
 def _parse_side_effects(items: Any) -> list[Assertion]:

@@ -32,6 +32,7 @@ IMPORT_RE = re.compile(
     re.MULTILINE,
 )
 CALL_RE = re.compile(r"\bexpectReadAfterWrite\s*\(", re.MULTILINE)
+PAGE_CALL_RE = re.compile(r"\bexpectReadAfterWrite\s*\(\s*page\b", re.MULTILINE)
 GOAL_TYPE_RE = re.compile(r"\*\*goal_type:\*\*\s*(\S+)", re.MULTILINE)
 
 
@@ -42,6 +43,26 @@ def _is_mutation_goal(goal_path: Path) -> bool:
         return False
     m = GOAL_TYPE_RE.search(text)
     return bool(m and m.group(1).lower() == "mutation")
+
+
+def _goal_has_ui_assert(goal_path: Path) -> bool:
+    """Return True if the YAML invariant in the goal has a ui_assert block (Task 25)."""
+    import sys as _sys
+    repo = Path(__file__).resolve().parents[2]
+    _sys.path.insert(0, str(repo / "scripts" / "lib"))
+    try:
+        from rcrurd_invariant import extract_from_test_goal_md  # type: ignore
+    except ImportError:
+        return False
+    try:
+        text = goal_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        inv = extract_from_test_goal_md(text)
+    except Exception:
+        return False
+    return bool(inv and inv.ui_assert)
 
 
 def main() -> int:
@@ -86,6 +107,15 @@ def main() -> int:
             continue
         if not CALL_RE.search(text):
             failures.append(f"{goal_id}: spec {spec.name} does not call expectReadAfterWrite()")
+            continue
+        # Task 25 R9: when goal invariant has ui_assert, spec MUST pass page
+        # as the first argument (not just the request context).
+        if _goal_has_ui_assert(goal):
+            if not PAGE_CALL_RE.search(text):
+                failures.append(
+                    f"{goal_id}: invariant has ui_assert but spec {spec.name} doesn't pass "
+                    f"`page` to expectReadAfterWrite(...) — R9 ui_render_truth_mismatch needs DOM access"
+                )
 
     if failures:
         print(f"⛔ codegen RCRURD gate: {len(failures)} mutation goal(s) failed "
