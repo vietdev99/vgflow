@@ -5,6 +5,8 @@ and resolves absolute paths to the hook scripts under test. Hooks are
 invoked via subprocess so we exercise the real shebang and trap
 behavior.
 """
+from __future__ import annotations
+
 import os
 import subprocess
 from pathlib import Path
