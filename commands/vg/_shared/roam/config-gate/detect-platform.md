@@ -38,6 +38,14 @@ TOOL_GEMINI=$(command -v gemini >/dev/null 2>&1 && echo "present" || echo "missi
 export TOOL_PLAYWRIGHT_MCP TOOL_MAESTRO TOOL_ADB TOOL_CODEX TOOL_GEMINI
 
 # Mode availability matrix per platform + tools
+#
+# Round-2 F4 fix: only modes that persist-config.md accepts AND that
+# spawn-executors.md actually implements may be offered here. The accepted
+# set is {self, spawn, manual}. `spawn-mobile` was offered for
+# mobile-native phases but had no executor implementation and was rejected
+# by persist-config.md validate — silent drift. Until /vg:setup-mobile
+# wires a real Maestro/adb executor branch, mobile-native falls back to
+# `manual` (user pastes prompt to a CLI that has Maestro available).
 declare -a MODES_AVAIL
 case "$ROAM_PLATFORM" in
   web)
@@ -46,8 +54,13 @@ case "$ROAM_PLATFORM" in
     MODES_AVAIL+=("manual")  # always available — user pastes elsewhere
     ;;
   mobile-native)
-    if [ "$TOOL_MAESTRO" = "present" ] && [ "$TOOL_ADB" = "present" ]; then
-      MODES_AVAIL+=("spawn-mobile")
+    # `spawn-mobile` deliberately NOT offered — no executor branch exists
+    # in spawn-executors.md and persist-config.md would reject it. Surface
+    # the install hint so the user knows the tooling status, but route them
+    # through `manual` for now.
+    if [ "$TOOL_MAESTRO" != "present" ] || [ "$TOOL_ADB" != "present" ]; then
+      echo "  ℹ Mobile tooling missing (maestro=${TOOL_MAESTRO} adb=${TOOL_ADB})." >&2
+      echo "    Run /vg:setup-mobile to install. roam will continue in manual mode." >&2
     fi
     MODES_AVAIL+=("manual")
     ;;
