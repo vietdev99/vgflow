@@ -150,3 +150,16 @@ for all hooks except the documented exceptions in
 `tests/hooks/test_write_protection_unconditional.py`.
 
 Source: `docs/superpowers/specs/2026-05-03-vg-r5.5-hooks-source-isolation-design.md`
+
+## Deploy-specific Red Flags
+
+| Thought | Reality |
+|---|---|
+| "Spawn vg-deploy-executor with parallel envs for speed" | Rule 2: sequential — parallel risks shared SSH/DB contention. R7 may add `--parallel-envs`; until then keep sequential. |
+| "Subagent should write DEPLOY-STATE.json directly" | NO — orchestrator-only writer to preserve `preferred_env_for` keys per rule 5. Subagent returns JSON; Step 2 merges. |
+| "Skip narrate-spawn for vg-deploy-executor — UX nicety only" | UX baseline R2 makes it MANDATORY. Each env iteration → green pill at start, cyan/red at end. |
+| "Health check 1× is enough" | 6× retry with 5s sleep (30s total) is the contract. Reducing masks transient cold-start failures. |
+| "Dry-run can skip emitting result JSON" | Dry-run MUST emit JSON with `health: "dry-run"` so orchestrator merge in Step 2 has a record to write. |
+| "Add a schema_version to DEPLOY-STATE.json — best practice" | R6a explicitly does NOT introduce one. Existing consumers don't expect it. |
+
+Source: `docs/superpowers/specs/2026-05-03-vg-r6a-deploy-design.md`
