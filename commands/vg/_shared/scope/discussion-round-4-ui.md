@@ -14,16 +14,23 @@ expander mandatory. Do NOT mark `1_deep_discussion` here — owner is
 
 ## §1. Profile-aware skip (FIRST)
 
+> Important-2 r2 fix: replace `return 0` (only valid inside sourced
+> functions — Bash tool snippets are NOT guaranteed sourced) with an
+> `R4_SKIP` flag. The AI MUST honor `R4_SKIP=1` and proceed directly to
+> R5 without running §2-§6 below.
+
 ```bash
+R4_SKIP=""
 case "${PROFILE}" in
   web-backend-only|cli-tool|library)
     echo "↷ R4 UI/UX skipped — profile=${PROFILE} has no UI surface"
     vg-orchestrator emit-event scope.r4_skipped --payload "{\"profile\":\"${PROFILE}\"}" 2>/dev/null || true
-    # Skip directly to R5
-    return 0
+    R4_SKIP=1
     ;;
 esac
 ```
+
+If `R4_SKIP=1`, do NOT execute §2-§6. Jump directly to "## Advance" (read R5 next).
 
 ## §2. Design System integration
 

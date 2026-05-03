@@ -43,53 +43,95 @@ options:
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 1b_env_preference
 
+# Important-2 r2 fix: replace `return 0` (only valid inside sourced functions —
+# Bash tool snippets are NOT guaranteed to run sourced) with a guarded
+# `ENV_PREF_SKIP` flag + single fall-through path. mark-step always fires at
+# the end regardless of skip path.
+ENV_PREF_SKIP=""
+DEPLOY_STATE="${PHASE_DIR}/DEPLOY-STATE.json"
+
 # Skip if non-interactive OR --skip-env-preference
 if [[ "$ARGUMENTS" =~ --skip-env-preference ]] || [[ "$ARGUMENTS" =~ --non-interactive ]]; then
   echo "▸ Skipping env preference step (flag set)"
-  vg-orchestrator mark-step scope 1b_env_preference 2>/dev/null || true
-  return 0
+  ENV_PREF_SKIP="flag"
 fi
 
 # Skip if preference already set + no --reset-env-preference
-DEPLOY_STATE="${PHASE_DIR}/DEPLOY-STATE.json"
-if [ -f "$DEPLOY_STATE" ] && [[ ! "$ARGUMENTS" =~ --reset-env-preference ]]; then
+if [ -z "$ENV_PREF_SKIP" ] && [ -f "$DEPLOY_STATE" ] && [[ ! "$ARGUMENTS" =~ --reset-env-preference ]]; then
   HAS_PREF=$(${PYTHON_BIN:-python3} -c "import json; d=json.load(open('$DEPLOY_STATE')); print('1' if d.get('preferred_env_for') else '0')" 2>/dev/null || echo 0)
   if [ "$HAS_PREF" = "1" ]; then
     EXISTING=$(${PYTHON_BIN:-python3} -c "import json; print(json.dumps(json.load(open('$DEPLOY_STATE')).get('preferred_env_for', {})))" 2>/dev/null)
     echo "▸ preferred_env_for đã set: $EXISTING — skip (re-set bằng --reset-env-preference)"
-    vg-orchestrator mark-step scope 1b_env_preference 2>/dev/null || true
-    return 0
+    ENV_PREF_SKIP="already-set"
   fi
 fi
 
-# AI: invoke AskUserQuestion above, capture answer into ENV_PREF_CHOICE
-${PYTHON_BIN:-python3} -c "
+if [ -z "$ENV_PREF_SKIP" ]; then
+
+# Important-1 r2 fix: --env-preference=<mode> inline flag is now honored.
+# Precedence:
+#   1. ENV_PREF_INLINE (from preflight parser, --env-preference=<token>)
+#   2. ENV_PREF_CHOICE (from AskUserQuestion in interactive mode)
+#   3. default 'auto'
+# Inline tokens: auto | sandbox | review-sandbox-accept-prod | paranoid | local
+${PYTHON_BIN:-python3} - "$DEPLOY_STATE" "${PHASE_NUMBER}" <<'PY'
 import json, os, sys
 from pathlib import Path
-choice = os.environ.get('ENV_PREF_CHOICE', 'auto').lower()
+
+deploy_state_path, phase_number = sys.argv[1], sys.argv[2]
+inline = (os.environ.get('ENV_PREF_INLINE') or '').strip().lower()
+choice = (os.environ.get('ENV_PREF_CHOICE') or '').strip().lower()
+
+# Token map for inline form (canonical short tokens documented in §"Override flags")
+INLINE_MAP = {
+    'auto': None,
+    'sandbox': {'review': 'sandbox', 'test': 'sandbox', 'roam': 'sandbox', 'accept': 'sandbox'},
+    'all-sandbox': {'review': 'sandbox', 'test': 'sandbox', 'roam': 'sandbox', 'accept': 'sandbox'},
+    'review-sandbox-accept-prod': {'review': 'sandbox', 'test': 'sandbox', 'roam': 'sandbox', 'accept': 'prod'},
+    'paranoid': {'review': 'sandbox', 'test': 'sandbox', 'roam': 'staging', 'accept': 'prod'},
+    'local': {'review': 'local', 'test': 'local', 'roam': 'local', 'accept': 'local'},
+    'all-local': {'review': 'local', 'test': 'local', 'roam': 'local', 'accept': 'local'},
+}
+
+source = None
 mapping = None
-if 'all sandbox' in choice:
-  mapping = {'review': 'sandbox', 'test': 'sandbox', 'roam': 'sandbox', 'accept': 'sandbox'}
-elif 'review+test+roam=sandbox' in choice and 'accept=prod' in choice:
-  mapping = {'review': 'sandbox', 'test': 'sandbox', 'roam': 'sandbox', 'accept': 'prod'}
-elif 'roam=staging' in choice and 'accept=prod' in choice:
-  mapping = {'review': 'sandbox', 'test': 'sandbox', 'roam': 'staging', 'accept': 'prod'}
-elif 'all local' in choice:
-  mapping = {'review': 'local', 'test': 'local', 'roam': 'local', 'accept': 'local'}
-elif 'auto' in choice:
-  mapping = None
+if inline:
+    if inline in INLINE_MAP:
+        mapping = INLINE_MAP[inline]
+        source = f'inline(--env-preference={inline})'
+    else:
+        print(f'[scope-1b] WARN: unrecognized --env-preference={inline!r}; '
+              f'falling back to auto. Accepted: {sorted(INLINE_MAP)}', file=sys.stderr)
+        source = 'inline-invalid-fallback'
+elif choice:
+    if 'all sandbox' in choice:
+        mapping = INLINE_MAP['sandbox']
+    elif 'review+test+roam=sandbox' in choice and 'accept=prod' in choice:
+        mapping = INLINE_MAP['review-sandbox-accept-prod']
+    elif 'roam=staging' in choice and 'accept=prod' in choice:
+        mapping = INLINE_MAP['paranoid']
+    elif 'all local' in choice:
+        mapping = INLINE_MAP['local']
+    elif 'auto' in choice:
+        mapping = None
+    else:
+        print(f'[scope-1b] WARN: unrecognized ENV_PREF_CHOICE {choice!r} — treating as auto', file=sys.stderr)
+    source = f'interactive({choice})'
 else:
-  print(f'[scope-1b] WARN: unrecognized choice {choice!r} — treating as auto', file=sys.stderr)
+    source = 'default-auto'
 
 if mapping is None:
-  print('[scope-1b] auto — DEPLOY-STATE.json not modified')
-  sys.exit(0)
+    print(f'[scope-1b] auto ({source}) — DEPLOY-STATE.json not modified')
+    sys.exit(0)
 
-deploy_state_path = Path('$DEPLOY_STATE')
-state = json.loads(deploy_state_path.read_text(encoding='utf-8')) if deploy_state_path.exists() else {'phase': '${PHASE_NUMBER}'}
+p = Path(deploy_state_path)
+state = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {'phase': phase_number}
 state['preferred_env_for'] = mapping
-deploy_state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-print(f'[scope-1b] preferred_env_for saved: {json.dumps(mapping)}')"
+p.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+print(f'[scope-1b] preferred_env_for saved ({source}): {json.dumps(mapping)}')
+PY
+
+fi  # end ENV_PREF_SKIP guard (Important-2 r2 fix)
 
 vg-orchestrator mark-step scope 1b_env_preference 2>/dev/null || true
 ```
