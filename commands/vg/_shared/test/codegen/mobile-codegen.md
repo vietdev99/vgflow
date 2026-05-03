@@ -18,6 +18,8 @@ assertVisible → takeScreenshot.
 Output path: `${GENERATED_TESTS_DIR}/mobile/<phase>/<G-XX>.maestro.yaml`
 
 ```bash
+vg-orchestrator step-active 5d_mobile_codegen
+
 OUT_DIR="${GENERATED_TESTS_DIR}/mobile/${PHASE_NUMBER}"
 mkdir -p "$OUT_DIR"
 

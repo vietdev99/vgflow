@@ -190,6 +190,7 @@ Display:
 ```
 
 ```bash
+vg-orchestrator step-active 5c_fix
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_fix" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_fix.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_fix 2>/dev/null || true
@@ -204,6 +205,8 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 Loop counter: `TOTAL_ITER` — persisted in `${PHASE_DIR}/.fix-loop-state.json`, survives re-invocations (OHOK B5 B8 2026-04-23: real persistent counter, not prose fiction).
 
 ```bash
+vg-orchestrator step-active 5c_auto_escalate
+
 # Load or initialize persistent counter
 FIX_LOOP_STATE="${PHASE_DIR}/.fix-loop-state.json"
 MAX_ITER=$(vg_config_get test.max_fix_loop_iterations 3 2>/dev/null || echo 3)

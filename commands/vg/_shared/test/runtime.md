@@ -151,6 +151,7 @@ Display:
 ```
 
 ```bash
+vg-orchestrator step-active 5c_smoke
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_smoke" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_smoke.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_smoke 2>/dev/null || true
@@ -161,6 +162,10 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## STEP 3.3 — multi-page flow verify (5c_flow) [profile: web-fullstack,web-frontend-only]
 
 HARD-GATE: web-backend-only + mobile-* MUST skip this step.
+
+```bash
+vg-orchestrator step-active 5c_flow
+```
 
 **Skip conditions:**
 - `--skip-flow` flag → skip
@@ -259,6 +264,8 @@ Mobile equivalent of web smoke + goal + flow combined. Each goal → Maestro YAM
 under `${GENERATED_TESTS_DIR}/mobile/<phase>/` or `config.mobile.e2e.flows_dir`.
 
 ```bash
+vg-orchestrator step-active 5c_mobile_flow
+
 WRAPPER="${REPO_ROOT}/.claude/scripts/maestro-mcp.py"
 FLOWS_DIR=$(awk '/^mobile:/{m=1;next} m && /^  e2e:/{e=1;next}
                   e && /^  [a-z]/{e=0} e && /flows_dir:/{print $2;exit}' \

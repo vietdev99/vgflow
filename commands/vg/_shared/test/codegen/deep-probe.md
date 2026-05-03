@@ -23,6 +23,8 @@ Profile: `web-fullstack`, `web-frontend-only`, `web-backend-only`, `cli-tool`, `
 ### 5d-deep.1: Preflight — detect adversarial CLI
 
 ```bash
+vg-orchestrator step-active 5d_deep_probe
+
 DEEP_PROBE_ENABLED=$(${PYTHON_BIN:-python3} -c "
 import re
 try:

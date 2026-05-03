@@ -25,6 +25,8 @@ vg-load: no vg-load injection needed; orchestration-only.
 Run generated tests via CLI (not MCP):
 
 ```bash
+vg-orchestrator step-active 5e_regression
+
 run_on_target "cd ${PROJECT_PATH} && npx playwright test ${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts"
 ```
 
@@ -63,6 +65,8 @@ Tier 1-4 run grep heuristics.
 ### Tier 0: B8 structured validators (MANDATORY)
 
 ```bash
+vg-orchestrator step-active 5f_security_audit
+
 echo "━━━ 5f Tier 0: B8 security validators ━━━"
 SEC_TIER0_EXIT=0
 
@@ -224,6 +228,8 @@ consistency) by checking ACTUAL source — secrets, cleartext traffic, weak cryp
 insecure storage. Runs ≤10 seconds. CRITICAL/HIGH → FAIL. MEDIUM → GAPS_FOUND. LOW → logged.
 
 ```bash
+vg-orchestrator step-active 5f_mobile_security_audit
+
 SEC_FINDINGS=()
 SEC_DIR="${PHASE_DIR}/mobile-security"
 mkdir -p "$SEC_DIR"
@@ -367,6 +373,8 @@ HARD-GATE: web-frontend-only + mobile-* MUST skip this step.
 Read performance budgets from config. Skip entirely if `perf_budgets` section absent.
 
 ```bash
+vg-orchestrator step-active 5g_performance_check
+
 API_P95=$(${PYTHON_BIN} -c "
 import re
 for line in open('.claude/vg.config.md', encoding='utf-8'):
@@ -547,6 +555,8 @@ Findings severity routing via `config.project_risk_profile`:
 - `low` → all advisory
 
 ```bash
+vg-orchestrator step-active 5h_security_dynamic
+
 echo ""
 echo "━━━ Step 5h — DAST (Dynamic Application Security Testing) ━━━"
 
