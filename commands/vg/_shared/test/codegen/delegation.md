@@ -50,6 +50,12 @@ ONLY the spawn payload + return contract.
   becomes its own assertion. Variant `expected_outcome` → assertion text.
   When `edge_cases_available: false` (legacy phase), generate single-path
   spec.ts as before; emit warning in return JSON.
+  
+  **TOOLING shortcut**: dùng `python3 .claude/scripts/edge-cases-to-spec.py
+  --phase ${PHASE_NUMBER} --goal G-NN --framework playwright` để gen
+  deterministic skeleton (vg-edge-case anchor + variant_id + priority đầy đủ
+  trong test.each). Subagent CHỈ fill body (selector/click/fill/assertion)
+  thay vì bịa skeleton — đảm bảo coverage check (Gate F.2.5) PASS.
 - The subagent MUST NOT `cat PLAN.md`, `cat API-CONTRACTS.md`, `cat TEST-GOALS.md`,
   or `cat EDGE-CASES.md` directly. All artifacts loaded via vg-load.
 
