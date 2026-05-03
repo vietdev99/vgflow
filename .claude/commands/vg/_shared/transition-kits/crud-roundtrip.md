@@ -1,0 +1,331 @@
+# Transition Kit — CRUD Round-Trip
+
+**Pattern:** state transition with invariants. Given (role, resource, scope), execute Read → Create → Read → Update → Read → Delete → Read with persistence verification between every mutation.
+
+This kit applies to resources where `kit: crud-roundtrip` is declared in `CRUD-SURFACES.md`. For workflows that don't fit (approvals, bulk actions, settings, dashboards), use a different kit.
+
+---
+
+## TOOL USAGE IS MANDATORY
+
+You are a Gemini Flash worker driving a real browser via MCP. You MUST call playwright tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_form`, `browser_network_requests`) to complete this task. Text-only responses describing what you "would" do are INVALID and will fail the run.
+
+For every step below, your response MUST include exactly one tool invocation. Do not describe actions; perform them.
+
+If `base_url` in your context block is null/empty, do NOT fabricate a URL. Instead, write the run artifact with `steps[].status: "blocked"` and `reason: "missing_base_url"` and exit.
+
+---
+
+## Worker invocation contract
+
+You are a worker spawned per `(resource × role)` pair. You will receive a `CONTEXT` JSON block (appended to this prompt) with these top-level keys:
+
+- **`resource`** — resource name (string) and **`scope`** (`global` | `owner-only` | `tenant-scoped` | `self-service`)
+- **`role`** — current role name (string) and **`auth_token`**, **`actor`** (`{user_id, tenant_id, ...}`)
+- **`base_url`** — origin to prepend to every route (e.g. `http://localhost:5555`)
+- **`platforms_web`** — UI surface descriptor (nested):
+    - `platforms_web.list.route` — list route (e.g. `/notes`)
+    - `platforms_web.list.table.columns[]` — list table columns
+    - `platforms_web.form.create_route` — create route (e.g. `/notes/new`)
+    - `platforms_web.form.update_route` — update route (e.g. `/notes/:id/edit`)
+    - `platforms_web.form.fields[]` — form field names
+    - `platforms_web.delete.confirm_dialog` — bool, dialog presence expectation
+- **`platforms_backend`** — backend endpoint descriptor (nested):
+    - `platforms_backend.list_endpoint.path` — e.g. `GET /api/notes`
+    - `platforms_backend.mutation.paths[]` — e.g. `[POST /api/notes, PATCH /api/notes/{id}, DELETE /api/notes/{id}]`
+- **`expected_behavior`** — per-operation status code matrix for this role
+- **`forbidden_side_effects[]`** — endpoints that MUST NOT be called for this operation
+- **`delete_policy`** — `{confirm, reversible_policy, audit_log}` from CRUD-SURFACES base
+- **`lifecycle_states[]`** — state list for record-state auth checks
+- **`object_level_auth`** — IDOR/tenant-leak expectation map
+- **`output_path`** — where to write the run artifact JSON
+- **`run_id`** — unique identifier for this workflow run (used for unique payload generation, evidence refs, cleanup)
+
+Always construct full URLs as `${base_url}${platforms_web.list.route}` (etc.). Never call `browser_navigate` with a relative or `null/...` URL.
+
+You have access to the Playwright MCP server for browser interaction. Use it for every step that touches the UI.
+
+---
+
+## 8-step round-trip
+
+For each step, observe the actual response, compare to expected behavior for this role + scope, and emit a finding if observed ≠ expected.
+
+### Step 1 — Read list (baseline)
+
+- Navigate to `${base_url}${platforms_web.list.route}` with `auth_token` (use `browser_navigate`).
+- Capture: row count, column headers, sample row values, filter UI presence.
+- Expected for role:
+  - `admin` (global scope): 200, full row count
+  - `user` (owner-only scope): 200, only owner's rows
+  - `user` (admin-scoped resource): 403 or empty list (per app convention)
+  - `anon`: 401 or login redirect
+- If 200 + rows visible: capture `baseline_row_count`. Continue.
+- If denied as expected: emit `step.status: skipped`, reason `denied_by_role`, skip remaining steps.
+- If response diverges from expected: emit finding (severity per matrix below), continue ONLY if Read returned data (else skip).
+
+### Step 2 — Create
+
+- If `expected_behavior.create` denies for this role: verify the create affordance is hidden (no button/link visible) AND a direct POST returns the expected denial code. If either condition fails (button visible OR mutation succeeds), emit a `critical` finding (`auth_bypass`).
+- If `expected_behavior.create` allows: open create form via UI affordance.
+- Generate payload with **per-run unique values** to avoid collisions:
+  - `name: "vg-review-{run_id}-create"`
+  - `email: "vg-review-{run_id}@test.local"`
+  - other fields: minimal valid values from `platforms_web.form.fields[]` (use `default_test_value` if declared, else type-appropriate fixtures)
+- Submit. Capture: response status, redirect target, network calls, screenshot.
+- Track: every API call this step triggered. Cross-reference against `forbidden_side_effects[]`. If any forbidden endpoint hit (e.g. `POST /api/billing/charge` during create of a draft) → emit `high` finding.
+- Capture the created entity ID (from response body, redirect URL, or list refresh).
+
+### Step 3 — Read list (verify Create persisted)
+
+- Navigate back to `${base_url}${platforms_web.list.route}` (force reload, no cache).
+- Verify `row_count == baseline_row_count + 1`.
+  - **Caveat**: if the list is filtered/paginated and the new row falls outside view, this assertion is unreliable. Try filtering by the unique payload value (e.g. `name=vg-review-{run_id}-create`) before asserting.
+- Verify the new row contains the submitted values.
+- If row not visible: emit `high` finding `persistence_broken_or_optimistic_ui`, evidence = full request/response of Step 2 + this list query.
+
+### Step 4 — Read detail (after Create)
+
+The context block does NOT carry a dedicated detail-route field. Derive the
+detail URL from `platforms_web.form.update_route` ONLY if the route ends with
+the exact 5-character suffix `/edit` (no trailing slash, no query string
+`?...`, no fragment `#...`). Strip those 5 characters to get the detail URL.
+
+- If `platforms_web.form.update_route` is null/absent, OR does not end in the
+  exact suffix `/edit` (e.g. has a query string, fragment, trailing slash, or
+  different suffix): emit `step.status: "skipped"`, `reason: "cannot_derive_detail_url"`, continue to Step 5. Do NOT reference any other detail-route field name (none exists in context).
+- Otherwise navigate to `${base_url}${platforms_web.form.update_route minus trailing /edit}` for the created entity (use `browser_navigate`).
+- Verify all submitted fields are persisted with submitted values.
+- Capture: detail view structure (which fields shown, edit/delete affordance presence per role).
+
+### Step 5 — Update
+
+- If `expected_behavior.update` denies: verify edit affordance is hidden AND direct PATCH/PUT returns denial code. Emit finding if either bypass exists.
+- If allowed: modify a non-id, non-immutable field. Use a per-run unique new value (`updated_value: "vg-review-{run_id}-updated"`) to avoid clock-skew false positives.
+- Submit. Capture: response status, network calls.
+- Cross-reference against `forbidden_side_effects[]`.
+
+### Step 6 — Read detail (verify Update applied)
+
+- Re-load the detail view (or list if no detail view).
+- Verify the modified field shows the new unique value.
+- Verify other fields unchanged.
+- DO NOT rely on `updated_at` timestamp comparison — clock skew, async writes, second-level resolution all cause false positives. Compare the actual changed value instead.
+- If unchanged: emit `high` finding `update_not_persisted`, evidence = Step 5 request/response + this read.
+
+### Step 7 — Delete
+
+- If `expected_behavior.delete` denies: verify delete affordance is hidden AND direct DELETE returns denial code.
+- If allowed: trigger delete via UI (handle confirm dialog if present). Capture confirm dialog presence/absence — soft-delete UX often differs from hard-delete.
+- Capture response status, network call, redirect.
+- Cross-reference against `forbidden_side_effects[]`.
+
+### Step 8 — Read (verify deletion)
+
+- Determine soft vs hard delete from `CRUD-SURFACES.delete_policy`.
+- **Hard delete**: list view should not contain the entity; detail URL should 404.
+- **Soft delete**: entity should be flagged archived in the list (or hidden from default filter); detail URL should show archived banner; entity may still be reachable via "include archived" filter.
+- If observed != expected per `delete_policy`: emit `medium` finding `delete_policy_mismatch`.
+
+---
+
+## Step 9–11 — Object-level auth matrix (v2.39.0+ MANDATORY for owner-scoped resources)
+
+Codex critique #3: per-resource × role matrix misses ownership / tenancy / record state. These steps catch it. Skip ONLY if `CRUD-SURFACES.scope == "global"` (resource is shared across all users).
+
+Resources with `scope: owner-only` or `scope: tenant-scoped` MUST run these steps. The kit reads `expected_behavior.object_level` from CRUD-SURFACES — if absent, defaults below apply.
+
+### Step 9 — Cross-owner read (IDOR)
+
+Setup: ENV-CONTRACT.md must declare 2 users in same tenant (`user_a`, `user_b`) plus 1 user in different tenant (`user_other_tenant`).
+
+- As `user_a`: create entity (use Step 2's payload pattern, capture entity ID).
+- Switch login to `user_b` (same tenant): try to GET the entity by ID directly.
+- Expected per `scope`:
+  - `owner-only`: 403 OR 404 (preference: 404 for info-disclosure resistance)
+  - `tenant-scoped`: 200 (same tenant can read peer entities)
+  - `self-service`: 403 (each user sees only own)
+- If `user_b` got 200 on `owner-only` resource → emit `critical` finding `idor_horizontal_read`.
+
+### Step 10 — Cross-tenant read (tenant leakage)
+
+- As `user_other_tenant`: try to GET the entity created in Step 9 by ID directly.
+- Expected: 403 OR 404 regardless of scope (tenant boundary is hard).
+- If 200 → emit `critical` finding `tenant_leakage_read`. This is THE worst bug class for multi-tenant SaaS.
+
+### Step 11 — Cross-owner mutation (privilege escalation)
+
+- As `user_b` (same tenant, different owner): try PATCH and DELETE on entity owned by `user_a`.
+- Expected: 403 OR 404.
+- If mutation succeeds → emit `critical` finding `idor_horizontal_mutation`.
+- Track: did audit log capture `user_b` as actor? If audit shows `user_a` (the owner) instead → emit additional `high` finding `audit_log_actor_mismatch`.
+
+### Step 12 — State-locked operation (record-state auth)
+
+If CRUD-SURFACES declares `lifecycle_states` for this resource (e.g. `[draft, published, archived]`):
+
+- As authorized role: create entity in `published` state (or transition to it).
+- Try `update` operation on `published` entity.
+- Expected per `expected_behavior.state_lock`:
+  - If declared `published: read-only`: 403 OR 409 Conflict
+  - If declared `published: editable`: 200 with mutation
+- If state-lock declared but mutation succeeds: emit `high` finding `state_lock_bypass`.
+
+Repeat for `archived` state.
+
+---
+
+## Updated severity matrix (post v2.39 object-level additions)
+
+| Finding | Severity | Why |
+|---|---|---|
+| Cross-owner read on owner-only resource (IDOR) | critical | privilege/authz |
+| Cross-tenant read (tenant leakage) | critical | multi-tenant boundary |
+| Cross-owner mutation (privilege escalation) | critical | data integrity + authz |
+| Audit log actor mismatch | high | compliance/forensics |
+| State-lock bypass (mutation on read-only state) | high | state machine |
+| All Step 1–8 findings | (as previously declared) | (unchanged) |
+
+---
+
+## Cleanup (mandatory — runs even on failure)
+
+If the workflow created entities but didn't reach Step 7 successfully:
+- Attempt cleanup via direct DELETE on captured entity ID using admin token.
+- If cleanup fails: emit `cleanup_status: partial` in run artifact, list orphan IDs.
+
+If the workflow created via UI but failed before capturing the ID:
+- Search list for entities matching `name=vg-review-{run_id}-*` and delete them via admin token.
+- Emit `cleanup_status: best_effort` if any matches deleted.
+
+---
+
+## Severity matrix
+
+| Finding | Severity | Why |
+|---|---|---|
+| Mutation succeeds for role denied by matrix | critical | auth_bypass |
+| Mutation triggers forbidden side-effect (email, billing, audit) | high | scope_violation |
+| Persistence broken (Read after Create/Update doesn't reflect change) | high | data_integrity |
+| Delete policy mismatch (hard when should be soft, or vice versa) | medium | UX/compliance |
+| Detail view exists but missing submitted fields | medium | data_loss |
+| Cleanup partial (orphan test data left in DB) | low | hygiene |
+
+---
+
+## Output: run artifact JSON
+
+Write to `${OUTPUT_PATH}` exactly this shape (see `commands/vg/_shared/templates/run-artifact-template.json` for canonical schema):
+
+```json
+{
+  "run_id": "<provided>",
+  "resource": "<from context>",
+  "role": "<from context>",
+  "kit": "crud-roundtrip",
+  "scope": "<from context>",
+  "started_at": "<ISO 8601>",
+  "completed_at": "<ISO 8601>",
+  "steps": [
+    {
+      "name": "read_list_baseline",
+      "status": "pass | fail | blocked | skipped",
+      "expected": {"...": "..."},
+      "observed": {"...": "..."},
+      "evidence_ref": "evidence/run-{run_id}/step-1.json",
+      "blocked_reason": null
+    }
+    // ... 8 steps total
+  ],
+  "coverage": {
+    "attempted": 8,
+    "passed": 0,
+    "failed": 0,
+    "blocked": 0,
+    "skipped": 0
+  },
+  "findings": [
+    {
+      "id": "F-<incremental>",
+      "title": "<short>",
+      "severity": "critical | high | medium | low",
+      "security_impact": "auth_bypass | scope_violation | data_integrity | tenant_leakage | none",
+      "confidence": "high | medium | low",
+      "dedupe_key": "<resource>-<role>-<step>-<short_desc>",
+      "actor": {"role": "<role>", "user_id": "<from auth>", "tenant": "<if applicable>"},
+      "environment": "<from config>",
+      "step_ref": "step-<idx>",
+      "request": {"...": "..."},
+      "response": {"...": "..."},
+      "trace_id": "<if available from response headers>",
+      "data_created": [{"resource": "...", "id": "..."}],
+      "cleanup_status": "completed | partial | skipped",
+      "remediation_steps": ["..."],
+      "cwe": "CWE-<id> | null"
+    }
+  ],
+  "cleanup_status": "completed | partial | skipped"
+}
+```
+
+Findings are derived from steps with `status: fail`. Steps with `status: blocked` (couldn't execute due to upstream failure) do NOT emit findings — they document why coverage is incomplete.
+
+A clean pass produces zero findings and `coverage.passed == coverage.attempted`. The run artifact's existence proves execution; the verdict gate uses `coverage.attempted >= 1` and `evidence_ref` populated per non-skipped step.
+
+---
+
+## Replay manifest (v2.39.0+ MANDATORY for findings)
+
+Every emitted finding MUST include a `replay` block enabling deterministic
+re-execution by `scripts/replay-finding.py`. Without it, findings cannot
+be confirmed/disputed during human triage.
+
+```json
+"replay": {
+  "commit_sha": "<from git rev-parse HEAD at run start>",
+  "worker_prompt_version": "crud-roundtrip.md@<file mtime ISO>",
+  "env": {
+    "base_url": "<from ENV-CONTRACT.md target.base_url>",
+    "phase_dir": "<absolute path>"
+  },
+  "fixtures_used": {
+    "role": "<role>",
+    "user_id": "<from token>",
+    "tenant_id": "<from token>"
+  },
+  "seed_payload_pattern": "vg-review-{run_id}-create",
+  "request_sequence": [
+    {
+      "step": "step-2-create",
+      "method": "POST",
+      "url": "<full URL>",
+      "headers": {"Authorization": "Bearer ${TOKEN}", "Content-Type": "application/json"},
+      "body": {<exact JSON body submitted>},
+      "expected_status": 201,
+      "observed_status": 201,
+      "response_excerpt": "<first 500 chars>"
+    },
+    {
+      "step": "step-3-read-after-create",
+      "method": "GET",
+      "url": "<full URL>",
+      "headers": {"Authorization": "Bearer ${TOKEN}"},
+      "expected_status": 200,
+      "observed_status": 200,
+      "response_excerpt": "..."
+    }
+  ]
+}
+```
+
+Use `${TOKEN}` placeholder for auth — `replay-finding.py` substitutes
+from `.review-fixtures/tokens.local.yaml` at replay time. This decouples
+replay from token lifetime.
+
+For findings that require multi-step reproduction (e.g. step 2 creates
+entity, step 5 updates it, step 6 fails), include ALL preceding steps
+in `request_sequence` — replay must be self-contained.
+
+If a finding is UI-only (no API request), populate `request_sequence`
+with the network calls observed during that UI action (Playwright MCP
+captures these).

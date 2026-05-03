@@ -1,0 +1,1207 @@
+# ═════════════════════════════════════════════════════════════════════
+# VG Validator Narration Strings (B8.0)
+# ═════════════════════════════════════════════════════════════════════
+# Every validator Evidence.message / fix_hint goes through _i18n.t().
+# Key pattern: <validator>.<evidence_type>.<field>
+#   - .message   — WHAT went wrong (concrete, 1-2 sentences, user-oriented)
+#   - .fix_hint  — HOW to resolve (actionable, steps if multi-option)
+#   - .summary   — optional short form for log aggregation
+#
+# RULE: Vietnamese (vi) required. English (en) required as fallback.
+# Other locales optional — missing locale falls back automatically.
+# English terms inside VN templates MUST have VN gloss in parentheses on
+# first use (per .claude/commands/vg/_shared/term-glossary.md R2 rule).
+# Placeholders use {name} syntax; interpolate via _i18n.t(key, name=...).
+# ═════════════════════════════════════════════════════════════════════
+
+# ─── commit-attribution.py ─────────────────────────────────────────
+
+commit_attr.empty_message.message:
+  vi: "Commit message trống (không có subject / body)"
+  en: "Commit message is empty"
+
+commit_attr.empty_message.fix_hint:
+  vi: "Viết subject theo mẫu `feat(X.Y-NN): <mô tả>` + body giải thích 'vì sao' thay đổi. X.Y là phase, NN là task number trong PLAN."
+  en: "Provide subject `feat(X.Y-NN): <description>` + body explaining why. X.Y is phase, NN is task number from PLAN."
+
+commit_attr.subject_format_violation.message:
+  vi: "Subject commit không khớp conventional-commit pattern (mẫu chuẩn)"
+  en: "Subject does not match conventional-commit pattern"
+
+commit_attr.subject_format_violation.fix_hint:
+  vi: "Chấp nhận 2 dạng: (a) Phase format `feat(7.6-04): add handler` hoặc (b) Meta format `chore(vg): bump version`. Types: feat|fix|refactor|test|chore|docs|build|ci|perf|style|revert|review. Scope phải có nội dung. Chạy lại `git commit` với subject đúng."
+  en: "Accepted: (a) phase format `feat(7.6-04): add handler` or (b) meta format `chore(vg): bump version`. Types: feat|fix|refactor|test|chore|docs|build|ci|perf|style|revert|review. Scope must be non-empty. Re-run `git commit` with corrected subject."
+
+commit_attr.missing_citation.message:
+  vi: "Commit động vào code ({files}) nhưng body thiếu citation (tham chiếu)"
+  en: "Code-touching commit (files: {files}) missing citation in body"
+
+commit_attr.missing_citation.fix_hint:
+  vi: |
+    Thêm MỘT dòng vào commit body (lý do truy vết):
+      Per CONTEXT.md D-XX         (theo decision X trong phase)
+      Per API-CONTRACTS.md        (theo hợp đồng API)
+      Covers goal: G-XX           (đóng goal X)
+      no-goal-impact              (không liên quan goal nào — ghi rõ)
+  en: |
+    Add ONE line to commit body (traceability):
+      Per CONTEXT.md D-XX
+      Per API-CONTRACTS.md
+      Covers goal: G-XX
+      no-goal-impact
+
+commit_attr.phantom_citation.message:
+  vi: "Commit trích dẫn {refs} nhưng chúng KHÔNG tồn tại trong artifacts (tài liệu phase) của phase {phase}"
+  en: "Commit cites {refs} but they DON'T EXIST in phase {phase} artifacts"
+
+commit_attr.phantom_citation.fix_hint:
+  vi: |
+    Hoặc (a) trích dẫn một D-XX/G-XX thật từ {phase_dir}/CONTEXT.md
+    hoặc TEST-GOALS.md, (b) chạy /vg:scope hay /vg:amend để thêm
+    decision/goal còn thiếu, hoặc (c) đổi citation thành 'no-goal-impact'
+    nếu thay đổi thực sự không liên quan goal nào.
+  en: |
+    Either (a) cite a real D-XX/G-XX from {phase_dir}/CONTEXT.md or
+    TEST-GOALS.md, (b) run /vg:scope or /vg:amend to add the missing
+    decision/goal, or (c) change citation to 'no-goal-impact' if the
+    change is truly orthogonal.
+
+commit_attr.bypass_red_flag.message:
+  vi: "Commit body nhắc tới --no-verify hoặc --amend (dấu hiệu ý định bypass (đi đường tắt))"
+  en: "Commit body mentions --no-verify or --amend (bypass intent)"
+
+commit_attr.bypass_red_flag.fix_hint:
+  vi: "Bỏ nhắc tới --no-verify / --amend. Nếu thật sự cần bypass hook, ghi lý do vào override-debt register (sổ nợ) SAU khi fix gốc rễ, không phải thay vì fix."
+  en: "Remove mention of --no-verify / --amend. If bypass is truly needed, log justification in override-debt register AFTER fixing the root cause, not instead of it."
+
+commit_attr.args_error.message:
+  vi: "--staged-only yêu cầu --msg-file <path>"
+  en: "--staged-only requires --msg-file <path>"
+
+commit_attr.args_error.fix_hint:
+  vi: "Xem .husky/commit-msg để biết cách gọi đúng. Validator gốc dành cho hook mode chạy tự động khi git commit."
+  en: "See .husky/commit-msg for correct invocation. This mode is automatic when git commit runs."
+
+
+# ─── verify-contract-runtime.py ────────────────────────────────────
+
+contract_runtime.empty_contract.message:
+  vi: "API-CONTRACTS.md không có header `## METHOD /path` nào — contract có thể bị lỗi format hoặc dùng kiểu header không chuẩn"
+  en: "API-CONTRACTS.md has 0 `## METHOD /path` headers — contract may be malformed or uses non-standard header shape"
+
+contract_runtime.empty_contract.fix_hint:
+  vi: "Mỗi endpoint PHẢI bắt đầu bằng header markdown level-2 dạng `## POST /auth/register`. Bước blueprint 2b tạo đúng format này tự động. Nếu chạy tay, đảm bảo header đúng chữ hoa HTTP method."
+  en: "Each endpoint MUST start with a level-2 markdown header like `## POST /auth/register`. Blueprint step 2b generates this format automatically. If hand-authored, ensure HTTP method is uppercase."
+
+contract_runtime.no_source_files.message:
+  vi: "Không tìm thấy source file nào khớp globs — không thể verify endpoints contract"
+  en: "No source files matched globs — cannot verify contract endpoints"
+
+contract_runtime.no_source_files.fix_hint:
+  vi: "Nếu apps/*/src/ rỗng (dự án mới), bỏ qua gate này bằng override. Nếu không, tuỳ chỉnh --source-globs trỏ đúng source tree."
+  en: "If apps/*/src/ is empty (brand-new project), skip via override. Otherwise pass --source-globs pointing to the correct source tree."
+
+contract_runtime.missing_endpoint.message:
+  vi: "{count}/{total} endpoint trong contract KHÔNG có route handler trong source code. Endpoint được khai báo nhưng executor chưa implement (phantom — ma)."
+  en: "{count}/{total} contract endpoint(s) have NO route definition in source"
+
+contract_runtime.missing_endpoint.fix_hint:
+  vi: |
+    Hoặc (a) executor quên implement endpoint — thêm route handler
+    tương ứng, hoặc (b) contract khai báo endpoint phase này không
+    sở hữu — sửa API-CONTRACTS.md qua /vg:amend. Phantom endpoint
+    KHÔNG được phép ship vì review/test sẽ fail sau 1+ giờ.
+  en: |
+    Either (a) executor forgot to implement the endpoint — add the
+    missing route handler, or (b) contract declares endpoints the
+    phase doesn't own — amend API-CONTRACTS.md via /vg:amend.
+    Phantom endpoints should never ship.
+
+contract_runtime.ambiguous_endpoint.message:
+  vi: "{count}/{total} endpoint có path xuất hiện trong source nhưng không thấy route decl gắn method (verb HTTP)"
+  en: "{count}/{total} endpoint(s) have path match in source but no method-anchored route decl"
+
+contract_runtime.ambiguous_endpoint.fix_hint:
+  vi: |
+    Path xuất hiện trong source nhưng không có pattern
+    `fastify.<method>(` / `app.<method>(` / `@<Method>(` nào neo HTTP
+    method. Hoặc (a) đảm bảo route handler dùng đúng verb, hoặc
+    (b) nếu route nằm trong framework validator chưa biết, truyền
+    --allow-ambiguous để downgrade thành WARN (cảnh báo).
+  en: |
+    Path appears in source but no `fastify.<method>(` / `app.<method>(`
+    / `@<Method>(` pattern anchors the HTTP method. Either (a) ensure
+    the route handler uses the correct verb, or (b) if the route exists
+    under a framework this validator doesn't recognize, pass
+    --allow-ambiguous to downgrade to WARN.
+
+contract_runtime.verified_sample.message:
+  vi: "{count} endpoint verified OK (mẫu hiển thị dưới)"
+  en: "{count} endpoint(s) verified OK (sample below)"
+
+
+# ─── secrets-scan.py (B8.1) ────────────────────────────────────────
+
+secrets_scan.critical.message:
+  vi: "{count} bí mật CRITICAL (cực nghiêm trọng) lộ ra trong changes: {kinds}"
+  en: "{count} CRITICAL secret(s) leaked in changes: {kinds}"
+
+secrets_scan.critical.fix_hint:
+  vi: |
+    1. XOÁ giá trị secret khỏi source code, dùng env var hoặc vault.
+    2. ROTATE (thay) ngay: secret đã leaked coi như bị lộ — không thể
+       "đã sửa" bằng cách rewrite git history. Rotate trước, clean sau.
+    3. Nếu bí mật thuộc người khác (vd sample từ docs 3rd-party), thêm
+       vào .vg/secrets-allowlist.yml với pattern + reason + expires.
+    4. Commit lại + push. Scanner sẽ check lại file diff tự động.
+  en: |
+    1. REMOVE the secret value from source, use env var or vault.
+    2. ROTATE immediately — leaked secrets cannot be "un-leaked" by
+       rewriting history. Rotate first, clean later.
+    3. If the secret belongs to a 3rd party (docs sample, etc.), add
+       to .vg/secrets-allowlist.yml with pattern + reason + expires.
+    4. Re-commit + push. Scanner re-checks the diff automatically.
+
+secrets_scan.high.message:
+  vi: "{count} bí mật HIGH (nghiêm trọng) lộ ra trong changes: {kinds}"
+  en: "{count} HIGH-severity secret(s) leaked in changes: {kinds}"
+
+secrets_scan.high.fix_hint:
+  vi: "Xem fix_hint của critical — cách sửa như nhau, khác mức độ khẩn."
+  en: "See critical fix_hint — same procedure, different urgency."
+
+secrets_scan.medium.message:
+  vi: "{count} chuỗi giống password literal trong changes — kiểm tra tay"
+  en: "{count} password-literal-like string(s) in changes — manual review"
+
+secrets_scan.medium.fix_hint:
+  vi: |
+    Medium-severity match thường là password literal trong config hoặc
+    test fixture. Hoặc (a) rotate & dùng env var, (b) nếu là dummy
+    intended-for-test, đổi thành placeholder rõ ràng (vd `<PASSWORD>`),
+    hoặc (c) thêm vào .vg/secrets-allowlist.yml với lý do.
+  en: |
+    Medium matches usually password literals in config or test fixture.
+    Either (a) rotate & use env var, (b) if intended-for-test, switch
+    to clear placeholder (e.g. `<PASSWORD>`), or (c) add to
+    .vg/secrets-allowlist.yml with reason.
+
+
+# ─── deps-security-scan.py (B8.1) ─────────────────────────────────
+
+deps_security.scanner_error.message:
+  vi: "Scanner dependency (npm/pnpm/pip-audit) lỗi: {details}"
+  en: "Dependency scanner error: {details}"
+
+deps_security.scanner_error.fix_hint:
+  vi: "Cài tool thiếu (npm install -g pip-audit nếu Python project), hoặc tăng --timeout nếu dự án lớn."
+  en: "Install missing tool (npm install -g pip-audit for Python projects), or raise --timeout for large projects."
+
+deps_security.cve_blocking.message:
+  vi: "{count} CVE (lỗ hổng công khai) với severity >= {threshold} phải fix trước khi push"
+  en: "{count} CVE(s) at severity >= {threshold} must be fixed before push"
+
+deps_security.cve_blocking.fix_hint:
+  vi: |
+    1. Chạy `pnpm audit --fix` (hoặc `npm audit fix`) nếu upgrade tự
+       động được.
+    2. Nếu không fix được tự động, check changelog của package tìm
+       version patched.
+    3. Nếu CVE là false-positive hoặc chưa có fix, thêm vào
+       .vg/cve-waivers.yml với id + package + reason + expires.
+    4. Re-run `git push` — scanner sẽ check lại.
+  en: |
+    1. Run `pnpm audit --fix` (or `npm audit fix`) for auto-upgradable.
+    2. If not auto-fixable, check package changelog for patched version.
+    3. If CVE is false-positive or has no fix yet, add to
+       .vg/cve-waivers.yml with id + package + reason + expires.
+    4. Re-run `git push` — scanner re-checks.
+
+deps_security.cve_below_threshold.message:
+  vi: "{count} CVE nhỏ hơn threshold={threshold} (không block, nên track)"
+  en: "{count} CVE(s) below threshold={threshold} (not blocking, track these)"
+
+deps_security.cve_waived.message:
+  vi: "{count} CVE waived (miễn trừ) qua .vg/cve-waivers.yml"
+  en: "{count} CVE(s) waived via .vg/cve-waivers.yml"
+
+deps_security.cve_waived.fix_hint:
+  vi: "Review waivers định kỳ — waivers hết hạn sẽ auto block lại."
+  en: "Review waivers periodically — expired waivers will auto-block again."
+
+
+# ─── verify-input-validation.py (B8.2) ────────────────────────────
+
+input_validation.dormant_schema.message:
+  vi: "{count} route file import schema validator (Zod/Pydantic/Joi/...) nhưng KHÔNG thấy call .parse() hoặc decorator validator — schema ở trạng thái 'dormant' (ngủ), runtime bỏ qua validation"
+  en: "{count} route file(s) import a schema validator (Zod/Pydantic/Joi/...) but have NO .parse() call or validator decorator — schema is dormant, runtime skips validation"
+
+input_validation.dormant_schema.fix_hint:
+  vi: |
+    Với mỗi file bị flag:
+      - Zod: đảm bảo có `schema.parse(req.body)` hoặc `schema.parseAsync(...)`
+        bên trong route handler. Không chỉ import.
+      - Pydantic: call `Model(**req.json)` hoặc `Model.model_validate(...)`.
+      - NestJS: dùng `@Body(ValidationPipe)` với class-validator DTO.
+      - Fastify: attach schema qua `fastify.post('/x', { schema: { body: ... } })`.
+      - Joi/Yup: call `schema.validate(payload)`.
+
+    Nếu bạn CỐ TÌNH không validate (rare — chỉ đúng cho webhook raw body), di
+    chuyển schema import sang types-only file (không có route def) hoặc thêm
+    comment `// intentionally-skipped-validation: <reason>` để scanner tương lai
+    có context (feature sắp có).
+  en: |
+    For each flagged file:
+      - Zod: ensure `schema.parse(req.body)` or `schema.parseAsync(...)` is
+        called inside route handler. Not just imported.
+      - Pydantic: call `Model(**req.json)` or `Model.model_validate(...)`.
+      - NestJS: use `@Body(ValidationPipe)` with class-validator DTO.
+      - Fastify: attach schema via `fastify.post('/x', { schema: { body: ... } })`.
+      - Joi/Yup: call `schema.validate(payload)`.
+
+    If intentionally skipping validation (rare — raw webhook bodies), move
+    schema import to a types-only file (no route defs) or add comment
+    `// intentionally-skipped-validation: <reason>` for future scanner context.
+
+input_validation.validation_verified.message:
+  vi: "✓ {count} route file có schema validator được invoke (verified đúng)"
+  en: "✓ {count} route file(s) with schema validator properly invoked"
+
+
+# ─── verify-authz-declared.py (B8.3) ──────────────────────────────
+
+authz_declared.missing_auth.message:
+  vi: "{count}/{total} endpoint trong API-CONTRACTS.md THIẾU dòng `**Auth:**` khai báo authorization (phân quyền) — AI executor có thể default về no-auth"
+  en: "{count}/{total} endpoint(s) in API-CONTRACTS.md MISSING `**Auth:**` declaration — executor may default to no-auth"
+
+authz_declared.missing_auth.fix_hint:
+  vi: |
+    Dưới mỗi `## METHOD /path` header, thêm 1 dòng:
+
+      **Auth:** Public
+      **Auth:** Authenticated
+      **Auth:** Role: admin
+      **Auth:** Owner only (user can only access own resources)
+
+    Dòng này là contract — không chỉ comment. verify-authz-declared
+    và downstream authz test (B9+) sẽ dùng để sinh test cross-role.
+  en: |
+    Under each `## METHOD /path` header, add a line:
+
+      **Auth:** Public
+      **Auth:** Authenticated
+      **Auth:** Role: admin
+      **Auth:** Owner only (user can only access own resources)
+
+    This line is contract — not comment. verify-authz-declared and
+    downstream authz runtime test (B9+) use it to generate cross-role
+    test matrices.
+
+authz_declared.unclear_auth.message:
+  vi: "{count} endpoint có dòng `**Auth:**` nhưng NỘI DUNG không khớp classification nào (public/authenticated/role/owner_only) — AI khó infer intent"
+  en: "{count} endpoint(s) have `**Auth:**` line but content matches no known classification (public/authenticated/role/owner_only)"
+
+authz_declared.unclear_auth.fix_hint:
+  vi: |
+    Dùng từ khóa chuẩn để AI + validator parse được:
+      - `Public` — bất kỳ ai truy cập (rate-limited OK)
+      - `Authenticated` — login user bất kỳ
+      - `Role: <name>` — chỉ role cụ thể (admin, moderator, ...)
+      - `Owner only` — resource scoped cho chủ sở hữu
+    Sau đó có thể thêm context (rate-limit, captcha, 2FA) trong ngoặc.
+  en: |
+    Use standard keywords so AI + validator can parse:
+      - `Public` — anyone (rate-limit ok)
+      - `Authenticated` — any logged-in user
+      - `Role: <name>` — specific role only (admin, moderator, ...)
+      - `Owner only` — resource scoped to owner
+    Add context (rate-limit, captcha, 2FA) in parens if needed.
+
+authz_declared.mutation_generic.message:
+  vi: "{count} endpoint mutation (POST/PUT/PATCH/DELETE) chỉ khai `Authenticated` — cân nhắc nâng thành `Owner only` hoặc `Role:X` nếu resource có scope"
+  en: "{count} mutation endpoint(s) (POST/PUT/PATCH/DELETE) declare only `Authenticated` — consider escalating to `Owner only` or `Role:X` if resource is scoped"
+
+authz_declared.mutation_generic.fix_hint:
+  vi: |
+    `Authenticated` nghĩa là ai đăng nhập đều có thể gọi. Nếu resource
+    bị tenant-scoped (user X không được sửa data của user Y) mà contract
+    không khai `Owner only`, executor dễ quên implement ownership check
+    → leak cross-tenant. Nếu thực sự không có scope (vd /me/settings),
+    để `Authenticated` OK, gate này chỉ WARN advisory.
+  en: |
+    `Authenticated` means any logged-in user can call. If the resource
+    is tenant-scoped (user X must not mutate user Y's data) and the
+    contract doesn't declare `Owner only`, executor may forget the
+    ownership check → cross-tenant leak. If truly not scoped (e.g.
+    /me/settings), `Authenticated` is fine — this gate only WARNs.
+
+# ─────────────────────────────────────────────────────────────────────
+# B9.1 — accessibility-scan.py (static a11y violations)
+
+a11y.block_violations.message:
+  vi: "Phát hiện {count} vi phạm a11y (accessibility — khả năng truy cập) cần chặn: {critical} critical + {serious} serious"
+  en: "Found {count} blocking a11y violations: {critical} critical + {serious} serious"
+
+a11y.block_violations.fix_hint:
+  vi: |
+    Violations điển hình + cách sửa:
+      - `img-missing-alt`: thêm `alt="mô tả ngắn"` hoặc `alt=""` nếu decorative
+      - `button-no-label`: button rỗng cần text nội dung, hoặc `aria-label="Đóng"`
+      - `role-button-no-label`: element role=button phải có aria-label
+      - `link-no-label`: `<a>` rỗng — thêm text hoặc aria-label
+      - `onclick-non-interactive`: div/span có onclick cần role="button" + tabindex="0"
+    Nếu là false positive thực sự: thêm regex path vào `.vg/a11y-allowlist.yml`.
+  en: |
+    Typical violations + fixes:
+      - `img-missing-alt`: add `alt="short description"` or `alt=""` if decorative
+      - `button-no-label`: empty button needs text content, or `aria-label="Close"`
+      - `role-button-no-label`: role=button element must have aria-label
+      - `link-no-label`: empty `<a>` — add text or aria-label
+      - `onclick-non-interactive`: div/span with onclick needs role="button" + tabindex="0"
+    Real false positives: add regex path to `.vg/a11y-allowlist.yml`.
+
+a11y.moderate_violations.message:
+  vi: "{count} vi phạm a11y mức moderate (cảnh báo — không chặn). Nên fix trước UAT."
+  en: "{count} moderate a11y violations (advisory, non-blocking). Consider fixing before UAT."
+
+a11y.moderate_violations.fix_hint:
+  vi: "Kiểm tra file + line trong evidence, fix theo WCAG 2.2 AA guidelines."
+  en: "Inspect file + line in evidence, fix per WCAG 2.2 AA guidelines."
+
+# ─────────────────────────────────────────────────────────────────────
+# B9.2 — i18n-coverage.py (missing keys + hardcoded strings)
+
+i18n.default_missing.message:
+  vi: "Default locale '{locale}' không tìm thấy trong locales_dir"
+  en: "Default locale '{locale}' not found in locales_dir"
+
+i18n.default_missing.fix_hint:
+  vi: "Tạo file `{locale}.json` hoặc folder `{locale}/` với ít nhất 1 key, hoặc đổi `i18n.default_locale` trong vg.config.md cho khớp."
+  en: "Create `{locale}.json` or `{locale}/` folder with at least 1 key, or update `i18n.default_locale` in vg.config.md."
+
+i18n.missing_keys.message:
+  vi: "{count} key i18n được code gọi (t('...')) nhưng không tồn tại trong locale '{locale}'"
+  en: "{count} i18n keys called in code (t('...')) but missing from locale '{locale}'"
+
+i18n.missing_keys.fix_hint:
+  vi: |
+    Mở file locale `{locale}.json` thêm key + bản dịch. UI sẽ hiển thị
+    key literal (vd `campaigns.create`) khi thiếu — user nhìn thấy như
+    lỗi runtime. Nếu key đó là dynamic (từ API) thì di chuyển ra khỏi
+    `t()` literal mà dùng variable resolver.
+  en: |
+    Open `{locale}.json` and add the missing keys with translations.
+    UI shows literal key (e.g. `campaigns.create`) when missing —
+    visible to user as runtime error. If key is dynamic (from API),
+    use a variable resolver instead of `t()` literal.
+
+i18n.cross_locale.message:
+  vi: "Có {missing_total} key có trong default locale '{default_locale}' nhưng thiếu ở các locale khác"
+  en: "{missing_total} keys present in default locale '{default_locale}' but missing in other locales"
+
+i18n.cross_locale.fix_hint:
+  vi: |
+    Copy missing keys từ default locale sang các locale khác với bản
+    dịch tương ứng. Nếu locale nào chưa hoàn thiện, liệt kê rõ trong
+    project roadmap và dùng fallback mechanism để hiển thị default
+    text thay vì key literal.
+  en: |
+    Copy missing keys from default locale to other locales with
+    appropriate translations. If some locale is intentionally
+    incomplete, document in roadmap + use fallback to show default
+    text instead of key literal.
+
+i18n.hardcoded.message:
+  vi: "{count} chuỗi hardcode (ratio {ratio}% > threshold {threshold}%) — thiếu wrap trong t(...)"
+  en: "{count} hardcoded strings (ratio {ratio}% > threshold {threshold}%) — missing t(...) wrapper"
+
+i18n.hardcoded.fix_hint:
+  vi: |
+    Wrap các chuỗi user-visible trong `t('key.path')` để hỗ trợ dịch.
+    Nếu là tech code / ID (`PENDING`, `ERR-001`) — skip tự động.
+    Nếu là chuỗi dev-only (debug/console), thêm vào `.vg/i18n-allowlist.yml`.
+  en: |
+    Wrap user-visible strings in `t('key.path')` for translation support.
+    Tech codes / IDs (`PENDING`, `ERR-001`) auto-skipped.
+    Dev-only strings (debug/console): add to `.vg/i18n-allowlist.yml`.
+
+i18n.hardcoded_advisory.message:
+  vi: "{count} chuỗi có thể là hardcode (dưới threshold, không chặn) — review để chắc chắn"
+  en: "{count} possibly hardcoded strings (below threshold, advisory) — review to confirm"
+
+i18n.hardcoded_advisory.fix_hint:
+  vi: "Kiểm tra sample, thêm vào allowlist nếu intentional hoặc wrap `t()` nếu user-visible."
+  en: "Inspect samples, add to allowlist if intentional, wrap in `t()` if user-visible."
+
+# ─────────────────────────────────────────────────────────────────────
+# B12.1 — mutation-layers.py (3-layer mutation verify)
+
+mutation_layers.missing.message:
+  vi: "{count} mutation spec(s) thiếu 1 hoặc nhiều trong 3 layer bắt buộc (toast/network/persist)"
+  en: "{count} mutation spec(s) missing one or more required layers (toast/network/persist)"
+
+mutation_layers.missing.fix_hint:
+  vi: |
+    Mỗi mutation spec (create/update/delete/submit/save/send/...) BẮT BUỘC
+    3 layer assertion — ghost save bug (refresh mất data nhưng toast đã hiện)
+    chỉ phát hiện khi đủ cả 3:
+
+    1. **Toast/status** — user thấy xác nhận:
+       `await expect(page.getByRole('status')).toContainText(/success|saved/i);`
+       hoặc `getByRole('alert')` cho error toast.
+
+    2. **Network settle** — đợi request xong trước assertion kế:
+       `await page.waitForLoadState('networkidle');`
+       hoặc `await page.waitForResponse(r => r.url().includes('/api/'));`
+
+    3. **Persist verify** — navigate lại, data vẫn còn:
+       `await page.reload();` rồi re-query `getByText(createdValue);`
+       hoặc `await page.goto(url);` (điểm danh lại từ server).
+
+    Nếu spec thực sự không cần 1 layer (vd read-only preview không persist):
+    dùng flag `--allow-missing-mutation-verify` + log debt + comment lý do.
+  en: |
+    Every mutation spec (create/update/delete/submit/save/send/...) MUST
+    include 3 assertion layers — ghost-save bugs (refresh loses data but
+    toast already shown) only surface when all 3 are present:
+
+    1. **Toast/status** — user sees confirmation:
+       `await expect(page.getByRole('status')).toContainText(/success|saved/i);`
+       or `getByRole('alert')` for error toast.
+
+    2. **Network settle** — wait request completion before next assertion:
+       `await page.waitForLoadState('networkidle');`
+       or `await page.waitForResponse(r => r.url().includes('/api/'));`
+
+    3. **Persist verify** — navigate back, data still there:
+       `await page.reload();` then re-query `getByText(createdValue);`
+       or `await page.goto(url);` (re-fetch from server).
+
+    If spec genuinely doesn't need one layer (e.g. read-only preview with
+    no persistence): use `--allow-missing-mutation-verify` + log debt +
+    comment rationale in spec.
+
+# ─────────────────────────────────────────────────────────────────────
+# B11.1 — not-scanned-replay.py (test-entry gate for NOT_SCANNED/FAILED leftover)
+
+not_scanned_replay.remain.message:
+  vi: "Review exit nhưng còn {not_scanned} NOT_SCANNED + {failed} FAILED goal chưa resolve"
+  en: "Review exited but {not_scanned} NOT_SCANNED + {failed} FAILED goals remain unresolved"
+
+not_scanned_replay.remain.fix_hint:
+  vi: |
+    /vg:test không được chạy khi còn goal ở trạng thái trung gian —
+    codegen không có input để sinh test case.
+
+    Fix (pick 1):
+      a) /vg:review {phase} --retry-failed
+         → replay Haiku scanner targeted start_view của từng goal
+
+      b) Goal không có UI surface (backend/infra) → update TEST-GOALS.md
+         thêm `**Infra deps:** [<tag>]` → re-classify INFRA_PENDING
+
+      c) Feature chưa build → /vg:build {phase} --gaps-only rồi re-review
+
+      d) Genuinely unreachable (UX path không exist) → manually mark
+         UNREACHABLE trong GOAL-COVERAGE-MATRIX với reason note
+
+    Detail của mỗi goal ở `actual` field — dùng `start_view` làm hint
+    cho Haiku target khi retry.
+  en: |
+    /vg:test cannot proceed with intermediate-status goals remaining —
+    codegen has no input to generate test cases.
+
+    Fix (pick 1):
+      a) /vg:review {phase} --retry-failed
+         → replay Haiku scanner targeted at each goal's start_view
+
+      b) Goal has no UI surface (backend/infra) → update TEST-GOALS.md
+         add `**Infra deps:** [<tag>]` → re-classify INFRA_PENDING
+
+      c) Feature not yet built → /vg:build {phase} --gaps-only then re-review
+
+      d) Genuinely unreachable (UX path doesn't exist) → manually mark
+         UNREACHABLE in GOAL-COVERAGE-MATRIX with reason note
+
+    Per-goal detail in `actual` field — use `start_view` as Haiku
+    targeting hint when retrying.
+
+# ─────────────────────────────────────────────────────────────────────
+# B11.2 — build-telemetry-surface.py (review reads build telemetry at entry)
+
+build_telemetry_surface.found.message:
+  vi: "{count} sự kiện BLOCK/FAIL từ build (trong {window}h qua) — Phase 3 fix-loop dùng làm seed"
+  en: "{count} BLOCK/FAIL events from build (last {window}h) — Phase 3 fix-loop uses as seeds"
+
+build_telemetry_surface.found.fix_hint:
+  vi: |
+    Build đã block các issue trên ở commit-time. Review phase 3 fix-loop
+    nên pre-populate candidate list từ danh sách này thay vì re-discover.
+
+    User action:
+      - Nếu commit sau đã fix → events này stale, ignore
+      - Nếu issue vẫn còn → phase 3 fix-loop phải address
+      - Nếu cần verify → check `actual` field cho step/gate + timestamp
+
+    Gate này không chặn review (non-blocking WARN) — nhiệm vụ của review
+    là xác nhận đã fix, không re-block lần nữa.
+  en: |
+    Build blocked these issues at commit-time. Review phase 3 fix-loop
+    should pre-populate candidate list from this instead of re-discovering.
+
+    User action:
+      - If later commit fixed it → events stale, ignore
+      - If issue still exists → phase 3 fix-loop must address
+      - To verify → check `actual` field for step/gate + timestamp
+
+    Gate is non-blocking WARN — review's job is to confirm the fix,
+    not block again.
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase A v2.5 — wave-verify-isolated.py (post-wave independent verify)
+
+wave_verify.tag_unresolvable.message:
+  vi: "Không phân giải được tag wave '{tag}' để xác định commit range"
+  en: "Cannot resolve wave tag '{tag}' to determine commit range"
+
+wave_verify.tag_unresolvable.fix_hint:
+  vi: "Kiểm tra build.md step 8 có thực sự tạo tag wave-start trước khi wave execute không. Tag format: vg-build-{phase}-wave-{N}-start"
+  en: "Check build.md step 8 actually creates wave-start tag before wave execution. Tag format: vg-build-{phase}-wave-{N}-start"
+
+wave_verify.divergence.message:
+  vi: "{count} check subprocess independent trả kết quả KHÁC với executor claim cho wave {wave_tag}"
+  en: "{count} subprocess checks DIVERGED from executor claims for wave {wave_tag}"
+
+wave_verify.divergence.fix_hint:
+  vi: |
+    Executor claim trong commit message (vd "typecheck: PASS", "tests: 12/12")
+    không khớp với kết quả chạy lại trong fresh subprocess. Đây là signal
+    executor đã nói dối hoặc environment drift giữa wave run và verify run.
+
+    Fix paths:
+      (a) Rollback wave: git reset --soft {wave_tag} → sửa code → re-run wave
+      (b) Nếu executor đúng, verify sai (flaky test / env thiếu): override
+          --allow-verify-divergence + reason
+      (c) Check stderr_tail trong evidence actual để xem subprocess fail ở đâu
+
+    Không được skip gate này trừ khi có bằng chứng environment issue cụ thể.
+  en: |
+    Executor claim in commit message (e.g. "typecheck: PASS", "tests: 12/12")
+    doesn't match fresh-subprocess re-run. Signal: executor lied or environment
+    drift between wave run and verify run.
+
+    Fix paths:
+      (a) Rollback wave: git reset --soft {wave_tag} → fix code → re-run wave
+      (b) If executor correct, verify flaky (missing env): override
+          --allow-verify-divergence + reason
+      (c) Inspect stderr_tail in evidence.actual to see where subprocess failed
+
+    Don't skip this gate without concrete environment issue evidence.
+
+wave_verify.divergence_advisory.message:
+  vi: "{count} check subprocess khác với executor claim (advisory mode, không chặn) — wave {wave_tag}"
+  en: "{count} subprocess checks differ from claims (advisory mode, non-blocking) — wave {wave_tag}"
+
+wave_verify.divergence_advisory.fix_hint:
+  vi: "Advisory mode không chặn build. Xem evidence để đánh giá có cần switch về strict mode hay không."
+  en: "Advisory mode doesn't block. Review evidence to decide whether to switch to strict mode."
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase B v2.5 — verify-goal-security.py (goal-level OWASP check)
+
+goal_security.critical_missing.message:
+  vi: "{count} goal trong critical_goal_domain (auth/payment/billing) thiếu section owasp_top10_2021"
+  en: "{count} goal(s) in critical_goal_domain (auth/payment/billing) missing owasp_top10_2021 section"
+
+goal_security.critical_missing.fix_hint:
+  vi: |
+    Goal thuộc domain nhạy cảm (auth/payment/billing) BẮT BUỘC khai báo
+    OWASP Top 10 categories relevant cho endpoint. Ví dụ:
+
+      security_checks:
+        owasp_top10_2021:
+          - "A01:Broken-Access-Control: owner check via middleware"
+          - "A03:Injection: Zod schema + Prisma parameterized query"
+          - "A07:Identification-Auth: bcrypt 12 + session fixation prevent"
+
+    Validator sẽ cross-ref với API-CONTRACTS Block 2 schema — nếu Zod
+    present sẽ auto-tick A03. Không cần liệt kê tất cả 10, chỉ relevant.
+    Nếu goal này thực sự read-only không có auth concern, đặt priority
+    khác critical hoặc override --allow-missing-security + reason.
+  en: |
+    Goal in sensitive domain (auth/payment/billing) MUST declare OWASP
+    Top 10 categories relevant to endpoint. Example:
+
+      security_checks:
+        owasp_top10_2021:
+          - "A01:Broken-Access-Control: owner check via middleware"
+          - "A03:Injection: Zod schema + Prisma parameterized query"
+          - "A07:Identification-Auth: bcrypt 12 + session fixation prevent"
+
+    Validator cross-refs API-CONTRACTS Block 2 schema — Zod present
+    auto-ticks A03. No need to list all 10, only relevant. If goal
+    genuinely read-only without auth concern, set priority != critical
+    or override --allow-missing-security with reason.
+
+goal_security.mutation_csrf.message:
+  vi: "{count} mutation endpoint thiếu khai báo csrf protection mechanism"
+  en: "{count} mutation endpoint(s) missing csrf protection declaration"
+
+goal_security.mutation_csrf.fix_hint:
+  vi: |
+    Mọi endpoint POST/PUT/PATCH/DELETE với cookie auth phải khai báo
+    csrf mechanism. Ví dụ:
+
+      security_checks:
+        csrf: "SameSite=Strict session cookie + double-submit token"
+
+    Nếu API chỉ accept Bearer token (không cookie) thì CSRF not applicable —
+    set config.cookie_auth: false HOẶC ghi rõ:
+
+      csrf: "N/A — Bearer-only API, no cookie"
+
+    CSRF attack cross-site form submission gây unauthorized state change
+    dù user đã logout trong tab khác. Không được skip gate này.
+  en: |
+    Every POST/PUT/PATCH/DELETE endpoint with cookie auth must declare
+    csrf mechanism. Example:
+
+      security_checks:
+        csrf: "SameSite=Strict session cookie + double-submit token"
+
+    If API accepts Bearer-only (no cookie), CSRF n/a — set
+    config.cookie_auth: false OR declare explicitly:
+
+      csrf: "N/A — Bearer-only API, no cookie"
+
+    CSRF attacks via cross-site form submission cause unauthorized state
+    changes even if user logged out in another tab. Don't skip this gate.
+
+goal_security.mutation_rate.message:
+  vi: "{count} mutation endpoint thiếu rate_limit declaration"
+  en: "{count} mutation endpoint(s) missing rate_limit declaration"
+
+goal_security.mutation_rate.fix_hint:
+  vi: |
+    Mutation endpoint phải rate-limit để chống brute force + abuse.
+    Declaration example:
+
+      security_checks:
+        rate_limit: "10/min per user, 30/min per IP, 5/min anonymous"
+
+    Form throttle (login/signup/forgot-password) đặc biệt important để
+    tránh credential stuffing. Nếu là internal-only endpoint với
+    authenticated caller whitelist: ghi rõ "internal-only, no public rate".
+  en: |
+    Mutation endpoint must rate-limit to prevent brute force + abuse.
+    Declaration example:
+
+      security_checks:
+        rate_limit: "10/min per user, 30/min per IP, 5/min anonymous"
+
+    Form throttle (login/signup/forgot-password) especially important
+    against credential stuffing. Internal-only endpoint with
+    authenticated whitelist: declare "internal-only, no public rate".
+
+goal_security.auth_mismatch.message:
+  vi: "{count} goal có auth_model khác với API-CONTRACTS Block 1 Auth line"
+  en: "{count} goal(s) have auth_model diverging from API-CONTRACTS Block 1 Auth"
+
+goal_security.auth_mismatch.fix_hint:
+  vi: |
+    TEST-GOALS security_checks.auth_model phải khớp với API-CONTRACTS
+    **Auth:** line. Nếu không khớp, một trong hai chỗ sai — thường
+    TEST-GOALS stale sau khi contract refactor. Sync lại:
+
+      1. Đọc API-CONTRACTS.md line có **Auth:** cho endpoint
+      2. Classify: public | authenticated | role:<name> | owner_only
+      3. Update security_checks.auth_model trong TEST-GOALS cho matching
+
+    Executor đọc từ contract, test verify từ TEST-GOALS — mismatch =
+    test không cover actual auth behavior.
+  en: |
+    TEST-GOALS security_checks.auth_model must match API-CONTRACTS
+    **Auth:** line. Mismatch = one of two is wrong, usually TEST-GOALS
+    stale after contract refactor. Sync:
+
+      1. Read API-CONTRACTS.md **Auth:** line for endpoint
+      2. Classify: public | authenticated | role:<name> | owner_only
+      3. Update security_checks.auth_model in TEST-GOALS
+
+    Executor reads contract, tests verify from TEST-GOALS — mismatch
+    means tests don't cover actual auth behavior.
+
+goal_security.readonly_missing.message:
+  vi: "{count} read-only GET goal thiếu security_checks section (advisory)"
+  en: "{count} read-only GET goal(s) missing security_checks section (advisory)"
+
+goal_security.readonly_missing.fix_hint:
+  vi: "Khuyến nghị khai báo ít nhất auth_model + pii_fields cho GET endpoint. Không chặn, chỉ warn."
+  en: "Recommend declaring at least auth_model + pii_fields for GET. Non-blocking warn."
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase B.2 v2.5 — verify-goal-perf.py (perf_budget declaration gate)
+
+goal_perf.mutation_missing.message:
+  vi: "{count} mutation endpoint thiếu perf_budget declaration"
+  en: "{count} mutation endpoint(s) missing perf_budget declaration"
+
+goal_perf.mutation_missing.fix_hint:
+  vi: |
+    Mutation endpoint (POST/PUT/PATCH/DELETE) BẮT BUỘC perf_budget
+    để prevent shipping O(N²) code + N+1 query + large bundle.
+
+      perf_budget:
+        p50_ms: 80
+        p95_ms: 250
+        p99_ms: 500
+        n_plus_one_max: 3
+        cache_strategy: "Redis 5min TTL + tag-invalidate"
+
+    Thiếu budget = no contract với executor về performance target.
+    Code vẫn build được nhưng có thể 500ms p95 cho simple write = UX broken.
+  en: |
+    Mutation endpoint (POST/PUT/PATCH/DELETE) MUST declare perf_budget
+    to prevent shipping O(N²) code + N+1 query + large bundle.
+
+    Missing budget = no contract with executor on perf target. Code
+    builds but may have 500ms p95 on simple writes = broken UX.
+
+goal_perf.list_missing_p95.message:
+  vi: "{count} GET list endpoint thiếu p95_ms target"
+  en: "{count} GET list endpoint(s) missing p95_ms target"
+
+goal_perf.list_missing_p95.fix_hint:
+  vi: |
+    GET list endpoint thường hit DB nhiều row + N+1 risk cao. p95_ms
+    target buộc executor think về pagination + index + cache.
+
+    Không target = list endpoint dễ slow 2-5s ở production khi data grow.
+  en: |
+    GET list endpoints hit many DB rows + high N+1 risk. p95_ms target
+    forces executor to think pagination + index + cache.
+
+    No target = list endpoints easily slow to 2-5s in production as data grows.
+
+goal_perf.single_missing.message:
+  vi: "{count} single-record GET thiếu perf_budget (advisory, không chặn)"
+  en: "{count} single-record GET(s) missing perf_budget (advisory, non-blocking)"
+
+goal_perf.single_missing.fix_hint:
+  vi: "Single-record GET thường nhanh, budget optional. Khuyến nghị khai báo cache_strategy nếu có CDN/edge cache."
+  en: "Single-record GETs are usually fast, budget optional. Recommend declaring cache_strategy if CDN/edge cache applies."
+
+goal_perf.ui_missing_bundle.message:
+  vi: "{count} UI goal thiếu bundle_kb_fe_route target"
+  en: "{count} UI goal(s) missing bundle_kb_fe_route target"
+
+goal_perf.ui_missing_bundle.fix_hint:
+  vi: |
+    FE route bundle size quyết định FCP + LCP trên mobile 3G. Default
+    threshold 250KB. Route >500KB = poor mobile UX. Không target
+    = executor dễ import entire library vào route split thay vì lazy.
+  en: |
+    FE route bundle size determines FCP + LCP on mobile 3G. Default
+    250KB. Route >500KB = poor mobile UX. No target = executor easily
+    imports entire library into route split instead of lazy.
+
+goal_perf.nplus1_missing.message:
+  vi: "{count} mutation/list endpoint thiếu n_plus_one_max (advisory)"
+  en: "{count} mutation/list endpoint(s) missing n_plus_one_max (advisory)"
+
+goal_perf.nplus1_missing.fix_hint:
+  vi: "Recommend n_plus_one_max: 3 cho mutation, 2 cho list. Executor sẽ eager-load relations thay vì query-per-row."
+  en: "Recommend n_plus_one_max: 3 for mutations, 2 for lists. Executor will eager-load relations instead of query-per-row."
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase B.3 v2.5 — verify-security-baseline.py (project-wide baseline)
+
+sec_baseline.tls_outdated.message:
+  vi: "Phát hiện TLS version outdated trong deploy config (TLSv1.0/1.1/SSLv3 deprecated)"
+  en: "TLS outdated detected in deploy config (TLSv1.0/1.1/SSLv3 deprecated)"
+
+sec_baseline.tls_outdated.fix_hint:
+  vi: |
+    TLSv1.0/1.1/SSLv3 có vuln đã biết (BEAST, POODLE). Nginx phải set
+    ssl_protocols TLSv1.2 TLSv1.3. Caddy default TLS 1.2+. Compliance:
+    PCI-DSS yêu cầu TLS 1.2 từ 2018, SOC2 cũng vậy.
+  en: |
+    TLSv1.0/1.1/SSLv3 have known vulns (BEAST, POODLE). Nginx must set
+    ssl_protocols TLSv1.2 TLSv1.3. Caddy defaults TLS 1.2+. Compliance:
+    PCI-DSS requires TLS 1.2 since 2018, SOC2 likewise.
+
+sec_baseline.tls_config_not_found.message:
+  vi: "Không tìm thấy TLS config file trong deploy paths"
+  en: "No TLS config file found in deploy paths"
+
+sec_baseline.tls_config_not_found.fix_hint:
+  vi: "Có thể TLS xử lý ở CDN (Cloudflare/Fastly) — nếu đúng, ignore warn. Nếu không, thêm nginx/Caddy/HAProxy config với TLS 1.2+."
+  en: "TLS may be handled at CDN (Cloudflare/Fastly) — if so, ignore warn. Otherwise add nginx/Caddy/HAProxy config with TLS 1.2+."
+
+sec_baseline.cors_wildcard_credentials.message:
+  vi: "CORS wildcard origin COMBINED với credentials true — vulnerability critical"
+  en: "CORS wildcard origin COMBINED with credentials true — critical vulnerability"
+
+sec_baseline.cors_wildcard_credentials.fix_hint:
+  vi: |
+    Wildcard origin + credentials true cho phép bất kỳ site nào submit
+    authenticated request dẫn tới cross-site token theft. Browser sẽ
+    reject combo này nhưng implementation có thể bypass check.
+
+    Fix: whitelist specific origins hoặc disable credentials nếu API
+    public. Không được giữ wildcard với credentials - đây là OWASP A05.
+  en: |
+    Wildcard origin + credentials true allows any site to submit
+    authenticated requests leading to cross-site token theft. Browsers
+    reject this combo but implementations can bypass.
+
+    Fix: whitelist specific origins or disable credentials if API is
+    public. Never combine wildcard with credentials - OWASP A05.
+
+sec_baseline.secret_in_example.message:
+  vi: "Phát hiện pattern real secret trong .env.example (base64/UUID/JWT signature)"
+  en: "Real secret pattern detected in .env.example (base64/UUID/JWT signature)"
+
+sec_baseline.secret_in_example.fix_hint:
+  vi: |
+    .env.example commit vào repo, pattern giống real secret = credential
+    leak public. Thay bằng placeholder dạng <generate-with-openssl...>.
+
+    Rotate secret ngay nếu đã commit public. GitHub scan tool sẽ catch
+    after push, nhưng pre-commit là defense-in-depth.
+  en: |
+    .env.example committed to repo, real-secret-like pattern = public
+    credential leak. Replace with placeholder like <generate-with-...>.
+
+    Rotate immediately if already committed public. GitHub scan catches
+    after push, but pre-commit is defense-in-depth.
+
+sec_baseline.headers_missing.message:
+  vi: "API server không thấy security headers middleware (Helmet/securityHeaders)"
+  en: "API server missing security headers middleware (Helmet/securityHeaders)"
+
+sec_baseline.headers_missing.fix_hint:
+  vi: |
+    Security headers (CSP, X-Frame-Options, X-Content-Type-Options,
+    Referrer-Policy, Permissions-Policy) bảo vệ XSS/clickjacking/MIME
+    sniff. Fastify dùng @fastify/helmet, Express dùng helmet.
+
+    Không có = client exposed to common browser attacks dù code server-
+    side an toàn.
+  en: |
+    Security headers (CSP, X-Frame-Options, X-Content-Type-Options,
+    Referrer-Policy, Permissions-Policy) protect against XSS, clickjack,
+    MIME sniff. Fastify uses @fastify/helmet, Express uses helmet.
+
+    Missing = client exposed to common browser attacks despite safe
+    server code.
+
+sec_baseline.hsts_missing.message:
+  vi: "HSTS (Strict-Transport-Security) header không thấy dù require_hsts=true"
+  en: "HSTS (Strict-Transport-Security) header missing despite require_hsts=true"
+
+sec_baseline.hsts_missing.fix_hint:
+  vi: |
+    HSTS buộc browser dùng HTTPS cho tất cả subsequent request, tránh
+    SSL stripping attack. Helmet default enable HSTS với maxAge 1 year.
+    includeSubDomains và preload optional cho stricter policy.
+  en: |
+    HSTS forces browser to use HTTPS for all subsequent requests,
+    preventing SSL stripping. Helmet enables HSTS by default with maxAge
+    1 year. includeSubDomains and preload optional for stricter policy.
+
+sec_baseline.cookie_flags_missing.message:
+  vi: "{count} file có cookie/session setup thiếu Secure/HttpOnly/SameSite flag"
+  en: "{count} file(s) with cookie/session setup missing Secure/HttpOnly/SameSite flag"
+
+sec_baseline.cookie_flags_missing.fix_hint:
+  vi: |
+    Cookie session MUST có đủ 3 flag httpOnly (JS không đọc được - XSS
+    protection), secure (HTTPS only - MITM protection), sameSite strict
+    (CSRF protection).
+
+    Thiếu any flag = cookie vulnerable. Secure true local dev có thể
+    fail nếu HTTP - dùng conditional theo NODE_ENV.
+  en: |
+    Session cookies MUST have all 3 flags: httpOnly (JS cant read - XSS
+    protection), secure (HTTPS only - MITM protection), sameSite strict
+    (CSRF protection).
+
+    Missing any = cookie vulnerable. secure true may fail on HTTP local
+    dev - use conditional on NODE_ENV.
+
+sec_baseline.cors_maxage_high.message:
+  vi: "CORS preflight maxAge > 86400 (1 day) — giảm revoke effectiveness"
+  en: "CORS preflight maxAge > 86400 (1 day) — reduces revoke effectiveness"
+
+sec_baseline.cors_maxage_high.fix_hint:
+  vi: "maxAge cao = browser cache preflight lâu, nếu cần revoke CORS policy phải đợi. Recommend <= 3600 (1h) cho sensitive API, <= 86400 cho public."
+  en: "High maxAge = browser caches preflight long, revoke requires wait. Recommend <= 3600 (1h) for sensitive API, <= 86400 for public."
+
+sec_baseline.lockfile_missing.message:
+  vi: "Dependency lockfile không tìm thấy (package-lock.json / pnpm-lock.yaml / yarn.lock)"
+  en: "Dependency lockfile not found (package-lock.json / pnpm-lock.yaml / yarn.lock)"
+
+sec_baseline.lockfile_missing.fix_hint:
+  vi: |
+    Lockfile đảm bảo reproducible install — cùng version exact qua dev,
+    CI, prod. Thiếu lockfile = npm install có thể pull version khác mỗi
+    lần, bao gồm compromised version mới publish.
+
+    Generate bằng npm install, pnpm install, hoặc yarn install. Commit
+    file này vào git.
+  en: |
+    Lockfile ensures reproducible installs — same exact version across
+    dev, CI, prod. Missing = npm install may pull different versions
+    each time, including newly-published compromised versions.
+
+    Generate with npm install, pnpm install, or yarn install. Commit
+    the file.
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase B.5 v2.5 — dast-scan-report.py (DAST findings severity routing)
+
+dast.critical_high.message:
+  vi: "{count} finding DAST severity Critical/High — block cho project risk profile {risk_profile}"
+  en: "{count} DAST Critical/High finding(s) — blocking for project risk profile {risk_profile}"
+
+dast.critical_high.fix_hint:
+  vi: |
+    DAST (dynamic scan) phát hiện vuln active khi send payload thực lên
+    endpoint live. Critical/High khác với static check — đây là RUNTIME
+    confirmed exploitable.
+
+    Actions: đọc findings detail (mỗi finding có url + CWE + description),
+    fix code tương ứng (thường là input validation, output encoding,
+    CORS, header), re-run DAST scan verify findings cleared. Nếu false
+    positive thật sự, override + reason + evidence.
+  en: |
+    DAST (dynamic scan) detects actively exploitable vulns by sending
+    real payloads to live endpoints. Critical/High differs from static
+    check — RUNTIME confirmed exploitable.
+
+    Actions: read findings detail (each has url + CWE + description),
+    fix corresponding code (usually input validation, output encoding,
+    CORS, headers), re-run DAST scan to verify cleared. Real false
+    positive: override + reason + evidence.
+
+dast.medium_advisory.message:
+  vi: "{count} DAST Medium finding (advisory)"
+  en: "{count} DAST Medium finding(s) (advisory)"
+
+dast.medium_advisory.fix_hint:
+  vi: "Medium không chặn nhưng nên fix trước production. Review mỗi finding + decide fix-now hoặc defer với ticket."
+  en: "Medium doesn't block but should fix before production. Review each and decide fix-now or defer with ticket."
+
+dast.scan_skipped.message:
+  vi: "DAST scan skipped — report not found at {path}"
+  en: "DAST scan skipped — report not found at {path}"
+
+dast.scan_skipped.fix_hint:
+  vi: "dast-runner.sh chưa chạy thành công (Docker/nuclei không available hoặc cascade fall về grep-only). Check config.security_testing hoặc install tool."
+  en: "dast-runner.sh did not complete (Docker/nuclei unavailable or cascade fell to grep-only). Check config.security_testing or install tool."
+
+dast.report_unparseable.message:
+  vi: "DAST report unparseable — malformed JSON hoặc unknown format"
+  en: "DAST report unparseable — malformed JSON or unknown format"
+
+dast.report_unparseable.fix_hint:
+  vi: "Report file corrupt hoặc tool output format không match ZAP/Nuclei schema. Check dast-runner.sh log và report file content."
+  en: "Report file corrupt or tool output format doesn't match ZAP/Nuclei schema. Check dast-runner.sh log and report file content."
+
+# ─── verify-context-refs (Phase C v2.5) ────────────────────────────
+context_refs.missing.message:
+  vi: "{count} task(s) trong PLAN*.md thiếu <context-refs> — scoped mode không biết inject decision nào"
+  en: "{count} task(s) in PLAN*.md missing <context-refs> — scoped mode can't determine which decisions to inject"
+
+context_refs.missing.fix_hint:
+  vi: "Thêm <context-refs>P{phase}.D-01,P{phase}.D-03</context-refs> vào mỗi task trong PLAN*.md (phần header task). Blueprint planner phải emit field này khi scoped mode bật."
+  en: "Add <context-refs>P{phase}.D-01,P{phase}.D-03</context-refs> to each task header in PLAN*.md. Blueprint planner must emit this field when scoped mode is enabled."
+
+context_refs.stale.message:
+  vi: "{count} task(s) có context-refs trỏ tới decision IDs không tồn tại trong CONTEXT.md"
+  en: "{count} task(s) have context-refs pointing to decision IDs not found in CONTEXT.md"
+
+context_refs.stale.fix_hint:
+  vi: "Kiểm tra lại <context-refs> trong task — IDs phải khớp với ### P{phase}.D-XX headers trong CONTEXT.md. Có thể do blueprint tạo sai IDs hoặc CONTEXT.md chưa scope đủ."
+  en: "Check <context-refs> in task — IDs must match ### P{phase}.D-XX headers in CONTEXT.md. May be blueprint emitting wrong IDs or CONTEXT.md not yet scoped."
+
+# ─── verify-security-test-plan.py (Phase D v2.5) ───────────────────
+
+stp.missing.message:
+  vi: "SECURITY-TEST-PLAN.md không tồn tại — bắt buộc từ phase 14 trở đi. Chạy /vg:project round 8 để tạo artifact này."
+  en: "SECURITY-TEST-PLAN.md not found — mandatory from phase 14 onwards. Run /vg:project round 8 to generate this artifact."
+
+stp.missing.fix_hint:
+  vi: |
+    Tạo file .vg/SECURITY-TEST-PLAN.md từ template tại
+    .claude/commands/vg/_shared/templates/SECURITY-TEST-PLAN-template.md.
+    Trả lời 4 câu hỏi chiến lược trong /vg:project round 8:
+      1. Risk profile: critical | moderate | low
+      2. DAST tool: ZAP | Nuclei | Custom | None
+      3. Pen-test strategy: external-vendor-annual | internal-team-quarterly | bug-bounty-continuous | none
+      4. Compliance framework: SOC2-Type-II | ISO-27001 | PCI-DSS-L1-L4 | HIPAA | GDPR | none
+  en: |
+    Create .vg/SECURITY-TEST-PLAN.md from template at
+    .claude/commands/vg/_shared/templates/SECURITY-TEST-PLAN-template.md.
+    Answer the 4 strategic questions in /vg:project round 8:
+      1. Risk profile: critical | moderate | low
+      2. DAST tool: ZAP | Nuclei | Custom | None
+      3. Pen-test strategy: external-vendor-annual | internal-team-quarterly | bug-bounty-continuous | none
+      4. Compliance framework: SOC2-Type-II | ISO-27001 | PCI-DSS-L1-L4 | HIPAA | GDPR | none
+
+stp.schema_invalid.message:
+  vi: "SECURITY-TEST-PLAN.md {section}: trường `{field}` không hợp lệ. Nhận được: {got} — giá trị cho phép: {allowed}"
+  en: "SECURITY-TEST-PLAN.md {section}: field `{field}` is invalid. Got: {got} — allowed: {allowed}"
+
+stp.schema_invalid.fix_hint:
+  vi: |
+    Mở .vg/SECURITY-TEST-PLAN.md và sửa trường được nêu.
+    Đảm bảo giá trị dùng đúng enum (phân biệt hoa/thường theo template),
+    không phải placeholder dạng {GIẢI_THÍCH | LỰA_CHỌN}.
+    Tham khảo template: .claude/commands/vg/_shared/templates/SECURITY-TEST-PLAN-template.md
+  en: |
+    Open .vg/SECURITY-TEST-PLAN.md and fix the cited field.
+    Ensure the value uses the correct enum case (as shown in template),
+    not a placeholder like {EXPLANATION | CHOICE}.
+    Reference template: .claude/commands/vg/_shared/templates/SECURITY-TEST-PLAN-template.md
+
+stp.consistency_mismatch.message:
+  vi: "Không nhất quán: {found_in} đề cập '{term}' nhưng {section} khai báo '{value}' — có thể bỏ sót compliance requirement (yêu cầu tuân thủ)"
+  en: "Inconsistency: {found_in} mentions '{term}' but {section} declares '{value}' — possible compliance requirement omitted"
+
+stp.consistency_mismatch.fix_hint:
+  vi: |
+    Kiểm tra FOUNDATION §9.5 để xác định compliance requirement thực tế.
+    Nếu GDPR/SOC2/PCI-DSS thực sự áp dụng cho dự án, cập nhật
+    §6 Compliance Framework Mapping trong SECURITY-TEST-PLAN.md tương ứng.
+    Nếu FOUNDATION đề cập nhầm, sửa FOUNDATION §9.5 để loại bỏ term đó.
+  en: |
+    Review FOUNDATION §9.5 to confirm the actual compliance requirement.
+    If GDPR/SOC2/PCI-DSS genuinely applies, update §6 Compliance Framework
+    Mapping in SECURITY-TEST-PLAN.md accordingly.
+    If FOUNDATION mentions it incorrectly, update FOUNDATION §9.5 to remove the term.
+
+stp.critical_dast_none.message:
+  vi: "Mâu thuẫn nghiêm trọng: §1 risk_profile = critical nhưng §2 dast_tool = None — dự án rủi ro cao BẮT BUỘC có DAST (quét bảo mật động)"
+  en: "Critical conflict: §1 risk_profile = critical but §2 dast_tool = None — high-risk project MUST have DAST (dynamic security scanning)"
+
+stp.critical_dast_none.fix_hint:
+  vi: |
+    Dự án critical (xử lý payment/PII/healthcare/auth SaaS multi-tenant)
+    không được phép bỏ qua DAST. Hành động:
+      (a) Chọn DAST tool: ZAP (recommended), Nuclei, hoặc Custom script
+      (b) Hoặc hạ risk_profile xuống moderate/low nếu đánh giá lại
+          cho thấy không phải critical — cần justification cụ thể trong §1
+      (c) Không được dùng override để bypass gate này
+  en: |
+    Critical-risk projects (payment/PII/healthcare/auth SaaS multi-tenant)
+    must NOT skip DAST. Options:
+      (a) Choose a DAST tool: ZAP (recommended), Nuclei, or Custom script
+      (b) Or downgrade risk_profile to moderate/low if reassessment shows
+          the project is not critical — requires specific justification in §1
+      (c) This gate cannot be bypassed via override
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase D v2.5 — verify-foundation-architecture.py (§9 architecture lock)
+
+foundation_arch.section_missing.message:
+  vi: "FOUNDATION.md thiếu section §9 'Architecture Lock' — phase {phase} yêu cầu (cutover phase={cutover})"
+  en: "FOUNDATION.md missing §9 'Architecture Lock' section — phase {phase} requires it (cutover={cutover})"
+
+foundation_arch.section_missing.fix_hint:
+  vi: |
+    Chạy /vg:project --update để thêm §9 vào FOUNDATION.md. Section bắt đầu
+    bằng header `## 9. Architecture Lock` (hoặc `## Architecture Lock`) và
+    phải chứa 8 subsection (### headers):
+      - Tech Stack Matrix
+      - Module Boundary
+      - Folder Convention
+      - Cross-Cutting Concerns
+      - Security Baseline
+      - Performance Baseline
+      - Testing Baseline
+      - Model-Portable Code Style
+    Mỗi subsection phải có ít nhất 3 bullet lines nội dung thực chất.
+  en: |
+    Run /vg:project --update to add §9 to FOUNDATION.md. Section starts with
+    header `## 9. Architecture Lock` (or `## Architecture Lock`) and must
+    contain 8 subsections (### headers):
+      - Tech Stack Matrix
+      - Module Boundary
+      - Folder Convention
+      - Cross-Cutting Concerns
+      - Security Baseline
+      - Performance Baseline
+      - Testing Baseline
+      - Model-Portable Code Style
+    Each subsection needs at least 3 substantive bullet lines.
+
+foundation_arch.subsection_missing.message:
+  vi: "{count} subsection bắt buộc thiếu trong §9 Architecture Lock (phase {phase}): {names}"
+  en: "{count} required subsection(s) missing from §9 Architecture Lock (phase {phase}): {names}"
+
+foundation_arch.subsection_missing.fix_hint:
+  vi: |
+    Thêm ### header + nội dung cho từng subsection thiếu: {names}
+
+    Mỗi subsection phải có ít nhất 3 bullet lines thực chất. Ví dụ:
+
+    ### Tech Stack Matrix
+    - Language: TypeScript 5.x — typed safety across monorepo
+    - Framework: Fastify 4.x — low-overhead HTTP, plugin ecosystem
+    - Database: MongoDB 7 native driver + Zod schema validation
+
+    Blueprint planner inject §9 vào `<architecture_context>` khi tạo
+    PLAN.md — thiếu subsection = executor thiếu constraint quan trọng.
+  en: |
+    Add ### header + content for each missing subsection: {names}
+
+    Each subsection needs at least 3 substantive bullet lines. Example:
+
+    ### Tech Stack Matrix
+    - Language: TypeScript 5.x — typed safety across monorepo
+    - Framework: Fastify 4.x — low-overhead HTTP, plugin ecosystem
+    - Database: MongoDB 7 native driver + Zod schema validation
+
+    Blueprint planner injects §9 into `<architecture_context>` when
+    creating PLAN.md — missing subsections = executor lacks key constraints.
+
+foundation_arch.subsection_empty.message:
+  vi: "{count} subsection trong §9 có header nhưng thiếu nội dung (< {min_bullets} bullet lines): {names}"
+  en: "{count} §9 subsection(s) have header but insufficient content (< {min_bullets} bullet lines): {names}"
+
+foundation_arch.subsection_empty.fix_hint:
+  vi: |
+    Mỗi subsection phải có ít nhất {min_bullets} bullet lines thực chất để
+    blueprint planner có đủ context inject vào executor prompt.
+
+    "Thực chất" nghĩa là bullet phải nêu rõ công nghệ cụ thể, lý do chọn,
+    hoặc rule áp dụng — không phải placeholder (vd "- TBD" không được tính).
+
+    Subsection cần bổ sung: {names}
+  en: |
+    Each subsection needs at least {min_bullets} substantive bullet lines for
+    the blueprint planner to inject sufficient context into executor prompts.
+
+    "Substantive" means bullets must state a specific technology, rationale,
+    or rule — not placeholders (e.g. "- TBD" doesn't count).
+
+    Subsections to expand: {names}
+
+foundation_arch.foundation_missing.message:
+  vi: "FOUNDATION.md không tìm thấy trong .planning/ hoặc .vg/ — /vg:project chưa chạy hoặc chưa tạo artifact"
+  en: "FOUNDATION.md not found in .planning/ or .vg/ — /vg:project may not have run yet"
+
+foundation_arch.foundation_missing.fix_hint:
+  vi: |
+    Chạy /vg:project để khởi tạo FOUNDATION.md với đầy đủ các section bao
+    gồm §9 Architecture Lock. Validator này không chặn (SKIP advisory) khi
+    FOUNDATION.md chưa tồn tại — sẽ tự động block từ phase cutover trở đi
+    nếu §9 thiếu.
+  en: |
+    Run /vg:project to initialize FOUNDATION.md including §9 Architecture Lock.
+    This validator does not block (SKIP advisory) when FOUNDATION.md is absent
+    — it will automatically block from the cutover phase onwards if §9 is missing.

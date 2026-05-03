@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vgflow.dev/schemas/fixture-recipe.v1.json",
+  "title": "VGFlow Fixture Recipe v1.0",
+  "description": "RFC v9 D2 — recipe schema for FIXTURES/{G-XX}.yaml. Authored at /vg:build by executor; consumed by /vg:review preflight + /vg:test codegen.",
+  "type": "object",
+  "required": ["schema_version", "goal", "description", "fixture_intent", "steps"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Mandatory. Runner rejects unknown major. See D14 versioning policy."
+    },
+    "goal": {
+      "type": "string",
+      "pattern": "^G-[A-Za-z0-9._-]+$",
+      "description": "Goal ID matching TEST-GOALS.md heading"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 30,
+      "description": "D27 enforcement: min 30 chars, must be specific (not 'TBD')"
+    },
+    "fixture_intent": {
+      "type": "object",
+      "required": ["declared_in", "validates"],
+      "properties": {
+        "declared_in": {
+          "type": "string",
+          "description": "Cross-ref to TEST-GOALS.md anchor (e.g., 'TEST-GOALS.md#G-10')"
+        },
+        "validates": {
+          "type": "string",
+          "minLength": 20,
+          "description": "What this fixture verifies (anti-skim D27)"
+        }
+      }
+    },
+    "allocation": {
+      "type": "object",
+      "description": "D13 concurrency/isolation",
+      "properties": {
+        "lease_id": { "type": "string" },
+        "expires_at": {
+          "type": "string",
+          "pattern": "^\\+\\d+[smhd]$",
+          "description": "Relative offset like +30m, +1h, +1d"
+        },
+        "owner_session": { "type": "string" }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle",
+      "description": "D12 RCRURD lifecycle assertion contract — required for mutation goals"
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["api_call", "loop"]
+        },
+        "role": {
+          "type": "string",
+          "description": "Lookup into vg.config.credentials[env]"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Relative path; runner resolves base from config (D2 portability)"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "description": "D13: mandatory for POST/PUT (RFC 7240 Idempotency-Key header)"
+        },
+        "body": { "type": "object" },
+        "side_effect_risk": {
+          "type": "string",
+          "enum": ["none", "money_like", "external_call", "volume_change"],
+          "description": "D9: gates sandbox-only execution"
+        },
+        "capture": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/capture" }
+        },
+        "validate_after": { "$ref": "#/$defs/validate_after" },
+        "over": {
+          "description": "kind: loop — array of values OR int count",
+          "oneOf": [
+            { "type": "array" },
+            { "type": "integer", "minimum": 1 }
+          ]
+        },
+        "each": { "$ref": "#/$defs/step" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "api_call" } } },
+          "then": {
+            "required": ["role", "method", "endpoint"],
+            "anyOf": [
+              { "properties": { "method": { "enum": ["GET", "DELETE"] } } },
+              { "required": ["body"] }
+            ]
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              { "properties": { "kind": { "const": "api_call" } } },
+              { "properties": { "method": { "enum": ["POST", "PUT"] } } }
+            ]
+          },
+          "then": {
+            "required": ["idempotency_key"],
+            "description": "D13: POST/PUT must have idempotency_key"
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "loop" } } },
+          "then": { "required": ["over", "each"] }
+        }
+      ]
+    },
+    "capture": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^\\$",
+          "description": "JSONPath RFC 9535"
+        },
+        "cardinality": {
+          "type": "string",
+          "enum": ["scalar", "array", "optional_scalar"],
+          "default": "scalar"
+        },
+        "on_empty": {
+          "type": "string",
+          "enum": ["fail", "skip", "null"],
+          "default": "fail"
+        },
+        "from_each": {
+          "type": "boolean",
+          "description": "For loop step: collect captures from each iteration into array"
+        }
+      }
+    },
+    "validate_after": {
+      "type": "object",
+      "description": "D3: read-only assertion catching partial-orphan inconsistent state",
+      "required": ["kind", "method", "endpoint"],
+      "properties": {
+        "kind": { "const": "api_call" },
+        "method": { "type": "string", "enum": ["GET"] },
+        "endpoint": { "type": "string", "pattern": "^/" },
+        "expect_status": { "type": "integer" },
+        "assert_jsonpath": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/jsonpath_assert" }
+        }
+      }
+    },
+    "jsonpath_assert": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^\\$" },
+        "equals": {},
+        "not_equals": {},
+        "not_null": { "type": "boolean" },
+        "increased_by_at_least": { "type": "number" },
+        "decreased_by_at_least": { "type": "number" },
+        "cardinality": { "type": "string", "pattern": "^[><=]+\\d+$" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "description": "D12 RCRURD: pre_state + action + post_state + side_effects",
+      "required": ["pre_state", "action", "post_state"],
+      "properties": {
+        "pre_state": { "$ref": "#/$defs/lifecycle_check" },
+        "action": {
+          "type": "object",
+          "required": ["surface", "expected_network"],
+          "properties": {
+            "surface": {
+              "type": "string",
+              "enum": ["ui_click", "ui_form_submit", "api_direct"]
+            },
+            "target": { "type": "string" },
+            "expected_network": {
+              "type": "object",
+              "required": ["method", "endpoint", "status_range"],
+              "properties": {
+                "method": { "type": "string" },
+                "endpoint": { "type": "string", "pattern": "^/" },
+                "status_range": {
+                  "type": "array",
+                  "items": { "type": "integer" },
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "target_selector_must_include": {
+                  "type": "string",
+                  "description": "D13: scanner click fixture-specific ID, not 'first visible row'"
+                }
+              }
+            }
+          }
+        },
+        "post_state": { "$ref": "#/$defs/lifecycle_check" },
+        "side_effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lifecycle_check" }
+        }
+      }
+    },
+    "lifecycle_check": {
+      "type": "object",
+      "required": ["role", "method", "endpoint", "assert_jsonpath"],
+      "properties": {
+        "role": { "type": "string" },
+        "method": { "type": "string", "enum": ["GET"] },
+        "endpoint": { "type": "string", "pattern": "^/" },
+        "retry": {
+          "type": "object",
+          "description": "D12: handle eventual consistency",
+          "properties": {
+            "max_attempts": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "delay_ms": { "type": "integer", "minimum": 50 },
+            "until_assertion_pass": { "type": "boolean" }
+          }
+        },
+        "assert_jsonpath": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/jsonpath_assert" }
+        }
+      }
+    }
+  }
+}

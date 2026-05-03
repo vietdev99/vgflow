@@ -1,0 +1,65 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "VG_RUNTIME=codex VG_REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.claude/scripts/codex-hooks/vg-post-tool-use-bash.py\"",
+            "statusMessage": "VGFlow: tracking step marker",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "^Bash$"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "VG_RUNTIME=codex VG_REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.claude/scripts/codex-hooks/vg-pre-tool-use-bash.py\"",
+            "statusMessage": "VGFlow: checking Bash gate",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "^Bash$"
+      },
+      {
+        "hooks": [
+          {
+            "command": "VG_RUNTIME=codex VG_REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.claude/scripts/codex-hooks/vg-pre-tool-use-apply-patch.py\"",
+            "statusMessage": "VGFlow: checking protected paths",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "^(apply_patch|Edit|Write)$"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "VG_RUNTIME=codex VG_REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.claude/scripts/codex-hooks/vg-stop.py\"",
+            "statusMessage": "VGFlow: verifying runtime contract",
+            "timeout": 90,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "VG_RUNTIME=codex VG_REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.claude/scripts/vg-entry-hook.py\"",
+            "statusMessage": "VGFlow: starting run",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

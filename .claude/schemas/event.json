@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vg.event",
+  "description": "Single row in .vg/events.db events table. Append-only, hash-chained.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "ts",
+    "event_type",
+    "actor",
+    "outcome",
+    "prev_hash",
+    "this_hash"
+  ],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "SQLite rowid, auto-assigned"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Links event to runs table row"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO8601 UTC, orchestrator-stamped (not AI-provided)"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "run.started",
+        "run.completed",
+        "run.blocked",
+        "run.aborted",
+        "run.resumed",
+        "run.repaired",
+        "wave.started",
+        "wave.completed",
+        "wave.blocked",
+        "step.marked",
+        "validation.passed",
+        "validation.warned",
+        "validation.failed",
+        "override.used",
+        "override.resolved",
+        "bootstrap.rule_fired",
+        "bootstrap.outcome_recorded",
+        "reflection.proposed",
+        "reflection.promoted",
+        "reflection.rejected",
+        "artifact.written",
+        "artifact.invalidated",
+        "gate.escalation",
+        "integrity.compromised",
+        "schema.invalid",
+        "user.correction_detected",
+        "scope.started",
+        "scope.completed",
+        "blueprint.started",
+        "blueprint.completed",
+        "blueprint.plan_written",
+        "blueprint.contracts_generated",
+        "build.started",
+        "build.completed",
+        "review.started",
+        "review.completed",
+        "test.started",
+        "test.completed",
+        "accept.started",
+        "accept.completed"
+      ]
+    },
+    "phase": {
+      "type": "string",
+      "description": "Phase number (e.g. '14', '7.6'). Empty for pre-phase commands."
+    },
+    "command": {
+      "type": "string",
+      "pattern": "^vg:[a-z-]+$",
+      "description": "VG command namespace"
+    },
+    "step": {
+      "type": ["string", "null"],
+      "description": "Step name inside command (e.g. '2a_plan')"
+    },
+    "actor": {
+      "type": "string",
+      "enum": ["orchestrator", "hook", "validator", "llm-claimed", "user"],
+      "description": "Who emitted the event. llm-claimed events are untrusted — validators cross-check."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["PASS", "BLOCK", "WARN", "INFO"]
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-type-specific data. See per-event-type schemas."
+    },
+    "prev_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$|^0{64}$",
+      "description": "sha256 of previous event's this_hash. All zeros for first event."
+    },
+    "this_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "sha256(prev_hash + event_type + phase + command + payload_json + ts)"
+    }
+  },
+  "additionalProperties": false
+}

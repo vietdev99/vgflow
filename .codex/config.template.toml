@@ -1,0 +1,45 @@
+# VGFlow Codex config template.
+#
+# Codex reads global config from $CODEX_HOME/config.toml (usually ~/.codex).
+# Project installers also keep a copy at .codex/config.template.toml so users
+# can audit the expected agent registrations without overwriting local config.
+
+# Model is intentionally not pinned here. Codex model availability differs
+# between ChatGPT and API-backed accounts; use the user's ~/.codex/config.toml
+# default, or set VG_CODEX_MODEL_* when using codex-spawn.sh.
+#
+# Practical VG tier intent:
+# - VG_CODEX_MODEL_EXECUTOR: strongest coding/build model you have available.
+#   Use this when you want Sonnet-class build quality for /vg:build and
+#   review/test code-writing children.
+# - VG_CODEX_MODEL_SCANNER: cheap/fast read-only model for review map,
+#   classifier, reflection, and gap-hunter work.
+# - VG_CODEX_MODEL_PLANNER: strongest reasoning model for blueprint/scope
+#   planning agents.
+# - VG_CODEX_MODEL_ADVERSARIAL: independent reviewer model for challenge
+#   passes. Leave unset to use the Codex config default.
+sandbox_mode = "workspace-write"
+
+[features]
+codex_hooks = true
+
+[agents.vgflow-orchestrator]
+description = "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+config_file = ".codex/agents/vgflow-orchestrator.toml"
+
+[agents.vgflow-executor]
+description = "VGFlow bounded code executor for Codex child tasks."
+config_file = ".codex/agents/vgflow-executor.toml"
+
+[agents.vgflow-classifier]
+description = "VGFlow cheap classifier/scanner for read-only summaries and triage."
+config_file = ".codex/agents/vgflow-classifier.toml"
+
+# Optional Playwright MCP shape. install/sync/update generate concrete profile
+# directories in the current user's ~/.codex/config.toml; do not copy paths
+# from another machine.
+#
+# [mcp_servers.playwright1]
+# command = "npx"
+# args = ["@playwright/mcp@latest", "--user-data-dir", "<current-user-home>/.codex/playwright-profile-1"]
+# type = "stdio"

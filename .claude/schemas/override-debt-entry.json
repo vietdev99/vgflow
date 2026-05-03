@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vg.override-debt-entry",
+  "description": "Single entry in .vg/OVERRIDE-DEBT.md. Derived from events (override.used + override.resolved).",
+  "type": "object",
+  "required": ["id", "logged_at", "command", "phase", "flag", "reason", "git_sha", "status"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^OD-[0-9]{3,}$"
+    },
+    "logged_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "command": {
+      "type": "string",
+      "pattern": "^vg:[a-z-]+$"
+    },
+    "phase": {
+      "type": "string"
+    },
+    "flag": {
+      "type": "string",
+      "pattern": "^--[a-z-]+(=.*)?$"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 4,
+      "description": "User-provided rationale. Shorter than 4 chars = invalid."
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{7,40}$"
+    },
+    "revalidate_on": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["next_phase_starts", "phase.surfaces_change", "manual_only"]
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "resolved", "expired"]
+    },
+    "resolved_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "resolved_by": {
+      "type": ["string", "null"],
+      "enum": [null, "user", "reflector", "auto"]
+    }
+  }
+}

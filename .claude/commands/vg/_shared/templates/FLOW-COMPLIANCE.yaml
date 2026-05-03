@@ -1,0 +1,127 @@
+# FLOW-COMPLIANCE.yaml — v2.38.0+ profile × command × evidence matrix
+#
+# Evidence files prove that flow steps actually ran. Auditor checks file
+# presence per profile per command. Glob patterns supported (e.g. "scan-*.json").
+#
+# Override at vg.config.md → flow_compliance: { enabled, severity, custom_overrides }.
+
+schema_version: "1"
+
+# Default flow compliance — applies when no project override
+flow_compliance:
+
+  blueprint:
+    feature:
+      evidence_required:
+        - PLAN.md
+        - API-CONTRACTS.md
+        - TEST-GOALS.md
+      evidence_optional:
+        - CRUD-SURFACES.md
+        - TEST-GOALS-EXPANDED.md   # v2.36 if CRUD-SURFACES present
+    feature-legacy:
+      evidence_required:
+        - PLAN.md
+        - TEST-GOALS.md
+    infra:
+      evidence_required:
+        - PLAN.md
+    hotfix:
+      evidence_required:
+        - PLAN.md
+        - SPECS.md
+    bugfix:
+      evidence_required:
+        - PLAN.md
+    migration:
+      evidence_required:
+        - PLAN.md
+        - ROLLBACK.md
+    docs:
+      evidence_required:
+        - SPECS.md
+
+  build:
+    feature:
+      evidence_required:
+        - SUMMARY.md
+      evidence_optional:
+        - SUMMARY-AUTOFIX.md       # v2.37 --include-auto-fix
+    feature-legacy:
+      evidence_required:
+        - SUMMARY.md
+    infra:
+      evidence_required:
+        - SUMMARY.md
+    hotfix:
+      evidence_required:
+        - SUMMARY.md
+    bugfix:
+      evidence_required:
+        - SUMMARY.md
+    migration:
+      evidence_required:
+        - SUMMARY.md
+    docs:
+      evidence_required: []        # docs phase: no build artifacts
+
+  review:
+    feature:
+      evidence_required:
+        - nav-discovery.json
+        - scan-*.json              # at least 1 view scanned
+        - GOAL-COVERAGE-MATRIX.md
+      evidence_optional:
+        - TEST-GOALS-DISCOVERED.md # v2.34 enrichment
+        - runs/INDEX.json          # v2.35 CRUD round-trip dispatch
+        - REVIEW-FINDINGS.json     # v2.35 findings derive
+        - REVIEW-BUGS.md           # v2.35 human triage
+        - AUTO-FIX-TASKS.md        # v2.37 auto-fix routing
+    feature-legacy:
+      evidence_required:
+        - GOAL-COVERAGE-MATRIX.md
+    infra:
+      evidence_required:
+        - SUMMARY.md               # phaseP_infra_smoke writes here
+    hotfix:
+      evidence_required:
+        - SUMMARY.md               # phaseP_delta writes here
+    bugfix:
+      evidence_required:
+        - SUMMARY.md               # phaseP_regression writes here
+    migration:
+      evidence_required:
+        - SUMMARY.md               # phaseP_schema_verify writes here
+    docs:
+      evidence_required:
+        - SUMMARY.md               # phaseP_link_check writes here
+
+  test:
+    feature:
+      evidence_required:
+        - SANDBOX-TEST.md
+      evidence_optional:
+        - TEST-RESULTS.md
+        - GENERATED_TESTS_DIR/*.spec.ts
+    feature-legacy:
+      evidence_required:
+        - SANDBOX-TEST.md
+    infra:
+      evidence_required:
+        - SUMMARY.md               # infra-smoke
+    hotfix:
+      evidence_required:
+        - SANDBOX-TEST.md
+    bugfix:
+      evidence_required:
+        - SANDBOX-TEST.md
+    migration:
+      evidence_required:
+        - SANDBOX-TEST.md
+    docs:
+      evidence_required: []
+
+  accept:
+    all_profiles:
+      evidence_required:
+        - UAT.md

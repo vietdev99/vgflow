@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vg.wave-evidence",
+  "description": "Payload for vg-orchestrator wave-complete. Validator wave-attribution.py cross-checks against events + git log.",
+  "type": "object",
+  "required": ["wave", "tasks", "commits"],
+  "properties": {
+    "wave": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)*-\\d+$",
+            "description": "e.g. 14-03 (phase 14, task 3)"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "skipped", "deferred", "failed"]
+          },
+          "goal_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^G-\\d+$"
+            }
+          },
+          "files_changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "commit_sha": {
+            "type": ["string", "null"],
+            "pattern": "^([a-f0-9]{7,40}|)$",
+            "description": "Required when status=completed; null for skipped/deferred"
+          }
+        }
+      }
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sha", "message_matches_pattern", "cites_contract_or_decision"],
+        "properties": {
+          "sha": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{7,40}$"
+          },
+          "message_matches_pattern": {
+            "type": "boolean",
+            "description": "true iff message matches ^(feat|fix|refactor|test|chore|docs)\\(.+-\\d+\\):"
+          },
+          "cites_contract_or_decision": {
+            "type": "boolean",
+            "description": "true iff commit body has 'Per API-CONTRACTS.md' or 'Per CONTEXT.md D-'"
+          }
+        }
+      }
+    },
+    "typecheck": {
+      "type": "string",
+      "enum": ["pass", "fail", "skipped_reason_logged"]
+    },
+    "tests": {
+      "type": "object",
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "additionalProperties": false
+}

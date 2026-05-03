@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vg.validator-output",
+  "description": "Standard output format for every validator script in .claude/scripts/validators/*.py. Orchestrator parses this to decide run-complete verdict.",
+  "type": "object",
+  "required": ["validator", "verdict", "evidence"],
+  "properties": {
+    "validator": {
+      "type": "string",
+      "description": "Validator name (matches filename minus .py)"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "BLOCK", "WARN"]
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Structured evidence supporting verdict. Empty array = no signals found.",
+      "items": {
+        "type": "object",
+        "required": ["type", "message"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "missing_file",
+              "empty_file",
+              "malformed_content",
+              "count_below_threshold",
+              "event_missing",
+              "marker_missing",
+              "commit_missing",
+              "commit_mismatch",
+              "goal_unbound",
+              "schema_violation",
+              "override_unresolved",
+              "test_not_first",
+              "semantic_check_failed",
+              "info"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation"
+          },
+          "file": {"type": ["string", "null"]},
+          "line": {"type": ["integer", "null"]},
+          "expected": {},
+          "actual": {},
+          "fix_hint": {
+            "type": ["string", "null"],
+            "description": "Structured actionable fix for AI. Orchestrator forwards to additionalContext."
+          }
+        }
+      }
+    },
+    "duration_ms": {
+      "type": "integer",
+      "description": "How long validator took"
+    },
+    "cache_key": {
+      "type": ["string", "null"],
+      "description": "Hash of inputs. If unchanged, orchestrator can skip re-run."
+    }
+  },
+  "additionalProperties": false
+}

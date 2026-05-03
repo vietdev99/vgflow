@@ -42,7 +42,7 @@
       {
         "hooks": [
           {
-            "command": "python3 '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/vg-agent-spawn-guard.py'",
+            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-pre-tool-use-agent.sh'",
             "type": "command"
           }
         ],

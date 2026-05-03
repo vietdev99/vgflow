@@ -76,14 +76,46 @@ except Exception:
     fi
   fi
 
+  # Mainline pipeline commands have strict intra-phase ordering:
+  #   blueprint → build → review → test → accept
+  # Auxiliary commands are run-anytime/optional/standalone:
+  #   deploy (optional between build and review/test/roam)
+  #   roam (post-review/test janitor)
+  #   debug (standalone, phase=standalone)
+  #   amend (mid-phase change request, designed to interrupt)
+  #   polish (optional cleanup)
+  #   scope, specs (pre-pipeline, before blueprint)
+  # Hotfix 2026-05-04: cross-run conflict ONLY blocks when BOTH cmds are
+  # in mainline. Auxiliary↔mainline or auxiliary↔auxiliary → soft-warn +
+  # allow. Lost-track issue (overwriting an active mainline run-file with
+  # auxiliary cmd) is acceptable: the orphaned mainline run gets cleaned
+  # up via stale (>30min) on next user-prompt-submit, and Stop hook on
+  # session exit picks up whichever run-file is current.
+  MAINLINE_CMDS=" vg:blueprint vg:build vg:review vg:test vg:accept "
+
   if [ "$is_dead" -eq 1 ]; then
     # Soft-warn (yellow); fall through to overwrite the dead run-file.
     printf "\033[33mvg-cross-run: previous %s on phase %s is dead (%s); continuing with %s\033[0m\n" \
       "$existing_cmd" "$existing_phase" "$death_reason" "$cmd" >&2
   elif [ -n "$existing_cmd" ] && [ "$existing_cmd" != "$cmd" ] && [ "$existing_phase" = "$phase" ]; then
-    printf "\033[38;5;208mvg-cross-run: active %s on phase %s; finish or abort before invoking %s on same phase\033[0m\n" \
-      "$existing_cmd" "$existing_phase" "$cmd" >&2
-    exit 2
+    case "$MAINLINE_CMDS" in *" $existing_cmd "*) is_existing_mainline=1 ;; *) is_existing_mainline=0 ;; esac
+    case "$MAINLINE_CMDS" in *" $cmd "*) is_new_mainline=1 ;; *) is_new_mainline=0 ;; esac
+    if [ "$is_existing_mainline" -eq 1 ] && [ "$is_new_mainline" -eq 1 ]; then
+      # Both mainline → hard-block (preserve pipeline ordering)
+      printf "\033[38;5;208mvg-cross-run: active %s on phase %s; finish or abort before invoking %s on same phase\033[0m\n" \
+        "$existing_cmd" "$existing_phase" "$cmd" >&2
+      exit 2
+    fi
+    # At least one auxiliary → soft-warn, allow overwrite.
+    if [ "$is_existing_mainline" -eq 1 ]; then
+      role_note="auxiliary $cmd does not block mainline $existing_cmd"
+    elif [ "$is_new_mainline" -eq 1 ]; then
+      role_note="auxiliary $existing_cmd does not block mainline $cmd"
+    else
+      role_note="both auxiliary; concurrent allowed"
+    fi
+    printf "\033[33mvg-cross-run: %s active on phase %s; %s — previous run_id may need run-complete/abort manually\033[0m\n" \
+      "$existing_cmd" "$existing_phase" "$role_note" >&2
   fi
 fi
 

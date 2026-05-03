@@ -41,17 +41,19 @@ in the body below.
 
 ### Codex hook parity
 
-Claude Code has a project-local hook substrate; Codex skills do not receive
-Claude `UserPromptSubmit`, `Stop`, or `PostToolUse` hooks automatically.
-Therefore Codex must execute the lifecycle explicitly through the same
-orchestrator that writes `.vg/events.db`:
+Claude Code and Codex now both have project-local hook substrates. VGFlow
+`sync.sh`/`install.sh` installs `.codex/hooks.json` plus
+`.codex/config.toml` with `[features].codex_hooks = true`. Codex hooks
+wrap the same orchestrator that writes `.vg/events.db`, while command-body
+guards remain mandatory because Codex hook coverage is still tool-path scoped:
 
 | Claude hook | What it does on Claude | Codex obligation |
 |---|---|---|
-| `UserPromptSubmit` -> `vg-entry-hook.py` | Pre-seeds `vg-orchestrator run-start` and `.vg/.session-context.json` before the skill loads | Treat the command body's explicit `vg-orchestrator run-start` as mandatory; if missing or failing, BLOCK before doing work |
-| `Stop` -> `vg-verify-claim.py` | Runs `vg-orchestrator run-complete` and blocks false done claims | Run the command body's terminal `vg-orchestrator run-complete` before claiming completion; if it returns non-zero, fix evidence and retry |
-| `PostToolUse` edit -> `vg-edit-warn.py` | Warns that command/skill edits require session reload | After editing VG workflow files on Codex, tell the user the current session may still use cached skill text |
-| `PostToolUse` Bash -> `vg-step-tracker.py` | Tracks marker commands and emits `hook.step_active` telemetry | Do not rely on the hook; call explicit `vg-orchestrator mark-step` lines in the skill and preserve marker/telemetry events |
+| `UserPromptSubmit` -> `vg-entry-hook.py` | Pre-seeds `vg-orchestrator run-start` and `.vg/.session-context.json` before the skill loads | Codex wrapper accepts both `/vg:cmd` and `$vg-cmd`; command-body `vg-orchestrator run-start` is still mandatory and must BLOCK if missing/failing |
+| `PreToolUse` Bash -> `hooks/vg-pre-tool-use-bash.sh` | Blocks `vg-orchestrator step-active` until tasklist projection evidence is signed | Codex wrapper sets `CLAUDE_SESSION_ID`/`CLAUDE_HOOK_SESSION_ID` from Codex `session_id` and forwards to the same gate |
+| `PreToolUse` Write/Edit -> `hooks/vg-pre-tool-use-write.sh` | Blocks direct writes to protected evidence, marker, and event paths | Codex `apply_patch` wrapper at `codex-hooks/vg-pre-tool-use-apply-patch.py` blocks the same protected paths before patch application |
+| `PostToolUse` Bash -> `vg-step-tracker.py` | Tracks marker commands and emits `hook.step_active` telemetry | Codex wrapper forwards Bash results to the same tracker; explicit `vg-orchestrator mark-step` lines remain required |
+| `Stop` -> `vg-verify-claim.py` | Runs `vg-orchestrator run-complete` and blocks false done claims | Codex wrapper runs the same verifier; command-body terminal `vg-orchestrator run-complete` is still required before claiming completion |
 
 Codex hook parity is evidence-based: `.vg/events.db`, step markers,
 `must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
@@ -62,6 +64,37 @@ Before executing command bash blocks from a Codex skill, export
 Claude/unknown runtime keeps the canonical `AskUserQuestion` + Haiku path,
 while Codex maps only the incompatible orchestration primitives to
 Codex-native choices such as `codex-inline`.
+
+Run fenced command-body shell snippets with Bash explicitly, for example
+`/bin/bash -lc '<snippet>'`, instead of the user's login shell. VGFlow source
+commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
+`set -u`; zsh can misinterpret those snippets and create false failures.
+
+Before running any command-body snippet that calls validators, orchestrator
+helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
+`.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
+export the selected `PYTHON_BIN`. Do not reset `PYTHON_BIN=python3` after
+detection: on macOS, bare `python3` is often an older interpreter without
+PyYAML, which makes VG validators fail even though a valid Homebrew/Python.org
+interpreter is installed.
+
+Each Codex shell tool call starts with a fresh environment. If a later command
+invokes `.claude/scripts/*`, validators, or `vg-orchestrator`, redetect
+`PYTHON_BIN` or carry the previously detected absolute interpreter into that
+same command. Do not run `python3 .claude/scripts/...` directly for VG
+validators/orchestrator calls.
+
+For tasklist projection, Codex must write evidence before any step marker call:
+after `emit-tasklist.py`, run `vg-orchestrator tasklist-projected --adapter codex`
+as its own tool call. Do not group `tasklist-projected` and `step-active` in
+one shell command; PreToolUse evaluates the entire command before the evidence
+file exists and will block the grouped command.
+
+For top-level VG commands that include a mandatory `git commit` step, ensure
+the parent Codex session can write Git metadata. Some Codex
+`workspace-write` sandboxes deny `.git/index.lock`; when that happens,
+BLOCK and ask the operator to rerun with a sandbox/profile that permits Git
+metadata writes instead of skipping or forging the commit marker.
 
 ### Codex spawn precedence
 
@@ -113,6 +146,8 @@ For subprocess-based children, use:
 ```bash
 bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
   --tier executor \
+  --spawn-role "<vg-subagent-role>" \
+  --spawn-id "<stable-spawn-id>" \
   --prompt-file "$PROMPT_FILE" \
   --out "$OUT_FILE" \
   --timeout 900 \
@@ -121,6 +156,11 @@ bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
 
 The helper wraps `codex exec`, writes the final message to `--out`, captures
 stdout/stderr beside it, and fails loudly on timeout or empty output.
+When `--spawn-role` is set, it also writes Codex spawn evidence to
+`.vg/runs/<run_id>/codex-spawns/` and appends
+`.vg/runs/<run_id>/.codex-spawn-manifest.jsonl`. Codex Bash hooks block
+heavy-step markers and `wave-complete` when required spawn evidence or
+build wave `.spawn-count.json` is missing.
 
 ### Known Codex caveats to design around
 

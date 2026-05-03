@@ -1,0 +1,327 @@
+#!/bin/bash
+# VG commit-msg hook — validates commit format + citation truth + caller integrity
+# Deployed by /vg:init to .git/hooks/commit-msg
+# Config source: .claude/vg.config.md -> commit_msg_hook section
+#
+# Gates:
+#   1. Pattern:  subject matches type(phase-task): regex
+#   2. Citation: if src/ staged, message cites API-CONTRACTS/CONTEXT/TEST-GOALS
+#                AND the cited reference RESOLVES (line range contains endpoint,
+#                D-XX exists in CONTEXT, G-XX exists in TEST-GOALS)
+#   3. Caller:   if .callers.json flags downstream callers, they are staged or cited
+#
+# To disable: set commit_msg_hook.enabled=false in vg.config.md, or delete this file.
+# To bypass for a single commit (emergencies only): git commit --no-verify
+# NOTE: CLAUDE.md forbids --no-verify on apps/**/src/**, packages/**/src/** for AI executors.
+
+set -e
+
+MSG_FILE="$1"
+MSG="$(cat "$MSG_FILE")"
+FIRST_LINE="$(echo "$MSG" | head -1)"
+
+# Skip merge / revert / autosquash
+case "$FIRST_LINE" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *)
+    exit 0
+    ;;
+esac
+
+CONFIG_FILE=".claude/vg.config.md"
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "[vg commit-msg] vg.config.md not found - skipping validation."
+  exit 0
+fi
+
+# --- sed-based config getter (no awk nested-quote pain) ---
+# Usage: vg_config_get <section> <field>
+# Returns: field value with surrounding quotes stripped, empty if not found
+vg_config_get() {
+  local section="$1" field="$2"
+  # Extract the section block (between "section:" and next top-level key),
+  # grep the indented field, strip prefix + inline comment + trailing space + quotes.
+  sed -n "/^${section}:/,/^[a-zA-Z_][a-zA-Z0-9_]*:/p" "$CONFIG_FILE" 2>/dev/null \
+    | grep -E "^[[:space:]]+${field}:" \
+    | head -1 \
+    | sed -e "s/^[[:space:]]*${field}:[[:space:]]*//" \
+          -e "s/[[:space:]]*#.*$//" \
+          -e "s/[[:space:]]*$//" \
+          -e "s/^[\"']//" -e "s/[\"']$//"
+}
+
+# === P19 D-08 — Design citation gate (runs even if commit_msg_hook is disabled) ===
+# When the commit touches FE files, the body MUST contain ONE of:
+#   - "Per design/{slug}.png"        (Form A — slug from design/manifest.json)
+#   - "Design: no-asset (...)"        (Form B — explicit gap with reason)
+#   - "Design: refactor-only"         (rename/move/format only, no visual change)
+# Disable per-project: design_citation.enabled=false in vg.config.md.
+DESIGN_GATE_ENABLED=$(vg_config_get design_citation enabled)
+DESIGN_GATE_ENABLED="${DESIGN_GATE_ENABLED:-true}"
+if [ "$DESIGN_GATE_ENABLED" = "true" ]; then
+  STAGED_NAMES_D08=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null || true)
+  RENAMED_ONLY_D08=$(git diff --cached --name-only --diff-filter=R 2>/dev/null || true)
+  FE_TOUCHED_D08=""
+  if [ -n "$STAGED_NAMES_D08" ]; then
+    FE_TOUCHED_D08=$(echo "$STAGED_NAMES_D08" | grep -E '^(apps/(admin|merchant|vendor|web)/|packages/ui/src/(components|theme)/).*\.(tsx|jsx|vue|svelte)$' || true)
+  fi
+  if [ -n "$FE_TOUCHED_D08" ]; then
+    BODY_D08="$(cat "$MSG_FILE")"
+    HAS_PER_DESIGN_D08=$(echo "$BODY_D08" | grep -cE 'Per design/[a-z0-9][a-z0-9_-]+\.png' || true)
+    HAS_NO_ASSET_D08=$(echo "$BODY_D08" | grep -cE 'Design: no-asset \([^)]+\)' || true)
+    HAS_REFACTOR_ONLY_D08=$(echo "$BODY_D08" | grep -cE 'Design: refactor-only' || true)
+    if [ "${HAS_PER_DESIGN_D08:-0}" -eq 0 ] && [ "${HAS_NO_ASSET_D08:-0}" -eq 0 ] && [ "${HAS_REFACTOR_ONLY_D08:-0}" -eq 0 ]; then
+      if [ -z "$STAGED_NAMES_D08" ] && [ -n "$RENAMED_ONLY_D08" ]; then
+        : # rename-only commit
+      else
+        echo ""
+        echo "[vg commit-msg] REJECTED - P19 D-08 design citation missing."
+        echo ""
+        echo "  FE files staged:"
+        echo "$FE_TOUCHED_D08" | sed 's/^/    /'
+        echo ""
+        echo "  Commit body must contain ONE of:"
+        echo "    Per design/{slug}.png       — Form A; slug from design/manifest.json"
+        echo "    Design: no-asset (reason)   — Form B; explicit gap, reason required"
+        echo "    Design: refactor-only       — rename/format only, no visual change"
+        echo ""
+        echo "  Disable per project: set design_citation.enabled=false in $CONFIG_FILE"
+        exit 1
+      fi
+    fi
+  fi
+fi
+
+ENABLED=$(vg_config_get commit_msg_hook enabled)
+ENABLED="${ENABLED:-true}"
+if [ "$ENABLED" != "true" ]; then
+  exit 0
+fi
+
+PATTERN=$(vg_config_get commit_msg_hook pattern)
+DEFAULT_PATTERN='^(feat|fix|refactor|test|chore|docs|style|perf|build|ci)\([0-9]+(\.[0-9]+)*(-[0-9]+)?\): .+'
+PATTERN="${PATTERN:-$DEFAULT_PATTERN}"
+
+REQUIRE_CITE=$(vg_config_get commit_msg_hook require_contract_cite)
+REQUIRE_CITE="${REQUIRE_CITE:-false}"
+
+# ============================================================
+# Gate 1: Pattern check
+# ============================================================
+if ! echo "$FIRST_LINE" | grep -qE "$PATTERN"; then
+  echo ""
+  echo "[vg commit-msg] REJECTED - commit subject does not match required pattern."
+  echo ""
+  echo "  Pattern:  $PATTERN"
+  echo "  Subject:  $FIRST_LINE"
+  echo ""
+  echo "  Examples of valid subjects:"
+  echo "    feat 7.4-03 : add POST /api/appeals handler"
+  echo "    fix 7.6-02 : resolve modal z-index overlap"
+  echo "    refactor 8.1-05 : extract reputation scorer"
+  echo ""
+  echo "  (replace 'X Y-Z :' with parentheses: type(7.4-03): message)"
+  echo "  To disable: set commit_msg_hook.enabled=false in $CONFIG_FILE"
+  exit 1
+fi
+
+# Extract phase number from subject: "type(7.6-03): ..." -> phase="7.6"
+PHASE_TAG=$(echo "$FIRST_LINE" | grep -oE '\([0-9]+(\.[0-9]+)*(-[0-9]+)?\)' | head -1 | tr -d '()')
+PHASE_NUM="${PHASE_TAG%-*}"  # strip -NN task suffix
+PHASE_DIR=$(find .planning/phases -maxdepth 1 -type d \( -name "${PHASE_NUM}*" -o -name "0${PHASE_NUM}*" \) 2>/dev/null | head -1)
+
+# ============================================================
+# Gate 2: Citation check (only if require_contract_cite=true AND touches src/)
+# ============================================================
+if [ "$REQUIRE_CITE" = "true" ]; then
+  STAGED_SRC=$(git diff --cached --name-only 2>/dev/null | grep -E 'src/' || true)
+
+  if [ -n "$STAGED_SRC" ]; then
+    # Explicit skip marker — allowed for non-impactful changes (typo fix, comment)
+    if echo "$MSG" | grep -qE '(no-contract-impact|no-goal-impact)'; then
+      # Accepted — explicit skip. Skip truth check.
+      :
+    else
+      # --- Gate 2a: at least one citation token must appear ---
+      # Namespace v1.8.0 (BREAKING):
+      #   - P{phase}.D-XX — phase-scoped CONTEXT.md decisions (new)
+      #   - F-XX          — FOUNDATION.md project-level decisions (new)
+      #   - D-XX          — legacy bare decision ID (accepted through v1.10.0, rejected v1.10.1+)
+      if ! echo "$MSG" | grep -qE '(Per|per) (API-CONTRACTS|CONTEXT|SPECS|TEST-GOALS|FOUNDATION|goal:? G-|P[0-9.]+\.D-[0-9]+|F-[0-9]+|D-[0-9]+)|Covers goal: G-[0-9]+'; then
+        echo ""
+        echo "[vg commit-msg] REJECTED - commit touches src/ but missing citation."
+        echo ""
+        echo "  Staged src/ files:"
+        echo "$STAGED_SRC" | head -5 | sed 's/^/    /'
+        echo ""
+        echo "  Commit body MUST cite ONE of:"
+        echo "    Per API-CONTRACTS.md line X-Y"
+        echo "    Per CONTEXT.md D-XX"
+        echo "    Covers goal: G-XX"
+        echo "    no-contract-impact    (explicit skip)"
+        echo ""
+        echo "  To disable: set commit_msg_hook.require_contract_cite=false in $CONFIG_FILE"
+        exit 1
+      fi
+
+      # --- Gate 2b: citations must RESOLVE against phase artifacts ---
+      if [ -z "$PHASE_DIR" ]; then
+        echo ""
+        echo "[vg commit-msg] REJECTED - phase '$PHASE_NUM' has no directory in .planning/phases/."
+        echo "  Subject references phase ${PHASE_NUM}-${PHASE_TAG##*-} but no directory found."
+        echo "  Either create the phase (/vg:specs ${PHASE_NUM}) or fix the subject."
+        exit 1
+      fi
+
+      TRUTH_FAILURES=""
+
+      # 2b-1: "Per API-CONTRACTS.md line X-Y" -> line range must exist and contain
+      #       at least one endpoint that matches a staged route file.
+      API_CITE=$(echo "$MSG" | grep -oE 'Per API-CONTRACTS\.md line [0-9]+[-:][0-9]+' | head -1)
+      if [ -n "$API_CITE" ]; then
+        RANGE=$(echo "$API_CITE" | grep -oE '[0-9]+[-:][0-9]+')
+        LINE_START=$(echo "$RANGE" | cut -d'-' -f1 | cut -d':' -f1)
+        LINE_END=$(echo "$RANGE" | cut -d'-' -f2 | cut -d':' -f2)
+        API_FILE="${PHASE_DIR}/API-CONTRACTS.md"
+        if [ ! -f "$API_FILE" ]; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites API-CONTRACTS.md but file missing at ${API_FILE}"
+        else
+          TOTAL_LINES=$(wc -l < "$API_FILE" | tr -d ' ')
+          if [ "$LINE_END" -gt "$TOTAL_LINES" ] || [ "$LINE_START" -gt "$TOTAL_LINES" ] || [ "$LINE_START" -lt 1 ]; then
+            TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Line range ${LINE_START}-${LINE_END} out of bounds (file has ${TOTAL_LINES} lines)"
+          else
+            CITED_TEXT=$(sed -n "${LINE_START},${LINE_END}p" "$API_FILE")
+            # Must contain HTTP verb + path hint (basic sanity)
+            if ! echo "$CITED_TEXT" | grep -qE '(GET|POST|PUT|PATCH|DELETE) */[a-zA-Z_]'; then
+              TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cited lines ${LINE_START}-${LINE_END} of API-CONTRACTS.md contain no HTTP endpoint definition"
+            fi
+          fi
+        fi
+      fi
+
+      # 2b-2: Decision IDs referenced -> must resolve.
+      #   - P{phase}.D-XX  → resolve in this phase's CONTEXT.md (new v1.8.0 namespace)
+      #   - F-XX           → resolve in .planning/FOUNDATION.md (project-level)
+      #   - D-XX (bare)    → LEGACY: resolve in this phase's CONTEXT.md. WARNS about migration.
+      # Using ERE alternation to catch all 3 forms in priority order.
+
+      # 2b-2a: P{phase}.D-XX — phase-scoped
+      for PDID in $(echo "$MSG" | grep -oE 'P[0-9.]+\.D-[0-9]+' | sort -u); do
+        # Extract core ID (strip P-prefix after last dot for local grep)
+        DID=$(echo "$PDID" | sed -E 's/^P[0-9.]+\.//')
+        CTX_FILE="${PHASE_DIR}/CONTEXT.md"
+        if [ ! -f "$CTX_FILE" ]; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites ${PDID} but CONTEXT.md missing at ${CTX_FILE}"
+        elif ! grep -qE "(^|[^A-Za-z0-9])(${PDID}|${DID})([:*[:space:]]|$)" "$CTX_FILE"; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Decision ${PDID} not found in ${CTX_FILE}"
+        fi
+      done
+
+      # 2b-2b: F-XX — foundation-level
+      for FID in $(echo "$MSG" | grep -oE 'F-[0-9]+' | sort -u); do
+        FOUNDATION_FILE=".planning/FOUNDATION.md"
+        if [ ! -f "$FOUNDATION_FILE" ]; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites ${FID} but FOUNDATION.md missing at ${FOUNDATION_FILE}. Run /vg:project to create."
+        elif ! grep -qE "(^|[^A-Za-z0-9])${FID}([:*[:space:]]|$)" "$FOUNDATION_FILE"; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Foundation decision ${FID} not found in ${FOUNDATION_FILE}"
+        fi
+      done
+
+      # 2b-2c: Legacy bare D-XX (NOT preceded by "P{phase}.") — accepted thru v1.10.0, warned, rejected v1.10.1+
+      # Use perl-style negative lookbehind equivalent via sed-extracted ungrouped matches.
+      # Bash ERE can't do lookbehind; use a filter loop.
+      for DID in $(echo "$MSG" | grep -oE '(^|[^.])D-[0-9]+' | grep -oE 'D-[0-9]+' | sort -u); do
+        # Skip if this D-XX was already matched by P{phase}.D-XX above (which would include it)
+        if echo "$MSG" | grep -qE "P[0-9.]+\.${DID}\b"; then continue; fi
+        CTX_FILE="${PHASE_DIR}/CONTEXT.md"
+        if [ ! -f "$CTX_FILE" ]; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites legacy ${DID} but CONTEXT.md missing at ${CTX_FILE}"
+        elif ! grep -qE "(^|[^A-Za-z0-9])${DID}([:*[:space:]]|$)" "$CTX_FILE"; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Decision ${DID} not found in ${CTX_FILE}"
+        else
+          # WARN (non-blocking through v1.10.0): remind to migrate
+          echo "[vg commit-msg] WARN: legacy bare citation '${DID}'. Run .claude/scripts/migrate-d-xx-namespace.py --apply to convert to P{phase}.D-XX. Rejected starting v1.10.1." >&2
+        fi
+      done
+
+      # 2b-3: "G-XX" referenced -> must exist in TEST-GOALS.md.
+      #        Loose match: "Goal G-XX", "G-XX:", "| G-XX |", "**G-XX**" all count.
+      for GID in $(echo "$MSG" | grep -oE 'G-[0-9]+' | sort -u); do
+        TG_FILE="${PHASE_DIR}/TEST-GOALS.md"
+        if [ ! -f "$TG_FILE" ]; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Cites ${GID} but TEST-GOALS.md missing at ${TG_FILE}"
+        elif ! grep -qE "(^|[^A-Za-z0-9])${GID}([:*[:space:]]|$)" "$TG_FILE"; then
+          TRUTH_FAILURES="${TRUTH_FAILURES}\n  - Goal ${GID} not found in ${TG_FILE}"
+        fi
+      done
+
+      if [ -n "$TRUTH_FAILURES" ]; then
+        echo ""
+        echo "[vg commit-msg] REJECTED - citation(s) do not resolve against phase artifacts:"
+        printf "${TRUTH_FAILURES}\n"
+        echo ""
+        echo "  Phase dir checked: ${PHASE_DIR}"
+        echo "  Fix by:"
+        echo "    (a) Correct the line range / D-XX / G-XX to point at real content, OR"
+        echo "    (b) Add 'no-contract-impact' to commit body if change truly has no contract link"
+        exit 1
+      fi
+    fi
+  fi
+fi
+
+# ============================================================
+# Gate 3: Caller citation check (semantic regression)
+# ============================================================
+# If build step 4e generated .callers.json and this commit touches an <edits-*>
+# symbol, any downstream caller NOT in staged changes must be explicitly cited.
+if [ -n "$PHASE_DIR" ]; then
+  CALLERS_JSON="${PHASE_DIR}/.callers.json"
+  if [ -f "$CALLERS_JSON" ]; then
+    STAGED_FILES=$(git diff --cached --name-only 2>/dev/null)
+    REQUIRED=""
+    if command -v jq >/dev/null 2>&1; then
+      REQUIRED=$(jq -r '.affected_callers[]?' "$CALLERS_JSON" 2>/dev/null)
+    else
+      PY=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || command -v py 2>/dev/null)
+      if [ -n "$PY" ]; then
+        REQUIRED=$("$PY" -c "
+import json, sys
+try:
+    d = json.load(open('$CALLERS_JSON', encoding='utf-8'))
+    for f in d.get('affected_callers', []):
+        print(f)
+except Exception:
+    sys.exit(0)
+" 2>/dev/null)
+      fi
+    fi
+
+    MISSING_CITATIONS=""
+    for caller in $REQUIRED; do
+      if ! echo "$STAGED_FILES" | grep -qxF "$caller"; then
+        if ! grep -qE "(Caller[[:space:]]+${caller}|no breaking change.*${caller}|caller-safe:[[:space:]]*${caller})" "$MSG_FILE"; then
+          MISSING_CITATIONS="$MISSING_CITATIONS $caller"
+        fi
+      fi
+    done
+
+    if [ -n "$MISSING_CITATIONS" ]; then
+      echo ""
+      echo "[vg commit-msg] REJECTED - semantic regression: unaddressed callers."
+      echo ""
+      echo "  Caller graph ($CALLERS_JSON) lists these downstream files:"
+      for c in $MISSING_CITATIONS; do
+        echo "    $c"
+      done
+      echo ""
+      echo "  Options:"
+      echo "    (a) Add these files to the commit AND re-commit"
+      echo "    (b) Add a line to commit body: Caller <path>: <reason no breaking change>"
+      echo ""
+      echo "  To disable: set semantic_regression.enabled=false in $CONFIG_FILE"
+      exit 1
+    fi
+  fi
+fi
+
+exit 0
