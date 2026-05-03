@@ -339,17 +339,50 @@ If script exits non-zero OR `siblings` list is empty → orchestrator injects `<
 
 ### 4d: Task section extraction (fixes G6)
 
-For each task in PLAN*.md, pre-extract its section into a temp file so executor gets only that task, not the entire plan:
+For each task in PLAN*.md, pre-extract its slice via the canonical loader
+so executor gets only that task, not the entire plan. The loader resolves
+the per-task split form `${PHASE_DIR}/PLAN/task-${N}.md` first (canonical),
+falling back to a flat `PLAN*.md` parse only when the split form is
+missing — keeps consumer filename `${TASKS_DIR}/task-${N}.md` stable for
+downstream readers (pre-executor-check.py, find-siblings.py).
+
+Per audit doc `docs/audits/2026-05-04-build-flat-vs-split.md` row for
+backup line 1232 (MIGRATE), the historical awk-over-flat-PLAN parse is
+replaced by `vg-load --artifact plan --task ${TASK_NUM}` per task. This
+removes the last AI-context-feeding flat read of `PLAN*.md` from the
+build pipeline.
 
 ```bash
 TASKS_DIR="${PHASE_DIR}/.wave-tasks"
 mkdir -p "$TASKS_DIR"
 
-# Parse PLAN*.md, split by task headings (h2 or h3 — VG-native uses ### under wave headings)
-awk '
-  /^#{2,3} Task [0-9]+/ { if (out) close(out); n=$3; gsub(":", "", n); out="'$TASKS_DIR'/task-" n ".md"; print > out; next }
-  out { print >> out }
-' "${PHASE_DIR}"/PLAN*.md
+# Discover task numbers from PLAN tasks. Use vg-load --list when available
+# (canonical), otherwise grep the per-task split dir or flat PLAN headings
+# (deterministic — KEEP-FLAT, no AI context).
+TASK_NUMS=""
+if vg-load --phase "${PHASE_NUMBER}" --artifact plan --list-tasks 2>/dev/null > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/.plan-tasks.txt"; then
+  TASK_NUMS=$(cat "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/.plan-tasks.txt" | tr '\n' ' ')
+elif [ -d "${PHASE_DIR}/PLAN" ]; then
+  TASK_NUMS=$(ls "${PHASE_DIR}/PLAN"/task-*.md 2>/dev/null \
+    | sed -E 's|.*/task-0*([0-9]+)\.md|\1|' | sort -un | tr '\n' ' ')
+else
+  # Deterministic header scan over flat PLAN*.md (NOT AI context — feeds
+  # vg-load invocation below per task).
+  TASK_NUMS=$(grep -hoE '^#{2,3} Task [0-9]+' "${PHASE_DIR}"/PLAN*.md 2>/dev/null \
+    | sed -E 's/^#+ Task 0*([0-9]+).*/\1/' | sort -un | tr '\n' ' ')
+fi
+
+for TASK_NUM in $TASK_NUMS; do
+  TASK_NUM_PADDED=$(printf '%02d' "$TASK_NUM")
+  OUT="${TASKS_DIR}/task-${TASK_NUM_PADDED}.md"
+  # Canonical loader — resolves split form, falls back to flat parse only
+  # when split missing. Output goes to .wave-tasks/task-${N}.md (preserved
+  # filename so downstream consumers keep working unchanged).
+  vg-load --phase "${PHASE_NUMBER}" --artifact plan --task "${TASK_NUM}" \
+    > "$OUT" 2>/dev/null || {
+    echo "⚠ vg-load failed for task ${TASK_NUM} — capsule materialization may use stale slice" >&2
+  }
+done
 ```
 
 Each executor now injects `@${TASKS_DIR}/task-{N}.md` (task-only, ~100-300 lines) instead of `@${PLAN_FILE}` (full file).
