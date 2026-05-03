@@ -523,6 +523,8 @@ vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint" "${PHASE_NUMBE
 ### 5.5.6 — CrossAI consensus review (when gate PASSED)
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 2d_crossai_review 2>/dev/null || true
+
 source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/crossai-skip-guard.sh" 2>/dev/null || \
   echo "⚠ crossai-skip-guard.sh missing — skip audit not enforced" >&2
 

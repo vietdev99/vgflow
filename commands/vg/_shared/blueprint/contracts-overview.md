@@ -244,7 +244,14 @@ fi
 
 ### Mark steps 2b + 2b5
 
+`2b5_test_goals` is co-generated with `2b_contracts` by the same subagent
+spawn (TEST-GOALS.md authored alongside API-CONTRACTS.md). Open the
+2b5_test_goals step gate explicitly so PreToolUse Bash hook records the
+sub-step lifecycle, then close both markers.
+
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 2b5_test_goals 2>/dev/null || true
+
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b_contracts" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b_contracts.done"
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b5_test_goals" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b5_test_goals.done"
