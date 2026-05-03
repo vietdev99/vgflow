@@ -5,6 +5,16 @@
 set -euo pipefail
 
 input="$(cat)"
+
+# ── VG context guard ──
+# Hook is harmless when no VG run is active. Silent exit prevents
+# false blocks on unrelated Claude Code skills (superpowers, gsd, etc).
+session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+run_file=".vg/active-runs/${session_id}.json"
+if [ ! -f "$run_file" ]; then
+  exit 0
+fi
+
 subagent="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("subagent_type",""))' 2>/dev/null || true)"
 
 # Allow-list: general-purpose, Explore, Plan, vg-* custom agents, gsd-debugger only.
