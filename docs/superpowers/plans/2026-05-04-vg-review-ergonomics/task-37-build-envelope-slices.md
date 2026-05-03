@@ -468,7 +468,9 @@ Then modify `build_task_context_capsule()` to call this helper. Around line 605 
     )
 
     capsule = {
-        "capsule_version": "1",
+        # PRESERVE existing capsule_version verbatim — Task 41 bumps it to "2";
+        # if Task 41 already merged, leave the existing "2". Do NOT downgrade.
+        "capsule_version": ...,
         # ...existing fields up through anti_lazy_read_rules...
         "crud_surfaces_slice_path": slices["crud_surfaces_slice_path"],
         "lens_walk_slice_path": slices["lens_walk_slice_path"],
@@ -477,6 +479,12 @@ Then modify `build_task_context_capsule()` to call this helper. Around line 605 
 ```
 
 Add `import sys` if not already imported at top of file.
+
+**Cross-task note:** Task 37 ADDS 3 keys to the capsule literal. Task 41
+bumps `capsule_version` from `"1"` to `"2"` and adds 4 more keys (actor_role,
+workflow_id, workflow_step, write_phase). Tasks 37 and 41 are independent;
+whichever lands first should leave the other's edit intact. Final capsule
+after both = `capsule_version: "2"` + 7 new keys (3 from 37 + 4 from 41).
 
 - [ ] **Step 8: Update `commands/vg/_shared/build/waves-delegation.md` — declare 3 envelope fields**
 
