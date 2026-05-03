@@ -93,6 +93,13 @@ def parse_yaml(yaml_text: str) -> RCRURDInvariant:
     )
 
 
+def _is_endpoint(s: object) -> bool:
+    """Endpoint is either a relative path (`/api/...`) or absolute URL
+    (`http(s)://host/api/...`). Relative is preferred in TEST-GOALS;
+    runtime gate may inject base URL or accept absolute for tests."""
+    return isinstance(s, str) and (s.startswith("/") or s.startswith("http://") or s.startswith("https://"))
+
+
 def _parse_write(d: Any) -> WriteSpec:
     if not isinstance(d, dict):
         raise RCRURDInvariantError("write must be a mapping")
@@ -100,8 +107,8 @@ def _parse_write(d: Any) -> WriteSpec:
     if method not in _VALID_WRITE_METHOD:
         raise RCRURDInvariantError(f"write.method must be one of {sorted(_VALID_WRITE_METHOD)}, got {method!r}")
     endpoint = d.get("endpoint")
-    if not isinstance(endpoint, str) or not endpoint.startswith("/"):
-        raise RCRURDInvariantError(f"write.endpoint must start with '/', got {endpoint!r}")
+    if not _is_endpoint(endpoint):
+        raise RCRURDInvariantError(f"write.endpoint must be a relative path '/...' or absolute URL, got {endpoint!r}")
     return WriteSpec(method=method, endpoint=endpoint)
 
 
@@ -112,8 +119,8 @@ def _parse_read(d: Any) -> ReadSpec:
     if method != "GET":
         raise RCRURDInvariantError(f"read.method must be GET, got {method!r}")
     endpoint = d.get("endpoint")
-    if not isinstance(endpoint, str) or not endpoint.startswith("/"):
-        raise RCRURDInvariantError(f"read.endpoint must start with '/', got {endpoint!r}")
+    if not _is_endpoint(endpoint):
+        raise RCRURDInvariantError(f"read.endpoint must be a relative path '/...' or absolute URL, got {endpoint!r}")
     cache_policy = d.get("cache_policy")
     if cache_policy not in _VALID_CACHE:
         raise RCRURDInvariantError(f"read.cache_policy must be one of {sorted(_VALID_CACHE)}, got {cache_policy!r}")
