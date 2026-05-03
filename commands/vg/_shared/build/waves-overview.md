@@ -147,11 +147,18 @@ Executors append their task summary sections to this file (per
 `vg-executor-rules.md` "Task summary output"). After all waves, step 9
 verifies every task has a section.
 
-### Step 4 — Tag wave start + init progress file (8b)
+### Step 4 — Tag wave start + emit `wave.started` event + init progress file (8b)
 
 ```bash
 git tag "vg-build-${PHASE}-wave-${N}-start" HEAD
 WAVE_TAG="vg-build-${PHASE}-wave-${N}-start"
+
+# Emit canonical wave.started event (orchestrator helper). Required by
+# build.md frontmatter must_emit_telemetry — Stop hook fails run-complete
+# without ≥1 wave.started event in events.db. Idempotent: same wave N
+# rejected if already started in this run.
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator wave-start "${N}" 2>/dev/null \
+  || echo "⚠ wave-start emit failed (or wave ${N} already started) — continuing" >&2
 
 # Init compact-safe progress file — survives context compacts + crashes.
 source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/build-progress.sh"
@@ -921,8 +928,21 @@ fi
 
 ```bash
 echo "wave-${N}: ${FAILED_GATE:-passed} (retries: ${RETRY_COUNT})" >> "${PHASE_DIR}/build-state.log"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event build.wave_completed \
-  --phase "${PHASE_NUMBER}" --wave "${N}" 2>/dev/null || true
+
+# Build wave-complete evidence envelope (canonical contract — accepted by
+# vg-orchestrator wave-complete via stdin or --evidence-file).
+WAVE_EVIDENCE=$(cat <<EVIDENCE_JSON
+{
+  "wave": ${N},
+  "outcome": "${FAILED_GATE:-passed}",
+  "retries": ${RETRY_COUNT:-0},
+  "tasks": ${WAVE_TASKS_JSON:-"[]"},
+  "wave_tag": "${WAVE_TAG:-}"
+}
+EVIDENCE_JSON
+)
+echo "${WAVE_EVIDENCE}" | "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator wave-complete 2>/dev/null \
+  || echo "⚠ wave-complete emit failed for wave ${N} — Stop hook may flag missing wave.completed" >&2
 ```
 
 Only proceed to next wave if `$FAILED_GATE` empty.
