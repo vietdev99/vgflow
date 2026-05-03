@@ -119,3 +119,34 @@ phases that pre-date the per-task split.
 | "Profile branch is suggestion" | Profile branch enforces R4 skip for backend-only — don't override |
 | "Per-decision split optional" | UX baseline R1 — blueprint depends on `vg-load.sh --decision D-NN` |
 | "Spawn Task() for challenger" | Tool name is `Agent` (Codex correction #1) |
+
+---
+
+## Hook authoring rule — VG context guard
+
+Every NEW hook script that enforces VG-specific policy MUST start with
+the canonical "VG context guard" block. Hooks that enforce filesystem-
+scoped invariants (write protection on `.vg/runs/*`) MAY skip the
+guard, but MUST document the rationale at the top of the script.
+
+The guard pattern is identical bytes across all hooks for grep-ability:
+
+```bash
+# ── VG context guard ──
+# Hook is harmless when no VG run is active. Silent exit prevents
+# false blocks on unrelated Claude Code skills (superpowers, gsd, etc).
+session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+run_file=".vg/active-runs/${session_id}.json"
+if [ ! -f "$run_file" ]; then
+  exit 0
+fi
+```
+
+Placement: immediately after `set -euo pipefail` and `input="$(cat)"`
+(if the hook reads stdin), before any policy check.
+
+Pytest suite `tests/hooks/test_hooks_silent_on_non_vg.py` enforces this
+for all hooks except the documented exceptions in
+`tests/hooks/test_write_protection_unconditional.py`.
+
+Source: `docs/superpowers/specs/2026-05-03-vg-r5.5-hooks-source-isolation-design.md`
