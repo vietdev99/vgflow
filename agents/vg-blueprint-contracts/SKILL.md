@@ -1,6 +1,6 @@
 ---
 name: vg-blueprint-contracts
-description: Generate API-CONTRACTS (flat + per-endpoint split) + INTERFACE-STANDARDS + TEST-GOALS (flat + per-goal split) + Codex proposal/delta + CRUD-SURFACES for a phase. ONLY this task.
+description: "Generate API-CONTRACTS (flat + per-endpoint split) + INTERFACE-STANDARDS + TEST-GOALS (flat + per-goal split) + CRUD-SURFACES for a phase. ONLY this task. Codex proposal/delta lane is owned by the MAIN agent, not this subagent."
 tools: [Read, Write, Bash, Grep]
 model: opus
 ---
