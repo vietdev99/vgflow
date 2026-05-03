@@ -25,6 +25,8 @@ ONLY the spawn payload + return contract.
   "goals_loaded_via": "vg-load --phase ${PHASE_NUMBER} --artifact goals --priority critical",
   "goals_index": "<output of vg-load --phase ${PHASE_NUMBER} --artifact goals --priority critical>",
   "contracts_loaded_via": "vg-load --phase ${PHASE_NUMBER} --artifact contracts --endpoint <slug>",
+  "edge_cases_loaded_via": "vg-load --phase ${PHASE_NUMBER} --artifact edge-cases --goal G-NN",
+  "edge_cases_available": true,
   "runtime_map_path": "${PHASE_DIR}/RUNTIME-MAP.json",
   "goal_coverage_matrix_path": "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md",
   "generated_tests_dir": "${GENERATED_TESTS_DIR}",
@@ -42,7 +44,14 @@ ONLY the spawn payload + return contract.
 **CRITICAL — vg-load mandate:**
 - Goals MUST be loaded via `vg-load --phase ${PHASE_NUMBER} --artifact goals --priority critical`.
 - Per-endpoint contracts MUST be loaded via `vg-load --phase ${PHASE_NUMBER} --artifact contracts --endpoint <slug>` (endpoint slug derives from the goal's API binding).
-- The subagent MUST NOT `cat PLAN.md`, `cat API-CONTRACTS.md`, or `cat TEST-GOALS.md` directly. All artifacts are provided via the `goals_index` input field.
+- **Edge cases (P1 v2.49+)**: when `edge_cases_available: true`, MUST load
+  per-goal variants via `vg-load --phase ${PHASE_NUMBER} --artifact edge-cases --goal G-NN`.
+  Generate `test.each([...variants])` blocks per goal so each variant
+  becomes its own assertion. Variant `expected_outcome` → assertion text.
+  When `edge_cases_available: false` (legacy phase), generate single-path
+  spec.ts as before; emit warning in return JSON.
+- The subagent MUST NOT `cat PLAN.md`, `cat API-CONTRACTS.md`, `cat TEST-GOALS.md`,
+  or `cat EDGE-CASES.md` directly. All artifacts loaded via vg-load.
 
 ---
 
@@ -318,6 +327,42 @@ ADV_SEVERITY=$(vg_config_get "adversarial_coverage.severity" "warn" 2>/dev/null 
 ```
 
 WARN-only by default. Promote to BLOCK via `vg.config.md adversarial_coverage.severity: block`.
+
+### F.2.5 — edge-case variant coverage gate (P1 v2.49+)
+
+Before goal-test binding gate, verify each variant from EDGE-CASES has a
+matching `test()` or `test.each()` row in generated `.spec.ts`:
+
+```bash
+if [ "$EDGE_CASES_AVAILABLE" = "true" ]; then
+  # For each goal in goals_index, load edge cases + grep generated specs
+  EDGE_GAP_COUNT=0
+  for gid in $GOALS_LIST; do
+    EDGE_FILE="${PHASE_DIR}/EDGE-CASES/${gid}.md"
+    [ -f "$EDGE_FILE" ] || continue
+
+    # Extract variant_ids from edge case file
+    VARIANTS=$(grep -oE "${gid}-[a-z]\d+" "$EDGE_FILE" | sort -u)
+    for vid in $VARIANTS; do
+      # Variant must appear in spec.ts comment OR test name
+      if ! grep -rqE "vg-edge-case[: ]+${vid}|test\\(['\"].*${vid}|test\\.each.*${vid}" "${GENERATED_TESTS_DIR}/" 2>/dev/null; then
+        echo "  ⚠ ${gid}: variant ${vid} không có test (spec.ts thiếu coverage)"
+        EDGE_GAP_COUNT=$((EDGE_GAP_COUNT + 1))
+      fi
+    done
+  done
+  if [ "$EDGE_GAP_COUNT" -gt 0 ]; then
+    echo "⛔ ${EDGE_GAP_COUNT} variant(s) không có test coverage."
+    echo "   AI phải re-codegen với test.each(...) per variant từ EDGE-CASES."
+    echo "   Reference variant_id ở comment hoặc test name."
+    # Emit l2_escalation if user passed --skip-edge-cases-binding
+    [ -z "$ALLOW_SKIP" ] && exit 1
+  fi
+fi
+```
+
+Severity: BLOCK by default; degrades to WARN if `--allow-edge-case-gap` flag
+set (paired with override-reason).
 
 ### F.3 — goal-test binding gate (verify-goal-test-binding.py)
 

@@ -6,7 +6,7 @@
 # partial loading instead of reading the full flat file — saves context budget.
 #
 # USAGE
-#   vg-load --phase <N> --artifact <plan|contracts|goals> [<filter-flags>]
+#   vg-load --phase <N> --artifact <plan|contracts|goals|edge-cases> [<filter-flags>]
 #
 # ARTIFACTS + FILTERS
 #   --artifact plan
@@ -30,6 +30,13 @@
 #     --full            flat TEST-GOALS.md
 #     --list            print goal filenames only
 #     --index           print TEST-GOALS/index.md only
+#
+#   --artifact edge-cases (P1 v2.49+)
+#     --goal G-NN       single per-goal edge-case file (EDGE-CASES/G-NN.md)
+#     --priority <p>    all edge-case files containing variants matching priority
+#     --full            flat EDGE-CASES.md
+#     --list            print per-goal edge-case filenames only
+#     --index           print EDGE-CASES/index.md only
 #
 # OPTIONAL
 #   --phases-dir DIR    override default .vg/phases (or $PHASES_DIR env)
@@ -183,8 +190,35 @@ case "$artifact" in
     esac
     ;;
 
+  edge-cases)
+    # P1 v2.49+: edge cases artifact (3-layer split mirrors goals).
+    # Layer 3: EDGE-CASES.md (flat). Layer 2: EDGE-CASES/index.md (TOC).
+    # Layer 1: EDGE-CASES/G-NN.md (per-goal, primary for build/review/test).
+    sub_dir="$phase_dir/EDGE-CASES"
+    flat_file="$phase_dir/EDGE-CASES.md"
+    case "$filter_kind" in
+      full)  cat "$flat_file" 2>/dev/null || { echo "ERROR: $flat_file not found" >&2; exit 2; } ;;
+      index) cat "$sub_dir/index.md" 2>/dev/null || { echo "ERROR: $sub_dir/index.md not found" >&2; exit 2; } ;;
+      list)  ls "$sub_dir"/G-*.md 2>/dev/null || { echo "no edge-case files" >&2; exit 3; } ;;
+      goal)
+        f="$sub_dir/${filter_value}.md"
+        [ -f "$f" ] || { echo "ERROR: edge-case file not found: $f" >&2; exit 2; }
+        cat "$f"
+        ;;
+      priority)
+        # Match files with variant rows containing priority cell
+        files=$(grep -lE "\| ${filter_value} \|" "$sub_dir"/G-*.md 2>/dev/null || true)
+        [ -z "$files" ] && { echo "ERROR: no edge-cases with priority '$filter_value'" >&2; exit 3; }
+        for f in $files; do
+          cat "$f" && echo ""
+        done
+        ;;
+      *) echo "ERROR: unsupported filter '$filter_kind' for edge-cases (use --goal G-NN, --priority, --full, --index, --list)" >&2; exit 1 ;;
+    esac
+    ;;
+
   *)
-    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals" >&2
+    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases" >&2
     exit 1
     ;;
 esac

@@ -51,6 +51,10 @@ files (capsule, plan slice, contract slices, design ref).
   "binding_requirements": [
     "binding-CONTEXT-D-02",
     "binding-INTERFACE-error-shape"
+  ],
+  "edge_cases_for_goals": [
+    "G-04",
+    "G-12"
   ]
 }
 ```
@@ -72,6 +76,7 @@ files (capsule, plan slice, contract slices, design ref).
 | `typecheck_cmd` | yes | From `vg.config.md > build_gates.typecheck_cmd`. Subagent runs before commit. |
 | `build_cmd` | maybe | From `vg.config.md > build_gates.build_cmd`. May be empty. |
 | `binding_requirements` | yes | Citations the subagent's commit MUST satisfy via `// vg-binding: <id>` comments + commit-msg cite. |
+| `edge_cases_for_goals` | maybe | List of goal IDs (G-NN) whose EDGE-CASES this task implements. Subagent MUST load via `vg-load --artifact edge-cases --goal G-NN` and handle each variant_id in code. Empty list = task touches no goals (rare, e.g., infra/migration tasks). |
 
 ---
 
@@ -112,6 +117,18 @@ task_id: ${task_id}
 # Do NOT paraphrase, expand scope, or invent additional behavior.
 @${plan_task_path}
 </task_plan_slice>
+
+<edge_cases_for_goals>
+# P1 v2.49+: edge case variants this task MUST handle.
+# For each goal in edge_cases_for_goals, load the per-goal edge case file:
+#   vg-load --phase ${phase_number} --artifact edge-cases --goal G-NN
+# Each file lists variants (G-NN-b1, G-NN-a1, etc) with input + expected_outcome.
+# Implementation MUST cover EVERY variant — code paths, validation, error
+# responses, etc. Reference variant_id in comments at the relevant code site:
+#   // vg-edge-case: G-04-b1 (empty domain → 400)
+# This anchors review/test coverage check (Phase 2 downstream).
+${EDGE_CASES_FOR_GOALS_BLOCK}
+</edge_cases_for_goals>
 
 <contract_context>
 # Per-endpoint contract slices. Loaded via:
