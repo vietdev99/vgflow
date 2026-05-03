@@ -126,12 +126,18 @@ Adapter requirements:
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active create_task_tracker 2>/dev/null || true
 
+# A3-r2 fix: tasklist-projected MUST succeed — the projection event is
+# the only legitimate emitter for `accept.native_tasklist_projected`
+# (the suffix is RESERVED in vg-orchestrator/__main__.py:1212, so the
+# previous emit-event fallback never fired). Failure here = real bug
+# (missing tasklist-contract.json or adapter mismatch) — surface it and
+# block instead of silently masking with `|| true`.
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
-  --adapter "${VG_TASKLIST_ADAPTER:-fallback}" >/dev/null 2>&1 || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-  "accept.native_tasklist_projected" \
-  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"adapter\":\"${VG_TASKLIST_ADAPTER:-fallback}\"}" \
-  >/dev/null 2>&1 || true
+  --adapter "${VG_TASKLIST_ADAPTER:-fallback}" || {
+    echo "⛔ vg-orchestrator tasklist-projected failed — accept.native_tasklist_projected event will not fire." >&2
+    echo "   Check .vg/runs/<run_id>/tasklist-contract.json was written by emit-tasklist.py + adapter is one of {claude,codex,fallback}." >&2
+    exit 1
+  }
 
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/create_task_tracker.done"
