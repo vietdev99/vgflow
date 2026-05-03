@@ -21,11 +21,17 @@ run_file=".vg/active-runs/${session_id}.json"
 
 mkdir -p ".vg/active-runs"
 
-# Reject if active run already exists with different command (resolution gate).
+# Cross-run guard:
+# - Different phase → independent run, overwrite silently (e.g., blueprint 4.1 active, user starts build 2).
+# - Same phase + different command → intra-phase pipeline conflict, block (e.g., blueprint 4.1 active, user starts build 4.1 before blueprint completes).
+# - Same phase + same command → idempotent restart, overwrite silently.
+# Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
 if [ -f "$run_file" ]; then
-  existing="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"])' "$run_file" 2>/dev/null || true)"
-  if [ -n "$existing" ] && [ "$existing" != "$cmd" ]; then
-    echo "ERROR: active run for $existing exists; finish or abort before invoking $cmd" >&2
+  existing_cmd="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"])' "$run_file" 2>/dev/null || true)"
+  existing_phase="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("phase",""))' "$run_file" 2>/dev/null || true)"
+  if [ -n "$existing_cmd" ] && [ "$existing_cmd" != "$cmd" ] && [ "$existing_phase" = "$phase" ]; then
+    printf "\033[38;5;208mvg-cross-run: active %s on phase %s; finish or abort before invoking %s on same phase\033[0m\n" \
+      "$existing_cmd" "$existing_phase" "$cmd" >&2
     exit 2
   fi
 fi
