@@ -56,12 +56,21 @@ runtime_contract:
       phase: "${PHASE_NUMBER}"
     - event_type: "scope.completed"
       phase: "${PHASE_NUMBER}"
+    # Task 12 (build-fix-loop) — forward-dep disposition gate.
+    # Emitted by preflight Step 1.5 when .vg/FORWARD-DEPS.md has unresolved
+    # entries from prior phases. severity=warn so a clean phase (no carry-over)
+    # doesn't fail telemetry contract; --no-forward-deps escape hatch listed below.
+    - event_type: "scope.forward_deps_dispositioned"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+      required_unless_flag: "--no-forward-deps"
   forbidden_without_override:
     - "--skip-crossai"
     - "--skip-crossai-output"
     - "--skip-env-preference"
     - "--allow-decisions-untraced"
     - "--override-reason"
+    - "--no-forward-deps"
 ---
 
 
@@ -89,9 +98,12 @@ You MUST follow STEP 1 through STEP 7 in exact order. Each step is gated
 by hooks. Skipping ANY step will be blocked by PreToolUse + Stop hooks.
 You CANNOT rationalize past these gates.
 
-You MUST call TodoWrite IMMEDIATELY after STEP 1 runs emit-tasklist.py.
-The PreToolUse Bash hook will block all subsequent step-active calls
-until signed evidence (HMAC) exists at `.vg/runs/<run>/tasklist-evidence.json`.
+You MUST project the native tasklist IMMEDIATELY after STEP 1 runs
+emit-tasklist.py. Claude uses TodoWrite first, then `tasklist-projected`;
+Codex runs `tasklist-projected --adapter codex` as a separate command before
+any `step-active` call. The PreToolUse Bash hook will block all subsequent
+step-active calls until signed evidence exists at
+`.vg/runs/<run>/.tasklist-projected.evidence.json`.
 
 For each of the 5 discussion rounds (inside STEP 2), you MUST invoke:
   (a) per-answer adversarial challenger via the Agent tool

@@ -109,8 +109,20 @@ fi
 source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/config-loader.md" 2>/dev/null || \
   source ".claude/commands/vg/_shared/config-loader.md"
 
-PHASE_DIR="${PHASES_DIR}/${PHASE_NUMBER}"
+# Resolve slugged phase directories produced by /vg:specs, e.g.
+# `.vg/phases/1-codex-fixture-cli-health`, instead of assuming a bare
+# `.vg/phases/1` directory exists.
+source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/phase-resolver.sh" 2>/dev/null || \
+  source "${REPO_ROOT}/commands/vg/_shared/lib/phase-resolver.sh" 2>/dev/null || true
+PHASE_DIR=""
+if type -t resolve_phase_dir >/dev/null 2>&1; then
+  PHASE_DIR=$(resolve_phase_dir "$PHASE_NUMBER" 2>/dev/null || true)
+fi
+if [ -z "$PHASE_DIR" ]; then
+  PHASE_DIR="${PHASES_DIR}/${PHASE_NUMBER}"
+fi
 [ -d "$PHASE_DIR" ] || { echo "⛔ Phase dir missing: $PHASE_DIR — check ROADMAP.md" >&2; exit 1; }
+export PHASE_DIR
 ```
 
 ## 2. SPECS.md gate (precedes run-start so non-feature short-circuit doesn't open a half-finished run)
@@ -242,7 +254,7 @@ Extract Goal / In-scope / Out-of-scope / Constraints / Success criteria from SPE
   --phase "${PHASE_NUMBER}" --step scope --status in_progress 2>/dev/null || true
 ```
 
-## 8. Emit tasklist + TodoWrite + tasklist-projected (HARD-GATE)
+## 8. Emit tasklist + native projection evidence (HARD-GATE)
 
 > Critical-1 fix: `emit-tasklist.py` reads the active run_id from
 > `.vg/active-runs/<session>.json` (via `_read_active_run`) and writes
@@ -263,17 +275,27 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
 `emit-tasklist.py` emits the `scope.tasklist_shown` event (via
 `_emit_event`) and writes the contract; do not re-emit it manually.
 
-**THEN IMMEDIATELY** call `TodoWrite` with one todo per `projection_items[]`
-entry from `.vg/runs/<run_id>/tasklist-contract.json` (group headers + sub-steps
-with `↳` prefix). The PreToolUse Bash hook BLOCKS subsequent step-active calls
-until TodoWrite runs and the PostToolUse hook signs
-`.vg/runs/<run_id>/.tasklist-projected.evidence.json`.
+**THEN IMMEDIATELY** project the native tasklist before any `step-active` call:
 
-After TodoWrite returns:
+- Claude: call `TodoWrite` with one todo per `projection_items[]` entry from
+  `.vg/runs/<run_id>/tasklist-contract.json` (group headers + sub-steps with
+  `↳` prefix), then run the binder below.
+- Codex: Codex has no Claude `TodoWrite` PostToolUse evidence path. Run the
+  binder below with adapter `codex` as its own shell/tool call. Do not bundle it
+  with `step-active`; PreToolUse evaluates the whole command before the evidence
+  file exists and will block the grouped command.
+
+The PreToolUse Bash hook BLOCKS subsequent step-active calls until
+`.vg/runs/<run_id>/.tasklist-projected.evidence.json` exists.
 
 ```bash
+TASKLIST_ADAPTER="${VG_TASKLIST_ADAPTER:-claude}"
+if [ "${VG_RUNTIME:-}" = "codex" ]; then
+  TASKLIST_ADAPTER="${VG_TASKLIST_ADAPTER:-codex}"
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
-  --adapter "${VG_TASKLIST_ADAPTER:-claude}" >/dev/null 2>&1 || \
+  --adapter "${TASKLIST_ADAPTER}" >/dev/null 2>&1 || \
   echo "⚠ tasklist-projected binder failed — Stop hook will BLOCK at run-complete" >&2
 ```
 
@@ -281,12 +303,46 @@ The `tasklist-projected` command is the SOLE owner of the reserved
 `scope.native_tasklist_projected` event (`__main__.py:1132`-`1153` rejects CLI
 emit of the `.native_tasklist_projected` suffix).
 
+## 8.5 — Forward-deps disposition gate (Codex feedback, Task 12)
+
+If `.vg/FORWARD-DEPS.md` exists with unresolved entries from prior phases,
+this scope run MUST disposition each before proceeding. Codex review
+(2026-05-03): "must handle should not mean must implement now."
+
+Disposition options per entry (AskUserQuestion):
+- `[a] accepted_into_phase` — work folds into this phase's scope
+- `[d] deferred_to_phase X` — deferred (requires X target phase + rationale)
+- `[b] converted_to_backlog` — moved to milestone backlog
+- `[i] invalid/stale` — no longer relevant
+
+```bash
+FWD="${PLANNING_DIR:-.vg}/FORWARD-DEPS.md"
+if [ -f "$FWD" ]; then
+  UNRESOLVED=$(grep -c "^- \[" "$FWD" 2>/dev/null || echo 0)
+  if [ "$UNRESOLVED" -gt 0 ]; then
+    echo "▸ ${UNRESOLVED} unresolved forward-deps from prior phases — must disposition before scope"
+    # Loop AskUserQuestion per entry; on each answer, append disposition log:
+    #   ## Disposition log ($(date))
+    #   - <entry> → accepted_into_phase / deferred_to_phase 5.0 / converted_to_backlog / invalid
+    # Strip the entry from "## Forward deps" section once dispositioned.
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "scope.forward_deps_dispositioned" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"count\":${UNRESOLVED}}" \
+      2>/dev/null || true
+  fi
+fi
+```
+
+Block scope if user dismisses without dispositioning ANY entry. The gate
+fires on `disposition recorded`, not on `entry resolved`.
+
 ## 9. Mark step + emit started
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 0_parse_and_validate
-vg-orchestrator mark-step scope 0_parse_and_validate
-vg-orchestrator emit-event scope.started --phase "${PHASE_NUMBER}"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 0_parse_and_validate
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event scope.started \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\"}"
 ```
 
 Proceed to STEP 2 — Read `_shared/scope/discussion-overview.md`.
