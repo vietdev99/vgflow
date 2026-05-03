@@ -1,5 +1,13 @@
 # Config gate sub-step 4 — env + model + mode confirmation (AskUserQuestion 3-question batch)
 
+<HARD-GATE>
+`0a_confirm_env_model_mode` MUST fire its 3-question AskUserQuestion
+batch unless `--non-interactive` is set (which is itself in
+forbidden_without_override and requires --override-reason). Skipping the
+batch silently leaves ROAM_ENV/MODEL/MODE empty, which discovery.md
+HARD-GATE then refuses on entry.
+</HARD-GATE>
+
 **Marker:** `0a_confirm_env_model_mode`
 **Source:** 3-question batch (42 lines) of original `0a_env_model_mode_gate`.
 

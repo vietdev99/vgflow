@@ -1,5 +1,12 @@
 # Config gate sub-step 1 — backfill `preferred_env_for`
 
+<HARD-GATE>
+`0a_backfill_env_pref` MUST emit its own `step-active` + canonical
+`mark-step roam` pair. Skipping this sub-step leaves DEPLOY-STATE
+without a `preferred_env_for` for older phases — the runtime env gate
+then silently re-fires the 5-option preset every roam invocation.
+</HARD-GATE>
+
 **Marker:** `0a_backfill_env_pref`
 **Source:** Pre-prompt 1 (90 lines, v2.42.7+) of original `0a_env_model_mode_gate`.
 

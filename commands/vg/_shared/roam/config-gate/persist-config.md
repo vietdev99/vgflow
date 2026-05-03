@@ -1,5 +1,13 @@
 # Config gate sub-step 5 — resolve, validate, persist
 
+<HARD-GATE>
+`0a_persist_config` is the FINAL config-gate sub-step. It writes
+`.tmp/0a-confirmed.marker` (HARD GATE token consumed by step 1
+discovery entry) and emits `roam.config_confirmed`. ROAM_MODE is
+validated against {self|spawn|manual}; anything else is a HARD GATE
+BREACH (round-2 F4 spawn-mobile alignment).
+</HARD-GATE>
+
 **Marker:** `0a_persist_config`
 **Source:** After-answers branch (91 lines) of original `0a_env_model_mode_gate`.
 

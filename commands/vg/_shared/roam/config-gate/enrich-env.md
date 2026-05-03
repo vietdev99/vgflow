@@ -1,5 +1,12 @@
 # Config gate sub-step 3 — enrich env options from DEPLOY-STATE
 
+<HARD-GATE>
+`0a_enrich_env_options` MUST emit its own `step-active` + canonical
+`mark-step roam` pair. The env question's option list (sandbox/staging/
+prod presence + Recommended hint) depends on this enrichment running
+BEFORE `confirm-env-model-mode.md`.
+</HARD-GATE>
+
 **Marker:** `0a_enrich_env_options`
 **Source:** Pre-prompt 2 (32 lines, B2 wiring v2.42.5+) of original `0a_env_model_mode_gate`.
 

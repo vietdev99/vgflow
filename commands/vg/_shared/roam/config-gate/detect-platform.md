@@ -1,5 +1,12 @@
 # Config gate sub-step 2 — platform + tool availability check
 
+<HARD-GATE>
+`0a_detect_platform_tools` MUST run before mode selection. The mode list
+in `confirm-env-model-mode.md` is FILTERED by the offered set this ref
+writes to `.tmp/modes-avail.txt`. Skipping it = offering modes that
+persist-config.md will reject (see round-2 F4 spawn-mobile fix).
+</HARD-GATE>
+
 **Marker:** `0a_detect_platform_tools`
 **Source:** Pre-prompt 1.5 (73 lines, v2.42.11) of original `0a_env_model_mode_gate`.
 
