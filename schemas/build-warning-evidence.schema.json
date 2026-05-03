@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BuildWarningEvidence",
+  "type": "object",
+  "required": ["warning_id", "severity", "category", "phase", "evidence_refs", "summary", "detected_by", "detected_at"],
+  "properties": {
+    "warning_id":   {"type": "string", "minLength": 1},
+    "severity":     {"type": "string", "enum": ["BLOCK", "TRIAGE_REQUIRED", "FORWARD_DEP", "ADVISORY"]},
+    "category":     {"type": "string", "enum": [
+      "fe_be_call_graph", "contract_shape_mismatch", "spec_drift",
+      "i18n_coverage", "a11y_coverage", "perf_budget", "visual_drift",
+      "test_gap", "other"
+    ]},
+    "phase":        {"type": "string", "minLength": 1},
+    "evidence_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file":      {"type": "string"},
+          "line":      {"type": "integer", "minimum": 1},
+          "snippet":   {"type": "string"},
+          "endpoint":  {"type": "string"},
+          "task_id":   {"type": "string"}
+        }
+      }
+    },
+    "summary":      {"type": "string", "minLength": 1},
+    "detected_by":  {"type": "string", "minLength": 1},
+    "detected_at":  {"type": "string", "format": "date-time"},
+    "owning_artifact": {"type": "string"},
+    "recommended_action": {"type": "string"},
+    "confidence":   {"type": "number", "minimum": 0.0, "maximum": 1.0}
+  }
+}
