@@ -67,11 +67,14 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.command not in COMMAND_SEQUENCES:
-        sys.stderr.write(
-            f"ERROR: no state machine defined for command '{args.command}'\n"
-            f"Known commands: {sorted(COMMAND_SEQUENCES.keys())}\n"
+        # No sequence defined for this command — Stop hook treats validator as
+        # best-effort, so skip silently rather than block every Stop event.
+        # When a sequence is added, this returns to enforcing order.
+        print(
+            f"STATE MACHINE SKIP: no sequence defined for '{args.command}' "
+            f"(known: {sorted(COMMAND_SEQUENCES.keys())})"
         )
-        sys.exit(2)
+        sys.exit(0)
 
     expected = COMMAND_SEQUENCES[args.command]
     events = fetch_events(args.db, args.command, args.run_id)

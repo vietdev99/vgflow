@@ -56,7 +56,9 @@ def test_blueprint_events_out_of_order_fails(tmp_path):
     assert "out of order" in result.stderr.lower() or "expected" in result.stderr.lower()
 
 
-def test_unknown_command_returns_error(tmp_path):
+def test_unknown_command_skips_silently(tmp_path):
+    # Stop hook treats validator as best-effort — skip silently for commands
+    # without a defined sequence rather than blocking every Stop event.
     db = tmp_path / "events.db"
     _seed_events(db, [])
     result = subprocess.run(
@@ -64,8 +66,8 @@ def test_unknown_command_returns_error(tmp_path):
          "--db", str(db), "--command", "vg:nonexistent", "--run-id", "r1"],
         capture_output=True, text=True,
     )
-    assert result.returncode == 2
-    assert "no state machine" in result.stderr.lower() or "unknown" in result.stderr.lower()
+    assert result.returncode == 0
+    assert "skip" in result.stdout.lower()
 
 
 def test_missing_db_handled_gracefully(tmp_path):
