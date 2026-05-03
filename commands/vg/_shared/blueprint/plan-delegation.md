@@ -1,5 +1,13 @@
 # blueprint plan delegation contract (vg-blueprint-planner subagent)
 
+<!-- # Exception: contract document, not step ref — H1/HARD-GATE not required.
+     This ref describes a JSON envelope + prompt template + return contract
+     for the `vg-blueprint-planner` subagent. It has no `step-active` /
+     `mark-step` lifecycle of its own — `plan-overview.md` STEP 3 owns those.
+     The reviewer audit (B1/B2 FAIL) flagged the missing
+     `# blueprint <name> (STEP N)` H1 + top HARD-GATE; both are intentionally
+     absent because this file is a contract, not an executable step body. -->
+
 This file contains the prompt template the main agent passes to
 `Agent(subagent_type="vg-blueprint-planner", prompt=...)`.
 
