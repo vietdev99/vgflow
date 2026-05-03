@@ -878,8 +878,15 @@ def cmd_tasklist_projected(args) -> int:
         for checklist in checklists
         if isinstance(checklist, dict) and checklist.get("id")
     ]
-    if contract.get("schema") != "native-tasklist.v1":
-        print("⛔ tasklist contract schema must be native-tasklist.v1", file=sys.stderr)
+    # v2 is a field-superset of v1 (adds hierarchical group headers); event
+    # payload is identical so we accept both. Bug S2 fix — emit-tasklist.py
+    # writes v2 unconditionally; rejecting v1-only here meant
+    # `<flow>.native_tasklist_projected` never fired, breaking run-complete.
+    if contract.get("schema") not in ("native-tasklist.v1", "native-tasklist.v2"):
+        print(
+            "⛔ tasklist contract schema must be native-tasklist.v1 or v2",
+            file=sys.stderr,
+        )
         return 2
     if contract.get("run_id") != run_id:
         print("⛔ tasklist contract belongs to a different run_id", file=sys.stderr)
