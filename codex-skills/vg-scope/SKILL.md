@@ -162,6 +162,21 @@ build the prompts. DO NOT skip rounds, DO NOT skip challenger/expander —
 hooks will not catch this, but Codex consensus blocked omission as
 adversarial-suppression risk.
 
+Three documented skip paths (Important-3 r2 — entry-refs alignment):
+1. **Trivial answers** (Y/N, single-word) — `challenger_is_trivial`
+   helper auto-returns rc=2 from the wrapper. NO override needed; this is
+   a built-in noise filter, not a skip of meaningful adversarial review.
+2. **Per-phase loop guard** — challenger auto-skips after
+   `${config.scope.adversarial_max_rounds:-3}` triggers per phase;
+   expander after `${config.scope.dimension_expand_max:-6}`. Hard cap
+   prevents runaway cost.
+3. **Config-level disable** — `config.scope.adversarial_check: false`
+   and/or `config.scope.dimension_expand_check: false` in
+   `.claude/vg.config.md`. Intended for rapid-prototyping phases ONLY;
+   any phase using these flags emits override-debt at scope.completed.
+
+Outside these 3 paths, skipping is FORBIDDEN.
+
 Tool name is `Agent`, NOT `Task` (Codex correction #1).
 </HARD-GATE>
 

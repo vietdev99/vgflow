@@ -180,8 +180,9 @@ WHILE ITERATION < MAX_FIX_ITER AND REGRESSION_COUNT > 0:
 
   For each cluster:
     1. Read error messages + affected test files + blame commit diff
-    2. Spawn Agent (gsd-debugger or inline) with context:
-       # gsd-debugger is a generic Claude agent type for debugging — not a GSD workflow dependency
+    2. Spawn Agent (subagent_type="general-purpose") with context:
+       # general-purpose is the canonical debug-agent slot in VG (framework-neutral, allow-list-clean).
+       # Operator can also invoke /vg:debug interactively for the same loop.
        - Error: {error_message}
        - Test file: {path}
        - Blame: {commit_sha} — {commit_message}

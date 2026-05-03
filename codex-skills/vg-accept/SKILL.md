@@ -234,9 +234,20 @@ Each gate is fail-fast. Override only with `--override-reason="<text>"`
 Read `_shared/accept/uat/checklist-build/overview.md` AND
 `_shared/accept/uat/checklist-build/delegation.md`.
 
+Wrap the spawn with narration (overview.md spells out the same lifecycle).
+Pre-spawn:
+```bash
+bash .claude/scripts/vg-narrate-spawn.sh vg-accept-uat-builder spawning "phase ${PHASE_NUMBER} UAT checklist"
+```
+
 Then call:
 ```
 Agent(subagent_type="vg-accept-uat-builder", prompt=<built from delegation>)
+```
+
+Post-return (success):
+```bash
+bash .claude/scripts/vg-narrate-spawn.sh vg-accept-uat-builder returned "<count> items across 6 sections"
 ```
 
 DO NOT build the checklist inline. The subagent uses `vg-load --list` for
@@ -300,9 +311,20 @@ for UAT.md (Phase F Task 30 absorption).
 Read `_shared/accept/cleanup/overview.md` AND
 `_shared/accept/cleanup/delegation.md`.
 
+Wrap the spawn with narration (overview.md spells out the same lifecycle).
+Pre-spawn:
+```bash
+bash .claude/scripts/vg-narrate-spawn.sh vg-accept-cleanup spawning "post-accept ${PHASE_NUMBER}"
+```
+
 Then call:
 ```
 Agent(subagent_type="vg-accept-cleanup", prompt=<built from delegation>)
+```
+
+Post-return (success):
+```bash
+bash .claude/scripts/vg-narrate-spawn.sh vg-accept-cleanup returned "<count> actions"
 ```
 
 DO NOT cleanup inline. The subagent runs 8 subroutines (scan-cleanup,

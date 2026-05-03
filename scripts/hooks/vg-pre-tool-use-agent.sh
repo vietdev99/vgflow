@@ -17,8 +17,10 @@ fi
 
 subagent="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("subagent_type",""))' 2>/dev/null || true)"
 
-# Allow-list: general-purpose, Explore, Plan, vg-* custom agents, gsd-debugger only.
-if [[ "$subagent" =~ ^(general-purpose|Explore|Plan|gsd-debugger)$ ]]; then
+# Allow-list: general-purpose, Explore, Plan, vg-* custom agents.
+# Debug retries should use `general-purpose` (canonical), not `gsd-debugger`
+# (deprecated — GSD framework agent, no longer needed in VG).
+if [[ "$subagent" =~ ^(general-purpose|Explore|Plan)$ ]]; then
   exit 0
 fi
 if [[ "$subagent" == vg-* ]]; then
@@ -43,15 +45,15 @@ emit_block() {
 ${cause}
 
 ## Allowed subagents
-- \`general-purpose\` — generic task delegation
+- \`general-purpose\` — generic task delegation (also the canonical debug-retry slot)
 - \`Explore\` — read-only code search
 - \`Plan\` — implementation planning (read-only)
 - \`vg-*\` — VG custom agents (vg-blueprint-planner, vg-blueprint-contracts, vg-haiku-scanner, etc.)
-- \`gsd-debugger\` — GSD debug session manager
 
 ## Required fix
 Switch \`subagent_type\` to one in the allow-list above.
-\`gsd-*\` agents (except gsd-debugger) are blocked because R1a scope is VG-only.
+\`gsd-*\` agents are blocked — VG framework no longer borrows from GSD.
+For debug retries, use \`general-purpose\` (or invoke \`/vg:debug\` interactively).
 
 ## Narration template (use session language)
 [VG diagnostic] Spawn subagent bị chặn vì kiểu '${subagent}' không trong allow-list.
@@ -67,9 +69,9 @@ EOF
   exit 2
 }
 
-# Block gsd-* explicitly (except gsd-debugger handled above).
+# Block gsd-* explicitly — VG no longer borrows from GSD framework.
 if [[ "$subagent" == gsd-* ]]; then
-  emit_block "subagent type '${subagent}' not allowed (R1a scope is VG-only)"
+  emit_block "subagent type '${subagent}' not allowed — VG framework no longer borrows from GSD; use 'general-purpose' for debug retries"
 fi
 
 # Default deny unknown.

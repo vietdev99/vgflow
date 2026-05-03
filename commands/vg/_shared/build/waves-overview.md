@@ -974,8 +974,9 @@ from backup lines 2510-2693. Skipped silently when `enabled != true`.
 
 ### 8d.8 — Failure handling (max 2 debugger retries)
 
-If `$FAILED_GATE` set, spawn `gsd-debugger` (allow-listed gsd-* agent
-for debug retries, NOT a wave executor):
+If `$FAILED_GATE` set, spawn `general-purpose` agent for debug retries
+(allow-list-clean, framework-neutral; previously used gsd-debugger which
+borrowed from GSD framework). Operator can also invoke `/vg:debug` interactively.
 
 ```
 RETRY_COUNT=0
@@ -984,10 +985,10 @@ MAX_RETRIES=2
 while [ "$FAILED_GATE" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
   RETRY_COUNT=$((RETRY_COUNT + 1))
   # R1a UX baseline Req 2 — narrate every Agent() spawn (green pill chip).
-  bash scripts/vg-narrate-spawn.sh gsd-debugger spawning \
-    "wave-${N} retry-${RETRY_COUNT}/${MAX_RETRIES} gate=${FAILED_GATE}"
+  bash scripts/vg-narrate-spawn.sh general-purpose spawning \
+    "wave-${N} retry-${RETRY_COUNT}/${MAX_RETRIES} gate=${FAILED_GATE} (debug)"
 
-  Agent(subagent_type="gsd-debugger", model="${MODEL_DEBUGGER}"):
+  Agent(subagent_type="general-purpose", model="${MODEL_DEBUGGER}"):
     prompt: |
       Wave ${N} of phase ${PHASE_NUMBER} failed post-wave gate.
       Failed gate: ${FAILED_GATE}
@@ -1025,10 +1026,10 @@ while [ "$FAILED_GATE" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
   if eval "$CMD"; then
     FAILED_GATE=""
     echo "Gate recovered after retry ${RETRY_COUNT}."
-    bash scripts/vg-narrate-spawn.sh gsd-debugger returned \
+    bash scripts/vg-narrate-spawn.sh general-purpose returned \
       "wave-${N} retry-${RETRY_COUNT} gate=${FAILED_GATE_PREV:-recovered}"
   else
-    bash scripts/vg-narrate-spawn.sh gsd-debugger failed \
+    bash scripts/vg-narrate-spawn.sh general-purpose failed \
       "wave-${N} retry-${RETRY_COUNT} gate=${FAILED_GATE} still failing"
   fi
 done
