@@ -232,6 +232,7 @@ Mismatch → error JSON `{"error": "input_envelope_length_mismatch"}`.
      "summary_sha256": "abc123...",
      "build_log_path": "${PHASE_DIR}/BUILD-LOG.md",
      "build_log_index_path": "${PHASE_DIR}/BUILD-LOG/index.md",
+     "build_log_sha256": "fed987...",
      "build_log_sub_files": [
        "${PHASE_DIR}/BUILD-LOG/task-01.md",
        "${PHASE_DIR}/BUILD-LOG/task-02.md"
@@ -241,6 +242,11 @@ Mismatch → error JSON `{"error": "input_envelope_length_mismatch"}`.
    `gates_passed[]` MUST be a SUPERSET of `{L2, L5, truthcheck}` always,
    and `{L3, L6}` when ANY task in the phase has a non-`null`
    `design_ref_paths[i]`. Orchestrator re-validates this.
+
+   `build_log_sha256` MUST equal `sha256sum ${build_log_path}` — the
+   orchestrator re-hashes post-return and rejects mismatch. Also
+   compute it AFTER the atomic `mv` so the hash matches the on-disk
+   file the validator opens.
 
 ## Failure modes
 

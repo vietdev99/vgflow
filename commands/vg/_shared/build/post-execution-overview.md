@@ -750,7 +750,10 @@ step complete. The post-executor returns the envelope shaped per
 
 1. **Schema**: returned value parses as JSON and contains required
    keys: `gates_passed`, `gates_failed`, `gaps_closed`, `summary_path`,
-   `summary_sha256`.
+   `summary_sha256`, plus the BUILD-LOG layer keys `build_log_path`,
+   `build_log_index_path`, `build_log_sha256`, `build_log_sub_files`
+   (R2 round-2 — closes A4/E2/C5 BUILD-LOG contract drift between SKILL
+   and delegation).
 2. **Gates coverage**: `gates_passed[]` MUST include `L2`, `L5`, and
    `truthcheck` unconditionally; MUST include `L3` AND `L6` when ANY
    task in the phase carried a `<design-ref>` (i.e., when
@@ -758,7 +761,16 @@ step complete. The post-executor returns the envelope shaped per
 3. **Summary path exists**: `[ -f "${summary_path}" ]` must succeed.
 4. **Summary hash matches**: `sha256sum "${summary_path}" | cut -d' ' -f1`
    must equal `summary_sha256`.
-5. **Failed-without-closure**: if `gates_failed[]` is non-empty AND
+5. **BUILD-LOG concat exists + hashes**: `[ -s "${build_log_path}" ]`
+   AND `sha256sum "${build_log_path}" | cut -d' ' -f1` MUST equal
+   `build_log_sha256`. The path MUST resolve to
+   `${PHASE_DIR}/BUILD-LOG.md` (entry contract `must_write` Layer 3).
+6. **BUILD-LOG index exists**: `[ -s "${build_log_index_path}" ]` AND
+   the path MUST resolve to `${PHASE_DIR}/BUILD-LOG/index.md`.
+7. **BUILD-LOG sub-files non-empty + on disk**: `build_log_sub_files[]`
+   MUST be non-empty (entry contract `glob_min_count: 1` for
+   `BUILD-LOG/task-*.md`) AND every entry must exist on disk.
+8. **Failed-without-closure**: if `gates_failed[]` is non-empty AND
    no entry in `gaps_closed[]` covers each failure (matched by
    `task_id` + `gate`), route to gap-recovery (separate flow, out of
    scope here) — do NOT mark step complete.
@@ -770,10 +782,16 @@ import json, sys, hashlib, os
 from pathlib import Path
 
 ret = json.loads(sys.argv[1])
-phase_dir = sys.argv[2]
+phase_dir = Path(sys.argv[2]).resolve()
 re_list = sys.argv[3].split()
 
-required_keys = {"gates_passed", "gates_failed", "gaps_closed", "summary_path", "summary_sha256"}
+required_keys = {
+    "gates_passed", "gates_failed", "gaps_closed",
+    "summary_path", "summary_sha256",
+    # R2 round-2: BUILD-LOG contract keys (closes A4/E2/C5 drift).
+    "build_log_path", "build_log_index_path",
+    "build_log_sha256", "build_log_sub_files",
+}
 missing_keys = required_keys - ret.keys()
 if missing_keys:
     print(f"⛔ Post-executor return missing keys: {missing_keys}"); sys.exit(1)
@@ -797,6 +815,37 @@ if actual_sha != ret["summary_sha256"]:
     print(f"⛔ summary_sha256 mismatch: returned={ret['summary_sha256']} actual={actual_sha}")
     sys.exit(1)
 
+# BUILD-LOG layer 3 (flat concat) — must equal entry contract path.
+expected_build_log = phase_dir / "BUILD-LOG.md"
+build_log_path = Path(ret["build_log_path"])
+if build_log_path.resolve() != expected_build_log.resolve():
+    print(f"⛔ build_log_path drift: returned={build_log_path} expected={expected_build_log}")
+    sys.exit(1)
+if not build_log_path.is_file() or build_log_path.stat().st_size == 0:
+    print(f"⛔ build_log_path missing or empty: {build_log_path}"); sys.exit(1)
+actual_bl_sha = hashlib.sha256(build_log_path.read_bytes()).hexdigest()
+if actual_bl_sha != ret["build_log_sha256"]:
+    print(f"⛔ build_log_sha256 mismatch: returned={ret['build_log_sha256']} actual={actual_bl_sha}")
+    sys.exit(1)
+
+# BUILD-LOG layer 2 (index TOC).
+expected_index = phase_dir / "BUILD-LOG" / "index.md"
+build_log_index_path = Path(ret["build_log_index_path"])
+if build_log_index_path.resolve() != expected_index.resolve():
+    print(f"⛔ build_log_index_path drift: returned={build_log_index_path} expected={expected_index}")
+    sys.exit(1)
+if not build_log_index_path.is_file() or build_log_index_path.stat().st_size == 0:
+    print(f"⛔ build_log_index_path missing or empty: {build_log_index_path}"); sys.exit(1)
+
+# BUILD-LOG layer 1 (per-task split) — entry contract glob_min_count: 1.
+sub_files = ret.get("build_log_sub_files") or []
+if not sub_files:
+    print("⛔ build_log_sub_files empty — Layer 1 split missing (R1a UX baseline Req 1)")
+    sys.exit(1)
+missing_subs = [p for p in sub_files if not Path(p).is_file()]
+if missing_subs:
+    print(f"⛔ build_log_sub_files paths missing on disk: {missing_subs}"); sys.exit(1)
+
 # Failed-without-closure check
 unclosed = []
 for fail in ret.get("gates_failed", []):
@@ -812,7 +861,8 @@ if unclosed:
     print("   Route to gap-recovery before marking step complete.")
     sys.exit(1)
 
-print(f"✓ Post-executor return validated: gates={sorted(gates_passed)}, summary_sha256 match")
+print(f"✓ Post-executor return validated: gates={sorted(gates_passed)}, "
+      f"summary+build_log sha256 match, {len(sub_files)} BUILD-LOG sub-files")
 PY
 ```
 

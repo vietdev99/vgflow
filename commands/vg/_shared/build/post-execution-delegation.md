@@ -159,6 +159,28 @@ ${TASK_ENDPOINT_MAP_JSON}    # JSON literal
 # PROCEDURE — execute these steps in order, sequentially per task
 # ============================================================
 
+**Step 0 — BUILD-LOG concat (Layer 2 + Layer 3 — runs FIRST per
+R1a UX baseline Req 1).** Aggregate the per-task BUILD-LOG split that
+each `vg-build-task-executor` wrote (Layer 1) into the canonical flat
+log + index BEFORE per-task gate validation, so SUMMARY.md (Step 7) can
+reference finalized paths:
+
+  1. Enumerate `${phase_dir}/BUILD-LOG/task-*.md` lexicographically.
+  2. Write `${phase_dir}/BUILD-LOG/index.md` (Layer 2 TOC) — one bullet
+     per task file, citing the H1 line as the one-line summary.
+  3. Concat `BUILD-LOG/index.md` + every `BUILD-LOG/task-*.md` →
+     `${phase_dir}/BUILD-LOG.md` (Layer 3 flat). Use atomic write
+     (`BUILD-LOG.md.tmp` → `mv`).
+  4. On filesystem error / sub-files missing → return error JSON
+     `{"error": "build_log_concat_failed", "reason": "<errno>"}` and
+     exit before any per-task gate work.
+
+The orchestrator's post-spawn validator hashes the returned
+`build_log_path` and rejects mismatch — drift here is a hard error.
+This step exists in delegation (not just SKILL) because the
+orchestrator-side validator and the SKILL-side procedure must agree on
+the same field names + ordering.
+
 For each task index `i` in [0, task_count):
 
 1. **L2 fingerprint validation** — read
@@ -264,8 +286,15 @@ For each task index `i` in [0, task_count):
 8. **Compute summary_sha256**:
      `sha256sum ${phase_dir}/SUMMARY.md | cut -d' ' -f1`
 
-9. **Return JSON** to the orchestrator (see Output JSON contract
-   below).
+9. **Compute build_log_sha256** (Layer 3 atomicity proof):
+     `sha256sum ${phase_dir}/BUILD-LOG.md | cut -d' ' -f1`
+   This is what the orchestrator re-hashes post-return to detect
+   subagent confabulation about Layer 3 contents.
+
+10. **Return JSON** to the orchestrator (see Output JSON contract
+   below). Required keys include `build_log_path`,
+   `build_log_index_path`, `build_log_sub_files`, and `build_log_sha256`
+   produced in Step 0 + Step 9.
 ````
 
 **Rendering notes for the orchestrator:**
@@ -300,7 +329,14 @@ The full rendered prompt is also persisted to
     {"task_id": "task-04", "gate": "L3", "fix": "re-rendered screenshot, SSIM 0.97 PASS"}
   ],
   "summary_path": "${PHASE_DIR}/SUMMARY.md",
-  "summary_sha256": "abc123def4567890abc123def4567890abc123def4567890abc123def4567890"
+  "summary_sha256": "abc123def4567890abc123def4567890abc123def4567890abc123def4567890",
+  "build_log_path": "${PHASE_DIR}/BUILD-LOG.md",
+  "build_log_index_path": "${PHASE_DIR}/BUILD-LOG/index.md",
+  "build_log_sha256": "fed987...64hex",
+  "build_log_sub_files": [
+    "${PHASE_DIR}/BUILD-LOG/task-01.md",
+    "${PHASE_DIR}/BUILD-LOG/task-02.md"
+  ]
 }
 ```
 
@@ -313,6 +349,10 @@ The full rendered prompt is also persisted to
 | `gaps_closed` | yes | List of `{task_id, gate, fix}` triples for failures that re-passed after the 1-retry gap closure (procedure step 6). Used by orchestrator to determine whether to route to gap-recovery. |
 | `summary_path` | yes | Absolute path to the SUMMARY.md file written in procedure step 7. Orchestrator validates `[ -f "${summary_path}" ]`. |
 | `summary_sha256` | yes | SHA-256 hex of `${summary_path}` contents. Orchestrator re-hashes the file post-return and rejects mismatch (catches subagent confabulation about file contents). |
+| `build_log_path` | yes | Absolute path to the Layer 3 flat concat written in procedure step 0 (`${PHASE_DIR}/BUILD-LOG.md`). Orchestrator validates `[ -s "${build_log_path}" ]` AND that it matches the entry contract `${PHASE_DIR}/BUILD-LOG.md`. R1a UX baseline Req 1. |
+| `build_log_index_path` | yes | Absolute path to the Layer 2 TOC written in procedure step 0 (`${PHASE_DIR}/BUILD-LOG/index.md`). Orchestrator validates `[ -s "${build_log_index_path}" ]`. |
+| `build_log_sha256` | yes | SHA-256 hex of `${build_log_path}` contents (procedure step 9). Orchestrator re-hashes post-return and rejects mismatch (catches subagent confabulation about concat contents). |
+| `build_log_sub_files` | yes | List of every `${PHASE_DIR}/BUILD-LOG/task-*.md` (Layer 1 split) the subagent enumerated in procedure step 0. MUST be non-empty (entry contract `glob_min_count: 1`). Orchestrator validates each path exists. |
 
 **Error return format** (any procedure step failure that prevents
 SUMMARY.md write):
@@ -361,7 +401,8 @@ writing the step marker. Per the post-spawn validation script in
 
 - Returned value parses as JSON and contains required keys
   (`gates_passed`, `gates_failed`, `gaps_closed`, `summary_path`,
-  `summary_sha256`)
+  `summary_sha256`, `build_log_path`, `build_log_index_path`,
+  `build_log_sha256`, `build_log_sub_files`)
 - `gates_passed[]` is a SUPERSET of:
   - `{L2, L5, truthcheck}` always
   - `{L3, L6}` when ANY task in the phase has a non-`null`
@@ -369,6 +410,15 @@ writing the step marker. Per the post-spawn validation script in
 - `summary_path` exists on disk: `[ -f "${summary_path}" ]`
 - `sha256sum ${summary_path} | cut -d' ' -f1` equals
   `summary_sha256`
+- `build_log_path` resolves to `${PHASE_DIR}/BUILD-LOG.md` (entry
+  contract `must_write`), exists on disk, AND
+  `sha256sum ${build_log_path} | cut -d' ' -f1` equals
+  `build_log_sha256` (R2 round-2 fix — closes A4/E2/C5 BUILD-LOG
+  contract drift between SKILL and delegation)
+- `build_log_index_path` exists on disk and resolves to
+  `${PHASE_DIR}/BUILD-LOG/index.md`
+- `build_log_sub_files[]` is non-empty AND every entry exists on disk
+  (entry contract `glob_min_count: 1` for `BUILD-LOG/task-*.md`)
 - For every entry in `gates_failed[]`, there MUST be a matching
   entry in `gaps_closed[]` (same `task_id` + `gate`) — OTHERWISE
   route to gap-recovery (separate flow, out of scope here) BEFORE
