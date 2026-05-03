@@ -17,6 +17,8 @@ unresolved blocking-severity entries.
 **Gate 1: All required artifacts exist**
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 1_artifact_precheck 2>/dev/null || true
+
 MISSING=""
 REQUIRED=(
   "SPECS.md"
@@ -86,6 +88,8 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 Profile determines which steps must have markers. Use `filter-steps.py` to compute the expected set per command, then verify each marker exists.
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 2_marker_precheck 2>/dev/null || true
+
 MARKER_DIR="${PHASE_DIR}/.step-markers"
 mkdir -p "$MARKER_DIR"
 
@@ -181,6 +185,8 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 **Gate 3: Test verdict**
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 3_sandbox_verdict_gate 2>/dev/null || true
+
 SANDBOX=$(ls "${PHASE_DIR}"/*SANDBOX-TEST.md 2>/dev/null | head -1)
 # OHOK-8 round-4 Codex fix: accept emits verdict in 3 formats across versions.
 # Parser now accepts all:
@@ -301,6 +307,8 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 Rationale: UNREACHABLE goals previously got "tracked separately" and shipped silently. They are bugs (or fictional roadmap entries) until proven otherwise. The triage produced by `/vg:review` distinguishes legitimate cross-phase ownership from bugs — only `cross-phase:{X.Y}` (owner already accepted + runtime-verified) is acceptance-safe.
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 3b_unreachable_triage_gate 2>/dev/null || true
+
 TRIAGE_JSON="${PHASE_DIR}/.unreachable-triage.json"
 
 if [ -f "$TRIAGE_JSON" ]; then
@@ -415,6 +423,8 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 Rationale (from M9 claude reviewer): prior `auto_expire_days` model silently forgave real debt. An override entry must stay OPEN until either (a) the bypassed gate re-runs cleanly (auto-resolved via telemetry `override_resolved` event correlation), or (b) the user explicitly marks `--wont-fix` with justification.
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 3c_override_resolution_gate 2>/dev/null || true
+
 # Load helpers (v1.9.0 T3: source .sh, NOT .md — .md contains YAML frontmatter
 # that bash cannot source. If .sh missing → real install bug, surface it.)
 source .claude/commands/vg/_shared/lib/override-debt.sh 2>/dev/null || \

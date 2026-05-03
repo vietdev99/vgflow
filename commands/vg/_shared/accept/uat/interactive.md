@@ -25,6 +25,10 @@ NEVER paraphrase TEST-GOALS items during AskUserQuestion — refer to the
 <step name="5_interactive_uat">
 **Run interactive checklist — one item at a time.**
 
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 5_interactive_uat 2>/dev/null || true
+```
+
 For each section:
 
 ### A. Decisions

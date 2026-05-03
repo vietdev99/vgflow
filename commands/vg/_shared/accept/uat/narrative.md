@@ -30,6 +30,8 @@ A sibling `UAT-NARRATIVE-OVERRIDES.md` (if present) is appended verbatim
 at the end so manual prose can survive regeneration.
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 4b_uat_narrative_autofire 2>/dev/null || true
+
 NARRATIVE_OUT="${PHASE_DIR}/UAT-NARRATIVE.md"
 NARRATIVE_GEN="${REPO_ROOT}/.claude/scripts/build-uat-narrative.py"
 

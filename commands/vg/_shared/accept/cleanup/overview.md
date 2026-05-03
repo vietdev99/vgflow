@@ -20,6 +20,8 @@ already written) and exits.
 ## Pre-spawn narration
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 7_post_accept_actions 2>/dev/null || true
+
 bash .claude/scripts/vg-narrate-spawn.sh vg-accept-cleanup spawning "post-accept ${PHASE_NUMBER}"
 ```
 

@@ -14,6 +14,8 @@ Inline execution will skim — empirical 96.5% skip rate without subagent.
 ## Pre-spawn narration
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 4_build_uat_checklist 2>/dev/null || true
+
 bash .claude/scripts/vg-narrate-spawn.sh vg-accept-uat-builder spawning "phase ${PHASE_NUMBER} UAT checklist"
 ```
 

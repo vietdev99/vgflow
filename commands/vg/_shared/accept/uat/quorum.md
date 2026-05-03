@@ -24,6 +24,8 @@ Before Batch 3 UAT was pure theatre — every AskUserQuestion offered `[s] Skip`
 This gate counts SKIPs on critical sections (A decisions, B READY goals) and BLOCKs if over threshold. Config-driven via `config.accept.max_uat_skips_critical` (default 0 — strict).
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 5_uat_quorum_gate 2>/dev/null || true
+
 # Config thresholds (default strict: 0 critical skips allowed)
 MAX_CRIT_SKIPS=$(${PYTHON_BIN:-python3} - <<'PY' 2>/dev/null || echo 0
 import re
