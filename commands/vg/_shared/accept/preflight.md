@@ -27,6 +27,13 @@ baseline 0 events).
 If `${PLANNING_DIR}/vgflow-patches/gate-conflicts.md` exists, a prior `/vg:update` detected that the 3-way merge (gộp) altered one or more HARD gate blocks. BLOCK (chặn) until resolved via `/vg:reapply-patches --verify-gates`.
 
 ```bash
+# A1/B3-r2 fix — register run BEFORE first step-active. cmd_step_active
+# requires an active run; without run-start, this call would fail silently
+# under `2>/dev/null || true`, leaving the FK-backed step.active event
+# never emitted. Parse PHASE_NUMBER first (idempotent with UserPromptSubmit).
+[ -z "${PHASE_NUMBER:-}" ] && PHASE_NUMBER=$(echo "${ARGUMENTS}" | awk '{print $1}')
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start vg:accept "${PHASE_NUMBER}" "${ARGUMENTS}" || { echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2; exit 1; }
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 0_gate_integrity_precheck 2>/dev/null || true
 
 # Harness v2.6.1 (2026-04-26): inject rule cards at skill entry — gives AI
@@ -51,20 +58,15 @@ elif [ -f "${PLANNING_DIR}/vgflow-patches/gate-conflicts.md" ]; then
   echo "⛔ Gate integrity conflicts unresolved — run /vg:reapply-patches --verify-gates first."
   exit 1
 fi
-```
-</step>
 
-```bash
-# v2.2 — register run with orchestrator (idempotent with UserPromptSubmit hook)
-# OHOK-8 round-4 Codex fix: parse PHASE_NUMBER BEFORE run-start
-[ -z "${PHASE_NUMBER:-}" ] && PHASE_NUMBER=$(echo "${ARGUMENTS}" | awk '{print $1}')
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start vg:accept "${PHASE_NUMBER}" "${ARGUMENTS}" || { echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2; exit 1; }
+# Step-end marker for 0_gate_integrity_precheck (run-start moved to top of step).
 if [ -n "${PHASE_DIR:-}" ]; then
   mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_gate_integrity_precheck" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_gate_integrity_precheck.done"
 fi
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_gate_integrity_precheck 2>/dev/null || true
 ```
+</step>
 
 <step name="0_load_config">
 Follow `.claude/commands/vg/_shared/config-loader.md`.
