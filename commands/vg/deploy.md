@@ -280,9 +280,11 @@ echo "$SELECTED_ENVS" > "${PHASE_DIR}/.tmp/deploy-targets.txt"
 <step name="1_deploy_per_env">
 ## Step 1 — Deploy loop (sequential per env)
 
-For each env in `$SELECTED_ENVS`, run the canonical deploy sequence: pre →
-build → restart → health (with retry) → seed (if configured). Each env
-gets its own log file. Failures don't auto-abort siblings.
+Per-env work delegated to `vg-deploy-executor`. Orchestrator only resolves
+env config, narrates spawn, collects result JSON, asks user on failure.
+Refs: `_shared/deploy/per-env-executor-contract.md` (spawn schema + post-spawn
+validation), `_shared/deploy/overview.md` (flow). Initialize accumulator
+(Step 2 reads this exact path):
 
 ```bash
 DRY_RUN="false"
@@ -290,18 +292,20 @@ DRY_RUN="false"
 
 LOCAL_SHA=$(git rev-parse --short HEAD)
 DEPLOY_RESULTS_JSON="${PHASE_DIR}/.tmp/deploy-results.json"
+mkdir -p "${PHASE_DIR}/.tmp"
 echo '{"results":[]}' > "$DEPLOY_RESULTS_JSON"
+```
 
+For each env in `$SELECTED_ENVS`:
+
+```bash
 for env in $(echo "$SELECTED_ENVS" | tr ',' ' '); do
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "  Deploying to: ${env}"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  LOG_FILE="${PHASE_DIR}/.deploy-log.${env}.txt"
-  : > "$LOG_FILE"   # truncate
-
-  # Read previous deployed SHA for rollback hint
+  # ── Resolve env config from vg.config.md ──
   PREVIOUS_SHA=$(${PYTHON_BIN:-python3} -c "
 import json
 try:
@@ -310,63 +314,24 @@ try:
 except Exception:
   print('')" 2>/dev/null)
 
-  # Read deploy commands from config.environments.{env}.deploy
-  PRE_CMD=$(${PYTHON_BIN:-python3} -c "
+  read_cmd() { ${PYTHON_BIN:-python3} -c "
 import re
 text = open('.claude/vg.config.md', encoding='utf-8').read()
 em = re.search(r'^[[:space:]]+${env}:[[:space:]]*\$', text, re.M)
 if not em: print(''); exit()
 section = text[em.end():em.end()+5000]
-m = re.search(r'^[[:space:]]+pre:[[:space:]]*\"([^\"]+)\"', section, re.M)
-print(m.group(1) if m else '')" 2>/dev/null)
+m = re.search(r'^[[:space:]]+$1:[[:space:]]*\"([^\"]*)\"', section, re.M)
+print(m.group(1) if m else '')" 2>/dev/null; }
 
-  BUILD_CMD=$(${PYTHON_BIN:-python3} -c "
-import re
-text = open('.claude/vg.config.md', encoding='utf-8').read()
-em = re.search(r'^[[:space:]]+${env}:[[:space:]]*\$', text, re.M)
-if not em: print(''); exit()
-section = text[em.end():em.end()+5000]
-m = re.search(r'^[[:space:]]+build:[[:space:]]*\"([^\"]+)\"', section, re.M)
-print(m.group(1) if m else '')" 2>/dev/null)
-
-  RESTART_CMD=$(${PYTHON_BIN:-python3} -c "
-import re
-text = open('.claude/vg.config.md', encoding='utf-8').read()
-em = re.search(r'^[[:space:]]+${env}:[[:space:]]*\$', text, re.M)
-if not em: print(''); exit()
-section = text[em.end():em.end()+5000]
-m = re.search(r'^[[:space:]]+restart:[[:space:]]*\"([^\"]+)\"', section, re.M)
-print(m.group(1) if m else '')" 2>/dev/null)
-
-  HEALTH_CMD=$(${PYTHON_BIN:-python3} -c "
-import re
-text = open('.claude/vg.config.md', encoding='utf-8').read()
-em = re.search(r'^[[:space:]]+${env}:[[:space:]]*\$', text, re.M)
-if not em: print(''); exit()
-section = text[em.end():em.end()+5000]
-m = re.search(r'^[[:space:]]+health:[[:space:]]*\"([^\"]+)\"', section, re.M)
-print(m.group(1) if m else '')" 2>/dev/null)
-
-  SEED_CMD=$(${PYTHON_BIN:-python3} -c "
-import re
-text = open('.claude/vg.config.md', encoding='utf-8').read()
-em = re.search(r'^[[:space:]]+${env}:[[:space:]]*\$', text, re.M)
-if not em: print(''); exit()
-section = text[em.end():em.end()+5000]
-m = re.search(r'^[[:space:]]+seed_command:[[:space:]]*\"([^\"]+)\"', section, re.M)
-print(m.group(1) if m else '')" 2>/dev/null)
-
-  RUN_PREFIX=$(${PYTHON_BIN:-python3} -c "
-import re
-text = open('.claude/vg.config.md', encoding='utf-8').read()
-em = re.search(r'^[[:space:]]+${env}:[[:space:]]*\$', text, re.M)
-if not em: print(''); exit()
-section = text[em.end():em.end()+5000]
-m = re.search(r'^[[:space:]]+run_prefix:[[:space:]]*\"([^\"]*)\"', section, re.M)
-print(m.group(1) if m else '')" 2>/dev/null)
+  PRE_CMD=$(read_cmd "pre")
+  BUILD_CMD=$(read_cmd "build")
+  RESTART_CMD=$(read_cmd "restart")
+  HEALTH_CMD=$(read_cmd "health")
+  SEED_CMD=$(read_cmd "seed_command")
+  RUN_PREFIX=$(read_cmd "run_prefix")
 
   if [ -z "$BUILD_CMD" ] && [ -z "$RESTART_CMD" ]; then
-    echo "  ⛔ env=${env} has no deploy.build / deploy.restart in config — skip"
+    echo "  env=${env} has no deploy.build / deploy.restart in config — skip"
     ${PYTHON_BIN:-python3} -c "
 import json
 d = json.load(open('${DEPLOY_RESULTS_JSON}'))
@@ -375,102 +340,38 @@ open('${DEPLOY_RESULTS_JSON}', 'w').write(json.dumps(d))"
     continue
   fi
 
-  if [ "$DRY_RUN" = "true" ]; then
-    echo "  [dry-run] Commands:"
-    echo "    PRE     = ${PRE_CMD:-<none>}"
-    echo "    BUILD   = ${BUILD_CMD:-<none>}"
-    echo "    RESTART = ${RESTART_CMD:-<none>}"
-    echo "    HEALTH  = ${HEALTH_CMD:-<none>}"
-    echo "    SEED    = ${SEED_CMD:-<none>}"
-    echo "    PREFIX  = ${RUN_PREFIX:-<none>}"
-    HEALTH_RESULT="dry-run"
+  # ── Spawn vg-deploy-executor (input schema: per-env-executor-contract.md §"Spawn site") ──
+  bash scripts/vg-narrate-spawn.sh vg-deploy-executor spawning "phase=${PHASE_NUMBER} env=${env}"
+  # AI: invoke Agent(subagent_type="vg-deploy-executor", prompt={phase, phase_dir,
+  #     env, run_prefix, build_cmd, restart_cmd, health_cmd, seed_cmd, pre_cmd,
+  #     local_sha, previous_sha, dry_run: ${DRY_RUN}, policy_ref}). Capture last
+  #     stdout line into RESULT_JSON.
+
+  # Parse result + narrate (post-spawn validation: contract §"Orchestrator post-spawn handling"):
+  HEALTH=$(echo "$RESULT_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.load(sys.stdin)['health'])" 2>/dev/null || echo "unknown")
+  ERROR=$(echo "$RESULT_JSON" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.load(sys.stdin).get('error') or 'none')" 2>/dev/null || echo "parse-failed")
+
+  if [ "$HEALTH" = "failed" ]; then
+    bash scripts/vg-narrate-spawn.sh vg-deploy-executor failed "env=${env} cause=${ERROR}"
   else
-    # Pre (runs locally — usually git push)
-    if [ -n "$PRE_CMD" ]; then
-      echo "  ▸ pre: ${PRE_CMD}"
-      eval "$PRE_CMD" >> "$LOG_FILE" 2>&1
-      [ $? -ne 0 ] && { echo "  ⛔ pre failed — see ${LOG_FILE}"; HEALTH_RESULT="failed"; }
-    fi
-
-    # Build + restart on target
-    REMOTE_CMD=""
-    [ -n "$BUILD_CMD" ] && REMOTE_CMD="${BUILD_CMD}"
-    [ -n "$RESTART_CMD" ] && REMOTE_CMD="${REMOTE_CMD:+${REMOTE_CMD} && }${RESTART_CMD}"
-
-    if [ -n "$REMOTE_CMD" ] && [ "${HEALTH_RESULT:-}" != "failed" ]; then
-      if [ -n "$RUN_PREFIX" ]; then
-        WRAPPED="${RUN_PREFIX} '${REMOTE_CMD}'"
-      else
-        WRAPPED="$REMOTE_CMD"
-      fi
-      echo "  ▸ deploy: $WRAPPED"
-      eval "$WRAPPED" >> "$LOG_FILE" 2>&1
-      DEPLOY_RC=$?
-      [ $DEPLOY_RC -ne 0 ] && { echo "  ⛔ deploy failed (rc=${DEPLOY_RC}) — see ${LOG_FILE}"; HEALTH_RESULT="failed"; }
-    fi
-
-    # Wait + health (retry up to 30s)
-    if [ -n "$HEALTH_CMD" ] && [ "${HEALTH_RESULT:-}" != "failed" ]; then
-      sleep 3
-      HEALTH_RESULT="failed"
-      for i in 1 2 3 4 5 6; do
-        WRAPPED_HEALTH=""
-        if [ -n "$RUN_PREFIX" ]; then
-          WRAPPED_HEALTH="${RUN_PREFIX} '${HEALTH_CMD}'"
-        else
-          WRAPPED_HEALTH="$HEALTH_CMD"
-        fi
-        if eval "$WRAPPED_HEALTH" >> "$LOG_FILE" 2>&1; then
-          HEALTH_RESULT="ok"
-          echo "  ✓ health OK after ${i}×5s"
-          break
-        fi
-        sleep 5
-      done
-      [ "$HEALTH_RESULT" = "failed" ] && echo "  ⛔ health check failed after 30s — see ${LOG_FILE}"
-    elif [ -z "$HEALTH_CMD" ]; then
-      echo "  ⚠ no health command in config — assuming OK after deploy"
-      HEALTH_RESULT="ok"
-    fi
-
-    # Seed (only if previous steps OK)
-    if [ -n "$SEED_CMD" ] && [ "${HEALTH_RESULT}" = "ok" ]; then
-      echo "  ▸ seed: ${SEED_CMD}"
-      WRAPPED_SEED=""
-      if [ -n "$RUN_PREFIX" ]; then
-        WRAPPED_SEED="${RUN_PREFIX} '${SEED_CMD}'"
-      else
-        WRAPPED_SEED="$SEED_CMD"
-      fi
-      eval "$WRAPPED_SEED" >> "$LOG_FILE" 2>&1 || echo "  ⚠ seed exit non-zero (non-fatal)"
-    fi
+    bash scripts/vg-narrate-spawn.sh vg-deploy-executor returned "env=${env} health=${HEALTH}"
   fi
 
-  # Append result
+  # Append result to accumulator (Step 2 merges into DEPLOY-STATE.json)
   ${PYTHON_BIN:-python3} -c "
-import json, datetime
-d = json.load(open('${DEPLOY_RESULTS_JSON}'))
-d['results'].append({
-  'env': '${env}',
-  'sha': '${LOCAL_SHA}',
-  'previous_sha': '${PREVIOUS_SHA}',
-  'health': '${HEALTH_RESULT:-unknown}',
-  'deployed_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-  'deploy_log': '.deploy-log.${env}.txt',
-  'dry_run': ${DRY_RUN}
-})
-open('${DEPLOY_RESULTS_JSON}', 'w').write(json.dumps(d))"
+import json
+acc = json.load(open('${DEPLOY_RESULTS_JSON}'))
+acc['results'].append(json.loads('''${RESULT_JSON}'''))
+open('${DEPLOY_RESULTS_JSON}', 'w').write(json.dumps(acc))"
 
-  # On failure, ask user — unless --non-interactive (then continue)
-  if [ "${HEALTH_RESULT:-}" = "failed" ] && [[ ! "$ARGUMENTS" =~ --non-interactive ]]; then
+  # Per-env failure handling (rule 4)
+  if [ "$HEALTH" = "failed" ] && [[ ! "$ARGUMENTS" =~ --non-interactive ]]; then
     echo ""
-    echo "  ⚠ env=${env} deploy failed. AI: AskUserQuestion 3-option:"
+    echo "  env=${env} deploy failed. AI: AskUserQuestion 3-option:"
     echo "    - continue    — chuyển sang env tiếp theo (skip failed env)"
     echo "    - abort-all   — dừng toàn bộ deploy loop, không deploy thêm env"
     echo "    - retry-once  — thử deploy lại env này 1 lần (clear log + re-run)"
   fi
-
-  HEALTH_RESULT=""  # reset for next env
 done
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "1_deploy_per_env" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1_deploy_per_env.done"
