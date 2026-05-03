@@ -26,7 +26,7 @@ Fix 7 systemic UX + design failures spanning `/vg:review` and the blueprint→bu
 
 **Build coordination mitigations (Tasks 41-43, "Track C"):**
 
-9. **Bug I (M1)** — `pre-executor-check.py` capsule has no `actor_role` / `workflow_id` / `lifecycle_phase` fields. Build subagent doesn't know which side of a multi-actor workflow it's implementing. Extend capsule fields.
+9. **Bug I (M1)** — `pre-executor-check.py` capsule has no `actor_role` / `workflow_id` / `write_phase` fields. Build subagent doesn't know which side of a multi-actor workflow it's implementing. Extend capsule fields.
 10. **Bug J (M2)** — `wave-N-context.md` cites cross-task constraints by file/field only ("Task 7 + Task 8 reference these enum values"), NOT by workflow/state. Cross-wave workflow coordination invisible — wave 5 USER subagent doesn't know wave 8 ADMIN subagent is downstream. Add cross-wave workflow references.
 11. **Bug K (M3)** — `waves-delegation.md` prompt template has no `<workflow_context>` block. Per-slice size validator is 30 KB warn (advisory, not BLOCK). Add prompt block + promote validator to per-unit ≤ 5K-token BLOCK.
 
@@ -47,7 +47,8 @@ To avoid the 3-parallel-name confusion Codex finding #46 flagged:
 - **RCRURDR** — canonical name for the 7-op lifecycle (Read empty → Create → Read populated → Update → Read updated → Delete → Read after delete). Used in spec, schema field `lifecycle: "rcrurdr"`, lens-form-lifecycle prompt, scanner-report-contract `goal_class`.
 - **rcrurd** — the legacy single write+read invariant (Task 22 default). Schema field `lifecycle: "rcrurd"` (= just 1 phase: write + read + assert). Backward-compat default.
 - **`crud-roundtrip`** — the transition kit name (existing, in `_shared/transition-kits/`). Treated as alias for RCRURDR. The kit's prompt instructs operators to capture all 7 lifecycle ops; the `goal_class: crud-roundtrip` in scanner-report-contract maps 1:1 to lifecycle: rcrurdr.
-- **`lifecycle_phases`** — schema field name in `rcrurd_invariant.py` (extended in Task 39, NOT renamed). When `lifecycle: rcrurdr`, this list MUST contain exactly 7 phase entries.
+- **`lifecycle_phases`** — schema field name in `rcrurd_invariant.py` (extended in Task 39, NOT renamed). When `lifecycle: rcrurdr`, this list MUST contain exactly 7 phase entries (read_empty, create, read_populated, update, read_updated, delete, read_after_delete).
+- **`write_phase`** — capsule field (Bug I, Task 41). Indicates which WRITE op the task implements: `create | update | delete | null`. NOT the same as `lifecycle_phases` (which has 7 RCRURDR ops). Read-only tasks have `write_phase: null`. Subagent uses this to pick the right RCRURDR phase block from per-goal invariant.
 
 ## Bug A — Review hard-block without `AskUserQuestion`
 
@@ -193,7 +194,17 @@ Validator regex: `^(EP|DR|RV|GC|FN|SC|TM)-\d{3}$` (all 2-letter prefixes, no 1-l
 
 ### Validator
 
-`scripts/validators/verify-finding-id-namespace.py` — runs at end of Phase 4. Greps `REVIEW-FEEDBACK.md` for finding-section headers (regex `^### (EP|DR|RV|GC|FN|SC|TM)-\d{3}: ` per Codex finding #26 — JSONL would be cleaner but requires bigger schema migration; markdown-grep is the v1).
+`scripts/validators/verify-finding-id-namespace.py` — runs at end of Phase 4. Greps `REVIEW-FEEDBACK.md` for finding-section headers.
+
+**Regex** (Codex round-2 Amendment E — match real PV3 format):
+
+```regex
+^###\s+(EP|DR|RV|GC|FN|SC|TM)-\d{3}\s+\[(?:CRITICAL|MAJOR|MINOR|INFO)\]\s
+```
+
+This matches `### EP-001 [MAJOR] GET /api/...` (real format used in current PV3 RUNTIME-MAP.md). The earlier draft regex `^### (...)-\d{3}: ` would silently report ZERO findings on real artifacts (severity is in brackets, no colon).
+
+Test fixtures in `tests/test_finding_id_namespace.py` MUST use the real format.
 
 When AI emits a non-conforming ID (e.g. legacy `E-001`), validator emits `review.finding_id_invalid` (warn-tier) AND prints a fix-suggestion: "did you mean `EP-001`?" (mapping single-letter → 2-letter — Codex finding #28).
 
@@ -335,13 +346,22 @@ consumers: ['apps/web/src/sites/**/*.tsx'],   // glob pattern preferred
 consumers_auto_scan: true,                    // post-blueprint scan populates this
 ```
 
-### Retroactivity (Codex finding #42)
+### Retroactivity (Codex finding #42 + Amendment D)
 
-PV3 phase 4.1 has API-CONTRACTS.md without BLOCK 5. Two options:
-1. Backfill via one-pass blueprint re-run (`/vg:blueprint 4.1 --only=fe-contracts`).
-2. Effective-for-new-phases-only.
+PV3 phase 4.1 has API-CONTRACTS.md without BLOCK 5. Backfill via:
 
-**Spec choice: option 1**. After Task 38 lands, sếp can run `/vg:blueprint <phase> --only=fe-contracts` to backfill BLOCK 5 for any in-flight phase. Validator runs against BLOCK 5 presence, not against the existence of phase predating Task 38.
+```bash
+/vg:blueprint <phase> --only=fe-contracts
+```
+
+**`--only=<step>` CLI flag is part of Task 38 scope** (Codex round-2 Amendment D). Implementation:
+- Parse `--only=<step-name>` in `commands/vg/blueprint.md` argument-hint
+- When set, blueprint slim entry skips all steps EXCEPT the named one
+- Validate `<step-name>` against the known step list (`fe-contracts`, `rcrurdr-invariants`, `workflows`, etc) — unknown step = error
+- Add to blueprint.md frontmatter `argument-hint`: `[--only=<step>]`
+- Test: `tests/test_blueprint_only_step.py` covers `--only=fe-contracts` re-runs Pass 2 only
+
+Validator runs against BLOCK 5 presence, not against the existence of phase predating Task 38 (--allow-block5-missing escape with override-debt for legacy phases).
 
 ## Bug G — RCRURDR full lifecycle (Codex fix: extend in place, not rename)
 
@@ -543,7 +563,7 @@ Backward-compat: phases without multi-actor workflows produce empty index (`flow
 `scripts/pre-executor-check.py:574` `build_task_context_capsule()` produces fields:
 - `phase`, `task_num`, `task_title`, `source_artifacts`, `context_refs`, `goals`, `endpoints`, `file_paths`, `required_context`, `execution_contract`, `anti_lazy_read_rules`
 
-NO `actor_role`, `workflow_id`, `workflow_step`, `lifecycle_phase` fields. Build subagent doesn't know "I'm USER half of G-04 implementing step 2 of WF-001."
+NO `actor_role`, `workflow_id`, `workflow_step`, `write_phase` fields. Build subagent doesn't know "I'm USER half of G-04 implementing step 2 of WF-001."
 
 ### Design decision
 
@@ -555,7 +575,7 @@ capsule = {
     "actor_role": "user|admin|system|null",          # parsed from PLAN task <actor> tag
     "workflow_id": "WF-NN | null",                    # parsed from PLAN task <workflow> tag
     "workflow_step": int | None,                      # which step in workflow
-    "lifecycle_phase": "create|update|delete|null",   # which RCRURDR phase
+    "write_phase": "create|update|delete|null"  # write-op the task implements; null for read-only tasks. NOT to be confused with Bug G's RCRURDR lifecycle_phases[] (7 phases, ALL reads + writes),   # which RCRURDR phase
     "execution_contract": {
         ...existing flags...,
         "must_match_workflow_state": bool,            # True when workflow_id != None
@@ -581,7 +601,7 @@ Add to `commands/vg/_shared/blueprint/plan-delegation.md`. PLAN tasks gain optio
 <actor>user</actor>                 <!-- NEW -->
 <workflow>WF-001</workflow>          <!-- NEW -->
 <workflow-step>2</workflow-step>     <!-- NEW -->
-<lifecycle-phase>create</lifecycle-phase>   <!-- NEW -->
+<write-phase>create</write-phase>   <!-- NEW -->
 ```
 
 `pre-executor-check.py` parser extracts these tags + populates capsule fields. Missing tags = `null` (backward-compat).
@@ -666,7 +686,9 @@ NEW: `scripts/validators/verify-artifact-slice-size.py`. Per-unit slice rules:
 - BLOCK on violation, not warn
 - Runs in blueprint close step + build preflight (both gates ensure size discipline)
 
-Token counting via `tiktoken` (existing dep). Falls back to `len(content) / 4` heuristic if tiktoken unavailable.
+Token counting via `tiktoken` — **MANDATORY** (Codex round-2 amendment C). Add `tiktoken>=0.7` to `requirements.txt` as part of Task 43. Validator imports tiktoken at module load; if missing → `ImportError` (loud fail, blueprint close BLOCKs with fix-path "pip install tiktoken").
+
+Why mandatory: VG is Vietnamese-first product. The naive `len(content) / 4` heuristic UNDERESTIMATES tokens by ~50% for Vietnamese diacritics (real ratio ≈ 2 chars/token, not 4). Subagent prompt could exceed real 5K-token budget while heuristic-validator says "OK 4K." Cannot ship a fallback that silently misjudges Vietnamese content.
 
 ### Backward compat (Codex round-1 finding #36)
 
@@ -706,8 +728,9 @@ blueprint.md slim entry (Track B — Tasks 37-40)
   ├── 2b5e_edge_cases, 2b5e_a_lens_walk (existing)
   ├── [NEW Task 38] 2b6_fe_contracts (Pass 2 — BLOCK 5)
   │      └── vg-blueprint-fe-contracts subagent reads UI-MAP + VIEW-COMPONENTS + BE 4 blocks → emits BLOCK 5
-  ├── 2b7_rcrurdr_invariants (Task 22 schema, extended by Task 39)
-  ├── [NEW Task 40] 2b8_workflows (Pass 3 — multi-actor workflow specs)
+  │      Note: 2b7_flow_detect (existing, profile-gated web) sits here — 2b6 is BEFORE it
+  ├── 2b8_rcrurdr_invariants (Task 22 schema, extended by Task 39 — slot AFTER existing 2b7_flow_detect)
+  ├── [NEW Task 40] 2b9_workflows (Pass 3 — multi-actor workflow specs)
   │      └── vg-blueprint-workflows subagent reads BLOCK 5 + UI-MAP + state-machine signals
   │             → emits WORKFLOW-SPECS.md + index + WF-NN.md per-flow
   └── close + size validator (Task 43 per-slice ≤ 5K tokens BLOCK)
@@ -845,7 +868,7 @@ Plus integration test `tests/test_review_p4_dogfood_replay.py`: synthetic phase 
 | **Task 38** | F | B | BLOCK 5 schema + Pass 2 vg-blueprint-fe-contracts subagent + validator | `agents/vg-blueprint-fe-contracts/`, `_shared/blueprint/contracts-overview.md`, `scripts/validators/verify-fe-contract-block5.py`, `tests/test_blueprint_fe_contracts_pass.py` |
 | **Task 39** | G | B | Extend rcrurd_invariant.py with `lifecycle_phases[]` + Tasks 23/24/25 callsite updates | `scripts/lib/rcrurd_invariant.py`, `scripts/validators/verify-rcrurd-runtime.py`, `scripts/codegen-helpers/expectReadAfterWrite.ts`, `tests/test_rcrurdr_lifecycle.py` |
 | **Task 40** | H | B | Multi-actor WORKFLOW-SPECS artifact + Pass 3 vg-blueprint-workflows subagent | `agents/vg-blueprint-workflows/`, `_shared/blueprint/workflows-delegation.md`, `_shared/blueprint/contracts-overview.md` (orchestrator step), `scripts/vg-load.sh`, `tests/test_blueprint_workflows_pass.py` |
-| **Task 41** | I (M1) | C | Capsule extension: actor_role + workflow_id + workflow_step + lifecycle_phase + execution_contract.must_match_workflow_state | `scripts/pre-executor-check.py`, `_shared/blueprint/plan-delegation.md` (PLAN task tag conventions), `tests/test_capsule_workflow_fields.py` |
+| **Task 41** | I (M1) | C | Capsule extension: actor_role + workflow_id + workflow_step + write_phase + execution_contract.must_match_workflow_state | `scripts/pre-executor-check.py`, `_shared/blueprint/plan-delegation.md` (PLAN task tag conventions), `tests/test_capsule_workflow_fields.py` |
 | **Task 42** | J (M2) | C | wave-context.md cross-wave workflow references | `_shared/build/context.md`, `tests/test_wave_context_cross_wave.py` |
 | **Task 43** | K (M3) | C | `<workflow_context>` prompt block + verify-artifact-slice-size.py 5K-token BLOCK validator | `_shared/build/waves-delegation.md`, `scripts/validators/verify-artifact-slice-size.py`, `_shared/blueprint/close.md` (validator wiring), `_shared/build/preflight.md` (validator wiring), `tests/test_artifact_slice_size_validator.py` |
 
