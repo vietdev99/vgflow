@@ -1,4 +1,4 @@
-# Accept gates — STEP 2 (3-tier preflight gates)
+# accept gates (STEP 2 — 3-tier preflight gates)
 
 > **Size exception (F3-r2):** This ref is intentionally over the soft
 > 400-line cap (current ~629 lines). It bundles five fail-fast accept

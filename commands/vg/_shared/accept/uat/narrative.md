@@ -1,4 +1,4 @@
-# UAT narrative autofire — STEP 4
+# accept uat narrative autofire (STEP 4)
 
 Maps to step `4b_uat_narrative_autofire`. Auto-generates
 `UAT-NARRATIVE.md` deterministically (Sonnet-free) from TEST-GOALS

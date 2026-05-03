@@ -1,4 +1,4 @@
-# Accept preflight — STEP 1
+# accept preflight (STEP 1)
 
 4 light steps: `0_gate_integrity_precheck`, `0_load_config`,
 `create_task_tracker`, `0c_telemetry_suggestions`.

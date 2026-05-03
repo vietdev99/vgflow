@@ -1,4 +1,4 @@
-# Audit — STEP 7 (security baseline + learn + UAT.md write)
+# accept audit (STEP 7 — security baseline + learn + UAT.md write)
 
 > **Size exception (F3-r2):** This ref is intentionally over the soft
 > 400-line cap (current ~534 lines). It bundles three sub-steps that

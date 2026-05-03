@@ -1,4 +1,4 @@
-# Cleanup — STEP 8 (HEAVY, subagent)
+# accept cleanup (STEP 8 — HEAVY, subagent)
 
 Maps to step `7_post_accept_actions` (306 lines in legacy accept.md).
 Final post-accept lifecycle: scan-intermediate cleanup, bootstrap rule

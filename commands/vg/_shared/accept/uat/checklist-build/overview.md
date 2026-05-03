@@ -1,4 +1,4 @@
-# UAT checklist build — STEP 3 (HEAVY, subagent)
+# accept uat checklist build (STEP 3 — HEAVY, subagent)
 
 Maps to step `4_build_uat_checklist` (291 lines in legacy accept.md).
 Builds 6-section data-driven UAT checklist from VG artifacts.

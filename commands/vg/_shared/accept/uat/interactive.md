@@ -1,4 +1,4 @@
-# Interactive UAT — STEP 5 (INLINE, NOT subagent)
+# accept uat interactive (STEP 5 — INLINE, NOT subagent)
 
 Maps to step `5_interactive_uat` (213 lines in legacy accept.md). The
 human tester reviews 50+ items across 6 sections via `AskUserQuestion`.

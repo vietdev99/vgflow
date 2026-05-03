@@ -1,4 +1,4 @@
-# UAT quorum gate — STEP 6
+# accept uat quorum gate (STEP 6)
 
 Maps to step `5_uat_quorum_gate` (203 lines). Validates
 `.uat-responses.json` against critical-skip threshold + runs
