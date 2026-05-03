@@ -30,8 +30,11 @@ runtime_contract:
     - "1_deep_discussion"
     # Step 3 (env preference) — single declared marker for the env-preference ref.
     # Naming kept as `1b_env_preference` for compat with scripts/emit-tasklist.py
-    # CHECKLIST_DEFS["vg:scope"] (S2-owned). Nit #2 deferred (rename would
-    # require coordinated S2 update).
+    # CHECKLIST_DEFS["vg:scope"] (S2-owned). Nit #2 (round-1) and Nit #1
+    # (review-v2 round-2) both flagged this as cross-flow naming drift but
+    # accepted the deferral; rename requires coordinated update of
+    # emit-tasklist.py CHECKLIST_DEFS + any consumers reading the marker name.
+    # Tracked in .vg/codex-review/scope-review-v2.md §Nits #1.
     - "1b_env_preference"
     - "2_artifact_generation"
     - "3_completeness_validation"
