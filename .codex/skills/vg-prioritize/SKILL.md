@@ -84,6 +84,13 @@ invokes `.claude/scripts/*`, validators, or `vg-orchestrator`, redetect
 same command. Do not run `python3 .claude/scripts/...` directly for VG
 validators/orchestrator calls.
 
+`vg-orchestrator` command shapes are positional. Use
+`vg-orchestrator step-active <step_name>`,
+`vg-orchestrator mark-step <namespace> <step_name>`, and
+`vg-orchestrator emit-event <event_type> --payload '{...}'`. Do not use
+`step-active <namespace> <step>`, `event --type`, or grouped helper calls
+that mix tasklist projection with the first step marker.
+
 For tasklist projection, Codex must write evidence before any step marker call:
 after `emit-tasklist.py`, run `vg-orchestrator tasklist-projected --adapter codex`
 as its own tool call. Do not group `tasklist-projected` and `step-active` in

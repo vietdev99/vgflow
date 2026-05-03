@@ -84,6 +84,13 @@ invokes `.claude/scripts/*`, validators, or `vg-orchestrator`, redetect
 same command. Do not run `python3 .claude/scripts/...` directly for VG
 validators/orchestrator calls.
 
+`vg-orchestrator` command shapes are positional. Use
+`vg-orchestrator step-active <step_name>`,
+`vg-orchestrator mark-step <namespace> <step_name>`, and
+`vg-orchestrator emit-event <event_type> --payload '{...}'`. Do not use
+`step-active <namespace> <step>`, `event --type`, or grouped helper calls
+that mix tasklist projection with the first step marker.
+
 For tasklist projection, Codex must write evidence before any step marker call:
 after `emit-tasklist.py`, run `vg-orchestrator tasklist-projected --adapter codex`
 as its own tool call. Do not group `tasklist-projected` and `step-active` in
@@ -5856,6 +5863,57 @@ fi
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase4_goal_comparison >/dev/null 2>&1 || true
+```
+
+### 4.0: RCRURD runtime verification (Task 23 — Codex GPT-5.5 review 2026-05-03)
+
+For every TEST-GOALS/G-NN.md with `goal_type: mutation`, run the runtime
+gate. BLOCK review on assertion fail (R8 update_did_not_apply, etc).
+Action payload comes from per-phase fixture (`FIXTURES/G-NN.action.json`).
+
+```bash
+EVIDENCE_DIR="${PHASE_DIR}/.rcrurd-evidence"
+mkdir -p "$EVIDENCE_DIR"
+RCRURD_FAILED=0
+RCRURD_RAN=0
+
+if [ -d "${PHASE_DIR}/TEST-GOALS" ]; then
+  for goal in "${PHASE_DIR}/TEST-GOALS"/G-*.md; do
+    [ -f "$goal" ] || continue
+    grep -qE "goal_type:[[:space:]]*mutation" "$goal" || continue
+    RCRURD_RAN=$((RCRURD_RAN+1))
+    ev_out="${EVIDENCE_DIR}/$(basename "$goal" .md).json"
+
+    payload="{}"
+    fixture="${PHASE_DIR}/FIXTURES/$(basename "$goal" .md).action.json"
+    [ -f "$fixture" ] && payload=$(cat "$fixture")
+
+    "${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-rcrurd-runtime.py \
+      --goal-file "$goal" \
+      --phase "${PHASE_NUMBER}" \
+      --action-payload "$payload" \
+      --auth-header "$(vg_config_get review.rcrurd_auth_header '')" \
+      --evidence-out "$ev_out" || RCRURD_FAILED=1
+  done
+fi
+
+if [ "$RCRURD_RAN" -gt 0 ]; then
+  if [ "$RCRURD_FAILED" = "1" ]; then
+    echo "⛔ Phase 4.0 RCRURD runtime — at least one mutation goal failed (of ${RCRURD_RAN} run)"
+    echo "   Evidence: ${EVIDENCE_DIR}/*.json"
+    echo "   Route through classifier (Task 7) — most are IN_SCOPE for current phase"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.rcrurd_runtime_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"evidence_dir\":\"${EVIDENCE_DIR}\",\"goals_run\":${RCRURD_RAN}}" \
+      2>/dev/null || true
+    exit 1
+  fi
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.rcrurd_runtime_passed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goals_run\":${RCRURD_RAN}}" \
+    2>/dev/null || true
+fi
 ```
 
 ### 4a: Load Goals + edge cases

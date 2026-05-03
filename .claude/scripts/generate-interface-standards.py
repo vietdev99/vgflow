@@ -103,6 +103,10 @@ def _affirmative_phase_text(text: str) -> str:
     return "\n".join(lines)
 
 
+def _has_any(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
 def infer_surfaces(phase_dir: Path, profile: str) -> dict[str, bool]:
     text = _combined_phase_text(phase_dir)
     affirmative = _affirmative_phase_text(text)
@@ -110,12 +114,35 @@ def infer_surfaces(phase_dir: Path, profile: str) -> dict[str, bool]:
     has_api_contracts = (phase_dir / "API-CONTRACTS.md").exists()
     has_ui_artifacts = any((phase_dir / name).exists() for name in ("UI-MAP.md", "UI-SPEC.md"))
     has_design = any((phase_dir / name).exists() for name in ("design", "designs"))
+    is_cli_only = profile in CLI_PROFILES
+
+    http_signal = bool(re.search(r"\b(get|post|put|patch|delete)\s+/", affirmative, re.I))
+    api_keyword_signal = _has_any(affirmative, (
+        r"\bapi\b",
+        r"\bendpoint\b",
+        r"\brest\b",
+        r"\bgraphql\b",
+        r"\bwebhook\b",
+    ))
+    frontend_keyword_signal = _has_any(affirmative, (
+        r"\bfrontend\b",
+        r"\bui\b",
+        r"\bpage\b",
+        r"\bform\b",
+        r"\btoast\b",
+    ))
+    mobile_keyword_signal = _has_any(affirmative, (
+        r"\bmobile\b",
+        r"\bios\b",
+        r"\bandroid\b",
+        r"\bmaestro\b",
+    ))
 
     api = (
         profile in API_PROFILES
-        or has_api_contracts
-        or bool(re.search(r"\b(get|post|put|patch|delete)\s+/", affirmative, re.I))
-        or any(token in lower for token in (" api ", "endpoint", "rest", "graphql", "webhook"))
+        or (has_api_contracts and not is_cli_only)
+        or http_signal
+        or (api_keyword_signal and not is_cli_only)
     )
     frontend = (
         profile in FE_PROFILES
@@ -123,10 +150,16 @@ def infer_surfaces(phase_dir: Path, profile: str) -> dict[str, bool]:
         or has_design
         or "surface: ui" in lower
         or "**surface:** ui" in lower
-        or any(token in lower for token in ("frontend", "ui ", "page ", "form ", "toast"))
+        or (frontend_keyword_signal and not is_cli_only)
     )
-    cli = profile in CLI_PROFILES or any(token in lower for token in (" cli ", "command line", "stdout", "stderr", "--json"))
-    mobile = profile.startswith("mobile-") or any(token in lower for token in ("mobile", "ios", "android", "maestro"))
+    cli = profile in CLI_PROFILES or _has_any(affirmative, (
+        r"\bcli\b",
+        r"\bcommand line\b",
+        r"\bstdout\b",
+        r"\bstderr\b",
+        r"--json\b",
+    ))
+    mobile = profile.startswith("mobile-") or (mobile_keyword_signal and not is_cli_only)
     return {
         "api": bool(api),
         "frontend": bool(frontend),

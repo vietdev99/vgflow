@@ -219,6 +219,32 @@ PY
     fi
   fi
 fi
+
+# Codex GPT-5.5 review 2026-05-03 (Task 22): structured RCRURD invariant
+# required for goal_type=mutation, not just the prose **Persistence check:**
+# block above. Mutation goals must carry a fenced ```yaml-rcrurd``` block
+# parseable by scripts/lib/rcrurd_invariant.extract_from_test_goal_md.
+# Tasks 23 (review) + 24 (codegen) consume this — single source of truth.
+if [ -d "${PHASE_DIR}/TEST-GOALS" ]; then
+  for goal_file in "${PHASE_DIR}/TEST-GOALS"/G-*.md; do
+    [ -f "$goal_file" ] || continue
+    if grep -qE "^\*\*goal_type:\*\*[[:space:]]*mutation" "$goal_file"; then
+      if ! "${PYTHON_BIN:-python3}" -c "
+import sys
+sys.path.insert(0, '.claude/scripts/lib')
+from rcrurd_invariant import extract_from_test_goal_md
+text = open('$goal_file').read()
+inv = extract_from_test_goal_md(text)
+sys.exit(0 if inv is not None else 1)
+" 2>/dev/null; then
+        echo "⛔ Rule 3b extended: $goal_file is mutation goal but missing structured read-after-write invariant"
+        echo "   See contracts-delegation.md for the required \`\`\`yaml-rcrurd\`\`\` block format"
+        echo "   Schema: schemas/rcrurd-invariant.schema.yaml"
+        exit 1
+      fi
+    fi
+  done
+fi
 ```
 
 ### Bidirectional Goal ↔ Task linkage (auto-injection)

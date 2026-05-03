@@ -525,3 +525,18 @@ with `interactive_controls.url_sync: true`).
 Retry up to 2 times on transient errors, then surface `l2_escalations` to
 main agent for `AskUserQuestion` (Layer 3). Never retry indefinitely on
 binding failures — those require code fixes or architect decisions.
+
+---
+
+## RCRURD helper requirement (Codex GPT-5.5 review 2026-05-03 — Task 24)
+
+In addition to selector binding (L1/L2/L3/L4), every mutation goal's
+generated spec MUST call `expectReadAfterWrite()` — see
+`scripts/codegen-helpers/expectReadAfterWrite.ts` and the "RCRURD helper
+hard rule" section in `agents/vg-test-codegen/SKILL.md`.
+
+Post-codegen validation: orchestrator runs
+`scripts/validators/verify-codegen-rcrurd-helper.py --specs-dir <dir>
+--goals-dir <dir> --phase <p>` after subagent returns. Missing import or
+call site BLOCKs the codegen step. The orchestrator re-spawns with the
+failing goal list so the subagent can patch the specs.

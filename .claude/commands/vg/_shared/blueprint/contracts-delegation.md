@@ -200,6 +200,42 @@ Each goal:
     Why: "ghost save" bug class — toast + 200 + console clean BUT refresh shows
     old data. Only refresh-then-read detects backend silent skip / client
     optimistic rollback. GET-only goals don't need this.
+3c. **Read-after-write invariant (REQUIRED for goal_type: mutation, Codex GPT-5.5 review 2026-05-03):**
+    Append a fenced YAML block declaring the structured invariant — single
+    source of truth consumed by review (Task 23) + codegen (Task 24).
+    Schema: `schemas/rcrurd-invariant.schema.yaml`. Example:
+
+    ````yaml-rcrurd
+    goal_type: mutation
+    read_after_write_invariant:
+      write:
+        method: PATCH
+        endpoint: /api/users/{userId}/roles
+      read:
+        method: GET
+        endpoint: /api/users/{userId}
+        cache_policy: no_store
+        settle: {mode: immediate}
+      assert:
+        - path: $.roles[*].name
+          op: contains
+          value_from: action.new_role
+      side_effects:
+        - layer: audit_log
+          path: $.events[*].type
+          op: contains
+          value_from: literal:role_granted
+    ````
+
+    `cache_policy: no_store` — read MUST bypass HTTP cache + CDN (default for
+    role/permission/billing). `settle.mode: immediate` is the read-your-writes
+    default; `poll`/`wait_event` REQUIRE explicit `timeout_ms`. `side_effects[]`
+    covers audit log, effective permission, tenant identity, auth cache —
+    each side-effect entry needs `layer:` label.
+
+    Mutation goals WITHOUT this structured block fail Rule 3b extended →
+    blueprint BLOCKED. The unstructured **Persistence check:** prose still
+    required for human readability, but the YAML block is the machine contract.
 4. Dependencies reference goal IDs (G-XX).
 5. Priority assignment (deterministic, evaluate in order):
    a. Endpoints matching config `routing.critical_goal_domains`

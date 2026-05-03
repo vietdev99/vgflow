@@ -135,6 +135,17 @@ def test_cli_surface_inference_ignores_out_of_scope_mentions(tmp_path: Path) -> 
         "- HTTP API endpoints, frontend pages, mobile screens, and database behavior.\n",
         encoding="utf-8",
     )
+    phase.joinpath("CONTEXT.md").write_text(
+        "# Context\n\n"
+        "## Summary\n\n"
+        "- HTTP endpoints noted: 0\n"
+        "- UI components noted: 0\n"
+        "- Test scenarios noted: 3\n\n"
+        "### P1.D-03: CLI contract\n\n"
+        "There is no HTTP API. Invalid flags return nonzero and write a concise "
+        "stable message to stderr.\n",
+        encoding="utf-8",
+    )
 
     gen = _run([
         sys.executable, str(GENERATOR),

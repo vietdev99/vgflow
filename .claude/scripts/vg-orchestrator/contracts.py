@@ -319,6 +319,10 @@ _PROFILE_REQUIRED_ARTIFACTS = {
                   "API-DOCS.md",
                   "TEST-GOALS.md", "SUMMARY.md", "DISCUSSION-LOG.md",
                   "api-contract-precheck.txt"},
+    "cli-tool":  {"SPECS.md", "CONTEXT.md", "PLAN.md", "API-CONTRACTS.md",
+                  "TEST-GOALS.md", "SUMMARY.md", "DISCUSSION-LOG.md"},
+    "library":   {"SPECS.md", "CONTEXT.md", "PLAN.md", "TEST-GOALS.md",
+                  "SUMMARY.md", "DISCUSSION-LOG.md"},
     "infra":     {"SPECS.md", "PLAN.md", "SUMMARY.md"},
     "hotfix":    {"SPECS.md", "PLAN.md", "SUMMARY.md"},
     "bugfix":    {"SPECS.md", "PLAN.md", "SUMMARY.md"},
@@ -347,10 +351,18 @@ def detect_phase_profile(phase: str) -> str:
     fm_match = _re.match(r"^---\s*\n(.+?)\n---\s*\n", text, _re.DOTALL)
     if fm_match:
         fm = fm_match.group(1)
-        m = _re.search(r"^\s*profile\s*:\s*[\"']?(\w+)",
-                       fm, _re.MULTILINE)
-        if m and m.group(1).lower() in _PROFILE_REQUIRED_ARTIFACTS:
-            return m.group(1).lower()
+        profile_m = _re.search(r"^\s*profile\s*:\s*[\"']?([\w-]+)",
+                               fm, _re.MULTILINE)
+        platform_m = _re.search(r"^\s*platform\s*:\s*[\"']?([\w-]+)",
+                                fm, _re.MULTILINE)
+        profile = profile_m.group(1).lower() if profile_m else ""
+        platform = platform_m.group(1).lower() if platform_m else ""
+        if profile and profile != "feature" and profile in _PROFILE_REQUIRED_ARTIFACTS:
+            return profile
+        if platform and platform in _PROFILE_REQUIRED_ARTIFACTS:
+            return platform
+        if profile and profile in _PROFILE_REQUIRED_ARTIFACTS:
+            return profile
 
     plan = phase_dir / "PLAN.md"
     test_goals = phase_dir / "TEST-GOALS.md"

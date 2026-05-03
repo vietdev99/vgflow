@@ -23,10 +23,26 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-PIN_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "vg-contract-pins.py"
-MIGRATE_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "migrate-state.py"
-ORCHESTRATOR_DIR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
+
+def _find_repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "scripts" / "vg-contract-pins.py").exists():
+            return parent
+        if (parent / ".claude" / "scripts" / "vg-contract-pins.py").exists():
+            return parent
+    raise AssertionError("repo root not found")
+
+
+REPO_ROOT = _find_repo_root()
+SCRIPT_ROOT = REPO_ROOT / "scripts"
+if not (SCRIPT_ROOT / "vg-contract-pins.py").exists():
+    SCRIPT_ROOT = REPO_ROOT / "scripts"
+if not (SCRIPT_ROOT / "vg-contract-pins.py").exists():
+    SCRIPT_ROOT = REPO_ROOT / ".claude" / "scripts"
+PIN_SCRIPT = SCRIPT_ROOT / "vg-contract-pins.py"
+MIGRATE_SCRIPT = SCRIPT_ROOT / "migrate-state.py"
+ORCHESTRATOR_DIR = SCRIPT_ROOT / "vg-orchestrator"
 
 
 # ---------------------------------------------------------------------------

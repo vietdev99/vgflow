@@ -93,6 +93,25 @@ def test_detect_phase_profile_frontmatter_explicit(sandbox):
     assert contracts.detect_phase_profile("88") == "migration"
 
 
+def test_detect_phase_profile_cli_tool_platform(sandbox):
+    """`profile: feature` + `platform: cli-tool` is a CLI phase profile."""
+    specs = sandbox / ".vg" / "phases" / "99-test-feature" / "SPECS.md"
+    specs.write_text(
+        textwrap.dedent("""\
+            ---
+            profile: feature
+            platform: cli-tool
+            ---
+
+            # SPECS
+
+            Build a local CLI health command with stdout, stderr, and --json.
+            """) + ("x" * 120),
+        encoding="utf-8",
+    )
+    assert contracts.detect_phase_profile("99") == "cli-tool"
+
+
 def test_detect_phase_profile_migration_prose_does_not_false_positive(sandbox):
     """Casual migration prose with one schema path stays feature, not migration."""
     phase_dir = sandbox / ".vg" / "phases" / "99-test-feature"
@@ -131,6 +150,13 @@ def test_artifact_applicable_infra_skips_feature_artifacts(sandbox):
     assert contracts.artifact_applicable("infra", "SPECS.md")
     assert contracts.artifact_applicable("infra", "PLAN.md")
     assert contracts.artifact_applicable("infra", "SUMMARY.md")
+
+
+def test_artifact_applicable_cli_tool_keeps_cli_blueprint_artifacts(sandbox):
+    assert contracts.artifact_applicable("cli-tool", "CONTEXT.md")
+    assert contracts.artifact_applicable("cli-tool", "API-CONTRACTS.md")
+    assert contracts.artifact_applicable("cli-tool", "TEST-GOALS.md")
+    assert not contracts.artifact_applicable("cli-tool", "API-DOCS.md")
 
 
 def test_artifact_applicable_migration_requires_rollback(sandbox):

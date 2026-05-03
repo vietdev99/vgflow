@@ -16,6 +16,9 @@ from _common import Evidence, Output, emit_and_exit, find_phase_dir, timer  # no
 
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+API_PROFILES = {"web-fullstack", "web-backend-only"}
+FE_PROFILES = {"web-fullstack", "web-frontend-only"}
+CLI_PROFILES = {"cli-tool", "library"}
 HEADING_RE = re.compile(r"^#{1,6}\s+")
 EXCLUSION_HEADING_RE = re.compile(
     r"^#{1,6}\s*(out\s+of\s+scope|non[- ]?goals?|exclusions?)\b",
@@ -94,12 +97,24 @@ def _infer_surfaces(phase_dir: Path, profile: str) -> dict[str, bool]:
     text = "\n".join(_read(phase_dir / name) for name in (
         "SPECS.md", "CONTEXT.md", "PLAN.md", "API-CONTRACTS.md", "TEST-GOALS.md",
     ))
-    lower = _affirmative_phase_text(text).lower()
+    affirmative = _affirmative_phase_text(text)
+    lower = affirmative.lower()
+    is_cli_only = profile in CLI_PROFILES
     return {
-        "api": (phase_dir / "API-CONTRACTS.md").exists() or " api" in lower or "endpoint" in lower,
-        "frontend": "surface: ui" in lower or "frontend" in lower or "toast" in lower,
-        "cli": " cli" in lower or "--json" in lower,
-        "mobile": "mobile" in lower,
+        "api": (
+            profile in API_PROFILES
+            or ((phase_dir / "API-CONTRACTS.md").exists() and not is_cli_only)
+            or bool(re.search(r"\b(get|post|put|patch|delete)\s+/", affirmative, re.I))
+            or (not is_cli_only and bool(re.search(r"\b(api|endpoint|rest|graphql|webhook)\b", affirmative, re.I)))
+        ),
+        "frontend": (
+            profile in FE_PROFILES
+            or "surface: ui" in lower
+            or bool(re.search(r"\*\*surface:\*\*\s*ui\b", affirmative, re.I))
+            or (not is_cli_only and bool(re.search(r"\b(frontend|ui|page|form|toast)\b", affirmative, re.I)))
+        ),
+        "cli": profile in CLI_PROFILES or bool(re.search(r"\b(cli|command line|stdout|stderr)\b|--json\b", affirmative, re.I)),
+        "mobile": profile.startswith("mobile-") or (not is_cli_only and bool(re.search(r"\b(mobile|ios|android|maestro)\b", affirmative, re.I))),
     }
 
 

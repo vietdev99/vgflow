@@ -67,7 +67,10 @@ def load_runs(phase_dir: Path) -> list[dict]:
     if not runs_dir.is_dir():
         return []
     out: list[dict] = []
-    for p in sorted(runs_dir.glob("*.json")):
+    # Codex round 5 fix (Task 26): recursive scan to catch artifacts written
+    # by spawn_recursive_probe.py at runs/<tool>/<lens>/<goal>.json. Previously
+    # only top-level runs/*.json was scanned, missing every recursive lens run.
+    for p in sorted(runs_dir.rglob("*.json")):
         if p.name in {"INDEX.json", ".broker-context.json"}:
             continue
         data = load_run(p)

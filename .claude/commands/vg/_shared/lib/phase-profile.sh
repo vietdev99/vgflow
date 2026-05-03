@@ -66,11 +66,44 @@ detect_phase_profile() {
     return 1
   fi
 
+  local plan="${phase_dir}/PLAN.md"
+
+  # Explicit frontmatter wins for non-generic profiles. Some specs keep
+  # `profile: feature` for pipeline compatibility and declare the runtime
+  # surface separately as `platform: cli-tool`; treat that as a CLI profile.
+  local fm_profile fm_platform
+  fm_profile=$(awk '
+    BEGIN { in_fm=0 }
+    NR == 1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^[[:space:]]*profile[[:space:]]*:/ {
+      sub(/^[^:]+:[[:space:]]*/, ""); gsub(/["'\''\r]/, ""); print; exit
+    }
+  ' "$specs" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  fm_platform=$(awk '
+    BEGIN { in_fm=0 }
+    NR == 1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^[[:space:]]*platform[[:space:]]*:/ {
+      sub(/^[^:]+:[[:space:]]*/, ""); gsub(/["'\''\r]/, ""); print; exit
+    }
+  ' "$specs" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  case "$fm_profile" in
+    infra|hotfix|bugfix|migration|docs|cli-tool|library)
+      [ "$fm_profile" != "feature" ] && { echo "$fm_profile"; return 0; }
+      ;;
+  esac
+  case "$fm_platform" in
+    cli-tool|library)
+      echo "$fm_platform"
+      return 0
+      ;;
+  esac
+
   # ─── Rule 2: docs-only (all touched files are .md) ──────────────
   # Heuristic: the phase dir has only *.md files AND any task file-paths in PLAN.md
   # reference only .md files. We do not call git here — pure function, so we
   # rely on PLAN file-path extraction. If PLAN missing, fall through.
-  local plan="${phase_dir}/PLAN.md"
   if [ -f "$plan" ]; then
     local non_md_paths
     non_md_paths=$(grep -oE '<file-path>[^<]+</file-path>' "$plan" 2>/dev/null | \
@@ -205,6 +238,8 @@ phase_profile_required_artifacts() {
   case "${1:-feature}" in
     feature)        echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;
     feature-legacy) echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;  # v1.9.2.1 — pre-SPECS phases
+    cli-tool)       echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;
+    library)        echo "SPECS.md CONTEXT.md PLAN.md TEST-GOALS.md SUMMARY.md" ;;
     infra)          echo "SPECS.md PLAN.md SUMMARY.md" ;;
     hotfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
     bugfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
@@ -219,6 +254,8 @@ phase_profile_skip_artifacts() {
   case "${1:-feature}" in
     feature)        echo "" ;;
     feature-legacy) echo "SPECS.md" ;;  # v1.9.2.1 — treat SPECS as optional for legacy phases
+    cli-tool)       echo "UI-SPEC.md UI-MAP.md RUNTIME-MAP.json" ;;
+    library)        echo "API-CONTRACTS.md UI-SPEC.md UI-MAP.md RUNTIME-MAP.json" ;;
     infra)          echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md RUNTIME-MAP.json" ;;
     hotfix)         echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md" ;;
     bugfix)         echo "API-CONTRACTS.md CONTEXT.md" ;;
@@ -231,6 +268,8 @@ phase_profile_skip_artifacts() {
 phase_profile_review_mode() {
   case "${1:-feature}" in
     feature|feature-legacy) echo "full" ;;
+    cli-tool)               echo "cli-smoke" ;;
+    library)                echo "library-api" ;;
     infra)                  echo "infra-smoke" ;;
     hotfix)                 echo "delta" ;;
     bugfix)                 echo "regression" ;;
@@ -243,6 +282,8 @@ phase_profile_review_mode() {
 phase_profile_test_mode() {
   case "${1:-feature}" in
     feature|feature-legacy) echo "full" ;;
+    cli-tool)               echo "cli-smoke" ;;
+    library)                echo "library-api" ;;
     infra)                  echo "infra-smoke" ;;
     hotfix)                 echo "parent-goals-regression" ;;
     bugfix)                 echo "issue-specific" ;;
@@ -254,7 +295,7 @@ phase_profile_test_mode() {
 
 phase_profile_goal_coverage_source() {
   case "${1:-feature}" in
-    feature|feature-legacy) echo "TEST-GOALS" ;;
+    feature|feature-legacy|cli-tool|library) echo "TEST-GOALS" ;;
     infra)                  echo "SPECS.success_criteria" ;;
     hotfix)                 echo "parent_phase.TEST-GOALS" ;;
     bugfix)                 echo "SPECS.fixes_bug" ;;

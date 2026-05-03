@@ -394,3 +394,64 @@ This agent does NOT call AskUserQuestion. L2 proposals are packaged into the
 `l2_escalations` MUST be present (empty array if none).
 `bindings_satisfied` is `true` only if binding gate passed (or L1 resolved it).
 `binding_failed` is `true` only if L4 stuck (no resolution path found).
+
+---
+
+## RCRURD helper hard rule (Codex GPT-5.5 review 2026-05-03 — Task 24)
+
+For EVERY mutation goal in TEST-GOALS (`goal_type: mutation`), the
+generated `<goal_id>.spec.ts` MUST:
+
+1. **Import** `expectReadAfterWrite` from the test-helpers module
+   (canonical source: `scripts/codegen-helpers/expectReadAfterWrite.ts` —
+   project may alias to `@/test-helpers/expectReadAfterWrite`).
+2. **Call** `expectReadAfterWrite(request, invariant, actionPayload)`
+   after the mutation step (between the user-action click + post-mutation
+   assertions).
+
+The invariant comes from the structured YAML block in
+`TEST-GOALS/G-NN.md`, parsed by Task 22's `scripts/lib/rcrurd_invariant.py`.
+DO NOT regenerate or paraphrase the invariant body — write it once as a
+fixture (`fixtures/invariants/G-NN.ts` exporting a typed `RCRURDInvariant`)
+and import that fixture into the spec.
+
+Post-codegen validator: `scripts/validators/verify-codegen-rcrurd-helper.py`
+runs after generation and BLOCKs on missing import or missing call site.
+Read-only goals (`goal_type: read_only`) do NOT need this helper.
+
+Why a known helper instead of regex? Generic "GET-after-mutation" regex
+yields false positives on unrelated GETs and false negatives on indirect
+verification. The helper enforces:
+- `cache_policy: no_store` headers (Cache-Control + Pragma)
+- `settle.mode: poll/wait_event` honors `timeout_ms` + `interval_ms`
+- JSONPath assertions evaluated with the same operator semantics as the
+  Task 23 review-side runtime gate (single source of truth)
+- `side_effects[]` checked separately from primary assertions (multi-layer
+  audit log + effective-permission verification)
+
+### R9 ui_render_truth_mismatch — when invariant has ui_assert (Task 25)
+
+If the YAML invariant in `TEST-GOALS/G-NN.md` has a `ui_assert` block,
+the generated `.spec.ts` MUST pass `page` as the first argument:
+
+```typescript
+await expectReadAfterWrite(page, request, invariantG04, { new_role: 'admin' });
+```
+
+NOT `expectReadAfterWrite(request, invariantG04, ...)` — the helper
+throws `R9_NO_PAGE` if `invariant.ui_assert` is set but `page === null`.
+Backend-only goals (worker, cron) without DOM surface pass `null` for
+the page argument and omit `ui_assert` from the YAML invariant.
+
+The `dom_selector` and `selector_template` values MUST use stable
+selectors (`data-testid` or equivalent). The validator emits
+`R9_UNTESTABLE_MISSING_STABLE_SELECTOR` ADVISORY when a `ui_assert`
+op uses text-only or class-based selectors. Override only when text
+IS the spec contract (e.g. status badge "Approved" — the literal text
+is the contract).
+
+10 supported ops cover array (count_matches/text_contains_all/
+each_exists), scalar (text_equals/text_matches), conditional
+(visible_when/hidden_when), and attribute (attribute_equals/
+aria_state_matches/input_value_equals) layers — see
+`schemas/rcrurd-invariant.schema.yaml` `ui_assert_op` definition.
