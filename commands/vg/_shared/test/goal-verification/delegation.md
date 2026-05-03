@@ -1,4 +1,12 @@
-# test goal-verification delegation contract (vg-test-goal-verifier subagent)
+# test goal-verification delegation (STEP 4 — contract document)
+
+<!-- Exception: contract document.
+     This file is NOT an executable step ref — it documents the spawn
+     payload + return contract for vg-test-goal-verifier. No HARD-GATE
+     block because the orchestrator-side HARD-GATE lives in
+     `_shared/test/goal-verification/overview.md`. The subagent's own
+     HARD-GATE lives in `agents/vg-test-goal-verifier/SKILL.md`. Per
+     review-v2 B1/B2. -->
 
 This file contains the prompt template the main agent passes to
 `Agent(subagent_type="vg-test-goal-verifier", prompt=...)`.

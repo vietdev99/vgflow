@@ -1,4 +1,13 @@
-# test deep-probe (STEP 5 deep-probe sub-step — orchestrator-side, UNCHANGED)
+# test deep-probe (STEP 5)
+
+<HARD-GATE>
+You MUST run this sub-step orchestrator-side after `vg-test-codegen` returns.
+You MUST emit `5d_deep_probe` step-active + mark-step (see 5d-deep.6).
+You MUST wrap every Sonnet/adversarial spawn with `vg-narrate-spawn.sh`
+(spawning before, returned/failed after) — silent spawn = audit FAIL.
+Skipping this step requires `deep_probe_enabled: false` in vg.config.md
+OR zero READY goals. Any other skip = Stop hook block.
+</HARD-GATE>
 
 This step runs DIRECTLY in the main agent (orchestrator-side). It is NOT
 delegated to a subagent. It is read and executed AFTER `vg-test-codegen`

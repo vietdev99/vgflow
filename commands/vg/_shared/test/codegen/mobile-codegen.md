@@ -1,4 +1,12 @@
-# test mobile codegen (STEP 5 mobile branch — orchestrator-side)
+# test mobile codegen (STEP 5)
+
+<HARD-GATE>
+You MUST run this sub-step orchestrator-side when `PHASE_PROFILE=mobile-*`.
+You MUST emit `5d_mobile_codegen` step-active + mark-step (see 5d block).
+You MUST consume per-goal slices from `${VG_TMP}/goals/<G-NN>.json` — never
+flat-read TEST-GOALS.md. Skipping this step on a mobile profile = Stop
+hook block (the marker is profile-gated to mobile-* in test.md).
+</HARD-GATE>
 
 This step runs DIRECTLY in the main agent (orchestrator-side). It is NOT
 delegated to a subagent. It is read and executed when `PHASE_PROFILE=mobile-*`
