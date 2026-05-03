@@ -221,6 +221,7 @@ for the D-06 task-fidelity audit (post-spawn 3-way hash compare).
   ],
   "fingerprint_path": "${PHASE_DIR}/.fingerprints/task-04.fingerprint.md",
   "read_evidence_path": "${PHASE_DIR}/.read-evidence/task-04.json",
+  "build_log_path": "${PHASE_DIR}/BUILD-LOG/task-04.md",
   "warnings": []
 }
 ```
@@ -235,6 +236,7 @@ for the D-06 task-fidelity audit (post-spawn 3-way hash compare).
 | `bindings_satisfied` | yes | Subset of input `binding_requirements` the subagent satisfied. Empty = task plan binding requirements not met. |
 | `fingerprint_path` | yes | Path written in step 6 of procedure. Must exist on disk. |
 | `read_evidence_path` | maybe | Path written in step 7. NULL when no `design_ref_path` was passed. |
+| `build_log_path` | yes | Path written by subagent procedure step 13 — `${PHASE_DIR}/BUILD-LOG/task-${task_id}.md`. R1a UX baseline Req 1 layer 1 (per-task split). Orchestrator validates the file exists on disk before marking task complete. Post-executor (Task 11) concats every `BUILD-LOG/task-*.md` into Layer 3 `BUILD-LOG.md`; missing this file breaks aggregation. |
 | `warnings` | optional | Non-blocking issues the subagent surfaces (e.g., flaky test re-tried, deprecated API used). |
 
 **Error return format** (any procedure step failure):
@@ -285,6 +287,13 @@ marking the task complete. Per task:
 - `read_evidence_path` exists on disk IF `design_ref_path` was passed in
   input envelope; MUST be absent (or null in return) when `design_ref_path`
   was NULL
+- `build_log_path` is present in return JSON (non-empty string), file
+  exists on disk + non-empty, and resolves to
+  `${PHASE_DIR}/BUILD-LOG/task-${task_id}.md` (per R1a UX baseline Req 1
+  layer 1). Orchestrator MUST `[ -s "${build_log_path}" ]` before marking
+  task complete; missing layer-1 split breaks post-executor's Layer 2/3
+  aggregation (Task 11 concats every `BUILD-LOG/task-*.md` into the
+  canonical `BUILD-LOG.md`).
 - All `artifacts_written` paths exist on disk
 - `commit_sha` appears in `git log ${WAVE_TAG}..HEAD` (i.e., the commit
   was made within this wave's range, not pre-existing)
