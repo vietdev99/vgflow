@@ -255,7 +255,7 @@ PY
 : > "${VG_TMP}/uat-mobile-security.txt"
 case "$PROFILE" in
   mobile-*)
-    BUILD_LOG="${PHASE_DIR}/build-state.log"
+    export BUILD_LOG="${PHASE_DIR}/build-state.log"
     if [ -f "$BUILD_LOG" ]; then
       ${PYTHON_BIN} - <<'PY' > "${VG_TMP}/uat-mobile-gates.txt"
 import re, os
