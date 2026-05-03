@@ -139,7 +139,16 @@ vg-orchestrator step-active 1_parse_args
 # (GSD auto-chain is N/A — VG uses explicit /vg:next routing)
 
 # Flag allowlist (v1.14.4+ — typo guard). Unknown flag = hard BLOCK, not silent skip.
-VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-context-rebuild|resume|skip-truthcheck|allow-missing-commits|allow-r5-violation|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|allow-ux-violations|override-reason|force|help)$'
+# v2.41 R2 build pilot — added live --skip-* / --allow-* flags surfaced in
+# waves-overview.md (gates 8/8d.4/8d.5/8d.9) and close.md (PR-D coverage):
+#   --skip-design-pixel-gate         (waves-overview L1 design-pixel)
+#   --skip-uimap-injection-audit     (waves-overview 8d.4 D-12a)
+#   --skip-task-fidelity-audit       (waves-overview 8d.5 D-06)
+#   --allow-verify-divergence        (waves-overview 8d.9 wave-verify)
+#   --allow-coverage-regression      (close.md PR-D route schema coverage)
+# All gate-skip flags route through forbidden_without_override (entry
+# frontmatter); --allow-coverage-regression is informational + accept-and-log.
+VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-design-pixel-gate|skip-uimap-injection-audit|skip-task-fidelity-audit|skip-context-rebuild|resume|skip-truthcheck|skip-compliance|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|allow-missing-commits|allow-missing-fixtures|allow-r5-violation|allow-verify-divergence|allow-coverage-regression|allow-rule-not-implemented|allow-ux-violations|override-reason|force|help)$'
 UNKNOWN_FLAGS=""
 for tok in ${ARGUMENTS:-}; do
   case "$tok" in
@@ -155,8 +164,12 @@ done
 if [ -n "$UNKNOWN_FLAGS" ]; then
   echo "⛔ Unknown flag(s):${UNKNOWN_FLAGS}"
   echo "   Valid flags: --wave, --only, --status, --gaps-only, --interactive, --auto,"
-  echo "                --reset-queue, --skip-design-check, --skip-context-rebuild, --resume, --skip-truthcheck,"
-  echo "                --allow-missing-commits, --allow-r5-violation, --override-reason=<text>, --force, --help"
+  echo "                --reset-queue, --skip-design-check, --skip-design-pixel-gate,"
+  echo "                --skip-uimap-injection-audit, --skip-task-fidelity-audit,"
+  echo "                --skip-context-rebuild, --resume, --skip-truthcheck, --skip-compliance,"
+  echo "                --skip-reflection, --allow-missing-commits, --allow-missing-fixtures,"
+  echo "                --allow-r5-violation, --allow-verify-divergence, --allow-coverage-regression,"
+  echo "                --allow-rule-not-implemented, --override-reason=<text>, --force, --help"
   echo "   Có thể bạn gõ sai chính tả (typo). Check lại arguments trước khi chạy."
   exit 1
 fi

@@ -100,6 +100,14 @@ runtime_contract:
     - "--allow-r5-violation"
     - "--force"
     - "--skip-truthcheck"
+    # v2.41 R2 build pilot — hard-gate-skip flags surfaced by waves-overview
+    # gates 8/8d.4/8d.5/8d.9. Each requires --override-reason=<text> + emits
+    # override-debt entry. --allow-coverage-regression is informational and
+    # logged via close.md PR-D path (NOT listed here).
+    - "--skip-design-pixel-gate"
+    - "--skip-uimap-injection-audit"
+    - "--skip-task-fidelity-audit"
+    - "--allow-verify-divergence"
 ---
 
 <HARD-GATE>
