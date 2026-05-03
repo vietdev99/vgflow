@@ -58,3 +58,46 @@ def test_agent_hook_allows_vg_subagent_when_run_active(vg_active_run):
     )
     assert result.returncode == 0
     assert result.stderr == ""
+
+
+# ── Parametrized regression for hooks that already had correct guards ──
+#
+# These hooks were already correct pre-R5.5; the parametrized tests lock
+# them so future edits cannot regress.
+#
+# We feed each hook a stdin payload its matcher would normally see;
+# all must exit 0 silently when no .vg/active-runs/ file exists.
+
+@pytest.mark.parametrize("hook_name,stdin_payload", [
+    (
+        "bash",
+        json.dumps({"tool_input": {
+            "command": "vg-orchestrator step-active --step blueprint-design"
+        }}),
+    ),
+    (
+        "post-todowrite",
+        json.dumps({"tool_input": {"todos": [
+            {"content": "x", "status": "pending", "activeForm": "doing x"}
+        ]}}),
+    ),
+    (
+        "stop",
+        "",  # stop hook reads no meaningful stdin
+    ),
+    (
+        "user-prompt-submit",
+        json.dumps({"prompt": "/superpowers:brainstorming"}),
+    ),
+])
+def test_existing_hooks_silent_when_no_active_run(
+    tmp_workspace, hook_name, stdin_payload
+):
+    result = run_hook(hook_name, stdin=stdin_payload)
+    assert result.returncode == 0, (
+        f"{hook_name} broke silent-on-non-VG contract; "
+        f"rc={result.returncode}, stderr={result.stderr!r}"
+    )
+    assert result.stderr == "", (
+        f"{hook_name} leaked stderr: {result.stderr!r}"
+    )
