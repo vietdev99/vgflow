@@ -25,8 +25,8 @@ path. Bypassing this step BLOCKs run-complete.
 verify build output against the 4 source-of-truth artifacts
 (API-CONTRACTS.md, TEST-GOALS.md, CONTEXT.md decisions, PLAN.md
 tasks). Loops up to 5 iterations; each BLOCK round is fixed by a
-Sonnet Task subagent before re-invocation. Refactor deferred — see
-spec §1.5.>
+Sonnet `Agent` (not Task) subagent before re-invocation. Refactor
+deferred — see spec §1.5.>
 
 ## Step 11: OHOK-7 MANDATORY CrossAI build verification loop
 
@@ -49,10 +49,15 @@ for iteration in 1..5:
     - Build done
   Exit code 1 (BLOCKS_FOUND):
     - Read ${PHASE_DIR}/crossai-build-verify/findings-iter${iter}.json
-    - Spawn Sonnet Task subagent:
-      * description: "Fix CrossAI BLOCK findings iter ${iter}"
-      * prompt: findings JSON + artifact paths + "fix each BLOCK, commit
-                with feat(${phase}-${iter}.fixN): subject"
+    - Narrate + spawn Sonnet Agent (NOT Task) subagent:
+        bash scripts/vg-narrate-spawn.sh general-purpose spawning \
+          "crossai-fix iter-${iter} BLOCKs"
+        Agent(subagent_type="general-purpose", model="claude-sonnet-4-6"):
+          description: "Fix CrossAI BLOCK findings iter ${iter}"
+          prompt: findings JSON + artifact paths + "fix each BLOCK, commit
+                  with feat(${phase}-${iter}.fixN): subject"
+        bash scripts/vg-narrate-spawn.sh general-purpose returned \
+          "crossai-fix iter-${iter} done"
     - After subagent returns, continue to iter+1
   Exit code 2 (CLI_INFRA_FAILURE):
     - Retry once. If still fails, prompt user (CLI down / network / quota)
@@ -102,7 +107,8 @@ Do NOT refactor, do NOT add features beyond the fix. Stop and return.
 
 Bash auto-loop was wrong: re-running CrossAI on SAME unfixed code just
 re-produces the same findings. Main Claude (Opus) MUST orchestrate
-iteration-by-iteration with Sonnet Task subagent fixing between iters.
+iteration-by-iteration with a Sonnet Agent (NOT Task) subagent fixing
+between iters; see the literal Agent() block above.
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 11_crossai_build_verify_loop 2>/dev/null || true
@@ -124,10 +130,27 @@ echo "▸ iter 1 exit code: ${CROSSAI_RC} (0=CLEAN, 1=BLOCKS_FOUND, 2=INFRA_FAIL
 
 - **CROSSAI_RC = 1**: BLOCK findings exist at
   `${PHASE_DIR}/crossai-build-verify/findings-iter1.json`.
-  **Opus MUST dispatch a Sonnet Task subagent** with the findings JSON +
-  fix prompt (see template above). Subagent reads each finding, applies
-  minimal fix, commits with `feat(${PHASE}-1.fixN):` subject. After
-  subagent returns (all BLOCKS fixed + committed), Opus re-invokes:
+  **Opus MUST narrate + dispatch a Sonnet `Agent` (NOT Task) subagent**
+  with the findings JSON + fix prompt (see template above). The literal
+  call is:
+
+  ```bash
+  bash scripts/vg-narrate-spawn.sh general-purpose spawning \
+    "crossai-fix iter-1 BLOCKs"
+  ```
+
+  ```
+  Agent(subagent_type="general-purpose", model="claude-sonnet-4-6", prompt=<rendered>)
+  ```
+
+  ```bash
+  bash scripts/vg-narrate-spawn.sh general-purpose returned \
+    "crossai-fix iter-1 done"
+  ```
+
+  Subagent reads each finding, applies minimal fix, commits with
+  `feat(${PHASE}-1.fixN):` subject. After subagent returns (all BLOCKS
+  fixed + committed), Opus re-invokes:
   ```bash
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-build-crossai-loop.py \
     --phase "${CROSSAI_PHASE}" --iteration 2 --max-iterations ${CROSSAI_MAX_ITER}
@@ -162,9 +185,10 @@ Pick one:
 Opus presents options, user picks, Opus invokes the chosen command. Run-
 complete (step 12) BLOCKs until ONE of the three terminal events lands.
 
-**Why no bash while-loop**: the fix between iterations needs a Task subagent
-(Sonnet with isolated context reading findings-iterN.json), which a bash
-block can't spawn. Each iteration is a discrete Claude-orchestrated step.
+**Why no bash while-loop**: the fix between iterations needs an Agent
+spawn (Sonnet with isolated context reading findings-iterN.json), which
+a bash block can't issue. Each iteration is a discrete Claude-orchestrated
+step driven by the `Agent` tool, not the legacy `Task` tool.
 
 **If Opus bypasses this step** entirely: step 12 fires
 `build-crossai-required` validator which sees 0 iteration events → BLOCK.
