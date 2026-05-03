@@ -605,8 +605,9 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
   touch "${PHASE_DIR}/.step-markers/complete.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator \
   mark-step test complete 2>/dev/null || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator \
-  mark-step test 0_parse_and_validate 2>/dev/null || true
+# NOTE: 0_parse_and_validate is marked exactly once during preflight STEP 1.3
+# (see _shared/test/preflight.md). Re-marking it here would double-count and
+# confuse the marker timeline — review-v2 B4.
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator \
   emit-event "test.completed" \
   --payload "{\"phase\":\"${PHASE_NUMBER}\",\"verdict\":\"${VERDICT}\"}" >/dev/null
