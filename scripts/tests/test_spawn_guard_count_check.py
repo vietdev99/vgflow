@@ -91,6 +91,32 @@ def test_spawn_count_no_active_run_allows(tmp_path, monkeypatch):
     assert rc == 0
 
 
+def test_spawn_deny_writes_block_file_with_compact_stderr(tmp_path, monkeypatch):
+    """R2 round-2 Important-3 — deny path writes .vg/blocks/<run_id>/<gate>.md
+    AND emits a 3-line compact stderr summary (not the full multi-paragraph
+    reason). Mirrors the pattern in vg-pre-tool-use-agent.sh + vg-stop.sh.
+    """
+    monkeypatch.chdir(tmp_path)
+    run_id = "run-block-file"
+    _setup_run(tmp_path, run_id, expected_tasks=["task-04"])
+    # Force task_id-not-in-remaining deny to exercise the block-file path.
+    rc, stderr = _spawn(
+        tmp_path, "vg-build-task-executor", "task_id=task-99",
+    )
+    assert rc != 0
+    block_dir = tmp_path / ".vg" / "blocks" / run_id
+    files = sorted(block_dir.glob("*.md")) if block_dir.exists() else []
+    assert files, f"expected .vg/blocks/{run_id}/<gate>.md to exist; found nothing"
+    block_text = files[0].read_text()
+    assert "Block diagnostic" in block_text
+    assert "Required fix" in block_text
+    # Compact stderr: 3 lines max + colored title + "Read ... for full diagnostic"
+    err_lines = [l for l in stderr.splitlines() if l.strip()]
+    assert len(err_lines) <= 4, f"stderr should be compact ≤4 lines, got {len(err_lines)}: {err_lines}"
+    assert any("Read" in l and ".vg/blocks" in l for l in err_lines), \
+        f"stderr must point at block file; lines={err_lines}"
+
+
 def test_spawn_capsule_missing_blocks(tmp_path, monkeypatch):
     """R2 round-2 Important-1 — capsule absent on disk → spawn DENIED.
 

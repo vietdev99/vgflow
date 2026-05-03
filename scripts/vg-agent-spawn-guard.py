@@ -88,7 +88,50 @@ def allow() -> int:
     return 0
 
 
-def deny(reason: str) -> int:
+def _resolve_run_id_for_block(hook_session: str | None) -> str:
+    """Best-effort run_id for the block-file path. Falls back to 'unknown'."""
+    rid = _resolve_run_id(hook_session)
+    return rid or "unknown"
+
+
+def _write_block_file(gate_id: str, reason: str, hook_session: str | None) -> str | None:
+    """Mirror the deny reason to .vg/blocks/<run_id>/<gate_id>.md.
+
+    Same shape as scripts/hooks/vg-pre-tool-use-agent.sh and vg-stop.sh.
+    Returns the path (or None on filesystem error). Failure is non-fatal —
+    the deny still fires via stdout JSON + 3-line stderr summary.
+    """
+    run_id = _resolve_run_id_for_block(hook_session)
+    block_dir = REPO_ROOT / ".vg" / "blocks" / run_id
+    block_file = block_dir / f"{gate_id}.md"
+    try:
+        block_dir.mkdir(parents=True, exist_ok=True)
+        block_file.write_text(
+            "# Block diagnostic — " + gate_id + "\n\n"
+            "## Cause\n"
+            "vg-agent-spawn-guard.py denied an Agent() spawn during an "
+            "active /vg:* run.\n\n"
+            "## Full reason\n"
+            + reason + "\n\n"
+            "## Required fix\n"
+            "Read the reason above. Common patterns:\n"
+            "- task_id missing from prompt → render the\n"
+            "  waves-delegation.md template so 'task_id=task-NN' appears.\n"
+            "- task_id not in remaining[] → either typo or task already\n"
+            "  spawned this wave; check .vg/runs/<run_id>/.spawn-count.json.\n"
+            "- capsule missing on disk → re-run pre-executor-check.py to\n"
+            "  materialize .task-capsules/task-NN.capsule.json.\n"
+            "- gsd-* subagent → switch to general-purpose; the\n"
+            "  vg_executor_rules block is already authoritative.\n",
+            encoding="utf-8",
+        )
+        return str(block_file)
+    except OSError:
+        return None
+
+
+def deny(reason: str, hook_session: str | None = None,
+         gate_id: str = "PreToolUse-Agent-spawn-guard") -> int:
     # Dual-channel deny:
     #   - JSON on stdout for Claude Code's PreToolUse contract (v2.27.0+
     #     consumers expect permissionDecision=deny + reason here).
@@ -96,6 +139,16 @@ def deny(reason: str) -> int:
     #     pipelines (which inspect stderr/exit-code) see the same block.
     # Both channels carry the same reason — no double-blocking, just
     # belt-and-suspenders compatibility across Claude Code versions.
+    #
+    # R2 round-2 (Important-3 / R1a-3) — additionally write the full
+    # diagnostic to .vg/blocks/<run_id>/<gate_id>.md and shrink the
+    # stderr surface to the 3-line compact pattern used by the other
+    # PreToolUse hooks (vg-pre-tool-use-agent.sh, vg-pre-tool-use-bash.sh).
+    # The full reason is still sent via JSON stdout so Claude Code's
+    # permissionDecisionReason channel keeps the long form for the
+    # model to consume on the next turn.
+    block_path = _write_block_file(gate_id, reason, hook_session)
+
     payload = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -104,7 +157,16 @@ def deny(reason: str) -> int:
         }
     }
     sys.stdout.write(json.dumps(payload))
-    sys.stderr.write(reason + "\n")
+
+    # 3-line compact stderr (operator UX) — title + one-line cause + path.
+    first_line = reason.splitlines()[0] if reason else "spawn denied"
+    cause = first_line.strip() or "spawn denied"
+    location = block_path or "(.vg/blocks/ unwritable)"
+    sys.stderr.write(
+        f"\033[38;5;208m{gate_id}: {cause}\033[0m\n"
+        f"→ Read {location} for full diagnostic + fix\n"
+        f"→ Hook payload retains full reason for Claude.\n"
+    )
     return 2
 
 
@@ -168,7 +230,8 @@ def _resolve_capsule_path(raw: str, repo_root: Path) -> Path:
     return p
 
 
-def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
+def _enforce_spawn_count(hook_input: dict, run_id: str,
+                         hook_session: str | None = None) -> int | None:
     """R2 build pilot — assert spawned task_id matches wave-spawn-plan.
 
     Returns:
@@ -210,7 +273,9 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
             "\033[38;5;208mvg-build-task-executor spawn missing task_id in prompt; \033[0m"
             "spawn-guard cannot verify against wave plan.\n"
             "Add 'task_id=task-NN' to the subagent prompt so the guard "
-            "can match it against .wave-spawn-plan.json."
+            "can match it against .wave-spawn-plan.json.",
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-task-id-missing",
         )
 
     # R2 round-2 (Important-1) — capsule existence gate. The entry
@@ -231,7 +296,9 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
             "  <task_context_capsule path=\"...\">\n"
             "The capsule is the deterministic context contract assembled "
             "by pre-executor-check.py; the guard refuses the spawn when "
-            "no path is declared so the executor never runs blind."
+            "no path is declared so the executor never runs blind.",
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-capsule-undeclared",
         )
     capsule_path = _resolve_capsule_path(capsule_raw, REPO_ROOT)
     if not capsule_path.is_file() or capsule_path.stat().st_size == 0:
@@ -240,7 +307,9 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
             f"{capsule_path}\033[0m\n"
             "pre-executor-check.py MUST write this file before Agent() "
             "spawn (waves-overview.md Step 7). Re-run that script for "
-            f"{task_id} OR fix the rendered capsule_path in the prompt."
+            f"{task_id} OR fix the rendered capsule_path in the prompt.",
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-capsule-missing",
         )
 
     # Load existing count or initialize from plan.
@@ -283,7 +352,11 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
             f"Either correct the task_id, or update wave-spawn-plan.json "
             f"with override-reason."
         )
-        return deny(msg)
+        return deny(
+            msg,
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-task-not-in-remaining",
+        )
 
     # Move task_id from remaining → spawned, persist atomically-ish.
     remaining.remove(task_id)
@@ -410,7 +483,11 @@ def main() -> int:
                 f"(Rule sourced from commands/vg/build.md step 7 + hardened "
                 f"programmatically in vg-agent-spawn-guard.py since v2.27.0.)"
             )
-            return deny(reason)
+            return deny(
+                reason,
+                hook_session=hook_session,
+                gate_id="PreToolUse-Agent-spawn-guard-gsd-forbidden",
+            )
 
     # ── R2 build pilot — wave-plan spawn-count enforcement ──────────────
     # Only fires for vg-build-task-executor when an active VG run has a
@@ -419,7 +496,8 @@ def main() -> int:
     if is_active:
         run_id = _resolve_run_id(hook_session)
         if run_id:
-            rc = _enforce_spawn_count(hook_input, run_id)
+            rc = _enforce_spawn_count(hook_input, run_id,
+                                      hook_session=hook_session)
             if rc is not None:
                 return rc
 
