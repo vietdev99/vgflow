@@ -12,12 +12,15 @@ batch in `confirm-env-model-mode.md` is well-informed.
 ## Run
 
 ```bash
+vg-orchestrator step-active 0a_enrich_env_options
+
 mkdir -p "${PHASE_DIR}/.tmp"
 ${PYTHON_BIN:-python3} .claude/scripts/enrich-env-question.py \
   --phase-dir "${PHASE_DIR}" --command roam \
   > "${PHASE_DIR}/.tmp/env-options.roam.json" 2>/dev/null || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0a_enrich_env_options" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0a_enrich_env_options.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0a_enrich_env_options 2>/dev/null || true
 ```
 
 ## Output schema

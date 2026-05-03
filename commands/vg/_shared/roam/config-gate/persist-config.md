@@ -11,6 +11,8 @@ target URL + per-model output dirs, writes ROAM-CONFIG.json + the
 ## Resolve + validate
 
 ```bash
+vg-orchestrator step-active 0a_persist_config
+
 # Resolve from AskUserQuestion answers OR CLI flags OR defaults
 ROAM_ENV="${ROAM_ENV:-${CONFIG_STEP_ENV_VERIFY:-local}}"
 ROAM_MODEL="${ROAM_MODEL:-codex}"
@@ -105,6 +107,7 @@ mkdir -p "${ROAM_DIR}/.tmp"
 echo "$(date +%s)|${ROAM_ENV}|${ROAM_MODEL}|${ROAM_MODE}" > "${ROAM_DIR}/.tmp/0a-confirmed.marker"
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0a_persist_config" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0a_persist_config.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0a_persist_config 2>/dev/null || true
 ```
 
 After this sub-step, the config gate is complete. Next: `discovery.md`.

@@ -11,6 +11,8 @@ Check which executor tools are present. Filter the mode options in
 ## Detection
 
 ```bash
+vg-orchestrator step-active 0a_detect_platform_tools
+
 # Platform detection — heuristic from phase artifacts
 ROAM_PLATFORM="web"
 if [ -f "${PHASE_DIR}/CONTEXT.md" ]; then
@@ -79,6 +81,7 @@ echo "$ROAM_PLATFORM" > "${ROAM_DIR}/.tmp/platform.txt"
 printf '%s\n' "${MODES_AVAIL[@]}" > "${ROAM_DIR}/.tmp/modes-avail.txt"
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0a_detect_platform_tools" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0a_detect_platform_tools.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0a_detect_platform_tools 2>/dev/null || true
 ```
 
 ## Downstream usage

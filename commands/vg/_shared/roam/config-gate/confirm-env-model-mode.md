@@ -63,8 +63,11 @@ questions:
 ## After AskUserQuestion returns (or skip-mode resolved CLI flags)
 
 ```bash
+vg-orchestrator step-active 0a_confirm_env_model_mode
+
 # Just write the marker — actual resolution + persistence is in persist-config.md
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0a_confirm_env_model_mode" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0a_confirm_env_model_mode.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0a_confirm_env_model_mode 2>/dev/null || true
 ```
 
 The 3 answers are picked up by `persist-config.md` via the env vars
