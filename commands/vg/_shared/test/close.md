@@ -113,8 +113,11 @@ echo "$VERDICT_JSON" > "${PHASE_DIR}/.verdict-computed.json"
 echo "Computed verdict: $VERDICT"
 ```
 
-Write `${PHASE_DIR}/{num}-SANDBOX-TEST.md` using **only** the computed
-`$VERDICT` and runtime counters:
+Write `${PHASE_DIR}/SANDBOX-TEST.md` using **only** the computed
+`$VERDICT` and runtime counters. The path MUST exactly match the
+`must_write` declaration in `commands/vg/test.md` runtime_contract — Stop
+hook performs an exact-path check on this artifact and any deviation
+(e.g. `{num}-SANDBOX-TEST.md`) will block run-complete.
 
 ```markdown
 ---
@@ -177,7 +180,7 @@ Gate (weighted):
 Commit artifacts:
 
 ```bash
-git add "${PHASE_DIR}"/*-SANDBOX-TEST.md "${SCREENSHOTS_DIR}/" \
+git add "${PHASE_DIR}/SANDBOX-TEST.md" "${SCREENSHOTS_DIR}/" \
         "${GENERATED_TESTS_DIR}/" 2>/dev/null || true
 git commit -m "test(${PHASE_NUMBER}): goal verification — ${VERDICT}, ${PASSED_GOALS:-?}/${TOTAL_GOALS:-?} goals passed"
 
