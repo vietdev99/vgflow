@@ -1472,6 +1472,87 @@ def cmd_wave_complete(args) -> int:
               f"--wave ({args.wave_n})", file=sys.stderr)
         return 1
 
+    # R2 round-2 (E1 critical-2) — wave shortfall hard-block.
+    # Docs in waves-overview.md HARD-GATE promise that the Stop hook
+    # asserts spawned == expected at wave end. The Stop hook only delegates
+    # `run-status --check-contract`, so the real spawn-count check has to
+    # live here at wave-complete: read .vg/runs/<run_id>/.spawn-count.json
+    # written by vg-agent-spawn-guard.py and refuse the wave.completed
+    # event when remaining[] is non-empty (or when expected[]/wave_id
+    # doesn't match the plan the orchestrator just consumed).
+    spawn_count_path = (
+        _REPO_ROOT / ".vg" / "runs" / current["run_id"]
+        / ".spawn-count.json"
+    )
+    if spawn_count_path.exists():
+        try:
+            spawn_count = json.loads(
+                spawn_count_path.read_text(encoding="utf-8"),
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            print(
+                f"\033[38;5;208mwave-complete: cannot parse spawn-count "
+                f"({exc}) — refusing wave.completed.\033[0m",
+                file=sys.stderr,
+            )
+            return 2
+        sc_expected = spawn_count.get("expected") or []
+        sc_remaining = spawn_count.get("remaining") or []
+        sc_spawned = spawn_count.get("spawned") or []
+        sc_wave_id = spawn_count.get("wave_id")
+        if sc_wave_id != args.wave_n:
+            # Stale count from a prior wave — guard would have rebuilt on
+            # next spawn, but if no spawn fired yet the count is stale.
+            # Treat as shortfall and BLOCK.
+            print(
+                f"\033[38;5;208mwave-complete: spawn-count.wave_id="
+                f"{sc_wave_id} != --wave {args.wave_n}; either no executor "
+                f"spawned this wave or stale prior-wave state.\033[0m",
+                file=sys.stderr,
+            )
+            try:
+                db.append_event(
+                    run_id=current["run_id"],
+                    event_type="wave.shortfall_blocked",
+                    phase=current["phase"],
+                    command=current["command"],
+                    actor="orchestrator",
+                    outcome="BLOCK",
+                    payload={"wave": args.wave_n,
+                             "reason": "stale_or_missing_spawn_count",
+                             "spawn_count_wave_id": sc_wave_id},
+                )
+            except Exception:
+                pass
+            return 2
+        if sc_remaining:
+            shortfall = list(sc_remaining)
+            print(
+                f"\033[38;5;208m⛔ wave-complete shortfall — wave "
+                f"{args.wave_n} expected {sc_expected}, only spawned "
+                f"{sc_spawned}; missing {shortfall}.\033[0m\n"
+                f"   Spawn the missing vg-build-task-executor agents OR "
+                f"--allow-missing-commits with --override-reason="
+                f"<ticket-or-sha>.",
+                file=sys.stderr,
+            )
+            try:
+                db.append_event(
+                    run_id=current["run_id"],
+                    event_type="wave.shortfall_blocked",
+                    phase=current["phase"],
+                    command=current["command"],
+                    actor="orchestrator",
+                    outcome="BLOCK",
+                    payload={"wave": args.wave_n,
+                             "expected": sc_expected,
+                             "spawned": sc_spawned,
+                             "missing": shortfall},
+                )
+            except Exception:
+                pass
+            return 2
+
     # Idempotency: re-complete with identical evidence = no-op PASS
     prior_completes = db.query_events(
         run_id=current["run_id"], event_type="wave.completed",

@@ -32,9 +32,17 @@ commit `6135701`) DENIES the Agent tool call when:
   - `task_id` not in `remaining[]` of `.vg/runs/${RUN_ID}/.spawn-count.json`
   - capsule file `.task-capsules/task-${N}.capsule.json` missing on disk
 
-The Stop hook asserts `spawned.length == expected.length` post-wave; a
-shortfall (N-1 spawned, N expected) is a HARD BLOCK — operator sees the
-deny message and must complete the missing spawn before the wave closes.
+The `vg-orchestrator wave-complete` command asserts
+`spawned.length == expected.length` post-wave by reading
+`.vg/runs/${RUN_ID}/.spawn-count.json` (R2 round-2 — `cmd_wave_complete`
+in `scripts/vg-orchestrator/__main__.py`). A shortfall (N-1 spawned, N
+expected) BLOCKs `wave.completed` with exit code 2 + emits
+`wave.shortfall_blocked` to events.db; the operator sees the deny
+message and must complete the missing spawn (or pass
+`--allow-missing-commits --override-reason=<ticket>`) before the wave
+closes. The Stop hook surfaces the same condition transitively via
+`run-status --check-contract` since the missing `wave.completed` event
+fails `must_emit_telemetry`.
 
 You MUST narrate every spawn via `bash scripts/vg-narrate-spawn.sh`
 (green pill per R1a UX baseline Req 2). Skipping narration breaks
