@@ -351,9 +351,11 @@ vg_build_progress_start_task "$PHASE_DIR" "$TASK_NUM" "pending-agent"
 # producer of .task-capsules/task-${N}.capsule.json. The PreToolUse Agent
 # hook (vg-agent-spawn-guard, Task 1 commit 6135701) BLOCKS spawn when
 # this capsule file is missing on disk.
-TASK_CAPSULE_DIR="${PHASE_DIR}/.task-context-capsules"
+# Canonical path per build.md HARD-GATE + waves-delegation.md envelope:
+#   ${PHASE_DIR}/.task-capsules/task-${N}.capsule.json
+TASK_CAPSULE_DIR="${PHASE_DIR}/.task-capsules"
 mkdir -p "$TASK_CAPSULE_DIR" 2>/dev/null
-TASK_CAPSULE_PATH="${TASK_CAPSULE_DIR}/task-${TASK_NUM}.json"
+TASK_CAPSULE_PATH="${TASK_CAPSULE_DIR}/task-${TASK_NUM}.capsule.json"
 CONTEXT_JSON=$(${PYTHON_BIN} .claude/scripts/pre-executor-check.py \
   --phase-dir "${PHASE_DIR}" \
   --task-num ${TASK_NUM} \
