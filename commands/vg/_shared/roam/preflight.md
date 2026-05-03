@@ -30,11 +30,72 @@ REVIEW_VERDICT=$("${PYTHON_BIN:-python3}" -c "import json; d=json.load(open('${P
 TEST_VERDICT=$("${PYTHON_BIN:-python3}" -c "import json; d=json.load(open('${PHASE_DIR}/PIPELINE-STATE.json')); print(d.get('steps',{}).get('test',{}).get('verdict','UNKNOWN'))" 2>/dev/null)
 
 if [[ "$REVIEW_VERDICT" != "PASS" ]] || [[ "$TEST_VERDICT" != "PASS" ]]; then
-  echo "⛔ Roam requires /vg:review and /vg:test both PASS before running."
-  echo "   review verdict: $REVIEW_VERDICT"
-  echo "   test verdict:   $TEST_VERDICT"
-  echo "   Roam is post-confirmation janitor; no point exploring an unfinished phase."
-  exit 1
+  if [[ " ${ARGUMENTS} " =~ [[:space:]]--skip-pre-check([[:space:]=]|$) ]]; then
+    echo "⚠ Roam pre-check bypassed (--skip-pre-check). review=$REVIEW_VERDICT test=$TEST_VERDICT — proceeding under override-debt."
+  else
+    echo "⛔ Roam requires /vg:review and /vg:test both PASS before running."
+    echo "   review verdict: $REVIEW_VERDICT"
+    echo "   test verdict:   $TEST_VERDICT"
+    echo "   Roam is post-confirmation janitor; no point exploring an unfinished phase."
+    echo "   Override (NOT recommended): pair --skip-pre-check with --override-reason \"<≥50 char justification>\"."
+    exit 1
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Forbidden-without-override enforcement (round-2 A5 fix)
+#
+# Mirror of the test/preflight.md pattern. Each forbidden flag in
+# roam.md::runtime_contract.forbidden_without_override MUST be paired with
+# --override-reason "<≥50 char>" and emit a canonical override.used event so
+# the override-debt register has a stable record. Lone --override-reason
+# (no companion skip flag) also gates and emits its own override.used event.
+# ---------------------------------------------------------------------------
+ROAM_FORBIDDEN_FLAGS=(--skip-pre-check --skip-evidence-completeness --non-interactive)
+ROAM_USED_FORBIDDEN=()
+for FF in "${ROAM_FORBIDDEN_FLAGS[@]}"; do
+  if [[ " ${ARGUMENTS} " =~ [[:space:]]${FF}([[:space:]=]|$) ]]; then
+    ROAM_USED_FORBIDDEN+=("$FF")
+  fi
+done
+
+ROAM_HAS_OVERRIDE_REASON=false
+if [[ " ${ARGUMENTS} " =~ [[:space:]]--override-reason([[:space:]=]) ]]; then
+  ROAM_HAS_OVERRIDE_REASON=true
+fi
+
+ROAM_OVR_REASON=""
+if [ "$ROAM_HAS_OVERRIDE_REASON" = "true" ]; then
+  ROAM_OVR_REASON=$(echo "$ARGUMENTS" | ${PYTHON_BIN:-python3} -c "
+import re, sys
+arg = sys.stdin.read()
+m = re.search(r'--override-reason[ =](?:\"([^\"]+)\"|(\S.*))', arg)
+if m:
+    print((m.group(1) or m.group(2) or '').strip())
+")
+fi
+
+if [ ${#ROAM_USED_FORBIDDEN[@]} -gt 0 ]; then
+  if [ "$ROAM_HAS_OVERRIDE_REASON" != "true" ]; then
+    echo "⛔ Forbidden flag(s) used without --override-reason:"
+    for FF in "${ROAM_USED_FORBIDDEN[@]}"; do echo "   ${FF}"; done
+    echo ""
+    echo "Re-run with: --override-reason \"<≥50 char justification>\""
+    exit 1
+  fi
+  for FF in "${ROAM_USED_FORBIDDEN[@]}"; do
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "$FF" --reason "$ROAM_OVR_REASON" || {
+        echo "⛔ vg-orchestrator override rejected $FF (reason too short / placeholder)."
+        exit 1
+      }
+  done
+elif [ "$ROAM_HAS_OVERRIDE_REASON" = "true" ]; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--override-reason" --reason "$ROAM_OVR_REASON" || {
+      echo "⛔ vg-orchestrator override rejected --override-reason (reason too short / placeholder)."
+      exit 1
+    }
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"

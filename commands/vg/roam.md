@@ -1,7 +1,7 @@
 ---
 name: vg:roam
 description: Exploratory CRUD-lifecycle pass with state-coherence assertion (post-review/test janitor). Lens-driven, post-confirmation. Catches silent state-mismatches that /vg:review and /vg:test miss. Generates new .spec.ts proposals from findings.
-argument-hint: "<phase> [--lens=<csv>] [--council] [--auto-fix] [--max-cost-usd=N] [--max-surfaces=N] [--include-security] [--merge-specs] [--non-interactive] [--force] [--resume] [--aggregate-only] [--target-env=<v>] [--local|--sandbox|--staging|--prod] [--model=<v>] [--mode=<v>]"
+argument-hint: "<phase> [--lens=<csv>] [--council] [--auto-fix] [--max-cost-usd=N] [--max-surfaces=N] [--include-security] [--merge-specs] [--non-interactive] [--force] [--resume] [--aggregate-only] [--skip-pre-check] [--skip-evidence-completeness] [--override-reason=<≥50ch>] [--target-env=<v>] [--local|--sandbox|--staging|--prod] [--model=<v>] [--mode=<v>]"
 allowed-tools:
   - Read
   - Write
@@ -69,6 +69,7 @@ runtime_contract:
   forbidden_without_override:
     - "--non-interactive"
     - "--skip-pre-check"
+    - "--skip-evidence-completeness"
     - "--override-reason"
 ---
 
