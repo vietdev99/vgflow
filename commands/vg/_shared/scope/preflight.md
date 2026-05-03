@@ -3,15 +3,23 @@
 > Imperative ref — follow each section in order. DO NOT skip any.
 
 <HARD-GATE>
-You MUST execute sections 0-9 in order. Sections 1-3 (parse args, SPECS
-gate, profile detection short-circuit) run BEFORE `vg-orchestrator
-run-start` so non-feature profiles can `exit 0` without leaving a
-half-finished run for the Stop hook (Critical-4 fix).
+You MUST execute sections 0-9 in order. Sections 1-4 (parse args, SPECS
+gate, profile detection short-circuit, existing-CONTEXT skip) run BEFORE
+`vg-orchestrator run-start` so non-feature profiles AND user-selected
+"Skip" can `exit 0` without leaving a half-finished run for the Stop hook
+(Critical-2 + Critical-4 fix).
 
-Section 4b emits `override.used` events for every `forbidden_without_override`
-flag handled here (`--override-reason`, `--skip-crossai-output`); the
-`--skip-crossai` flag is handled by `crossai-skip-guard.sh` from STEP 6
-(Critical-5 fix).
+Section 5b emits `override.used` events for every `forbidden_without_override`
+flag handled here (`--override-reason`, `--skip-crossai-output`) using the
+canonical equals form `--flag=--xxx --reason=...` (argparse otherwise treats
+leading `--` values as new options — Critical-3 + Critical-5 fix); the
+`--skip-crossai` flag is handled by `crossai-skip-guard.sh` from STEP 6.
+
+Section 8 invokes `emit-tasklist.py` (which writes the contract to the
+canonical `.vg/runs/<run_id>/tasklist-contract.json` using the orchestrator
+run_id) then TodoWrite (PostToolUse hook signs evidence automatically) then
+`vg-orchestrator tasklist-projected` (sole owner of the reserved
+`scope.native_tasklist_projected` event — CLI emit is rejected — Critical-1 fix).
 
 Section 9 fires `step-active 0_parse_and_validate` AFTER tasklist evidence
 is signed (gated by PreToolUse hook) then `mark-step` and the started event.
@@ -159,7 +167,31 @@ PY
 fi
 ```
 
-## 4. Run-start (registers session for Stop hook)
+## 4. Existing CONTEXT.md handling (BEFORE run-start)
+
+> Critical-2 fix: this branch may `exit 0` on user-selected "Skip" without
+> running the rest of the contract. Doing it BEFORE `run-start` (like
+> Section 3 profile short-circuit) means no run is registered and no
+> markers / artifacts / `scope.completed` are owed. The Update path falls
+> through to Section 5 (`run-start`) and runs the full contract.
+
+```
+AskUserQuestion (only if "${PHASE_DIR}/CONTEXT.md" exists):
+  header: "Existing Scope"
+  question: "CONTEXT.md already exists for Phase {N} ({decision_count} decisions). Action?"
+  options:
+    - "Update — re-discuss and enrich existing scope"
+    - "View — show current CONTEXT.md contents"
+    - "Skip — proceed to /vg:blueprint"
+```
+
+- "Update" → set `EXISTING_CONTEXT_MODE=update` and FALL THROUGH (will overwrite CONTEXT.md, APPEND to DISCUSSION-LOG.md).
+- "View" → display contents, then re-ask.
+- "Skip" → echo `Next: /vg:blueprint ${PHASE_NUMBER}` and `exit 0` (no run-start, no orphan run).
+
+If `"${PHASE_DIR}/CONTEXT.md"` does NOT exist, skip this section entirely and continue to Section 5.
+
+## 5. Run-start (registers session for Stop hook)
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start \
@@ -169,41 +201,30 @@ fi
 }
 ```
 
-## 4b. Override.used emission for `--override-reason` / `--skip-crossai-output`
+## 5b. Override.used emission for `--override-reason` / `--skip-crossai-output`
 
-> Critical-5 fix: `forbidden_without_override` lists these flags so the Stop
-> hook checks for matching `override.used` events at run-complete. The
+> Critical-3 fix: argparse rejects values starting with `--` when passed via
+> `--flag "--xxx"` (treats them as a new option). Use the canonical equals
+> form (same as `crossai-skip-guard.sh:97`-`100`).
+>
+> `forbidden_without_override` lists these flags so the Stop hook checks
+> for matching `override.used` events at run-complete. The
 > `crossai-skip-guard.sh` helper handles `--skip-crossai`; this block handles
 > the rest so each forbidden flag has an audit-trail event.
 
 ```bash
 if [ -n "${OVERRIDE_REASON:-}" ]; then
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
-    --flag "--override-reason" --reason "${OVERRIDE_REASON}" \
+    "--flag=--override-reason" "--reason=${OVERRIDE_REASON}" \
     >/dev/null 2>&1 || echo "⚠ override emission failed for --override-reason (Stop hook may BLOCK)" >&2
 fi
 if [ "${SKIP_CROSSAI_OUTPUT}" = "true" ]; then
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
-    --flag "--skip-crossai-output" --reason "${OVERRIDE_REASON:-skip-crossai-output explicit user flag}" \
+    "--flag=--skip-crossai-output" \
+    "--reason=${OVERRIDE_REASON:-skip-crossai-output explicit user flag}" \
     >/dev/null 2>&1 || echo "⚠ override emission failed for --skip-crossai-output" >&2
 fi
 ```
-
-## 5. Existing CONTEXT.md handling
-
-```
-AskUserQuestion:
-  header: "Existing Scope"
-  question: "CONTEXT.md already exists for Phase {N} ({decision_count} decisions). Action?"
-  options:
-    - "Update — re-discuss and enrich existing scope"
-    - "View — show current CONTEXT.md contents"
-    - "Skip — proceed to /vg:blueprint"
-```
-
-- "Update" → continue (will overwrite CONTEXT.md, APPEND to DISCUSSION-LOG.md)
-- "View" → display contents, then re-ask
-- "Skip" → exit with `Next: /vg:blueprint ${PHASE_NUMBER}`
 
 ## 6. Inject codebase-map (silent context)
 
@@ -221,38 +242,44 @@ Extract Goal / In-scope / Out-of-scope / Constraints / Success criteria from SPE
   --phase "${PHASE_NUMBER}" --step scope --status in_progress 2>/dev/null || true
 ```
 
-## 8. Emit tasklist + sign evidence + TodoWrite (HARD-GATE)
+## 8. Emit tasklist + TodoWrite + tasklist-projected (HARD-GATE)
+
+> Critical-1 fix: `emit-tasklist.py` reads the active run_id from
+> `.vg/active-runs/<session>.json` (via `_read_active_run`) and writes
+> `tasklist-contract.json` to the canonical orchestrator path
+> `.vg/runs/<run_id>/tasklist-contract.json`. The PostToolUse TodoWrite
+> hook then signs `.tasklist-projected.evidence.json` automatically — no
+> manual `--out` or signed-evidence call. The reserved
+> `.native_tasklist_projected` event is emitted ONLY by
+> `vg-orchestrator tasklist-projected` (CLI emit is rejected by orchestrator).
 
 ```bash
-SESSION="$(cat .vg/active-runs/$(ls .vg/active-runs/ 2>/dev/null | head -1) 2>/dev/null \
-           | python3 -c 'import sys,json; print(json.load(sys.stdin).get("session_id","unknown"))')"
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${SESSION:0:8}"
-
-mkdir -p ".vg/runs/${RUN_ID}"
-
-python3 scripts/emit-tasklist.py \
+${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --command vg:scope \
   --profile "${PROFILE}" \
-  --phase "${PHASE_NUMBER}" \
-  --out ".vg/runs/${RUN_ID}/tasklist-contract.json"
-
-CONTRACT_SHA=$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" \
-  ".vg/runs/${RUN_ID}/tasklist-contract.json")
-
-python3 scripts/vg-orchestrator-emit-evidence-signed.py \
-  --out ".vg/runs/${RUN_ID}/tasklist-evidence.json" \
-  --payload "{\"contract_sha256\":\"${CONTRACT_SHA}\",\"todowrite_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
-
-vg-orchestrator emit-event scope.tasklist_shown --phase "${PHASE_NUMBER}"
+  --phase "${PHASE_NUMBER}" 2>&1 | head -40 || true
 ```
 
-**THEN IMMEDIATELY** call `TodoWrite` with one todo per checklist group from `tasklist-contract.json`. The PreToolUse Bash hook BLOCKS subsequent step-active calls until TodoWrite has been called.
+`emit-tasklist.py` emits the `scope.tasklist_shown` event (via
+`_emit_event`) and writes the contract; do not re-emit it manually.
+
+**THEN IMMEDIATELY** call `TodoWrite` with one todo per `projection_items[]`
+entry from `.vg/runs/<run_id>/tasklist-contract.json` (group headers + sub-steps
+with `↳` prefix). The PreToolUse Bash hook BLOCKS subsequent step-active calls
+until TodoWrite runs and the PostToolUse hook signs
+`.vg/runs/<run_id>/.tasklist-projected.evidence.json`.
 
 After TodoWrite returns:
 
 ```bash
-vg-orchestrator emit-event scope.native_tasklist_projected --phase "${PHASE_NUMBER}"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-claude}" >/dev/null 2>&1 || \
+  echo "⚠ tasklist-projected binder failed — Stop hook will BLOCK at run-complete" >&2
 ```
+
+The `tasklist-projected` command is the SOLE owner of the reserved
+`scope.native_tasklist_projected` event (`__main__.py:1132`-`1153` rejects CLI
+emit of the `.native_tasklist_projected` suffix).
 
 ## 9. Mark step + emit started
 
