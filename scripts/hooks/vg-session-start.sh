@@ -13,8 +13,15 @@ EVENTS_DB="${VG_EVENTS_DB:-.vg/events.db}"
 ACTIVE_RUN_PATH=".vg/active-runs/${CLAUDE_HOOK_SESSION_ID:-default}.json"
 
 if [ ! -f "$META_SKILL_PATH" ]; then
-  echo "ERROR: meta-skill missing at $META_SKILL_PATH" >&2
-  exit 1
+  # Graceful degrade — VG meta-skill missing, no context to inject.
+  # Log once per invocation for diagnostics; do NOT block session.
+  warn_log=".vg/.session-start-warn.log"
+  mkdir -p "$(dirname "$warn_log")" 2>/dev/null || true
+  printf '%s session=%s meta-skill missing at %s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "${CLAUDE_HOOK_SESSION_ID:-default}" \
+    "$META_SKILL_PATH" >> "$warn_log" 2>/dev/null || true
+  exit 0
 fi
 
 base_text="$(cat "$META_SKILL_PATH")"

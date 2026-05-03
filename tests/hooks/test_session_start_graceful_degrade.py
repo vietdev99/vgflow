@@ -4,9 +4,6 @@ Pre-R5.5: `exit 1` killed the SessionStart hook chain for any user who
 did not have VG installed. Post-R5.5: writes a warning to
 `.vg/.session-start-warn.log` and exits 0.
 """
-import json
-import os
-import shutil
 from pathlib import Path
 
 import pytest
@@ -54,4 +51,7 @@ def test_session_start_succeeds_when_meta_skill_present(
 
     assert result.returncode == 0, (
         f"happy path failed; stderr={result.stderr!r}"
+    )
+    assert not (tmp_workspace / ".vg" / ".session-start-warn.log").exists(), (
+        "happy path must not write degrade-warning log"
     )
