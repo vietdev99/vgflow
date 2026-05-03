@@ -37,16 +37,24 @@ mkdir -p ".vg/active-runs"
 #   Otherwise (fresh + alive + intra-phase conflict) → block as before.
 # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
 STALE_MINUTES=30
+# Hotfix 2026-05-04: interactive commands span hours by design.
+INTERACTIVE_CMDS=" vg:debug vg:amend vg:scope vg:accept "
+INTERACTIVE_STALE_MINUTES=360
 if [ -f "$run_file" ]; then
   existing_cmd="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"])' "$run_file" 2>/dev/null || true)"
   existing_phase="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("phase",""))' "$run_file" 2>/dev/null || true)"
   existing_run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run_id",""))' "$run_file" 2>/dev/null || true)"
   existing_started="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("started_at",""))' "$run_file" 2>/dev/null || true)"
 
+  case "$INTERACTIVE_CMDS" in
+    *" $existing_cmd "*) effective_stale_min=$INTERACTIVE_STALE_MINUTES ;;
+    *) effective_stale_min=$STALE_MINUTES ;;
+  esac
+
   is_dead=0
   death_reason=""
 
-  # Check 1 — stale by age
+  # Check 1 — stale by age (per-command threshold)
   if [ -n "$existing_started" ]; then
     age_min="$(python3 -c "
 import datetime
@@ -59,9 +67,9 @@ try:
 except Exception:
     print(0)
 " 2>/dev/null || echo 0)"
-    if [ "$age_min" -gt "$STALE_MINUTES" ]; then
+    if [ "$age_min" -gt "$effective_stale_min" ]; then
       is_dead=1
-      death_reason="stale ${age_min}min"
+      death_reason="stale ${age_min}min (threshold ${effective_stale_min}m)"
     fi
   fi
 

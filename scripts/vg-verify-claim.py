@@ -60,6 +60,18 @@ EVENTS_DB = REPO_ROOT / ".vg" / "events.db"
 STALE_MINUTES = 30
 DRIFT_STATE_TTL_MINUTES = 120  # GC stale entries after this
 
+# Hotfix 2026-05-04: interactive commands span hours by design (user reads
+# diagnostic + fixes + retries between AskUserQuestion turns). Bump to 6h
+# so live debug/amend/scope/accept sessions don't get falsely stale-blocked.
+INTERACTIVE_CMDS = {"vg:debug", "vg:amend", "vg:scope", "vg:accept"}
+INTERACTIVE_STALE_MINUTES = 360
+
+
+def _stale_threshold_for(command: str | None) -> int:
+    if command and command in INTERACTIVE_CMDS:
+        return INTERACTIVE_STALE_MINUTES
+    return STALE_MINUTES
+
 # v2.8.3 anti-forge: only auto-fire for these "structurally safe" violations.
 # must_write (artifacts) and must_emit_telemetry (events) cannot be backfilled
 # without proof — they signal real pipeline gaps. Marker drift is the only
@@ -139,7 +151,7 @@ def is_stale(run: dict) -> bool:
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=datetime.timezone.utc)
         age_min = (datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds() / 60
-        return age_min > STALE_MINUTES
+        return age_min > _stale_threshold_for(run.get("command"))
     except Exception:
         return True
 

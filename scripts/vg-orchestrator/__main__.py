@@ -810,6 +810,71 @@ def _tasklist_projection_event_name(command: str) -> str:
     return f"{command.replace('vg:', '').replace(':', '_')}.native_tasklist_projected"
 
 
+def _ensure_evidence_key() -> bytes:
+    """Return local HMAC key for harness evidence, creating it if missing."""
+    import base64
+    import secrets
+
+    key_path = Path(os.environ.get("VG_EVIDENCE_KEY_PATH", ".vg/.evidence-key"))
+    if not key_path.is_absolute():
+        key_path = _REPO_ROOT / key_path
+
+    if not key_path.exists():
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.write_bytes(base64.b64encode(secrets.token_bytes(32)))
+    try:
+        key_path.chmod(0o600)
+    except OSError:
+        pass
+
+    key = key_path.read_bytes().strip()
+    if len(key) < 32:
+        raise ValueError(f"evidence key too short at {key_path}")
+    return key
+
+
+def _write_tasklist_projection_evidence(
+    run_id: str,
+    adapter: str,
+    contract_path: Path,
+    contract: dict,
+    checklist_ids: list[str],
+) -> Path:
+    """Write signed tasklist evidence for adapters without TodoWrite hooks.
+
+    Claude gets this evidence from the PostToolUse TodoWrite hook. Codex has
+    no equivalent TodoWrite hook surface, so the explicit orchestrator binder
+    owns the same signed evidence file for Codex/fallback adapters.
+    """
+    import hashlib
+    import hmac
+
+    contract_bytes = contract_path.read_bytes()
+    projection_items = contract.get("projection_items") or []
+    payload = {
+        "run_id": run_id,
+        "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "todo_count": len(projection_items) or len(checklist_ids),
+        "contract_sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "todo_ids": sorted(checklist_ids),
+        "contract_ids": sorted(checklist_ids),
+        "match": True,
+        "adapter": adapter,
+    }
+    key = _ensure_evidence_key()
+    canonical = json.dumps(payload, sort_keys=True).encode()
+    record = {
+        "payload": payload,
+        "hmac_sha256": hmac.new(key, canonical, hashlib.sha256).hexdigest(),
+        "signed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    evidence_path = contract_path.parent / ".tasklist-projected.evidence.json"
+    tmp = evidence_path.with_suffix(evidence_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(record, sort_keys=True, indent=2), encoding="utf-8")
+    os.replace(str(tmp), str(evidence_path))
+    return evidence_path
+
+
 def _humanize_step_name(step: str) -> str:
     text = re.sub(r"([a-z])([A-Z])", r"\1 \2", step)
     text = re.sub(r"([A-Za-z])([0-9])", r"\1 \2", text)
@@ -980,6 +1045,19 @@ def cmd_tasklist_projected(args) -> int:
         print("\033[38;5;208mtasklist contract contains no task items\033[0m", file=sys.stderr)
         return 2
 
+    evidence_path = None
+    if args.adapter in ("codex", "fallback"):
+        try:
+            evidence_path = _write_tasklist_projection_evidence(
+                run_id, args.adapter, contract_path, contract, checklist_ids,
+            )
+        except Exception as exc:
+            print(
+                f"\033[38;5;208mfailed to write signed tasklist evidence: {exc}\033[0m",
+                file=sys.stderr,
+            )
+            return 2
+
     event_type = _tasklist_projection_event_name(current["command"])
     evt = db.append_event(
         run_id=run_id,
@@ -997,6 +1075,7 @@ def cmd_tasklist_projected(args) -> int:
             "checklist_ids": checklist_ids,
             "projection_required": True,
             "source_schema": contract.get("schema"),
+            "evidence_path": str(evidence_path) if evidence_path else None,
         },
     )
 
@@ -4189,7 +4268,9 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
                                "missing": block_missing})
 
     # must_emit_telemetry
-    # v2.5 anti-forge patch: honor required_unless_flag per telemetry spec
+    # v2.5 anti-forge patch: honor required_unless_flag per telemetry spec.
+    # Severity-aware: telemetry with severity=warn emits audit telemetry but
+    # does not block run-complete. This matches marker warn semantics.
     telemetry_specs = contracts.normalize_telemetry(
         contract.get("must_emit_telemetry") or []
     )
@@ -4224,10 +4305,35 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
                 pass
 
         events = db.query_events(run_id=run_id)
-        missing_tel = evidence.check_telemetry(checked_specs, events)
-        if missing_tel:
+        block_missing_tel = []
+        warn_missing_tel = []
+        for t in checked_specs:
+            missing_for_spec = evidence.check_telemetry([t], events)
+            if not missing_for_spec:
+                continue
+            if t.get("severity") == "warn":
+                warn_missing_tel.extend(missing_for_spec)
+            else:
+                block_missing_tel.extend(missing_for_spec)
+
+        if warn_missing_tel:
+            try:
+                for wt in warn_missing_tel:
+                    db.append_event(
+                        run_id=run_id,
+                        event_type="contract.telemetry_warn",
+                        phase=phase,
+                        command=command,
+                        outcome="WARN",
+                        payload={"event_type": wt,
+                                 "reason": "missing (severity=warn)"},
+                    )
+            except Exception:
+                pass
+
+        if block_missing_tel:
             violations.append({"type": "must_emit_telemetry",
-                               "missing": missing_tel})
+                               "missing": block_missing_tel})
 
     # forbidden_without_override
     forbidden = contract.get("forbidden_without_override") or []
