@@ -81,6 +81,11 @@ runtime_contract:
       severity: "warn"
     - name: "8_5_bootstrap_reflection_per_wave"
       severity: "warn"
+    # Task 10 (build-fix-loop) — L3 in-scope auto-fix loop runs only when
+    # STEP 5 emits l4a_violations_detected OR /vg:review left evidence files.
+    # severity=warn so a clean build (no evidence) doesn't fail contract check.
+    - name: "8_5_in_scope_fix_loop"
+      severity: "warn"
   must_emit_telemetry:
     # v1.15.2 — names match vg_run_start/vg_run_complete auto-emits.
     # Previously declared build.phase_start/build.phase_end but 0 emit calls
@@ -265,6 +270,21 @@ On return:
 bash scripts/vg-narrate-spawn.sh vg-build-post-executor returned "${N} gates passed, summary written"
 ```
 DO NOT verify L gates inline.
+
+### STEP 5.5 — In-scope warning auto-fix (HEAVY, conditional)
+
+Read `_shared/build/in-scope-fix-loop.md`. Runs ONLY when STEP 5 emits
+`build.l4a_violations_detected` or /vg:review left machine-readable evidence
+in `${PHASE_DIR}/.evidence/`. For each IN_SCOPE warning, narrate + spawn:
+
+```bash
+bash scripts/vg-narrate-spawn.sh general-purpose spawning "in-scope-fix <warning_id>"
+```
+
+Then `Agent(subagent_type="general-purpose", prompt=<from in-scope-fix-loop-delegation.md>)`.
+
+Build BLOCKS at end of STEP 5.5 if any IN_SCOPE remains UNRESOLVED OR any
+warning classified NEEDS_TRIAGE.
 
 ### STEP 6 — crossai loop (deferred refactor — verbatim)
 Read `_shared/build/crossai-loop.md` and follow it exactly.
