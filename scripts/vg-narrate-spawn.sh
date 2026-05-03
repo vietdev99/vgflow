@@ -31,8 +31,8 @@ CONTEXT="${3:-}"
 # State → ANSI background color (24-bit when supported).
 # 42 = green bg, 46 = cyan bg, 41 = red bg, 30 = black fg, 37 = white fg, 1 = bold.
 case "$STATE" in
-  spawning)  BG=42 FG=30 ;;  # green bg, black fg — about to spawn
-  returned)  BG=46 FG=30 ;;  # cyan bg, black fg — completed successfully
+  spawning)  BG=42 FG=37 ;;  # green bg, white fg — about to spawn
+  returned)  BG=46 FG=37 ;;  # cyan bg, white fg — completed successfully
   failed)    BG=41 FG=37 ;;  # red bg, white fg — error/timeout/refused
   *)         BG=47 FG=30 ;;  # white bg, black fg — unknown state
 esac
