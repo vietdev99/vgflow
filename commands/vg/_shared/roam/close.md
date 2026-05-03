@@ -1,4 +1,11 @@
-# Close — STEP 9
+# roam close (STEP 8)
+
+<HARD-GATE>
+`complete` MUST be the FINAL marker emitted in the pipeline. The
+`roam.session.completed` event is the Stop-hook witness that the run
+finished cleanly. Skipping this ref leaves the run in `step-active`
+without a terminal mark — Stop hook fails.
+</HARD-GATE>
 
 **Marker:** `complete`
 
@@ -10,6 +17,8 @@ mode that lives outside the main pipeline.
 ## Emit completion event + banner
 
 ```bash
+vg-orchestrator step-active complete
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
   "roam.session.completed" \
   --actor "orchestrator" --outcome "INFO" \
@@ -25,6 +34,7 @@ echo "  Output:      ${ROAM_DIR}/ROAM-BUGS.md"
 echo "  New specs:   ${ROAM_DIR}/proposed-specs/ (use /vg:roam --merge-specs to merge into test suite)"
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/complete.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam complete 2>/dev/null || true
 ```
 
 ---

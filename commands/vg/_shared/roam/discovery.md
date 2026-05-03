@@ -1,4 +1,12 @@
-# Discovery + briefs — STEP 3
+# roam discovery (STEP 3)
+
+<HARD-GATE>
+`1_discover_surfaces` MUST consume PLAN.md via `vg-load --index` (or
+`--task NN` for drill-down) and load CRUD-SURFACES.md when present. Flat-
+reading PLAN.md (`cat ${PHASE_DIR}/PLAN.md`) wastes context and silently
+misses surfaces on large phases. Step 1 entry refuses to proceed unless
+the 0aa + 0a HARD GATE markers exist (or `--non-interactive` set).
+</HARD-GATE>
 
 Two sub-steps:
 

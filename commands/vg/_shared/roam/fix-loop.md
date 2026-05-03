@@ -1,4 +1,12 @@
-# Optional fix loop — STEP 8
+# roam fix-loop (STEP 7)
+
+<HARD-GATE>
+`7_optional_fix_loop` runs ONLY when `--auto-fix` is set; default path is
+report-only. Marker is `severity: warn` with `required_unless_flag:
+"--auto-fix"` — Stop hook tolerates absence on default path.
+NO new subagents introduced (R3.5 decomposition-only); existing auto-fix
+agent preserved as-is.
+</HARD-GATE>
 
 **Marker:** `7_optional_fix_loop`
 **Severity:** `warn` (not `error`) — gate is gated by `--auto-fix` flag.
@@ -19,6 +27,8 @@ narrate-spawn calls for UX.
 ## Branch
 
 ```bash
+vg-orchestrator step-active 7_optional_fix_loop
+
 if [[ ! "$ARGUMENTS" =~ --auto-fix ]]; then
   echo "ℹ Skipping fix loop (default). Pass --auto-fix to enable."
 else
@@ -45,6 +55,7 @@ else
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "7_optional_fix_loop" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/7_optional_fix_loop.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 7_optional_fix_loop 2>/dev/null || true
 ```
 
 ## Why preserved as-is

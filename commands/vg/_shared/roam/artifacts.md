@@ -1,4 +1,11 @@
-# Artifacts — STEP 7
+# roam artifacts (STEP 6)
+
+<HARD-GATE>
+`6_emit_artifacts` MUST run after step 5 analysis writes ROAM-BUGS.md +
+RUN-SUMMARY.json. PIPELINE-STATE verdict `BLOCK_ACCEPT` flips when
+critical bug count > 0; `/vg:accept` consumes this verdict. Do NOT
+auto-merge `proposed-specs/*.spec.ts` — manual gate per `<rules>` 4.
+</HARD-GATE>
 
 **Marker:** `6_emit_artifacts`
 
@@ -16,6 +23,8 @@
 ## Update PIPELINE-STATE + verdict
 
 ```bash
+vg-orchestrator step-active 6_emit_artifacts
+
 ${PYTHON_BIN:-python3} -c "
 import json, datetime
 from pathlib import Path
@@ -36,6 +45,7 @@ if [ "${CRIT_COUNT:-0}" -gt 0 ]; then
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "6_emit_artifacts" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/6_emit_artifacts.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 6_emit_artifacts 2>/dev/null || true
 ```
 
 ## Spec.ts proposal staging contract

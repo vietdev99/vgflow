@@ -1,4 +1,12 @@
-# Spawn executors — STEP 4 (3 dispatch branches)
+# roam spawn-executors (STEP 4)
+
+<HARD-GATE>
+`3_spawn_executors` is gated by `0a-confirmed.marker` from config-gate.
+Single canonical mark-step emit lives at the BOTTOM of this ref — every
+branch (self/spawn/manual/aggregate-only-skip) MUST fall through to it.
+Do NOT add per-branch `mark_step`/`mark-step roam` calls; that re-introduces
+the duplicate-marker drift the round-2 review caught.
+</HARD-GATE>
 
 **Marker:** `3_spawn_executors`
 
@@ -22,6 +30,8 @@ over 1 saved bash call.
 ## Resume guard + cost estimator
 
 ```bash
+vg-orchestrator step-active 3_spawn_executors
+
 # Resume guard: aggregate-only mode skips step 3 entirely;
 # resume mode triggers per-brief skip in spawn loop (observe-X.jsonl
 # with ≥1 event = brief already done).
@@ -31,7 +41,8 @@ if [ "${ROAM_RESUME_MODE:-fresh}" = "aggregate-only" ]; then
   if [ "$EXISTING_OBSERVE" -eq 0 ]; then
     echo "  ⚠ No observe-*.jsonl found in ${ROAM_MODEL_DIRS[*]}. Did you drop manual-mode JSONL files there?"
   fi
-  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "3_spawn_executors" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_spawn_executors.done"
+  # NOTE: marker emit deferred to single bottom-of-ref site (see B4 fix —
+  # prior shape double-marked when aggregate-only AND fall-through to bottom).
 else  # not aggregate-only — run executors
 
 # Pre-spawn cost estimator (spawn mode only)
@@ -234,7 +245,11 @@ fi  # end if manual
 
 fi  # end aggregate-only guard
 
+# Single idempotent marker emit — fires on EVERY path (self/spawn/manual or
+# aggregate-only-skip). Round-2 B4 fix: prior shape emitted inside the
+# aggregate-only branch AND again at the bottom unconditionally → double-mark.
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "3_spawn_executors" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_spawn_executors.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 3_spawn_executors 2>/dev/null || true
 ```
 
 **Recursion (commander loop):** scan emitted `observe-*.jsonl` for

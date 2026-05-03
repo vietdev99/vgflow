@@ -1,4 +1,12 @@
-# Aggregate + analyze — STEPS 5 & 6
+# roam aggregate-analyze (STEP 5)
+
+<HARD-GATE>
+Step 4 (`4_aggregate_logs`) and Step 5 (`5_analyze_findings`) are gated by
+`scanner-report-contract` evidence completeness. Each step MUST emit
+`step-active` BEFORE work and a single canonical `mark-step roam` AFTER
+work. Skipping completeness gate without `--skip-evidence-completeness`
+override is a HARD GATE BREACH and silently invalidates analyze output.
+</HARD-GATE>
 
 Two sub-steps:
 
@@ -14,6 +22,8 @@ Two sub-steps:
 ## Step 4 — Aggregate raw logs (commander)
 
 ```bash
+vg-orchestrator step-active 4_aggregate_logs
+
 # Merge observe-*.jsonl from EVERY model dir into single RAW-LOG.jsonl
 > "${ROAM_DIR}/RAW-LOG.jsonl"
 for MODEL_DIR in "${ROAM_MODEL_DIRS[@]}"; do
@@ -49,6 +59,7 @@ for MODEL_DIR in "${ROAM_MODEL_DIRS[@]}"; do
 done
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "4_aggregate_logs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/4_aggregate_logs.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 4_aggregate_logs 2>/dev/null || true
 ```
 
 ### Vocabulary validator (preserved as-is per `<rules>` rule 8)
@@ -71,6 +82,8 @@ findings into severity buckets. Output `ROAM-BUGS.md` + proposed
 `.spec.ts` files.
 
 ```bash
+vg-orchestrator step-active 5_analyze_findings
+
 "${PYTHON_BIN:-python3}" .claude/scripts/roam-analyze.py \
   --raw-log "${ROAM_DIR}/RAW-LOG.jsonl" \
   --phase-dir "${PHASE_DIR}" \
@@ -87,6 +100,7 @@ echo "▸ Found ${BUGS_COUNT} bugs (${CRIT_COUNT} critical)"
   --actor "orchestrator" --outcome "INFO" --payload "{\"bugs\":${BUGS_COUNT},\"critical\":${CRIT_COUNT}}" 2>/dev/null || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "5_analyze_findings" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5_analyze_findings.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 5_analyze_findings 2>/dev/null || true
 ```
 
 ### R1-R8 deterministic rules
