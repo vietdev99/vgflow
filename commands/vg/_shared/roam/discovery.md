@@ -27,6 +27,8 @@ Read PLAN.md (via vg-load --index), CONTEXT.md (flat), RUNTIME-MAP.md
 role, entity, expected operations.
 
 ```bash
+vg-orchestrator step-active 1_discover_surfaces
+
 # v2.42.9 HARD GATE — refuse step 1 entry unless prior interactive prompts
 # fired this run. Closes silent-skip path: AI cannot bypass 0aa+0a question
 # batches and proceed to discover/compose/spawn. Bypass requires explicit
@@ -96,6 +98,7 @@ if [ "$SURFACE_COUNT" -gt "$MAX_SURFACES" ]; then
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "1_discover_surfaces" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1_discover_surfaces.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 1_discover_surfaces 2>/dev/null || true
 ```
 
 **DO NOT** `cat ${PHASE_DIR}/PLAN.md` or `Read ${PHASE_DIR}/PLAN.md` flat —
@@ -113,11 +116,17 @@ For each surface × selected lens × per-model dir, generate
 sequence + env-injected URL/credentials + cwd convention.
 
 ```bash
-# Resume guard: skip when aggregate-only, OR resume + briefs already exist
+vg-orchestrator step-active 2_compose_briefs
+
+# Resume guard: skip when aggregate-only, OR resume + briefs already exist.
+# v2.42.13 (B3 fix) — every branch falls through to the SAME single marker
+# emit at the bottom. Prior split-marker shape silently dropped the marker
+# when SKIP_COMPOSE=1 was set inside the elif and EXISTING_BRIEF_COUNT
+# satisfied the resume condition.
 if [ "${ROAM_RESUME_MODE:-fresh}" = "aggregate-only" ]; then
   echo "▸ aggregate-only mode — skipping step 2 (compose_briefs)"
   BRIEF_COUNT=$(find "${ROAM_MODEL_DIRS[@]}" -maxdepth 1 -name "INSTRUCTION-*.md" 2>/dev/null | wc -l | tr -d ' ')
-  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "2_compose_briefs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_compose_briefs.done"
+  SKIP_COMPOSE=1
 elif [ "${ROAM_RESUME_MODE:-fresh}" = "resume" ] && [[ ! "$ARGUMENTS" =~ --refresh-briefs ]]; then
   EXISTING_BRIEF_COUNT=$(find "${ROAM_MODEL_DIRS[@]}" -maxdepth 1 -name "INSTRUCTION-*.md" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$EXISTING_BRIEF_COUNT" -ge "$SURFACE_COUNT" ]; then
@@ -127,7 +136,7 @@ elif [ "${ROAM_RESUME_MODE:-fresh}" = "resume" ] && [[ ! "$ARGUMENTS" =~ --refre
   fi
 fi
 
-if [ "${SKIP_COMPOSE:-0}" != "1" ] && [ "${ROAM_RESUME_MODE:-fresh}" != "aggregate-only" ]; then
+if [ "${SKIP_COMPOSE:-0}" != "1" ]; then
 
 LENS_LIST="${VG_LENS:-auto}"
 if [[ "$ARGUMENTS" =~ --lens=([a-z,-]+) ]]; then LENS_LIST="${BASH_REMATCH[1]}"; fi
@@ -172,9 +181,13 @@ done
 BRIEF_COUNT=$(find "${ROAM_MODEL_DIRS[@]}" -maxdepth 1 -name "INSTRUCTION-*.md" 2>/dev/null | wc -l | tr -d ' ')
 echo "▸ Composed ${BRIEF_COUNT} brief(s) across ${#ROAM_MODEL_DIRS[@]} model dir(s)"
 
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "2_compose_briefs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_compose_briefs.done"
-
 fi  # end SKIP_COMPOSE guard
+
+# Single idempotent marker emit — fires on EVERY path (compose, resume-reuse,
+# aggregate-only). Prior shape had separate emits per branch and missed the
+# resume-reuse path entirely.
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "2_compose_briefs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_compose_briefs.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 2_compose_briefs 2>/dev/null || true
 ```
 
 **Conformance contract (per `<rules>` in roam.md):** every brief MUST inject

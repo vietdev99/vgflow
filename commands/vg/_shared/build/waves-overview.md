@@ -1,5 +1,11 @@
 # build waves (STEP 4 — HEAVY)
 
+<!-- # Exception: oversized ref (1054 lines) — extracted verbatim from backup
+     spec line 1882; ceiling raised to 1100 in test_build_references_exist.py
+     per audit doc docs/audits/2026-05-04-build-flat-vs-split.md. Keeping
+     verbatim avoids drift risk on R2 build pilot ship; future refactor
+     splits 8d post-spawn aggregation into its own ref. -->
+
 This is the orchestrator-side body of the build pipeline's wave-execution
 step (`8_execute_waves`) plus the per-wave bootstrap-reflection sub-step
 (`8_5_bootstrap_reflection_per_wave`). It is heavy: backup spec ~880 lines,

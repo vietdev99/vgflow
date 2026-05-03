@@ -1,5 +1,12 @@
 # build close (STEP 7)
 
+<!-- # Exception: oversized ref (539 lines) — combines step 10 + 12 from
+     backup (90 + 395 = 485 source lines) plus PR-D OpenAPI export + PR-E
+     truthcheck loop scaffolding; ceiling 600 in test_build_references_exist.py.
+     The truthcheck loop's inline Python keeps fixture orchestration atomic
+     in one place (recipe_executor + lease + write_captured); splitting it
+     would scatter 2-phase commit semantics. -->
+
 2 sub-steps: `10_postmortem_sanity` (recovery-bypass + silent-gate-failure detector + UI drift advisory + final graphify refresh) and `12_run_complete` (terminal validators + `build.completed` telemetry + truthcheck loop + `vg-orchestrator run-complete` + PIPELINE-STATE flip + ROADMAP status). This is the closing group of `/vg:build`; control returns to the user (or to `/vg:phase` chaining `/vg:review`) after STEP 7.2 succeeds.
 
 <HARD-GATE>

@@ -128,10 +128,21 @@ Track every blueprint output (N9 fix: prevent silent orphans of
 UI-MAP-AS-IS / TEST-GOALS / UI-SPEC / UI-MAP / FLOW-SPEC).
 
 ```bash
+# Layer 3 flat artifacts (legacy compat — root files)
 git add "${PHASE_DIR}/PLAN"*.md \
         "${PHASE_DIR}/API-CONTRACTS.md" \
         "${PHASE_DIR}/TEST-GOALS.md" \
         "${PHASE_DIR}/crossai/" 2>/dev/null
+
+# Layer 1+2 split artifacts — declared in blueprint.md must_write
+# (PLAN/index.md + PLAN/task-*.md, API-CONTRACTS/*.md, TEST-GOALS/G-*.md).
+# Without these, /vg:build's vg-load --task / --endpoint / --goal lookups
+# silently fall back to flat reads (defeating context-budget split).
+for split_dir in PLAN API-CONTRACTS TEST-GOALS; do
+  if [ -d "${PHASE_DIR}/${split_dir}" ]; then
+    git add "${PHASE_DIR}/${split_dir}/" 2>/dev/null || true
+  fi
+done
 
 # Optional artifacts — only present when relevant generator fired
 for opt in INTERFACE-STANDARDS.md INTERFACE-STANDARDS.json CRUD-SURFACES.md \
