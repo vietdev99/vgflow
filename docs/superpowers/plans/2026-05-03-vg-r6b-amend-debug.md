@@ -1,15 +1,19 @@
-# VG R6b — Amend + Debug Workflows Batch Implementation Plan
+# VG R6b — Amend + Debug Workflows Implementation Plan (REVISED 2026-05-03)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extract `vg-amend-impact-analyzer` and `vg-debug-classifier` subagents from `commands/vg/{amend,debug}.md`. Both entry skills stay below the 500-line slim ceiling; the refactor moves judgement-heavy analysis steps out of orchestrator AI context. Cap debug fix loop at 3 iterations (regression test). Add 7 pytest tests + 2 manual dogfood checklists.
+**Goal:** Narrow extractions only:
+1. `commands/vg/amend.md` Step 5 (cascade impact analysis, lines ~204–246) → spawn `vg-amend-cascade-analyzer` subagent. Output is markdown report displayed inline (no new file artifact). Rule 6 ("informational only, no auto-modify") preserved.
+2. `commands/vg/debug.md` Step 1 `runtime_ui` branch (lines ~176–197, currently pseudo-code "Spawn Haiku agent") → implement actual `Agent(vg-debug-ui-discovery)` spawn. Subagent wraps MCP Playwright; orchestrator appends findings to existing DEBUG-LOG.md.
 
-**Architecture:** `amend.md` STEP 2 spawns `vg-amend-impact-analyzer` (read-only: scope+blueprint+plan+contracts+tests) which writes `RIPPLE-ANALYSIS.json`. `debug.md` STEP 2 spawns `vg-debug-classifier` (read-only + WebSearch) which writes `DEBUG-CLASSIFY.json`. Fix loop in `debug.md` STEP 4 stays in orchestrator (uses Edit/Write directly with user gate per iteration), hard-capped at 3.
+Both entry skills stay below 500-line ceiling. NO changes to telemetry events, NO changes to `<rules>`, NO new file artifact schemas, NO cap on debug fix loop (rule 2 forbids cap).
 
-**Tech Stack:** bash 5+, python3, pytest 7+, jsonschema 4+, PyYAML.
+**Architecture:** amend Step 5 and debug Step 1 `runtime_ui` are the only changed sections. Subagents are read-only (amend) or MCP-bound (debug). Orchestrator owns all writes (CONTEXT.md, AMENDMENT-LOG.md, DEBUG-LOG.md). Subagents return markdown text on stdout for orchestrator to display/append.
 
-**Spec:** `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md`
-**Depends on:** R5.5 hooks-source-isolation (subagent allow-list silence on non-VG dogfood).
+**Tech Stack:** bash 5+, python3, pytest 7+, PyYAML, MCP Playwright (existing).
+
+**Spec:** `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md` (revised companion).
+**Depends on:** R5.5 hooks-source-isolation (merged: `d932710`).
 
 ---
 
@@ -17,362 +21,202 @@
 
 | File | Action | Responsibility |
 |---|---|---|
-| `commands/vg/_shared/amend/severity-rules.md` | CREATE | Severity taxonomy (low/med/high) + reasoning rules |
-| `commands/vg/_shared/debug/classify-taxonomy.md` | CREATE | Root-cause taxonomy (code/config/env/data) + ranking rules |
-| `.claude/agents/vg-amend-impact-analyzer.md` | CREATE | Subagent — read CONTEXT + downstream → RIPPLE-ANALYSIS.json |
-| `.claude/agents/vg-debug-classifier.md` | CREATE | Subagent — classify bug into ranked hypotheses |
-| `commands/vg/amend.md` | REFACTOR | Delegate STEP 2 to analyzer (~330 lines total) |
-| `commands/vg/debug.md` | REFACTOR | Delegate STEP 2 to classifier + cap fix loop at 3 (~390 lines total) |
+| `.claude/agents/vg-amend-cascade-analyzer.md` | CREATE | Read-only cascade impact analyzer subagent |
+| `.claude/agents/vg-debug-ui-discovery.md` | CREATE | MCP Playwright wrapper for debug runtime_ui |
+| `commands/vg/amend.md` | REFACTOR Step 5 only | Replace inline grep block with subagent spawn |
+| `commands/vg/debug.md` | REFACTOR Step 1 runtime_ui only | Replace pseudo-code with Agent() spawn |
 | `scripts/hooks/vg-meta-skill.md` | EXTEND | Append amend + debug Red Flags |
-| `tests/skills/test_amend_subagent_delegation.py` | CREATE | Assert STEP 2 spawns analyzer |
-| `tests/skills/test_amend_telemetry_events.py` | CREATE | Assert frontmatter must_emit complete |
-| `tests/skills/test_amend_ripple_schema.py` | CREATE | Assert RIPPLE-ANALYSIS schema parses |
-| `tests/skills/test_debug_subagent_delegation.py` | CREATE | Assert STEP 2 spawns classifier |
-| `tests/skills/test_debug_telemetry_events.py` | CREATE | Assert frontmatter must_emit complete |
-| `tests/skills/test_debug_fix_loop_max_3.py` | CREATE | Assert fix loop hard-cap == 3 |
-| `tests/skills/test_debug_classify_schema.py` | CREATE | Assert DEBUG-CLASSIFY schema parses |
-| `tests/fixtures/amend/ripple-low.json` | CREATE | Schema fixture |
-| `tests/fixtures/amend/ripple-high.json` | CREATE | Schema fixture |
-| `tests/fixtures/debug/classify-3-hypotheses.json` | CREATE | Schema fixture |
-| `tests/fixtures/debug/classify-1-hypothesis.json` | CREATE | Schema fixture |
+| `tests/skills/test_amend_subagent_delegation.py` | CREATE | Assert Step 5 spawns analyzer + narrate |
+| `tests/skills/test_amend_telemetry_preserved.py` | CREATE | Assert amend.started + amend.completed retained |
+| `tests/skills/test_amend_within_500.py` | CREATE | Assert ≤500 lines |
+| `tests/skills/test_amend_rules_preserved.py` | CREATE | Assert all 7 rules present, especially rule 6 |
+| `tests/skills/test_debug_subagent_delegation.py` | CREATE | Assert Step 1 runtime_ui spawns ui-discovery + narrate |
+| `tests/skills/test_debug_telemetry_preserved.py` | CREATE | Assert all 5 events retained |
+| `tests/skills/test_debug_within_500.py` | CREATE | Assert ≤500 lines |
+| `tests/skills/test_debug_no_loop_cap.py` | CREATE | Assert NO hard cap on Step 3 fix loop (rule 2) |
+| `tests/skills/test_debug_rules_preserved.py` | CREATE | Assert all 7 rules present, especially rule 2 |
+
+NOTE: NO `_shared/amend/` or `_shared/debug/` directories. NO new fixture files. NO JSON artifact schemas.
 
 ---
 
-## Task 1: Verify R5.5 merged + check skill-test infra
+## Task 1: Verify R5.5 + snapshot pre-conditions
 
 **Files:** read-only.
 
-- [ ] **Step 1: Confirm R5.5 merged**
+- [ ] **Step 1: Confirm R5.5 + R6a (or at least R5.5) merged**
 
-Run: `git log --oneline | grep -E 'r5\.5|hooks-source-isolation' | head -3`
+Run: `cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix" && git log --oneline | grep -E 'r5\.5|r6a' | head -5`
 
-Expected: at least one commit. If empty → STOP and execute R5.5 plan first.
+Expected: at least the R5.5 commits. R6a not strictly required for R6b (independent).
 
-- [ ] **Step 2: Check if `tests/skills/conftest.py` exists**
-
-Run: `ls tests/skills/conftest.py 2>/dev/null && echo EXISTS || echo MISSING`
-
-If `EXISTS` (R6a was executed first), continue to Task 2.
-
-If `MISSING`, copy Task 2 setup from `docs/superpowers/plans/2026-05-03-vg-r6a-deploy.md` Task 2 — create `tests/skills/__init__.py` + `tests/skills/conftest.py` exactly as specified there.
-
-- [ ] **Step 3: Snapshot current line counts**
-
-Run: `wc -l commands/vg/amend.md commands/vg/debug.md`
-
-Expected: 323 + 399. Both already under the 500-line slim ceiling — refactor is about delegation, not size reduction.
-
-- [ ] **Step 4: Identify current STEP boundaries**
+- [ ] **Step 2: Snapshot current files**
 
 Run:
 ```bash
-echo '=== amend.md ===' && grep -n '^## STEP' commands/vg/amend.md
-echo '=== debug.md ===' && grep -n '^## STEP' commands/vg/debug.md
+echo "=== amend.md ===" && wc -l commands/vg/amend.md && grep -nE '^## Step' commands/vg/amend.md
+echo "=== debug.md ===" && wc -l commands/vg/debug.md && grep -nE '^## Step' commands/vg/debug.md
 ```
 
-Record line numbers — refactor preserves these anchors.
+Expected:
+- amend.md: 323 lines, 7 Step headings (Step 0 through Step 6)
+- debug.md: 399 lines, 5 Step headings (Step 0 through Step 4)
 
-- [ ] **Step 5: No commit (read-only)**
+- [ ] **Step 3: Identify Step 5 cascade block in amend.md**
+
+Run: `awk '/^## Step 5/,/^## Step 6/' commands/vg/amend.md | head -50`
+
+This is the section to refactor (replace inline grep with subagent spawn).
+
+- [ ] **Step 4: Identify runtime_ui branch in debug.md Step 1**
+
+Run: `awk '/^### runtime_ui/,/^### network/' commands/vg/debug.md`
+
+This is the pseudo-code section to implement (replace "Spawn Haiku agent" comment with actual `Agent(vg-debug-ui-discovery)` call).
+
+- [ ] **Step 5: Verify pytest skill-test infra exists**
+
+Run: `ls tests/skills/conftest.py 2>/dev/null && echo EXISTS || echo MISSING`
+
+If `EXISTS`, continue. If `MISSING`, create per R6a Task 2 (or copy template from `tests/hooks/conftest.py`).
+
+- [ ] **Step 6: No commit (read-only)**
 
 Skip.
 
 ---
 
-## Task 2: Create _shared/amend/severity-rules.md
+## Task 2: Create vg-amend-cascade-analyzer subagent
 
 **Files:**
-- Create: `commands/vg/_shared/amend/severity-rules.md`
-
-- [ ] **Step 1: Create directory**
-
-```bash
-mkdir -p commands/vg/_shared/amend
-```
-
-- [ ] **Step 2: Write severity-rules.md**
-
-Write to `commands/vg/_shared/amend/severity-rules.md`:
-
-```markdown
-# Amend — Severity Rules (Shared Reference)
-
-Loaded by `vg-amend-impact-analyzer` subagent. Defines how the analyzer
-classifies the severity of a single affected artifact.
-
-## Severity levels
-
-| Level | Meaning | Action |
-|---|---|---|
-| **high** | Affected artifact requires re-derivation; downstream guarantees broken | Recommend re-run originating skill (e.g. `/vg:blueprint`, `/vg:test-spec`) |
-| **med**  | Artifact references the changed area; manual review needed but not full re-derive | Recommend targeted edit + verify |
-| **low**  | Tangential reference; safe to leave as-is | Recommend annotate only (CONTEXT.md decision log) |
-
-## Classification rules
-
-For each downstream artifact, apply the following decision tree:
-
-1. **Direct contract impact**
-   - Endpoint signature change ↔ API-CONTRACTS file → **high**
-   - Data shape change ↔ TEST-GOALS that read that shape → **high**
-   - Field rename ↔ PLAN tasks that reference the field → **med**
-
-2. **Behavioral impact (no contract change)**
-   - Algorithm swap (e.g. sort order) ↔ TEST-GOALS that assert order → **high**
-   - Internal refactor invisible to consumer → **low** (annotate only)
-
-3. **Documentation/decision impact**
-   - Decision in CONTEXT.md contradicted by change → **med** (update decision)
-   - Old discussion log entry mentions feature → **low**
-
-4. **Side-effect cascade**
-   - Test fixtures used by changed code path → **med** (regenerate fixtures)
-   - Migration scripts that depend on old shape → **high**
-
-## Confidence scoring
-
-Analyzer reports `confidence` ∈ {high, med, low}:
-- **high** — direct ref grep hit + semantic match (e.g. exact endpoint name in API-CONTRACTS)
-- **med** — indirect ref (e.g. helper function name match without semantic anchor)
-- **low** — speculative impact based on file proximity only
-
-Low-confidence findings should appear in RIPPLE-ANALYSIS but NOT trigger automatic recommended_action.
-
-## Recommended action templates
-
-The analyzer composes `recommended_action` from this set:
-
-- `"rerun /vg:blueprint for phase, then /vg:test-spec"` — when ≥1 high in API-CONTRACTS or TEST-GOALS
-- `"targeted edit in PLAN/task-NN.md, then re-run /vg:build wave N"` — when only PLAN-level med/high
-- `"update CONTEXT.md decision log, no code change needed"` — when only low/med in CONTEXT.md
-- `"manual review — analyzer cannot determine action"` — fallback when severity mix unclear
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add commands/vg/_shared/amend/severity-rules.md
-git commit -m "docs(r6b): _shared/amend/severity-rules.md taxonomy
-
-3-level severity scale + classification decision tree + confidence
-scoring + recommended_action templates. Loaded by
-vg-amend-impact-analyzer subagent (Task 4).
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
-
----
-
-## Task 3: Create _shared/debug/classify-taxonomy.md
-
-**Files:**
-- Create: `commands/vg/_shared/debug/classify-taxonomy.md`
-
-- [ ] **Step 1: Create directory**
-
-```bash
-mkdir -p commands/vg/_shared/debug
-```
-
-- [ ] **Step 2: Write classify-taxonomy.md**
-
-Write to `commands/vg/_shared/debug/classify-taxonomy.md`:
-
-```markdown
-# Debug — Classify Taxonomy (Shared Reference)
-
-Loaded by `vg-debug-classifier` subagent. Defines root-cause categories
-and ranking rules for hypothesis generation.
-
-## Root-cause types
-
-| Type | Definition | Typical evidence |
-|---|---|---|
-| **code** | Bug in source code (logic error, race, off-by-one, missing await, type mismatch caught at runtime) | stack trace, error message matches source line |
-| **config** | Wrong configuration (env var unset, wrong value, missing feature flag, bad TOML/JSON syntax) | startup log shows missing key, behavior changes between envs |
-| **env** | Runtime environment issue (missing dep, wrong version, network reachability, file permissions, memory) | works locally / fails in target env, OS-level error |
-| **data** | Bad input data (corrupt row, schema drift, encoding mismatch, missing required field) | error correlates with specific record IDs, recent data import |
-
-## Ranking rules
-
-For each candidate hypothesis, score:
-
-- **Type-fit confidence** — how well evidence matches the type's typical pattern (high/med/low)
-- **Reproducibility** — does the user's repro steps deterministically trigger the bug? (yes/intermittent/no)
-- **Recency** — does the bug correlate with a recent change (commit, deploy, config push)? (yes/no/unknown)
-
-Compute rank score:
-- High type-fit + deterministic repro + recent change → rank 1
-- High type-fit + intermittent repro → rank 2
-- Med type-fit + any repro → rank 3+
-
-Top 3 hypotheses returned. If only 1-2 are above the type-fit threshold,
-return only what's confident.
-
-## Hypothesis structure
-
-Each hypothesis includes:
-
-- `rank`           — 1-based, lower = more likely
-- `type`           — one of {code, config, env, data}
-- `file`           — path (best guess; null if not narrowable)
-- `line`           — int (best guess; null if not narrowable)
-- `hypothesis`     — one-sentence statement of root cause
-- `evidence`       — list of strings, each citing a specific signal
-- `confidence`     — high/med/low
-- `suggested_fix`  — concrete one-line action (e.g. "add await keyword at line 42")
-
-## WebSearch budget
-
-Classifier MAY use WebSearch up to 3 queries per invocation, ONLY for
-known-error-pattern lookup (e.g. "ECONNRESET race condition Node 22").
-MUST NOT WebSearch for codebase-internal questions.
-
-## When to return zero hypotheses
-
-If evidence is insufficient (no error message, no file paths, no repro),
-return `{hypotheses: []}` with `confidence: "low"`. Orchestrator will
-prompt user for more info.
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add commands/vg/_shared/debug/classify-taxonomy.md
-git commit -m "docs(r6b): _shared/debug/classify-taxonomy.md root-cause types
-
-4 root-cause types (code/config/env/data) + ranking rules + hypothesis
-structure + WebSearch budget. Loaded by vg-debug-classifier (Task 5).
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
-
----
-
-## Task 4: Create vg-amend-impact-analyzer subagent
-
-**Files:**
-- Create: `.claude/agents/vg-amend-impact-analyzer.md`
+- Create: `.claude/agents/vg-amend-cascade-analyzer.md`
 
 - [ ] **Step 1: Write the subagent definition**
 
-Write to `.claude/agents/vg-amend-impact-analyzer.md`:
+Write to `.claude/agents/vg-amend-cascade-analyzer.md`:
 
 ```markdown
 ---
-name: vg-amend-impact-analyzer
-description: Analyze cascade impact of a mid-phase change request. Reads CONTEXT.md decisions + downstream artifacts (PLAN, API-CONTRACTS, TEST-GOALS, design refs), produces RIPPLE-ANALYSIS.json with affected list + severity + recommended action.
+name: vg-amend-cascade-analyzer
+description: Read-only cascade impact analyzer for /vg:amend Step 5. Reads phase artifacts (PLAN, API-CONTRACTS, TEST-GOALS, SUMMARY, RUNTIME-MAP), greps for references to changed decisions, returns markdown impact report. Does NOT modify any file (preserves /vg:amend rule 6: informational only).
 tools: Read, Grep, Bash
 model: claude-sonnet-4-6
 ---
 
-# vg-amend-impact-analyzer
+# vg-amend-cascade-analyzer
 
-Read-only impact analyzer for `/vg:amend`. Receives a change description
-and produces a structured RIPPLE-ANALYSIS.json so the orchestrator can
-present the cascade to the user before committing decisions.
+Read-only impact analyzer for `/vg:amend`. Receives a list of changed
+decision IDs and produces a markdown impact report so the orchestrator
+can present cascade information to the user before Step 6 commit.
 
 ## Input contract
 
-You receive a JSON object with these fields:
+You receive a JSON object on the prompt with these fields:
 
-- `phase`                 — phase ID (e.g. "P1")
-- `change_description`    — free-text from user describing the requested change
-- `current_artifacts_manifest` — list of paths under `.vg/phases/<phase>/` (orchestrator pre-enumerates; do NOT re-enumerate)
-- `policy_ref`            — `commands/vg/_shared/amend/severity-rules.md`
+- `phase_dir`             — absolute path to phase directory
+- `changed_decision_ids`  — list of D-XX strings (e.g. `["D-03", "D-07"]`)
+- `change_summary`        — one-line summary from amend Step 2
 
 ## Workflow
 
-### STEP A — Load policy
+### STEP A — Inventory phase artifacts
 
-Read `commands/vg/_shared/amend/severity-rules.md`. Internalize:
-- 3-level severity scale (low/med/high)
-- Classification decision tree
-- Confidence scoring rules
-- Recommended-action templates
+Check existence of (under `${phase_dir}`):
+- `PLAN.md`           (or `PLAN/index.md` for split version)
+- `API-CONTRACTS.md`  (or `API-CONTRACTS/index.md`)
+- `TEST-GOALS.md`     (or `TEST-GOALS/index.md`)
+- `SUMMARY.md`
+- `RUNTIME-MAP.json`
 
-### STEP B — Read CONTEXT.md decisions
+For each existing artifact, prepare a "section" in the output report.
+Skip non-existent artifacts (don't pad with "(none)" — just omit).
 
-Read `.vg/phases/<phase>/CONTEXT.md`. Extract the existing decisions
-list. Identify any that the `change_description` directly contradicts —
-these are HIGH-severity by default (decision update required).
+### STEP B — Grep each artifact for references
 
-### STEP C — Traverse downstream artifacts
+For each `D-XX` in `changed_decision_ids`:
 
-For each path in `current_artifacts_manifest`:
-- Skip if not under `.vg/phases/<phase>/`.
-- Read the file (or grep if file >100 KB).
-- Apply the severity decision tree from STEP A.
-- Build candidate `affected[]` entries.
+- **PLAN.md / PLAN/**: grep for `<goals-covered>` containing `D-XX`, task descriptions referencing the decision, `<contract-ref>` tags. Output: list of "Task N: <one-line reason>" entries.
+- **API-CONTRACTS.md / API-CONTRACTS/**: grep for endpoint references in changed decisions (extract endpoint paths from change_summary if any). Output: list of "<METHOD> <path>: <reason>" entries.
+- **TEST-GOALS.md / TEST-GOALS/**: grep for goals tracing to changed decisions (D-XX in goal trace metadata). Output: list of "G-XX: <reason>" entries.
+- **SUMMARY.md**: if exists → output "Gap-closure build may be needed".
+- **RUNTIME-MAP.json**: if exists → output "Re-review recommended".
 
-Typical paths to check:
-- `PLAN/task-*.md` (per-task split)
-- `API-CONTRACTS/*.md` (per-endpoint split)
-- `TEST-GOALS/G-*.md` (per-goal split)
-- `DESIGN-REFS/*.md` (if present)
-- `CONTEXT.md` (decisions section)
+### STEP C — Compute suggested next action
 
-### STEP D — Compose recommended_action
+Read phase pipeline state (from PIPELINE-STATE.json under `${phase_dir}` if it exists, else infer from artifact presence):
 
-Apply the template selection rules from STEP A. Pick the LEAST disruptive
-template that covers all affected entries.
+| Current step | Suggested action |
+|---|---|
+| scoped (only CONTEXT.md exists) | `/vg:blueprint <phase>` |
+| blueprinted (PLAN.md exists, no SUMMARY) | `/vg:blueprint <phase> --from=2a` |
+| built (SUMMARY.md exists, no RUNTIME-MAP) | `/vg:build <phase> --gaps-only` |
+| reviewed (RUNTIME-MAP.json exists) | `/vg:build --gaps-only` then `/vg:review --retry-failed` |
+| tested (TEST-RESULTS exists) | `/vg:build --gaps-only` then `/vg:review` (full) |
+| accepted | "⚠ Warning: consider new phase" |
 
-### STEP E — Write RIPPLE-ANALYSIS.json (atomic)
+### STEP D — Emit markdown report
 
-Write to `.vg/phases/<phase>/RIPPLE-ANALYSIS.json` (atomic — write
-`.tmp` then mv).
+Output the FOLLOWING markdown block as the LAST contiguous text on stdout:
 
-Schema:
+```markdown
+# Cascade Impact Report — Phase <phase>
 
-```json
-{
-  "phase": "<phase>",
-  "change_summary": "<one-sentence summary of change_description>",
-  "analyzed_at": "<ISO-8601 UTC>",
-  "affected": [
-    {
-      "artifact": "<relative path under .vg/phases/<phase>/>",
-      "severity": "low" | "med" | "high",
-      "reason": "<one sentence>",
-      "confidence": "high" | "med" | "low"
-    }
-  ],
-  "recommended_action": "<from STEP A templates>",
-  "confidence": "high" | "med" | "low"
-}
+**Change:** <change_summary>
+**Decisions affected:** <comma-separated D-XX list>
+
+## PLAN.md impact
+- Task N: <reason>
+- Task M: <reason>
+
+## API-CONTRACTS.md impact
+- <METHOD> <path>: <reason>
+
+## TEST-GOALS.md impact
+- G-XX: <reason>
+
+## SUMMARY.md impact
+- Gap-closure build may be needed
+
+## RUNTIME-MAP.json impact
+- Re-review recommended
+
+## Suggested next action
+<suggested action from STEP C>
 ```
 
-If file size exceeds 30 KB advisory threshold, also write per-affected
-split files at `RIPPLE-ANALYSIS/<artifact-slug>.md` (consumer pattern:
-`vg-load --phase N --artifact ripple-analysis --affected <path>`).
+OMIT any section whose artifact doesn't exist OR has zero matches.
 
-### STEP F — Return on stdout
+If NO artifacts have any matches, emit:
 
-Print on the LAST line of stdout:
+```markdown
+# Cascade Impact Report — Phase <phase>
 
-```json
-{
-  "status": "success",
-  "ripple_path": ".vg/phases/<phase>/RIPPLE-ANALYSIS.json",
-  "affected_count": <int>,
-  "max_severity": "low" | "med" | "high"
-}
+**Change:** <change_summary>
+**Decisions affected:** <D-XX list>
+
+## No downstream impact detected
+(All checked artifacts: <list>. No references to changed decisions found.)
+
+## Suggested next action
+<from STEP C>
 ```
 
 ## Tool restrictions
 
-ALLOWED: Read, Grep, Bash (read-only — `cat`, `grep`, `wc`, `find`)
-FORBIDDEN: Write\* (\*EXCEPTION: RIPPLE-ANALYSIS.json output via Write — no other writes), Edit, Agent, WebSearch
+ALLOWED: Read, Grep, Bash (read-only — `cat`, `grep`, `wc`, `find`).
+FORBIDDEN: Write, Edit, Agent, WebSearch, WebFetch.
 
-You MUST NOT modify CONTEXT.md or any source code. Orchestrator owns
-those writes.
+You MUST NOT modify any file. The orchestrator owns CONTEXT.md, AMENDMENT-LOG.md, and all phase artifacts.
+
+This preserves /vg:amend rule 6: "Impact is informational — cascade analysis warns but does NOT auto-modify PLAN.md or API-CONTRACTS.md."
 
 ## Failure modes
 
 | Cause | Action |
 |---|---|
-| `change_description` empty/unclear | Return `{status: "input_unclear", affected: []}` — orchestrator re-prompts |
-| `phase` directory missing | Return `{status: "phase_missing"}` — orchestrator emits block |
-| Manifest contains paths outside phase dir | Skip those paths; do NOT fail |
+| `phase_dir` does not exist | Emit error JSON (no markdown report); orchestrator narrates red |
+| `changed_decision_ids` empty | Emit "No decisions changed" report; orchestrator may still proceed |
+| All artifacts unreadable | Emit error JSON; orchestrator falls back to "manual review needed" |
 ```
 
 - [ ] **Step 2: Verify frontmatter parses**
@@ -381,12 +225,15 @@ Run:
 ```bash
 python3 -c "
 import yaml
-text = open('.claude/agents/vg-amend-impact-analyzer.md').read()
+text = open('.claude/agents/vg-amend-cascade-analyzer.md').read()
 end = text.find('\n---\n', 4)
 fm = yaml.safe_load(text[4:end])
-assert fm['name'] == 'vg-amend-impact-analyzer'
-assert 'Read' in fm['tools']
-assert 'Agent' not in fm['tools']
+assert fm['name'] == 'vg-amend-cascade-analyzer'
+tools = fm['tools']
+tools_str = ' '.join(tools) if isinstance(tools, list) else str(tools)
+assert 'Write' not in tools_str, 'analyzer must be read-only'
+assert 'Edit' not in tools_str
+assert 'Agent' not in tools_str
 print('OK')
 "
 ```
@@ -396,159 +243,176 @@ Expected: `OK`.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add .claude/agents/vg-amend-impact-analyzer.md
-git commit -m "feat(r6b): vg-amend-impact-analyzer subagent
+git add .claude/agents/vg-amend-cascade-analyzer.md
+git commit -m "feat(r6b): vg-amend-cascade-analyzer subagent
 
-Read-only cascade analyzer. Workflow STEP A-F: load policy, read CONTEXT
-decisions, traverse downstream artifacts, compose recommended_action,
-write RIPPLE-ANALYSIS.json, return JSON on stdout. Tool-restricted to
-Read/Grep/Bash + sole exception Write for the output file.
+Read-only cascade impact analyzer. Workflow STEP A-D: inventory phase
+artifacts, grep for D-XX references, compute suggested next action,
+emit markdown report on last stdout block. Tool-restricted to
+Read/Grep/Bash. Preserves /vg:amend rule 6 (informational only).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 5: Create vg-debug-classifier subagent
+## Task 3: Create vg-debug-ui-discovery subagent
 
 **Files:**
-- Create: `.claude/agents/vg-debug-classifier.md`
+- Create: `.claude/agents/vg-debug-ui-discovery.md`
 
 - [ ] **Step 1: Write the subagent definition**
 
-Write to `.claude/agents/vg-debug-classifier.md`:
+Write to `.claude/agents/vg-debug-ui-discovery.md`:
 
 ```markdown
 ---
-name: vg-debug-classifier
-description: Classify a bug report into ranked root-cause hypotheses (code|config|env|data). Reads bug context + greps codebase for symptom patterns + bounded WebSearch for known patterns. Produces DEBUG-CLASSIFY.json with top hypotheses.
-tools: Read, Grep, Bash, WebSearch
+name: vg-debug-ui-discovery
+description: Browser MCP wrapper for /vg:debug Step 1 runtime_ui branch. Navigates to suspected route, captures snapshot + console + network + screenshot, returns markdown findings. Implements rule 5 fallback if MCP unavailable. Does NOT modify code or write to DEBUG-LOG.md (orchestrator appends).
+tools: Read, Grep, Bash, mcp__playwright1__browser_navigate, mcp__playwright1__browser_snapshot, mcp__playwright1__browser_console_messages, mcp__playwright1__browser_network_requests, mcp__playwright1__browser_take_screenshot, mcp__playwright1__browser_close
 model: claude-sonnet-4-6
 ---
 
-# vg-debug-classifier
+# vg-debug-ui-discovery
 
-Read-only bug classifier for `/vg:debug`. Receives a bug report and
-produces a ranked DEBUG-CLASSIFY.json so the orchestrator can present
-hypotheses to the user before fix-loop iterations.
+Browser MCP discovery wrapper for `/vg:debug` Step 1 `runtime_ui` branch.
+Performs ONE focused UI inspection — not a full review sweep.
 
 ## Input contract
 
-You receive a JSON object with these fields:
+You receive a JSON object on the prompt with these fields:
 
-- `bug_context`    — `{description, repro_steps, error_message?, file_paths?, recent_commits?}`
-- `codebase_root`  — absolute path to the project root
-- `policy_ref`     — `commands/vg/_shared/debug/classify-taxonomy.md`
-- `run_id`         — orchestrator-assigned ID (use for output path)
+- `bug_description`   — verbatim bug description from user
+- `suspected_route`   — best-guess URL path from Step 0 classification (or `"unknown"`)
+- `debug_id`          — debug session ID (for filename hint, NOT for writing)
+- `mcp_available`     — boolean from orchestrator's MCP availability check
+- `base_url`          — base URL for the app under test (from .claude/vg.config.md or `"http://localhost:3000"` default)
 
 ## Workflow
 
-### STEP A — Load taxonomy
+### STEP A — MCP-available branch
 
-Read `commands/vg/_shared/debug/classify-taxonomy.md`. Internalize:
-- 4 root-cause types (code/config/env/data) and their typical evidence
-- Ranking rules (type-fit + reproducibility + recency)
-- Hypothesis structure
-- WebSearch budget (3 queries max)
-- When to return zero hypotheses
+If `mcp_available == true` AND `suspected_route != "unknown"`:
 
-### STEP B — Anchor on evidence
+1. **Navigate**: `mcp__playwright1__browser_navigate` to `<base_url><suspected_route>`.
+2. **Wait briefly**: implicit page load wait via MCP.
+3. **Snapshot**: `mcp__playwright1__browser_snapshot` → capture accessibility tree.
+4. **Console**: `mcp__playwright1__browser_console_messages` → list errors + warnings.
+5. **Network**: `mcp__playwright1__browser_network_requests` → list 4xx/5xx responses.
+6. **Screenshot**: `mcp__playwright1__browser_take_screenshot` to `.vg/debug/<debug_id>/screenshots/discovery-<iso8601>.png`. Make `mkdir -p` first via Bash.
+7. **Close**: `mcp__playwright1__browser_close` to release MCP slot.
 
-Parse `bug_context.error_message` (if present). Extract:
-- File path / line number from stack trace
-- Exception class name
-- Module/function name
+### STEP B — Suspected-route-unknown branch
 
-If `bug_context.file_paths` provided, treat as confirmed loci.
+If `mcp_available == true` AND `suspected_route == "unknown"`:
 
-If `bug_context.recent_commits` provided, run:
-```bash
-git log -p <recent_commits[0]>..<recent_commits[-1]> -- <file_paths> 2>/dev/null
-```
-to inspect the change diff.
+1. AskUserQuestion is NOT available in subagent. Instead:
+   - Skip navigation.
+   - Note in findings: "Route unknown; orchestrator should AskUserQuestion before re-spawning with route."
+   - Emit shortened findings block.
 
-### STEP C — Generate candidate hypotheses
+### STEP C — MCP-unavailable branch (rule 5 fallback)
 
-Per loci identified:
-- Read the source code around the line/function (Read tool).
-- Match against typical evidence patterns (per type from taxonomy).
-- Form a one-sentence hypothesis with `suggested_fix`.
+If `mcp_available == false`:
 
-If error message is unfamiliar, use WebSearch (max 3 queries):
-- Query: `<error_message_first_60_chars> site:stackoverflow.com OR site:github.com`
-- Cite top result URL in `evidence[]`.
+1. Do NOT attempt any navigation.
+2. Note in findings: "MCP Playwright unavailable. Per /vg:debug rule 5, falling back to amendment-trigger path."
+3. Suggest orchestrator route to /vg:amend with bug context as feature gap.
+4. Emit fallback findings block.
 
-### STEP D — Rank hypotheses
+### STEP D — Emit markdown findings
 
-Apply ranking rules from STEP A. Score each candidate. Sort by score.
-Truncate to top 3 (or fewer if confidence drops below med).
+Output the FOLLOWING markdown block as the LAST contiguous text on stdout (MCP-available, route-known case):
 
-### STEP E — Write DEBUG-CLASSIFY.json (atomic)
+```markdown
+## UI Discovery Findings — <iso8601>
 
-Write to `.vg/debug/<run_id>/DEBUG-CLASSIFY.json`. Schema:
+**Route navigated:** <base_url><suspected_route>
+**MCP available:** true
 
-```json
-{
-  "bug_id": "<run_id>",
-  "classified_at": "<ISO-8601 UTC>",
-  "hypotheses": [
-    {
-      "rank": 1,
-      "type": "code" | "config" | "env" | "data",
-      "file": "<relative path or null>",
-      "line": <int or null>,
-      "hypothesis": "<one sentence>",
-      "evidence": ["<signal 1>", "<signal 2>"],
-      "confidence": "high" | "med" | "low",
-      "suggested_fix": "<concrete action>"
-    }
-  ],
-  "search_queries_run": ["<query string>"]
-}
+### Snapshot summary
+<2-3 line summary of accessibility tree elements relevant to the bug — focus on the area mentioned in bug_description>
+
+### Console messages
+- [ERROR] <message>  (file:line if available)
+- [WARN] <message>
+(omit section if console clean)
+
+### Network errors
+- <METHOD> <path> → <status>
+(omit section if no errors)
+
+### Screenshot
+.vg/debug/<debug_id>/screenshots/discovery-<iso8601>.png
+
+### Hypothesis seed
+<one-line: most likely root cause given UI evidence>
 ```
 
-### STEP F — Return on stdout
+For route-unknown (STEP B):
 
-Print on the LAST line of stdout:
+```markdown
+## UI Discovery Findings — <iso8601>
 
-```json
-{
-  "status": "success" | "insufficient_evidence",
-  "classify_path": ".vg/debug/<run_id>/DEBUG-CLASSIFY.json",
-  "hypothesis_count": <int>,
-  "top_type": "code" | "config" | "env" | "data" | null
-}
+**Route navigated:** N/A (suspected_route="unknown")
+**MCP available:** true
+
+### Action needed
+Route unknown. Orchestrator should AskUserQuestion for route, then re-spawn with route filled in.
+
+### Hypothesis seed (from bug_description alone)
+<one-line guess>
+```
+
+For MCP-unavailable (STEP C):
+
+```markdown
+## UI Discovery Findings — <iso8601>
+
+**Route navigated:** N/A (MCP unavailable)
+**MCP available:** false (rule 5 fallback)
+
+### Fallback action
+Per /vg:debug rule 5, this is a UI bug + browser MCP unavailable.
+Suggest orchestrator route to `/vg:amend <phase>` to capture as feature gap.
+
+### Hypothesis seed (from bug_description alone)
+<one-line guess>
 ```
 
 ## Tool restrictions
 
-ALLOWED: Read, Grep, Bash (read-only), WebSearch (≤3 queries)
-FORBIDDEN: Write\* (\*EXCEPTION: DEBUG-CLASSIFY.json output via Write — no other writes), Edit, Agent, WebFetch
+ALLOWED: Read, Grep, Bash (for `mkdir -p`), MCP Playwright tools (navigate, snapshot, console, network, take_screenshot, close).
+FORBIDDEN: Write (orchestrator appends to DEBUG-LOG.md), Edit, Agent, WebSearch, WebFetch.
 
-You MUST NOT modify code. Orchestrator owns the fix-loop edits in
-`/vg:debug` STEP 4.
+The screenshot file IS written via the MCP `browser_take_screenshot` tool itself (which writes the file as a side-effect of the MCP call). This is intentional — that's what the tool exists for. The Write tool is forbidden because all OTHER artifact writes go through the orchestrator.
 
 ## Failure modes
 
 | Cause | Action |
 |---|---|
-| `bug_context.description` empty | Return `{status: "insufficient_evidence", hypotheses: []}` |
-| No error/file paths/commits | WebSearch from description; if still nothing → insufficient_evidence |
-| Codebase root unreadable | Return `{status: "codebase_unreachable"}` |
+| `suspected_route` is unknown AND mcp_available | STEP B (note in findings) |
+| MCP unavailable | STEP C (rule 5 fallback) |
+| Navigation fails (404/network error) | Capture as a finding, do not abort |
+| Screenshot fails | Continue; omit screenshot section |
+| Console/network MCP returns empty | Omit those sections; do not pad with "(none)" |
 ```
 
-- [ ] **Step 2: Verify frontmatter parses**
+- [ ] **Step 2: Verify frontmatter parses + tool list correct**
 
 Run:
 ```bash
 python3 -c "
 import yaml
-text = open('.claude/agents/vg-debug-classifier.md').read()
+text = open('.claude/agents/vg-debug-ui-discovery.md').read()
 end = text.find('\n---\n', 4)
 fm = yaml.safe_load(text[4:end])
-assert fm['name'] == 'vg-debug-classifier'
-assert 'WebSearch' in fm['tools']
-assert 'Edit' not in fm['tools']
+assert fm['name'] == 'vg-debug-ui-discovery'
+tools = fm['tools']
+tools_str = ' '.join(tools) if isinstance(tools, list) else str(tools)
+assert 'mcp__playwright1__browser_navigate' in tools_str
+assert 'Write' not in tools_str
+assert 'Agent' not in tools_str
 print('OK')
 "
 ```
@@ -558,869 +422,654 @@ Expected: `OK`.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add .claude/agents/vg-debug-classifier.md
-git commit -m "feat(r6b): vg-debug-classifier subagent
+git add .claude/agents/vg-debug-ui-discovery.md
+git commit -m "feat(r6b): vg-debug-ui-discovery subagent
 
-Read-only bug classifier. Workflow STEP A-F: load taxonomy, anchor on
-evidence, generate candidate hypotheses, rank, write DEBUG-CLASSIFY.json,
-return JSON on stdout. WebSearch budget capped at 3 queries.
-Tool-restricted to Read/Grep/Bash/WebSearch + sole Write for output.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
-
----
-
-## Task 6: Schema fixtures + failing schema tests
-
-**Files:**
-- Create: `tests/fixtures/amend/ripple-low.json`
-- Create: `tests/fixtures/amend/ripple-high.json`
-- Create: `tests/fixtures/debug/classify-3-hypotheses.json`
-- Create: `tests/fixtures/debug/classify-1-hypothesis.json`
-- Create: `tests/skills/test_amend_ripple_schema.py`
-- Create: `tests/skills/test_debug_classify_schema.py`
-
-- [ ] **Step 1: Create fixture directories**
-
-```bash
-mkdir -p tests/fixtures/amend tests/fixtures/debug
-```
-
-- [ ] **Step 2: Write 4 fixture files**
-
-Write to `tests/fixtures/amend/ripple-low.json`:
-
-```json
-{
-  "phase": "P1",
-  "change_summary": "Rename helper function getUserName to fetchUserName",
-  "analyzed_at": "2026-05-03T14:30:00Z",
-  "affected": [
-    {
-      "artifact": "PLAN/task-03.md",
-      "severity": "low",
-      "reason": "References function in task description prose",
-      "confidence": "high"
-    }
-  ],
-  "recommended_action": "update CONTEXT.md decision log, no code change needed",
-  "confidence": "high"
-}
-```
-
-Write to `tests/fixtures/amend/ripple-high.json`:
-
-```json
-{
-  "phase": "P2",
-  "change_summary": "Add OAuth2 to user-login endpoint, replacing session cookie auth",
-  "analyzed_at": "2026-05-03T14:35:00Z",
-  "affected": [
-    {
-      "artifact": "API-CONTRACTS/POST-user-login.md",
-      "severity": "high",
-      "reason": "Endpoint request/response shape changes (Bearer token replaces Set-Cookie)",
-      "confidence": "high"
-    },
-    {
-      "artifact": "PLAN/task-04.md",
-      "severity": "med",
-      "reason": "Task references current cookie-based session flow",
-      "confidence": "high"
-    },
-    {
-      "artifact": "TEST-GOALS/G-07.md",
-      "severity": "high",
-      "reason": "Test goal pre-dates OAuth2; assertions on Set-Cookie obsolete",
-      "confidence": "high"
-    },
-    {
-      "artifact": "CONTEXT.md",
-      "severity": "med",
-      "reason": "Decision D-03 says 'session cookies for v1'; contradicted",
-      "confidence": "high"
-    }
-  ],
-  "recommended_action": "rerun /vg:blueprint for phase, then /vg:test-spec",
-  "confidence": "high"
-}
-```
-
-Write to `tests/fixtures/debug/classify-3-hypotheses.json`:
-
-```json
-{
-  "bug_id": "debug-run-001",
-  "classified_at": "2026-05-03T15:00:00Z",
-  "hypotheses": [
-    {
-      "rank": 1,
-      "type": "code",
-      "file": "src/auth/login.ts",
-      "line": 42,
-      "hypothesis": "Missing await on token validation; race condition under load",
-      "evidence": [
-        "Error 'Cannot read properties of undefined' matches async-race pattern",
-        "git blame shows recent change to async flow at line 42 in commit abc123"
-      ],
-      "confidence": "high",
-      "suggested_fix": "Add await keyword before validateToken() call at line 42"
-    },
-    {
-      "rank": 2,
-      "type": "config",
-      "file": ".env.production",
-      "line": null,
-      "hypothesis": "JWT_SECRET env var unset in prod, falling back to default-empty",
-      "evidence": [
-        "Bug only reproduces in prod, not local",
-        "validateToken() returns falsy when secret is empty"
-      ],
-      "confidence": "med",
-      "suggested_fix": "Set JWT_SECRET in production env config"
-    },
-    {
-      "rank": 3,
-      "type": "data",
-      "file": null,
-      "line": null,
-      "hypothesis": "User session table contains rows with null token_hash from migration",
-      "evidence": [
-        "Bug correlates with user accounts created before 2026-04-15"
-      ],
-      "confidence": "low",
-      "suggested_fix": "Run backfill migration to populate token_hash for legacy rows"
-    }
-  ],
-  "search_queries_run": [
-    "Cannot read properties of undefined async race site:stackoverflow.com"
-  ]
-}
-```
-
-Write to `tests/fixtures/debug/classify-1-hypothesis.json`:
-
-```json
-{
-  "bug_id": "debug-run-002",
-  "classified_at": "2026-05-03T15:10:00Z",
-  "hypotheses": [
-    {
-      "rank": 1,
-      "type": "env",
-      "file": null,
-      "line": null,
-      "hypothesis": "Disk full on /tmp, causing fs.writeFile to throw ENOSPC",
-      "evidence": [
-        "Error message contains 'ENOSPC: no space left on device'"
-      ],
-      "confidence": "high",
-      "suggested_fix": "Free space on /tmp or move temp dir to a partition with more space"
-    }
-  ],
-  "search_queries_run": []
-}
-```
-
-- [ ] **Step 3: Write the schema test files**
-
-Write to `tests/skills/test_amend_ripple_schema.py`:
-
-```python
-"""RIPPLE-ANALYSIS.json schema validation."""
-import json
-from pathlib import Path
-
-import pytest
-
-FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "amend"
-
-SEVERITY_ENUM = {"low", "med", "high"}
-CONFIDENCE_ENUM = {"low", "med", "high"}
-REQUIRED_TOP = {"phase", "change_summary", "analyzed_at", "affected",
-                "recommended_action", "confidence"}
-REQUIRED_AFFECTED = {"artifact", "severity", "reason", "confidence"}
-
-
-@pytest.mark.parametrize(
-    "fixture",
-    sorted(FIXTURES.glob("ripple-*.json")),
-    ids=lambda p: p.name,
-)
-def test_ripple_top_level_fields(fixture):
-    data = json.loads(fixture.read_text())
-    missing = REQUIRED_TOP - set(data)
-    assert not missing, f"{fixture.name}: missing {missing}"
-    assert data["confidence"] in CONFIDENCE_ENUM
-
-
-@pytest.mark.parametrize("fixture", sorted(FIXTURES.glob("ripple-*.json")), ids=lambda p: p.name)
-def test_ripple_affected_entries_well_formed(fixture):
-    data = json.loads(fixture.read_text())
-    assert isinstance(data["affected"], list)
-    for i, entry in enumerate(data["affected"]):
-        missing = REQUIRED_AFFECTED - set(entry)
-        assert not missing, f"{fixture.name}[{i}]: missing {missing}"
-        assert entry["severity"] in SEVERITY_ENUM
-        assert entry["confidence"] in CONFIDENCE_ENUM
-```
-
-Write to `tests/skills/test_debug_classify_schema.py`:
-
-```python
-"""DEBUG-CLASSIFY.json schema validation."""
-import json
-from pathlib import Path
-
-import pytest
-
-FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "debug"
-
-TYPE_ENUM = {"code", "config", "env", "data"}
-CONFIDENCE_ENUM = {"low", "med", "high"}
-REQUIRED_TOP = {"bug_id", "classified_at", "hypotheses", "search_queries_run"}
-REQUIRED_HYPO = {"rank", "type", "file", "line", "hypothesis", "evidence",
-                 "confidence", "suggested_fix"}
-
-
-@pytest.mark.parametrize(
-    "fixture",
-    sorted(FIXTURES.glob("classify-*.json")),
-    ids=lambda p: p.name,
-)
-def test_classify_top_level_fields(fixture):
-    data = json.loads(fixture.read_text())
-    missing = REQUIRED_TOP - set(data)
-    assert not missing, f"{fixture.name}: missing {missing}"
-    assert isinstance(data["search_queries_run"], list)
-
-
-@pytest.mark.parametrize("fixture", sorted(FIXTURES.glob("classify-*.json")), ids=lambda p: p.name)
-def test_classify_hypotheses_well_formed(fixture):
-    data = json.loads(fixture.read_text())
-    assert isinstance(data["hypotheses"], list)
-    assert len(data["hypotheses"]) <= 3, "max 3 hypotheses per spec"
-    for i, hypo in enumerate(data["hypotheses"]):
-        missing = REQUIRED_HYPO - set(hypo)
-        assert not missing, f"{fixture.name}[{i}]: missing {missing}"
-        assert hypo["type"] in TYPE_ENUM
-        assert hypo["confidence"] in CONFIDENCE_ENUM
-        assert hypo["rank"] == i + 1, "rank must equal index+1"
-        assert isinstance(hypo["evidence"], list) and hypo["evidence"], (
-            "evidence must be non-empty list"
-        )
-
-
-@pytest.mark.parametrize("fixture", sorted(FIXTURES.glob("classify-*.json")), ids=lambda p: p.name)
-def test_classify_websearch_budget(fixture):
-    data = json.loads(fixture.read_text())
-    assert len(data["search_queries_run"]) <= 3, "WebSearch budget exceeded"
-```
-
-- [ ] **Step 4: Run schema tests, expect ALL PASS**
-
-Run: `python3 -m pytest tests/skills/test_amend_ripple_schema.py tests/skills/test_debug_classify_schema.py -v`
-
-Expected: 4 + 6 = 10 passed (2 fixtures × 2 tests for amend, 2 fixtures × 3 tests for debug).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add tests/fixtures/amend/ tests/fixtures/debug/ tests/skills/test_amend_ripple_schema.py tests/skills/test_debug_classify_schema.py
-git commit -m "test(r6b): RIPPLE-ANALYSIS + DEBUG-CLASSIFY schema fixtures + tests
-
-4 fixtures (2 ripple, 2 classify) covering low/high severity and
-1/3-hypothesis cases. Parametrized schema validation tests lock the
-JSON shapes from spec §4.1 and §4.2.
+MCP Playwright wrapper for /vg:debug Step 1 runtime_ui branch.
+Workflow STEP A-D: navigate to suspected route, capture snapshot +
+console + network + screenshot, emit markdown findings on last stdout.
+Implements rule 5 fallback if MCP unavailable. Does NOT modify code
+or write to DEBUG-LOG.md (orchestrator appends).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 7: Failing tests — amend delegation + telemetry
+## Task 4: Failing pytest tests for amend (4 tests)
 
 **Files:**
 - Create: `tests/skills/test_amend_subagent_delegation.py`
-- Create: `tests/skills/test_amend_telemetry_events.py`
+- Create: `tests/skills/test_amend_telemetry_preserved.py`
+- Create: `tests/skills/test_amend_within_500.py`
+- Create: `tests/skills/test_amend_rules_preserved.py`
 
-- [ ] **Step 1: Write delegation test**
+- [ ] **Step 1: Write all 4 test files**
 
 Write to `tests/skills/test_amend_subagent_delegation.py`:
 
 ```python
-"""STEP 2 of amend.md MUST spawn vg-amend-impact-analyzer with narrate-spawn."""
+"""amend.md Step 5 MUST spawn vg-amend-cascade-analyzer with narrate-spawn."""
 import re
 
 from .conftest import grep_count
 
 
-def test_amend_step2_spawns_analyzer(skill_loader):
+def test_amend_step5_spawns_cascade_analyzer(skill_loader):
     skill = skill_loader("amend")
     body = skill["body"]
     spawn_refs = grep_count(
         body,
-        r'subagent_type=["\']vg-amend-impact-analyzer["\']',
+        r'subagent_type=["\']vg-amend-cascade-analyzer["\']',
     )
     assert spawn_refs >= 1, (
-        "amend.md does not spawn vg-amend-impact-analyzer; "
-        "STEP 2 must call Agent(subagent_type='vg-amend-impact-analyzer', ...)"
+        "amend.md does not spawn vg-amend-cascade-analyzer; "
+        "Step 5 must call Agent(subagent_type='vg-amend-cascade-analyzer', ...)"
     )
 
 
-def test_amend_step2_wraps_spawn_with_narration(skill_loader):
+def test_amend_step5_wraps_spawn_with_narration(skill_loader):
     skill = skill_loader("amend")
     body = skill["body"]
     narrate_calls = grep_count(
         body,
-        r"vg-narrate-spawn\.sh\s+vg-amend-impact-analyzer",
+        r"vg-narrate-spawn\.sh\s+vg-amend-cascade-analyzer",
     )
     assert narrate_calls >= 2, (
-        "amend.md MUST wrap analyzer spawn with at least 2 vg-narrate-spawn.sh "
+        f"amend.md MUST wrap analyzer spawn with at least 2 vg-narrate-spawn.sh "
         f"calls (spawning + returned/failed); found {narrate_calls}"
     )
 
 
-def test_amend_within_500_lines(skill_loader):
+def test_amend_step5_section_exists(skill_loader):
     skill = skill_loader("amend")
-    assert skill["lines"] <= 500, (
-        f"commands/vg/amend.md is {skill['lines']} lines (limit 500)"
+    body = skill["body"]
+    assert re.search(r"^## Step 5", body, flags=re.MULTILINE), (
+        "Step 5 section header missing from amend.md body"
     )
 
 
-def test_analyzer_agent_definition_exists(agent_loader):
-    agent = agent_loader("vg-amend-impact-analyzer")
-    assert agent["frontmatter"].get("name") == "vg-amend-impact-analyzer"
+def test_cascade_analyzer_agent_definition_exists(agent_loader):
+    agent = agent_loader("vg-amend-cascade-analyzer")
+    assert agent["frontmatter"].get("name") == "vg-amend-cascade-analyzer"
     tools = agent["frontmatter"].get("tools", "")
-    assert "Agent" not in tools, "analyzer must not be allowed Agent (no nested spawns)"
-    assert "Edit" not in tools, "analyzer is read-only — no Edit tool"
+    tools_str = " ".join(tools) if isinstance(tools, list) else str(tools)
+    assert "Write" not in tools_str, "analyzer must be read-only"
+    assert "Edit" not in tools_str
+    assert "Agent" not in tools_str
 ```
 
-- [ ] **Step 2: Write telemetry test**
-
-Write to `tests/skills/test_amend_telemetry_events.py`:
+Write to `tests/skills/test_amend_telemetry_preserved.py`:
 
 ```python
-"""amend frontmatter must_emit_telemetry MUST list analyzer + completion events."""
+"""amend.md frontmatter MUST retain amend.started + amend.completed events."""
 
-REQUIRED_EVENTS = {
-    "amend.tasklist_shown",
-    "amend.native_tasklist_projected",
-    "amend.analyzer_spawned",
-    "amend.analyzer_returned",
-    "amend.analyzer_failed",
-    "amend.ripple_presented",
-    "amend.context_updated",
-    "amend.completed",
-}
+REQUIRED_EVENT_TYPES = {"amend.started", "amend.completed"}
 
 
-def test_amend_telemetry_events_complete(skill_loader):
+def test_amend_telemetry_events_preserved(skill_loader):
     skill = skill_loader("amend")
     fm = skill["frontmatter"]
     rc = fm.get("runtime_contract", {})
-    emit = set(rc.get("must_emit_telemetry", []))
-    missing = REQUIRED_EVENTS - emit
+    events = rc.get("must_emit_telemetry", [])
+    found = {e["event_type"] for e in events if isinstance(e, dict) and "event_type" in e}
+    missing = REQUIRED_EVENT_TYPES - found
     assert not missing, (
-        f"frontmatter must_emit_telemetry missing events: {missing}\n"
-        f"current: {sorted(emit)}"
+        f"frontmatter must_emit_telemetry missing event_types: {missing}\n"
+        f"current event_types: {sorted(found)}"
     )
 ```
 
-- [ ] **Step 3: Run tests, expect mixed (delegation FAIL, agent-existence PASS, telemetry FAIL)**
+Write to `tests/skills/test_amend_within_500.py`:
 
-Run: `python3 -m pytest tests/skills/test_amend_subagent_delegation.py tests/skills/test_amend_telemetry_events.py -v`
+```python
+"""amend.md MUST stay <= 500 lines after refactor."""
+SLIM_LIMIT = 500
+
+
+def test_amend_within_500_lines(skill_loader):
+    skill = skill_loader("amend")
+    assert skill["lines"] <= SLIM_LIMIT, (
+        f"commands/vg/amend.md is {skill['lines']} lines (limit {SLIM_LIMIT})"
+    )
+```
+
+Write to `tests/skills/test_amend_rules_preserved.py`:
+
+```python
+"""amend.md MUST keep all 7 rules in <rules> block, especially rule 6 (informational only)."""
+import re
+
+
+REQUIRED_RULE_FRAGMENTS = [
+    "VG-native",
+    "Config-driven",
+    "AMENDMENT-LOG is append-only",
+    "CONTEXT.md patch, not regenerate",
+    "Git tag before modify",
+    "Impact is informational",       # Rule 6 — CRITICAL: subagent must not auto-modify
+    "no GSD delegation",             # part of rule 1
+]
+
+
+def test_amend_rules_block_present(skill_loader):
+    skill = skill_loader("amend")
+    body = skill["body"]
+    assert "<rules>" in body and "</rules>" in body, "rules block missing"
+
+
+def test_amend_all_rule_fragments_present(skill_loader):
+    skill = skill_loader("amend")
+    body = skill["body"]
+    rules_match = re.search(r"<rules>(.*?)</rules>", body, flags=re.DOTALL)
+    assert rules_match
+    rules_text = rules_match.group(1)
+    missing = [f for f in REQUIRED_RULE_FRAGMENTS if f not in rules_text]
+    assert not missing, f"<rules> block missing fragments: {missing}"
+
+
+def test_amend_rule_6_informational_explicit(skill_loader):
+    """Rule 6 enforces NO auto-modify; subagent must respect."""
+    skill = skill_loader("amend")
+    body = skill["body"]
+    rules_match = re.search(r"<rules>(.*?)</rules>", body, flags=re.DOTALL)
+    rules_text = rules_match.group(1)
+    assert "informational" in rules_text and "NOT auto-modify" in rules_text or "does NOT" in rules_text, (
+        "Rule 6 wording weakened — must keep 'informational' + 'NOT auto-modify' or 'does NOT' phrasing"
+    )
+```
+
+- [ ] **Step 2: Run tests, expect mixed**
+
+Run: `cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix" && python3 -m pytest tests/skills/test_amend_*.py -v`
 
 Expected:
-- `test_amend_step2_spawns_analyzer` — FAIL (no spawn yet)
-- `test_amend_step2_wraps_spawn_with_narration` — FAIL
-- `test_amend_within_500_lines` — PASS (already 323)
-- `test_analyzer_agent_definition_exists` — PASS (Task 4 created it)
-- `test_amend_telemetry_events_complete` — FAIL (missing analyzer_* events)
+- `test_amend_step5_spawns_cascade_analyzer` — FAIL (no spawn yet)
+- `test_amend_step5_wraps_spawn_with_narration` — FAIL
+- `test_amend_step5_section_exists` — PASS (Step 5 already exists)
+- `test_cascade_analyzer_agent_definition_exists` — PASS (Task 2 created it)
+- `test_amend_telemetry_events_preserved` — PASS (already correct)
+- `test_amend_within_500_lines` — PASS (323 lines)
+- `test_amend_rules_block_present` — PASS
+- `test_amend_all_rule_fragments_present` — PASS
+- `test_amend_rule_6_informational_explicit` — PASS
 
-- [ ] **Step 4: Commit failing tests**
+If "PASS today" tests fail, investigate before proceeding.
+
+- [ ] **Step 3: Commit failing tests**
 
 ```bash
-git add tests/skills/test_amend_subagent_delegation.py tests/skills/test_amend_telemetry_events.py
-git commit -m "test(r6b): failing tests — amend delegation + telemetry
+git add tests/skills/test_amend_*.py
+git commit -m "test(r6b): failing tests — amend Step 5 delegation; baseline locks for telemetry/size/rules
 
-Locks contract: STEP 2 spawns vg-amend-impact-analyzer with
-narrate-spawn wrap; frontmatter emits analyzer_{spawned,returned,failed}
-+ ripple_presented + context_updated + completed.
+Locks the post-refactor contract:
+- Step 5 spawns vg-amend-cascade-analyzer with narrate-spawn wrap
+Plus baseline locks (passing today, must stay passing):
+- amend.started + amend.completed in must_emit_telemetry
+- ≤500 lines
+- All 7 rules present, especially rule 6 (informational only)
 
-Refactor in next task makes them pass.
+Refactor in next task makes failing tests pass.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 8: Refactor amend.md — delegate STEP 2
+## Task 5: Refactor amend.md Step 5 — delegate to subagent
 
 **Files:**
-- Modify: `commands/vg/amend.md` (frontmatter + STEP 2 body)
+- Modify: `commands/vg/amend.md` (Step 5 body, lines ~204–246)
 
-- [ ] **Step 1: Update frontmatter must_emit_telemetry**
+- [ ] **Step 1: Read current Step 5 body**
 
-In `commands/vg/amend.md` frontmatter, ensure `runtime_contract.must_emit_telemetry` lists ALL of:
+Run: `awk '/^## Step 5/,/^## Step 6/' commands/vg/amend.md > /tmp/amend-step5-current.md && wc -l /tmp/amend-step5-current.md`
 
-```yaml
-- "amend.tasklist_shown"
-- "amend.native_tasklist_projected"
-- "amend.analyzer_spawned"
-- "amend.analyzer_returned"
-- "amend.analyzer_failed"
-- "amend.ripple_presented"
-- "amend.context_updated"
-- "amend.completed"
-```
+Note line count.
 
-Add any missing entries (preserve existing ones).
+- [ ] **Step 2: Replace Step 5 body**
 
-- [ ] **Step 2: Replace STEP 2 body with analyzer-spawn pattern**
-
-Locate the current STEP 2 section (between `## STEP 2` heading and the next `## STEP` heading). Replace its body with:
+Locate `## Step 5` heading and the next `## Step 6` heading. Replace EVERYTHING between them (preserve those headings) with:
 
 ```markdown
-## STEP 2 — Spawn vg-amend-impact-analyzer
+## Step 5: Cascade impact analysis
 
-Load contract: `commands/vg/_shared/amend/severity-rules.md` (analyzer
-will load this too — orchestrator does not need the full table, only
-the awareness that the analyzer applies it).
+Cascade analysis is delegated to `vg-amend-cascade-analyzer` subagent
+(read-only). Subagent inspects PLAN/API-CONTRACTS/TEST-GOALS/SUMMARY/
+RUNTIME-MAP for references to changed decisions, returns a markdown
+impact report. Per rule 6, the report is informational — orchestrator
+displays it to user but does NOT auto-modify any artifact.
 
-### 2.1 Pre-spawn narrate (green pill)
-
-```bash
-bash scripts/vg-narrate-spawn.sh vg-amend-impact-analyzer spawning "phase=$PHASE"
-vg-orchestrator emit-event amend.analyzer_spawned --gate STEP-2 \
-  --payload "{\"phase\":\"$PHASE\"}"
-```
-
-### 2.2 Build manifest + spawn
-
-Enumerate current artifacts:
+### 5.1 Pre-spawn narrate
 
 ```bash
-manifest=$(find ".vg/phases/$PHASE/" -type f \
-  \( -name '*.md' -o -name '*.json' \) \
-  -not -path '*/.step-markers/*' \
-  -not -path '*/.deploy-log*' \
-  | sort)
+bash scripts/vg-narrate-spawn.sh vg-amend-cascade-analyzer spawning "phase=$PHASE_NUMBER decisions=$CHANGED_DECISIONS"
 ```
 
-Spawn:
+### 5.2 Spawn
 
-```
+Construct prompt JSON and call:
+
+```text
 Agent(
-  subagent_type="vg-amend-impact-analyzer",
+  subagent_type="vg-amend-cascade-analyzer",
   prompt={
-    "phase": "<phase>",
-    "change_description": "<from STEP 1 user input>",
-    "current_artifacts_manifest": <manifest as JSON list>,
-    "policy_ref": "commands/vg/_shared/amend/severity-rules.md"
+    "phase_dir": "${PHASE_DIR}",
+    "changed_decision_ids": <JSON list of D-XX from Step 2>,
+    "change_summary": "<one-line from Step 2 user input>"
   }
 )
 ```
 
-### 2.3 Post-spawn narrate
+### 5.3 Post-spawn narrate
 
-On success:
-
-```bash
-bash scripts/vg-narrate-spawn.sh vg-amend-impact-analyzer returned "affected=$N max_severity=$SEV"
-vg-orchestrator emit-event amend.analyzer_returned --gate STEP-2 \
-  --payload "{\"affected_count\":$N,\"max_severity\":\"$SEV\"}"
-```
-
-On failure (status ∈ {input_unclear, phase_missing}):
+On success (markdown report returned):
 
 ```bash
-bash scripts/vg-narrate-spawn.sh vg-amend-impact-analyzer failed "<one-line cause>"
-vg-orchestrator emit-event amend.analyzer_failed --gate STEP-2 \
-  --payload "{\"status\":\"$STATUS\"}"
+bash scripts/vg-narrate-spawn.sh vg-amend-cascade-analyzer returned "report-len=$(echo "$REPORT" | wc -l)"
 ```
 
-If `status == "input_unclear"`, return to STEP 1 to re-prompt user.
-If `status == "phase_missing"`, emit hard block.
+On failure (subagent emitted error JSON or no markdown block):
 
-### 2.4 Read RIPPLE-ANALYSIS.json
+```bash
+bash scripts/vg-narrate-spawn.sh vg-amend-cascade-analyzer failed "<one-line cause>"
+```
 
-Read the file the analyzer wrote at `.vg/phases/$PHASE/RIPPLE-ANALYSIS.json`.
-Validate top-level fields (phase, affected[], recommended_action,
-confidence). On schema mismatch, emit block `Amend-Ripple-Schema-Mismatch`.
+### 5.4 Display report to user
+
+Display the subagent's markdown report block inline in chat. Do NOT
+write the report to a file (rule 6: informational only). The
+AMENDMENT-LOG.md entry written in Step 3 already captures change context;
+the cascade report is for user's pre-commit awareness.
+
+### 5.5 If subagent failed
+
+If the subagent failed (e.g. all artifacts unreadable), surface the
+cause to user via:
+
+> ⚠ Cascade analysis failed: <cause>. Continue to Step 6 commit
+> without impact report? (yes/no)
+
+On yes → proceed to Step 6.
+On no → abort entry skill (no commit, no telemetry beyond what was emitted).
+
+See `.claude/agents/vg-amend-cascade-analyzer.md` for the full subagent
+contract.
 ```
 
 - [ ] **Step 3: Run amend tests, expect ALL PASS**
 
-Run: `python3 -m pytest tests/skills/test_amend_subagent_delegation.py tests/skills/test_amend_telemetry_events.py -v`
+Run: `python3 -m pytest tests/skills/test_amend_*.py -v`
 
-Expected: 5 passed.
+Expected: 9 tests pass (4 subagent_delegation + 1 telemetry + 1 within_500 + 3 rules_preserved).
 
-- [ ] **Step 4: Append References footer (if not present)**
-
-At end of `commands/vg/amend.md`, ensure this block exists:
-
-```markdown
----
-
-## References
-
-- Severity taxonomy: `commands/vg/_shared/amend/severity-rules.md`
-- Analyzer subagent: `.claude/agents/vg-amend-impact-analyzer.md`
-- UX baseline: `docs/superpowers/specs/_shared-ux-baseline.md`
-- R6b design spec: `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md`
-```
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add commands/vg/amend.md
-git commit -m "refactor(r6b): amend.md STEP 2 — delegate to vg-amend-impact-analyzer
+git commit -m "refactor(r6b): amend.md Step 5 — delegate cascade to vg-amend-cascade-analyzer
 
-Cascade impact analysis moved to subagent. STEP 2 now: build manifest,
-spawn (narrate green), receive return (narrate cyan/red), read
-RIPPLE-ANALYSIS.json, validate schema. Frontmatter telemetry expanded
-with analyzer_{spawned,returned,failed} + ripple_presented +
-context_updated + completed.
+Per spec §3.1: Step 5 was inline grep + analysis (~37 lines). Refactored
+to spawn read-only subagent that returns markdown impact report.
+Orchestrator displays inline (no new file artifact). Rule 6 preserved
+(informational only, no auto-modify).
 
-All 5 amend pytest tests pass.
+All 9 R6b amend pytest tests pass.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 9: Failing tests — debug delegation + telemetry + fix loop max 3
+## Task 6: Failing pytest tests for debug (5 tests)
 
 **Files:**
 - Create: `tests/skills/test_debug_subagent_delegation.py`
-- Create: `tests/skills/test_debug_telemetry_events.py`
-- Create: `tests/skills/test_debug_fix_loop_max_3.py`
+- Create: `tests/skills/test_debug_telemetry_preserved.py`
+- Create: `tests/skills/test_debug_within_500.py`
+- Create: `tests/skills/test_debug_no_loop_cap.py`
+- Create: `tests/skills/test_debug_rules_preserved.py`
 
-- [ ] **Step 1: Write delegation test**
+- [ ] **Step 1: Write all 5 test files**
 
 Write to `tests/skills/test_debug_subagent_delegation.py`:
 
 ```python
-"""STEP 2 of debug.md MUST spawn vg-debug-classifier with narrate-spawn."""
+"""debug.md Step 1 runtime_ui branch MUST spawn vg-debug-ui-discovery."""
 import re
 
 from .conftest import grep_count
 
 
-def test_debug_step2_spawns_classifier(skill_loader):
+def test_debug_step1_runtime_ui_spawns_ui_discovery(skill_loader):
     skill = skill_loader("debug")
     body = skill["body"]
-    spawn_refs = grep_count(
+    # Look for spawn within Step 1 section
+    step1_match = re.search(
+        r"^## Step 1(.*?)^## Step 2",
         body,
-        r'subagent_type=["\']vg-debug-classifier["\']',
+        flags=re.MULTILINE | re.DOTALL,
     )
-    assert spawn_refs >= 1
+    assert step1_match, "Step 1 section not found in debug.md"
+    step1_body = step1_match.group(1)
+    spawn_refs = len(re.findall(
+        r'subagent_type=["\']vg-debug-ui-discovery["\']',
+        step1_body,
+    ))
+    assert spawn_refs >= 1, (
+        "debug.md Step 1 does not spawn vg-debug-ui-discovery; "
+        "the runtime_ui branch must call Agent(subagent_type='vg-debug-ui-discovery', ...)"
+    )
 
 
-def test_debug_step2_wraps_spawn_with_narration(skill_loader):
+def test_debug_step1_wraps_spawn_with_narration(skill_loader):
     skill = skill_loader("debug")
     body = skill["body"]
     narrate_calls = grep_count(
         body,
-        r"vg-narrate-spawn\.sh\s+vg-debug-classifier",
+        r"vg-narrate-spawn\.sh\s+vg-debug-ui-discovery",
     )
-    assert narrate_calls >= 2
+    assert narrate_calls >= 2, (
+        f"debug.md MUST wrap ui-discovery spawn with at least 2 vg-narrate-spawn.sh "
+        f"calls (spawning + returned/failed); found {narrate_calls}"
+    )
 
 
-def test_debug_within_500_lines(skill_loader):
-    skill = skill_loader("debug")
-    assert skill["lines"] <= 500
-
-
-def test_classifier_agent_definition_exists(agent_loader):
-    agent = agent_loader("vg-debug-classifier")
-    assert agent["frontmatter"].get("name") == "vg-debug-classifier"
+def test_ui_discovery_agent_definition_exists(agent_loader):
+    agent = agent_loader("vg-debug-ui-discovery")
+    assert agent["frontmatter"].get("name") == "vg-debug-ui-discovery"
     tools = agent["frontmatter"].get("tools", "")
-    assert "Agent" not in tools
-    assert "Edit" not in tools
+    tools_str = " ".join(tools) if isinstance(tools, list) else str(tools)
+    assert "mcp__playwright1__browser_navigate" in tools_str
+    assert "Write" not in tools_str.split()[0:3] or "Write" not in tools_str  # crude check
+    assert "Agent" not in tools_str
 ```
 
-- [ ] **Step 2: Write telemetry test**
-
-Write to `tests/skills/test_debug_telemetry_events.py`:
+Write to `tests/skills/test_debug_telemetry_preserved.py`:
 
 ```python
-"""debug frontmatter must_emit_telemetry MUST list classifier + fix loop events."""
+"""debug.md frontmatter MUST retain all 5 telemetry events."""
 
-REQUIRED_EVENTS = {
-    "debug.tasklist_shown",
-    "debug.native_tasklist_projected",
-    "debug.classifier_spawned",
-    "debug.classifier_returned",
-    "debug.classifier_failed",
+REQUIRED_EVENT_TYPES = {
+    "debug.parsed",
+    "debug.classified",
     "debug.fix_attempted",
-    "debug.fix_loop_exhausted",
-    "debug.user_verified",
+    "debug.user_confirmed",
     "debug.completed",
 }
 
 
-def test_debug_telemetry_events_complete(skill_loader):
+def test_debug_telemetry_events_preserved(skill_loader):
     skill = skill_loader("debug")
     fm = skill["frontmatter"]
     rc = fm.get("runtime_contract", {})
-    emit = set(rc.get("must_emit_telemetry", []))
-    missing = REQUIRED_EVENTS - emit
+    events = rc.get("must_emit_telemetry", [])
+    found = {e["event_type"] for e in events if isinstance(e, dict) and "event_type" in e}
+    missing = REQUIRED_EVENT_TYPES - found
     assert not missing, (
-        f"frontmatter must_emit_telemetry missing events: {missing}\n"
-        f"current: {sorted(emit)}"
+        f"frontmatter must_emit_telemetry missing event_types: {missing}\n"
+        f"current event_types: {sorted(found)}"
     )
 ```
 
-- [ ] **Step 3: Write fix-loop max-3 test**
-
-Write to `tests/skills/test_debug_fix_loop_max_3.py`:
+Write to `tests/skills/test_debug_within_500.py`:
 
 ```python
-"""debug.md fix loop in STEP 4 MUST be hard-capped at 3 iterations."""
+"""debug.md MUST stay <= 500 lines after refactor."""
+SLIM_LIMIT = 500
+
+
+def test_debug_within_500_lines(skill_loader):
+    skill = skill_loader("debug")
+    assert skill["lines"] <= SLIM_LIMIT, (
+        f"commands/vg/debug.md is {skill['lines']} lines (limit {SLIM_LIMIT})"
+    )
+```
+
+Write to `tests/skills/test_debug_no_loop_cap.py`:
+
+```python
+"""debug.md Step 3 fix loop MUST NOT have a hard iteration cap.
+
+Rule 2: 'AskUserQuestion-driven loop — no max iterations'. Capping the
+loop violates the rule. This test asserts NO forbidden cap patterns
+appear in Step 3 body.
+"""
 import re
 
 
-def test_fix_loop_explicit_max_3(skill_loader):
-    """Body must contain a literal '3' iteration cap reference in STEP 4."""
+FORBIDDEN_CAP_PATTERNS = [
+    r"max(?:\s+|\s*=\s*|imum\s+)\d+\s+iteration",
+    r"\d+\s+iteration\s+max",
+    r"hard[-\s]?cap\w*\s+(?:at\s+|of\s+)?\d+",
+    r"iteration[_\s]?count\s*[<≤]=?\s*\d+",
+    r"iteration\s*[<≤]=?\s*\d+",
+]
+
+
+def test_debug_step3_has_no_cap(skill_loader):
     skill = skill_loader("debug")
     body = skill["body"]
-    step4_match = re.search(
-        r"^## STEP 4(.*?)^## STEP 5",
+    step3_match = re.search(
+        r"^## Step 3(.*?)^## Step 4",
         body,
         flags=re.MULTILINE | re.DOTALL,
     )
-    assert step4_match, "STEP 4 section not found in debug.md"
-    step4 = step4_match.group(1)
-    # Look for explicit "3 iteration" or "max 3" or "iteration < 3" or "iteration_count < 3"
-    cap_patterns = [
-        r"max(?:\s+|\s*=\s*|imum\s+)3\s+iteration",
-        r"3\s+iteration\s+max",
-        r"hard[-\s]?cap\w*\s+(?:at\s+|of\s+)?3",
-        r"iteration\s*[<≤]=?\s*3",
-        r"iteration_count\s*[<≤]=?\s*3",
-    ]
-    found = any(re.search(p, step4, flags=re.IGNORECASE) for p in cap_patterns)
-    assert found, (
-        "STEP 4 must explicitly state the fix loop is capped at 3 iterations. "
-        "Use one of: 'max 3 iterations', '3 iteration max', 'hard-cap at 3', "
-        "'iteration < 3', 'iteration_count < 3'."
-    )
-
-
-def test_fix_loop_exhausted_event_referenced(skill_loader):
-    """STEP 4 must reference debug.fix_loop_exhausted on cap-hit path."""
-    skill = skill_loader("debug")
-    body = skill["body"]
-    assert "debug.fix_loop_exhausted" in body, (
-        "STEP 4 must emit debug.fix_loop_exhausted when iteration == 3 "
-        "without resolution"
+    assert step3_match, "Step 3 section not found in debug.md"
+    step3 = step3_match.group(1)
+    found_caps = []
+    for pattern in FORBIDDEN_CAP_PATTERNS:
+        if re.search(pattern, step3, flags=re.IGNORECASE):
+            found_caps.append(pattern)
+    assert not found_caps, (
+        f"Step 3 contains forbidden iteration cap pattern(s): {found_caps}. "
+        f"Rule 2 requires no max iterations (AskUserQuestion-driven)."
     )
 ```
 
-- [ ] **Step 4: Run tests, expect mixed**
+Write to `tests/skills/test_debug_rules_preserved.py`:
 
-Run: `python3 -m pytest tests/skills/test_debug_subagent_delegation.py tests/skills/test_debug_telemetry_events.py tests/skills/test_debug_fix_loop_max_3.py -v`
+```python
+"""debug.md MUST keep all 7 rules in <rules> block, especially rule 2 (no max iterations)."""
+import re
+
+
+REQUIRED_RULE_FRAGMENTS = [
+    "Standalone session",
+    "AskUserQuestion-driven loop",   # Rule 2 — CRITICAL
+    "no max iterations",              # Rule 2 enforcement
+    "Auto-classify",
+    "Spec gap",
+    "Browser MCP fallback",
+    "Atomic commits",
+    "No destructive actions",
+]
+
+
+def test_debug_rules_block_present(skill_loader):
+    skill = skill_loader("debug")
+    body = skill["body"]
+    assert "<rules>" in body and "</rules>" in body, "rules block missing"
+
+
+def test_debug_all_rule_fragments_present(skill_loader):
+    skill = skill_loader("debug")
+    body = skill["body"]
+    rules_match = re.search(r"<rules>(.*?)</rules>", body, flags=re.DOTALL)
+    assert rules_match
+    rules_text = rules_match.group(1)
+    missing = [f for f in REQUIRED_RULE_FRAGMENTS if f not in rules_text]
+    assert not missing, f"<rules> block missing fragments: {missing}"
+
+
+def test_debug_rule_2_no_cap_explicit(skill_loader):
+    """Rule 2 wording must contain 'no max iterations' or equivalent."""
+    skill = skill_loader("debug")
+    body = skill["body"]
+    rules_match = re.search(r"<rules>(.*?)</rules>", body, flags=re.DOTALL)
+    rules_text = rules_match.group(1)
+    assert "no max iterations" in rules_text or "no max" in rules_text.lower(), (
+        "Rule 2 wording weakened — must keep 'no max iterations' phrasing"
+    )
+```
+
+- [ ] **Step 2: Run tests, expect mixed**
+
+Run: `python3 -m pytest tests/skills/test_debug_*.py -v`
 
 Expected:
-- delegation tests — FAIL (no spawn yet)
-- agent-existence — PASS (Task 5 created it)
-- telemetry — FAIL
-- within_500_lines — PASS (399 already)
-- fix_loop tests — FAIL (no explicit cap yet)
+- `test_debug_step1_runtime_ui_spawns_ui_discovery` — FAIL (pseudo-code not yet replaced)
+- `test_debug_step1_wraps_spawn_with_narration` — FAIL
+- `test_ui_discovery_agent_definition_exists` — PASS (Task 3 created it)
+- `test_debug_telemetry_events_preserved` — PASS (already correct)
+- `test_debug_within_500_lines` — PASS (399 lines)
+- `test_debug_step3_has_no_cap` — PASS (no cap today, rule 2 already honored)
+- `test_debug_rules_block_present` — PASS
+- `test_debug_all_rule_fragments_present` — PASS
+- `test_debug_rule_2_no_cap_explicit` — PASS
 
-- [ ] **Step 5: Commit failing tests**
+If "PASS today" tests fail, investigate.
+
+- [ ] **Step 3: Commit failing tests**
 
 ```bash
-git add tests/skills/test_debug_subagent_delegation.py tests/skills/test_debug_telemetry_events.py tests/skills/test_debug_fix_loop_max_3.py
-git commit -m "test(r6b): failing tests — debug delegation + telemetry + fix loop cap
+git add tests/skills/test_debug_*.py
+git commit -m "test(r6b): failing tests — debug Step 1 runtime_ui delegation; baseline locks
 
-Locks: STEP 2 spawns vg-debug-classifier with narrate; frontmatter
-emits classifier_{spawned,returned,failed} + fix_attempted +
-fix_loop_exhausted + user_verified + completed; STEP 4 fix loop
-hard-capped at 3 iterations.
+Locks the post-refactor contract:
+- Step 1 runtime_ui branch spawns vg-debug-ui-discovery with narrate-spawn
+Plus baseline locks (passing today, must stay passing):
+- All 5 telemetry events preserved
+- ≤500 lines
+- NO hard cap on Step 3 fix loop (rule 2)
+- All 7 rules present, especially rule 2
 
-Refactor in next task makes them pass.
+Refactor in next task makes failing tests pass.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 10: Refactor debug.md — delegate STEP 2 + cap STEP 4
+## Task 7: Refactor debug.md Step 1 runtime_ui — implement Agent() spawn
 
 **Files:**
-- Modify: `commands/vg/debug.md`
+- Modify: `commands/vg/debug.md` (Step 1 `runtime_ui` branch only)
 
-- [ ] **Step 1: Update frontmatter must_emit_telemetry**
+- [ ] **Step 1: Locate runtime_ui branch in Step 1**
 
-Add (preserving existing entries) to `runtime_contract.must_emit_telemetry`:
+Run: `awk '/^### runtime_ui/,/^### network/' commands/vg/debug.md > /tmp/debug-runtime-ui-current.md && cat /tmp/debug-runtime-ui-current.md`
 
-```yaml
-- "debug.tasklist_shown"
-- "debug.native_tasklist_projected"
-- "debug.classifier_spawned"
-- "debug.classifier_returned"
-- "debug.classifier_failed"
-- "debug.fix_attempted"
-- "debug.fix_loop_exhausted"
-- "debug.user_verified"
-- "debug.completed"
-```
+This is the section to replace.
 
-- [ ] **Step 2: Replace STEP 2 body with classifier-spawn pattern**
+- [ ] **Step 2: Replace runtime_ui branch body**
 
-Locate STEP 2. Replace body with:
+Locate the `### runtime_ui` heading (around line 176) and the next `### network` heading (around line 198). Replace EVERYTHING between them (preserve those headings) with:
 
 ```markdown
-## STEP 2 — Spawn vg-debug-classifier
+### runtime_ui → browser MCP via vg-debug-ui-discovery subagent
 
-Load contract: `commands/vg/_shared/debug/classify-taxonomy.md` (the
-classifier will load it too).
-
-### 2.1 Pre-spawn narrate
+Detect MCP availability:
 
 ```bash
-bash scripts/vg-narrate-spawn.sh vg-debug-classifier spawning "bug=$BUG_SHORT"
-vg-orchestrator emit-event debug.classifier_spawned --gate STEP-2 \
-  --payload "{\"run_id\":\"$RUN_ID\"}"
+MCP_AVAILABLE=$(...check for mcp__playwright1__ tool registration...)
 ```
 
-### 2.2 Spawn
+Determine `SUSPECTED_ROUTE` from bug description (heuristic — extract path
+from bug_description, default to "unknown" if no path mentioned).
 
+Read base URL from config:
+
+```bash
+BASE_URL=$(python3 scripts/lib/vg-config-extract.py "env.sandbox.base_url" || echo "http://localhost:3000")
 ```
+
+#### Pre-spawn narrate
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-debug-ui-discovery spawning "route=$SUSPECTED_ROUTE mcp=$MCP_AVAILABLE"
+```
+
+#### Spawn
+
+Construct prompt JSON and call:
+
+```text
 Agent(
-  subagent_type="vg-debug-classifier",
+  subagent_type="vg-debug-ui-discovery",
   prompt={
-    "bug_context": <from STEP 1 user input — description, repro_steps, error_message?, file_paths?, recent_commits?>,
-    "codebase_root": "<git rev-parse --show-toplevel>",
-    "policy_ref": "commands/vg/_shared/debug/classify-taxonomy.md",
-    "run_id": "<RUN_ID>"
+    "bug_description": "<verbatim from user>",
+    "suspected_route": "<SUSPECTED_ROUTE or 'unknown'>",
+    "debug_id": "<DEBUG_ID from Step 0>",
+    "mcp_available": <MCP_AVAILABLE bool>,
+    "base_url": "<BASE_URL>"
   }
 )
 ```
 
-### 2.3 Post-spawn narrate
+#### Post-spawn narrate
 
-On success (status ∈ {success, insufficient_evidence}):
-
-```bash
-bash scripts/vg-narrate-spawn.sh vg-debug-classifier returned "hypotheses=$N top_type=$TYPE"
-vg-orchestrator emit-event debug.classifier_returned --gate STEP-2 \
-  --payload "{\"hypothesis_count\":$N,\"top_type\":\"$TYPE\"}"
-```
-
-On failure (status == "codebase_unreachable"):
+On success (markdown findings block returned):
 
 ```bash
-bash scripts/vg-narrate-spawn.sh vg-debug-classifier failed "codebase unreachable"
-vg-orchestrator emit-event debug.classifier_failed --gate STEP-2 \
-  --payload "{\"cause\":\"codebase_unreachable\"}"
+bash scripts/vg-narrate-spawn.sh vg-debug-ui-discovery returned "route=$SUSPECTED_ROUTE"
 ```
 
-If `status == "insufficient_evidence"`, return to STEP 1 to gather more
-info from user.
-
-### 2.4 Read DEBUG-CLASSIFY.json
-
-Read `.vg/debug/<RUN_ID>/DEBUG-CLASSIFY.json`. Validate hypotheses[]
-schema. On mismatch → emit block `Debug-Classify-Schema-Mismatch`.
-```
-
-- [ ] **Step 3: Replace STEP 4 body — fix loop with explicit max-3 cap**
-
-Locate STEP 4. Replace body with:
-
-```markdown
-## STEP 4 — Fix Loop (hard-cap at 3 iterations)
-
-Iterate over hypotheses ranked 1..N. The loop is hard-capped at
-`iteration_count < 3` — under no circumstance attempt a 4th iteration
-without restarting the skill.
+On failure:
 
 ```bash
-iteration_count=0
-resolved=false
-
-while [ "$iteration_count" -lt 3 ] && [ "$resolved" = "false" ]; do
-  iteration_count=$((iteration_count + 1))
-  hypothesis="${HYPOTHESES[$((iteration_count - 1))]}"
-
-  # 4.1 Apply candidate fix using Edit/Write directly.
-  #     Orchestrator AI inspects the hypothesis suggested_fix field
-  #     and applies the change. NO subagent spawn here — fix is in
-  #     orchestrator context so the user can review every Edit call.
-
-  vg-orchestrator emit-event debug.fix_attempted --gate STEP-4 \
-    --payload "{\"iteration\":$iteration_count,\"hypothesis_rank\":$iteration_count}"
-
-  # 4.2 Ask user if fix worked.
-  #     AskUserQuestion: "Did the fix resolve the bug? (yes/no)"
-  if [ "$USER_REPLY" = "yes" ]; then
-    resolved=true
-  fi
-done
-
-if [ "$resolved" = "false" ]; then
-  vg-orchestrator emit-event debug.fix_loop_exhausted --gate STEP-4 \
-    --payload "{\"iterations_run\":$iteration_count}"
-  # Surface to user: "Tried 3 hypotheses, none resolved. Status=unresolved."
-fi
+bash scripts/vg-narrate-spawn.sh vg-debug-ui-discovery failed "<one-line cause>"
 ```
 
-### Cap rationale
+#### Append findings to DEBUG-LOG.md
 
-3 iterations balances thoroughness with cost. After 3 failed attempts,
-the classifier's hypothesis pool is likely wrong for this bug —
-returning to /vg:debug with refined evidence is better than continuing.
+Append the subagent's markdown findings block to:
+`.vg/debug/${DEBUG_ID}/DEBUG-LOG.md` (append-only per existing pattern).
+
+If subagent fell back (rule 5 — MCP unavailable), the findings block
+itself contains the fallback note. Orchestrator may then auto-route
+to `/vg:amend ${PHASE_NUMBER}` if `--no-amend-trigger` is NOT set
+(per existing Step 0 spec_gap routing pattern).
+
+See `.claude/agents/vg-debug-ui-discovery.md` for the full subagent
+contract (workflow STEP A-D, MCP tool list, fallback paths).
 ```
 
-- [ ] **Step 4: Append References footer (if not present)**
+- [ ] **Step 3: Run debug tests, expect ALL PASS**
 
-```markdown
----
+Run: `python3 -m pytest tests/skills/test_debug_*.py -v`
 
-## References
+Expected: 9 tests pass (3 subagent_delegation + 1 telemetry + 1 within_500 + 1 no_loop_cap + 3 rules_preserved).
 
-- Classify taxonomy: `commands/vg/_shared/debug/classify-taxonomy.md`
-- Classifier subagent: `.claude/agents/vg-debug-classifier.md`
-- Bug detection guide: `vg:_shared:bug-detection-guide`
-- UX baseline: `docs/superpowers/specs/_shared-ux-baseline.md`
-- R6b design spec: `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md`
-```
-
-- [ ] **Step 5: Run all debug tests, expect ALL PASS**
-
-Run: `python3 -m pytest tests/skills/test_debug_subagent_delegation.py tests/skills/test_debug_telemetry_events.py tests/skills/test_debug_fix_loop_max_3.py -v`
-
-Expected: 4 + 1 + 2 = 7 passed.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add commands/vg/debug.md
-git commit -m "refactor(r6b): debug.md STEP 2 + STEP 4 — delegate + cap fix loop
+git commit -m "refactor(r6b): debug.md Step 1 runtime_ui — implement vg-debug-ui-discovery spawn
 
-STEP 2: classify moved to vg-debug-classifier subagent. STEP 4: fix
-loop hard-capped at 3 iterations via while [\$iteration_count -lt 3];
-emits debug.fix_attempted per iter and debug.fix_loop_exhausted on
-cap-hit. Frontmatter telemetry expanded.
+Per spec §3.2: the runtime_ui branch had pseudo-code 'Spawn Haiku agent...'
+that was never implemented. Replaced with actual Agent(vg-debug-ui-discovery)
+spawn. Subagent wraps MCP Playwright tools, returns markdown findings.
+Orchestrator appends to DEBUG-LOG.md (consistent with existing append-only
+pattern). Rule 5 (MCP unavailable → fallback to amendment-trigger) preserved
+inside subagent.
 
-All 7 debug pytest tests pass.
+Step 3 fix loop UNCHANGED — rule 2 (no max iterations) preserved.
+All 5 telemetry events UNCHANGED.
+
+All 9 R6b debug pytest tests pass.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 11: vg-meta-skill.md — append amend + debug Red Flags
+## Task 8: vg-meta-skill.md — append amend + debug Red Flags
 
 **Files:**
 - Modify: `scripts/hooks/vg-meta-skill.md`
 
-- [ ] **Step 1: Append amend Red Flags section**
+- [ ] **Step 1: Append Red Flags sections**
 
 Append at end of `scripts/hooks/vg-meta-skill.md`:
 
@@ -1430,23 +1079,24 @@ Append at end of `scripts/hooks/vg-meta-skill.md`:
 
 | Thought | Reality |
 |---|---|
-| "Skip cascade impact analysis — change is small" | Mid-phase change impacts downstream artifacts; analyzer surfaces what you'd miss |
-| "Inline analyzer logic in entry — easier to maintain" | R6b explicitly extracts to subagent; orchestrator AI context stays slim |
-| "Auto-update CONTEXT.md without user confirm" | User confirm is mandatory — decisions are append-only audit log |
-| "Skip narrate-spawn for analyzer — it's read-only" | UX consistency matters; chip-style status applies to all spawns |
+| "Subagent should auto-apply ripple to PLAN.md" | Rule 6: cascade is INFORMATIONAL only. Subagent is read-only. Orchestrator displays report; user decides next action. |
+| "Skip cascade analysis, just commit Step 6" | Rule 6 still requires the report; user needs awareness before commit. |
+| "Cascade analyzer can write a RIPPLE-ANALYSIS.json file" | NO — output is markdown report on stdout. AMENDMENT-LOG.md (existing) captures change context; cascade is ephemeral inline. |
+| "Skip narrate-spawn for cascade analyzer — read-only is harmless" | UX baseline R2 makes narrate-spawn MANDATORY for ALL spawns. |
 
 ## Debug-specific Red Flags
 
 | Thought | Reality |
 |---|---|
-| "Skip classification, jump to fix" | Targeted bug-fix requires classifier output; jumping = guess work |
-| "Bump fix loop to 4 iterations — almost there" | Hard-cap 3 is intentional; 4th iter = restart with refined evidence |
-| "Verify with user fast, just confirm" | User verification gate is mandatory; theatre-confirm = bug returns |
-| "Apply fix in subagent — keep orchestrator clean" | Fix-applier MUST stay in orchestrator so user reviews every Edit |
-| "Skip WebSearch — codebase is enough" | WebSearch budget (3 queries) is for unfamiliar error patterns; use it |
+| "Cap fix loop at 3 to prevent infinite retry" | Rule 2: AskUserQuestion-driven, NO max iterations. User-controlled exit. |
+| "Use a subagent for classification (Step 0)" | Rule 3: Auto-classify is heuristic regex (deterministic, fast). Subagent is overkill + slow. |
+| "Skip Step 1 runtime_ui — too complex" | The Agent(vg-debug-ui-discovery) spawn IS the implementation. Skipping = pseudo-code remains. |
+| "MCP unavailable → abort debug session" | Rule 5: fallback to amendment-trigger; do NOT abort. |
+| "Subagent should write to DEBUG-LOG.md directly" | NO — orchestrator owns the append (rule 6: atomic commits per fix). Subagent returns markdown; orchestrator appends. |
+| "Spec_gap should NOT auto-route to /vg:amend" | Rule 4 + flag default is auto-route. Use --no-amend-trigger to disable. |
 ```
 
-- [ ] **Step 2: Verify markdown parses**
+- [ ] **Step 2: Verify markdown still parses**
 
 Run: `python3 -c "from pathlib import Path; t = Path('scripts/hooks/vg-meta-skill.md').read_text(); assert t.count('|') > 100; print('OK')"`
 
@@ -1458,177 +1108,160 @@ Expected: `OK`.
 git add scripts/hooks/vg-meta-skill.md
 git commit -m "docs(r6b): vg-meta-skill.md — amend + debug Red Flags
 
-4 amend entries (impact-skip, inline-analyzer, auto-update, narrate-skip)
-+ 5 debug entries (skip-classify, bump-loop, theatre-verify, fix-in-
-subagent, skip-websearch).
+4 amend entries (auto-apply, skip-cascade, JSON-artifact, narrate-skip)
++ 6 debug entries (cap-loop, classify-subagent, skip-runtime-ui,
+abort-on-mcp-fail, write-from-subagent, disable-amend-route).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 12: Manual dogfood — amend + debug
+## Task 9: Mock dogfood — amend + debug
 
-**Files:** none modified.
+**Files:** none modified — verification only.
 
-- [ ] **Step 1: amend dogfood — preconditions**
+### Part A: amend dogfood
 
-Pick a phase that has multiple artifacts (PLAN/, API-CONTRACTS/,
-TEST-GOALS/, CONTEXT.md). A phase with the per-task split format from
-R1a blueprint pilot is ideal.
+- [ ] **Step 1: Pick a phase with multiple downstream artifacts**
+
+Phase should have at least PLAN.md (or PLAN/) AND CONTEXT.md. API-CONTRACTS.md and TEST-GOALS.md optional but better coverage.
 
 - [ ] **Step 2: Run /vg:amend <phase>**
 
-In the test project:
+In Claude Code session:
 
 ```
-/vg:amend P1
+/vg:amend <phase>
 ```
 
-When STEP 1 prompts: enter a meaningful change description, e.g.
-`"Rename POST /users endpoint to POST /accounts; update response shape"`.
+Walk through Steps 0-4 (parse, what-to-change, discuss, write log, update CONTEXT). Provide a meaningful change description (e.g. "Rename POST /users → POST /accounts").
 
-- [ ] **Step 3: Verify amend chip narration + ripple**
+- [ ] **Step 3: Verify Step 5 chip narration + report**
+
+At Step 5, look for:
+- 🟢 green pill: `vg-amend-cascade-analyzer spawning phase=<phase> decisions=D-XX`
+- 🔵 cyan pill: `vg-amend-cascade-analyzer returned report-len=N`
+- Markdown impact report displayed inline (sections per artifact, suggested next action at end)
+
+- [ ] **Step 4: Verify report quality**
+
+The report should:
+- List affected artifacts (PLAN/API-CONTRACTS/TEST-GOALS sections)
+- Cite D-XX in change_summary section
+- Suggest a next action matching the phase's current pipeline state
+- NOT modify any file (read-only contract)
+
+- [ ] **Step 5: Verify CONTEXT.md updated + AMENDMENT-LOG.md appended**
+
+```bash
+cat .vg/phases/<phase>/CONTEXT.md | tail -10  # Check footer + decision edits
+cat .vg/phases/<phase>/AMENDMENT-LOG.md       # Check new amendment block appended
+```
+
+- [ ] **Step 6: Verify telemetry**
+
+```bash
+sqlite3 .vg/events.db "SELECT event_type FROM events WHERE event_type LIKE 'amend.%' ORDER BY id DESC LIMIT 5"
+```
+
+Expected: `amend.completed`, `amend.started`.
+
+### Part B: debug dogfood
+
+- [ ] **Step 7: Set up a contrived UI bug context**
+
+Either:
+- Have a real running app on `localhost:3000` with a known UI quirk, OR
+- Mock by deferring browser MCP availability check (subagent will take rule 5 fallback path)
+
+- [ ] **Step 8: Run /vg:debug with a UI bug**
+
+```
+/vg:debug "modal does not close on ESC at /admin/users"
+```
+
+- [ ] **Step 9: Verify Step 0 classifies as runtime_ui**
+
+In chat, look for: `Classification: runtime_ui (XX%)`
+
+- [ ] **Step 10: Verify Step 1 chip narration + findings**
 
 Look for:
-- 🟢 green pill: `vg-amend-impact-analyzer spawning phase=P1`
-- 🔵 cyan pill: `vg-amend-impact-analyzer returned affected=N max_severity=high`
-- RIPPLE-ANALYSIS shown to you with ≥2 affected entries
-- AskUserQuestion: "Apply change?"
+- 🟢 green pill: `vg-debug-ui-discovery spawning route=/admin/users mcp=true|false`
+- 🔵 cyan pill: `vg-debug-ui-discovery returned route=/admin/users` (or red if failed)
+- Markdown findings block displayed (snapshot summary, console, network, screenshot path OR fallback note)
 
-- [ ] **Step 4: Verify RIPPLE-ANALYSIS.json on disk**
-
-```bash
-cat .vg/phases/P1/RIPPLE-ANALYSIS.json | python3 -m json.tool
-```
-
-Verify:
-- All 6 top-level fields (phase, change_summary, analyzed_at, affected, recommended_action, confidence)
-- ≥1 entry in affected[]
-- recommended_action matches one of the templates from severity-rules.md
-
-- [ ] **Step 5: Verify amend telemetry**
+- [ ] **Step 11: Verify DEBUG-LOG.md appended**
 
 ```bash
-sqlite3 .vg/events.db \
-  "SELECT event_type FROM events WHERE event_type LIKE 'amend.%' ORDER BY id DESC LIMIT 10"
+cat .vg/debug/<debug_id>/DEBUG-LOG.md
 ```
 
-Expected (most recent first): `amend.completed`, `amend.context_updated`,
-`amend.ripple_presented`, `amend.analyzer_returned`, `amend.analyzer_spawned`,
-`amend.native_tasklist_projected`, `amend.tasklist_shown`.
+Expected: Header (from Step 0), then iteration block(s) including the UI Discovery Findings markdown.
 
-- [ ] **Step 6: debug dogfood — preconditions**
-
-Use any project. Have a contrived bug ready, e.g. introduce a typo in a
-known function name and ensure the error message references the file.
-
-- [ ] **Step 7: Run /vg:debug**
-
-```
-/vg:debug
-```
-
-When STEP 1 prompts:
-- description: `"login fails with 500 on prod"`
-- repro_steps: `"POST /auth/login with valid creds → 500"`
-- error_message: `"Cannot read properties of undefined (reading 'token')"`
-- file_paths: `"src/auth/login.ts"`
-- recent_commits: leave blank (or add the commit you contrived)
-
-- [ ] **Step 8: Verify debug chip narration + classify**
-
-Look for:
-- 🟢 green pill: `vg-debug-classifier spawning bug=login fails with 500...`
-- 🔵 cyan pill: `vg-debug-classifier returned hypotheses=N top_type=code`
-- Top-3 hypotheses shown to you
-- AskUserQuestion: "Which hypothesis to try first?"
-
-- [ ] **Step 9: Verify DEBUG-CLASSIFY.json**
+- [ ] **Step 12: Verify telemetry**
 
 ```bash
-cat .vg/debug/*/DEBUG-CLASSIFY.json | python3 -m json.tool
+sqlite3 .vg/events.db "SELECT event_type FROM events WHERE event_type LIKE 'debug.%' ORDER BY id DESC LIMIT 10"
 ```
 
-Verify:
-- bug_id, classified_at, hypotheses[], search_queries_run present
-- ≤3 hypotheses; ranks 1, 2, 3
-- Each hypothesis has all 8 required fields
+Expected events present: `debug.parsed`, `debug.classified`, plus whatever happened later in the session (`fix_attempted`, `user_confirmed`, `completed`).
 
-- [ ] **Step 10: Verify fix loop cap**
-
-Reject the first 3 fixes by answering "no" to the verify question each
-time. Verify:
-- Loop stops after iteration 3 (do NOT see iteration 4)
-- `debug.fix_loop_exhausted` event emitted
-- Skill closes with status=unresolved
-
-- [ ] **Step 11: Verify debug telemetry**
-
-```bash
-sqlite3 .vg/events.db \
-  "SELECT event_type FROM events WHERE event_type LIKE 'debug.%' ORDER BY id DESC LIMIT 15"
-```
-
-Expected events present: classifier_spawned/returned, fix_attempted (×3),
-fix_loop_exhausted, user_verified, completed.
-
-- [ ] **Step 12: Final summary**
+### Step 13: Final summary
 
 R6b ship-ready when ALL above pass:
-- amend dogfood: chip narration + RIPPLE-ANALYSIS valid + telemetry complete.
-- debug dogfood: chip narration + DEBUG-CLASSIFY valid + fix loop stops at 3 + telemetry complete.
-- All 12 R6b pytest tests pass.
-- R5.5 + R6a tests still pass (no regression).
+- amend dogfood: chip narration + cascade report inline + CONTEXT/AMENDMENT-LOG updated + telemetry
+- debug dogfood: chip narration + findings appended to DEBUG-LOG + telemetry
+- All 18 R6b pytest tests pass (9 amend + 9 debug)
+- R5.5 + R6a tests still pass (no regression)
 
 Optional tag:
 
 ```bash
-git tag -a r6b-amend-debug-dedicated -m "R6b amend+debug subagent extraction"
+git tag -a r6b-amend-debug -m "R6b amend Step 5 + debug Step 1 runtime_ui subagent extraction"
 ```
 
 ---
 
 ## Self-Review
 
-**Spec coverage check:**
+**Spec coverage:**
 
 | Spec § | Task(s) |
 |---|---|
-| §3.1 amend flow (orchestrator + analyzer split) | Tasks 4 (analyzer), 8 (entry refactor) |
-| §3.2 debug flow (orchestrator + classifier split, 3-iter cap) | Tasks 5 (classifier), 10 (entry refactor) |
-| §3.3 Slim entry constraints | Tasks 7+9 (within_500_lines tests) |
-| §4.1 vg-amend-impact-analyzer contract | Task 4 |
-| §4.2 vg-debug-classifier contract | Task 5 |
-| §5 File and directory layout | All tasks (each row mapped) |
-| §6.1 amend telemetry events (8) | Tasks 7 (telem test), 8 (frontmatter update) |
-| §6.2 debug telemetry events (9) | Tasks 9 (telem test), 10 (frontmatter update) |
-| §7.1 Error handling (subagent fail, fix loop exhaustion, schema validation) | Tasks 8 (analyzer fail paths), 10 (fix-loop cap + emit), 6 (schema tests) |
-| §7.2 Migration (pre-R6b artifacts parse) | Task 6 (RIPPLE fixtures parse) |
-| §7.3 Pytest static + manual dogfood | Tasks 6, 7, 9, 12 |
-| §7.4 Exit criteria 1-6 | Task 12 step 12 (summary) |
-| §10 UX baseline | Tasks 8, 10 (narration), 11 (Red Flags) |
+| §1.4 What changes | Tasks 5 (amend Step 5), 7 (debug Step 1 runtime_ui) |
+| §3.1 amend flow | Tasks 2 (subagent), 5 (entry refactor) |
+| §3.2 debug flow | Tasks 3 (subagent), 7 (entry refactor) |
+| §3.3 Slim entry constraints | Tasks 4 (within_500 test), 6 (within_500 test) |
+| §4.1 vg-amend-cascade-analyzer contract | Task 2 |
+| §4.2 vg-debug-ui-discovery contract | Task 3 |
+| §5 File and directory layout | All tasks |
+| §6 Telemetry events (UNCHANGED) | Tasks 4 (telem test), 6 (telem test) |
+| §7.1 Error handling | Tasks 5 (amend fail path), 7 (debug rule 5 fallback inside subagent) |
+| §7.3 Pytest static + mock dogfood | Tasks 4, 6, 9 |
+| §7.4 Exit criteria 1-6 | Task 9 step 13 |
+| §10 UX baseline | Tasks 5, 7 (narration), 8 (Red Flags) |
 
 No gaps detected.
 
 **Placeholder scan:** searched for TBD/TODO — none in plan body.
 
 **Type/path consistency:**
-- Subagent names `vg-amend-impact-analyzer`, `vg-debug-classifier` consistent across spec, agent files, delegation steps in entries, all 4 pytest files referencing them.
-- RIPPLE-ANALYSIS.json field names (`phase`, `change_summary`, `analyzed_at`, `affected[].{artifact,severity,reason,confidence}`, `recommended_action`, `confidence`) consistent across schema doc, fixtures, schema test, analyzer subagent STEP E, orchestrator STEP 2.4.
-- DEBUG-CLASSIFY.json field names (`bug_id`, `classified_at`, `hypotheses[].{rank,type,file,line,hypothesis,evidence,confidence,suggested_fix}`, `search_queries_run`) consistent across same trio.
-- Telemetry event names consistent across telem tests, STEP 2 emit calls, STEP 4 emit calls (debug only), vg-meta-skill Red Flags.
-- Severity enum {low, med, high} used consistently in fixtures, schema test, severity-rules.md.
-- Type enum {code, config, env, data} used consistently in fixtures, schema test, classify-taxonomy.md.
+- Subagent names `vg-amend-cascade-analyzer`, `vg-debug-ui-discovery` consistent across spec, agent files, delegation steps, all pytest files.
+- Telemetry event names (`amend.started/completed`, `debug.parsed/classified/fix_attempted/user_confirmed/completed`) consistent.
+- Rule fragment strings (rule 2 "no max iterations", rule 6 "informational") consistent across spec, plan, tests.
+- File paths consistent.
+- NO `RIPPLE-ANALYSIS.json` or `DEBUG-CLASSIFY.json` mentioned anywhere (explicit decision: outputs are markdown text, not JSON files).
 
 ---
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-05-03-vg-r6b-amend-debug.md`. Two execution options:
+Plan complete and saved to `docs/superpowers/plans/2026-05-03-vg-r6b-amend-debug.md` (REVISED). Two execution options:
 
-**1. Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration.
+**1. Subagent-Driven (recommended)** — dispatch a fresh subagent per task, review between tasks.
 
-**2. Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints.
+**2. Inline Execution** — execute tasks in this session using executing-plans, batch with checkpoints.
 
 Which approach?

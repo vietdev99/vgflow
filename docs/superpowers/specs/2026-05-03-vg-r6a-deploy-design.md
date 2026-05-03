@@ -1,11 +1,19 @@
-# VG R6a — Deploy Workflow Dedicated Spec
+# VG R6a — Deploy Workflow Dedicated Spec (REVISED 2026-05-03)
 
-**Status:** Design (pending implementation plan)
-**Date:** 2026-05-03
-**Replication round:** R6a (cross-cutting workflow #1, paired with R6b amend+debug)
+**Status:** Design (revised against actual deploy.md state, ready for plan execution)
+**Date:** 2026-05-03 (revised from earlier same-day idealized version)
+**Replication round:** R6a (cross-cutting workflow #1, paired with R6b)
 **Inherits from:** `2026-05-03-vg-blueprint-pilot-design.md` (UX baseline)
-**Depends on:** R5.5 hooks-source-isolation (subagent allow-list must allow `vg-deploy-executor`)
+**Depends on:** R5.5 hooks-source-isolation (merged)
 **Covers:** `commands/vg/deploy.md` and the new `vg-deploy-executor` subagent
+
+> **Revision note:** The earlier version of this spec assumed a 6-STEP idealized
+> structure (Preflight / Env Select / User Confirm / Spawn / Verify / Close) and
+> a `schema_version` field on DEPLOY-STATE.json. Both were wrong against the
+> real `commands/vg/deploy.md`. This spec is rewritten against verified file
+> structure: 5 sections (Step 0 / Step 0a / Step 1 / Step 2 / Final), real
+> DEPLOY-STATE schema (no `schema_version`), real telemetry events
+> (`phase.deploy_started` / `phase.deploy_completed`).
 
 ---
 
@@ -13,49 +21,58 @@
 
 ### 1.1 Problem
 
-`commands/vg/deploy.md` is currently 588 lines — above the 500-line slim entry ceiling established by R1a blueprint pilot. The file mixes three concerns:
+`commands/vg/deploy.md` is currently 588 lines. The bulk (lines 281–478, ≈ 200 lines) is **Step 1 — Deploy loop (sequential per env)** which inlines all per-env work:
 
-1. **Orchestration** — env selection, user confirmation, telemetry emission, DEPLOY-STATE.json read/write coordination.
-2. **Per-env execution logic** — sandbox/staging/prod sequences with SSH commands, build artifact upload, service restart, smoke checks.
-3. **Reference material** — env policy diff (sandbox vs staging vs prod), DEPLOY-STATE schema, log format.
+- Config parsing from `.claude/vg.config.md` (RUN_PREFIX, BUILD_CMD, RESTART_CMD, HEALTH_CMD, SEED_CMD, PRE_CMD) — repeated as ~5 inline Python regex blocks per invocation
+- Sequential exec flow (pre → build → restart → health-retry × 6 with 30s timeout → seed)
+- Per-env failure handling + AskUserQuestion (continue / skip-failed / abort-all)
+- JSON append to `.tmp/deploy-results.json`
 
-The R5 batch spec (`vg-remaining-commands-batch-design.md`) flagged `deploy` as one of 4 files >500 lines requiring "slim + refs" treatment, but treated it as mechanical cleanup. In practice, deploy carries **judgement-heavy per-env logic** (smoke threshold per env, redeploy policy, log retention) that benefits from extraction into a dedicated subagent rather than reference docs.
+Three problems with the inline form:
 
-### 1.2 Why dedicated subagent (not just refs)
+1. **Orchestrator AI context pollution** — every invocation loads the full per-env script (including SSH command bodies + retry policy + error handling) into the AI orchestrator's reasoning context, even though the orchestrator only needs to coordinate.
+2. **Future parallel-env extension is blocked** — the inline shape forces sequential. To support `--parallel-envs` in a future round, per-env logic must be a callable unit.
+3. **Config-parsing duplication** — config extraction is hand-rolled 5 times in the same step. Trivial bugs slip in (e.g. one block defaults differently than another).
 
-Per discussion 2026-05-03 with operator:
+### 1.2 Why dedicated subagent (per operator decision 2026-05-03 round C)
 
-- Future env additions (canary, prod-eu, prod-asia) will compound complexity.
-- Per-env retry/rollback policies will diverge from a shared template.
-- Without subagent boundary, every env-specific bug requires editing the entry skill (which loads into orchestrator AI context every invocation).
-- Dedicated subagent isolates per-env logic: orchestrator only loads env contract + result, not full SSH sequences.
+Per discussion with operator: extract `vg-deploy-executor` subagent now (futureproof), even though current logic could fit in pure shell helpers. Rationale:
 
-**Decision**: extract `vg-deploy-executor` subagent now (futureproof), even though current logic could fit in refs.
+- Future env additions (canary, prod-eu, prod-asia) compound complexity inside the inline loop.
+- Per-env retry / rollback policies will diverge from a shared template.
+- Without subagent boundary, every env-specific bug requires editing the entry skill — which loads into orchestrator AI context every invocation.
+- Dedicated subagent isolates per-env logic: orchestrator only loads contract + result, not full SSH sequences.
 
 ### 1.3 Scope
 
-**In scope**:
+**In scope:**
 - Refactor `commands/vg/deploy.md` from 588 to ≤500 lines (slim entry).
 - Create `vg-deploy-executor` subagent in `.claude/agents/vg-deploy-executor.md`.
-- Split per-env logic + reference material into `commands/vg/_shared/deploy/`.
-- Update telemetry events: add `deploy.executor_spawned`, `deploy.executor_returned`, `deploy.executor_failed`.
+- Split per-env execution + config helpers into `commands/vg/_shared/deploy/`.
+- Preserve current telemetry events (`phase.deploy_started`, `phase.deploy_completed`) — orchestrator-emitted, NOT changed by this round.
+- Preserve DEPLOY-STATE.json schema EXACTLY — fields `phase`, `deployed.{env}.{sha, deployed_at, health, deploy_log, previous_sha, dry_run}`, plus preserved keys `preferred_env_for`, `preferred_env_for_skipped`.
+- Preserve all 7 rules in current `<rules>` block.
+- Preserve all 5 step markers (`0_parse_and_validate`, `0a_env_select_and_confirm`, `1_deploy_per_env`, `2_persist_summary`, `complete`).
 - Add subagent to `vg-pre-tool-use-agent.sh` allow-list (already covered by `vg-*` glob).
-- Pytest suite for slim size + subagent delegation.
+- Pytest suite for slim size + subagent delegation + telemetry preservation + step-marker preservation + DEPLOY-STATE schema preservation.
 
-**Out of scope**:
+**Out of scope:**
+- New telemetry events (`phase.deploy_started`/`completed` are sufficient).
+- Schema migration (no `schema_version` field exists today; do not introduce).
 - Adding new envs (canary, prod-eu) — separate roadmap.
-- Mobile deploy refactor — covered by `vg-_shared:mobile-deploy` shared ref.
+- `--parallel-envs` flag — refactor enables this but does not implement.
 - Codex mirror (`.codex/skills/vg-deploy/`) — defer.
-- DEPLOY-STATE schema breaking changes — keep backward compatible.
+- Mobile deploy — covered by separate `mobile-deploy` shared ref.
 
 ### 1.4 Goals
 
-- `commands/vg/deploy.md` ≤ 500 lines.
+- `commands/vg/deploy.md` ≤ 500 lines after refactor.
 - `vg-deploy-executor` subagent with explicit input/output contract.
-- Per-env logic isolated — orchestrator AI does not see SSH command bodies.
-- DEPLOY-STATE.json schema preserved (downstream consumers unchanged).
+- Per-env logic isolated — orchestrator AI does not see full SSH command bodies on every invocation.
+- DEPLOY-STATE.json schema unchanged (backward compat with consumers like `enrich-env-question.py`).
+- Existing telemetry events preserved (downstream gates depend on `phase.deploy_completed` payload).
 - Subagent spawn narrated via `scripts/vg-narrate-spawn.sh` (UX baseline R2).
-- Dogfood: 1 phase deploy to sandbox env on a test project succeeds end-to-end.
+- Mock dogfood: localhost-mock deploy of 1 phase to a stub `sandbox` env succeeds end-to-end (no real DEPLOY-STATE fixtures exist in repo today; mock is the pragmatic verification).
 
 ### 1.5 Non-goals
 
@@ -63,6 +80,7 @@ Per discussion 2026-05-03 with operator:
 - Replacing SSH transport (Ansible, Pulumi, etc.).
 - Per-env hook integration changes.
 - Removing `commands/vg/deploy.md` entirely (entry skill stays as orchestrator).
+- Changing the 7 `<rules>` (multi-env sequential, prod confirmation gate, per-env failure handling, etc.).
 
 ---
 
@@ -70,9 +88,9 @@ Per discussion 2026-05-03 with operator:
 
 This round inherits from `_shared-ux-baseline.md`:
 
-- **Per-task artifact split** — DEPLOY-STATE.json already has per-env block structure (`deployed.{env}`). Each env block is the natural per-unit. The flat JSON file IS the index. Deploy log per env is `.vg/phases/<P>/.deploy-log.{env}.txt`. Three layers satisfied implicitly.
-- **Subagent spawn narration** — MANDATORY. Every spawn of `vg-deploy-executor` wraps with `bash scripts/vg-narrate-spawn.sh vg-deploy-executor {spawning|returned|failed}`.
-- **Compact hook stderr** — if R6a adds new hooks (e.g. pre-deploy validate build artifact), hooks follow the 3-line stderr pattern from R1a.
+- **Per-task artifact split** — DEPLOY-STATE.json's `deployed.{env}` block IS the per-unit Layer 1; the flat file IS Layer 2/3. Consumers grep `deployed.<env>`. No additional split needed.
+- **Subagent spawn narration** — MANDATORY. Every `Agent(vg-deploy-executor)` call wraps with `bash scripts/vg-narrate-spawn.sh vg-deploy-executor {spawning|returned|failed}`. Step 1's per-env loop wraps every iteration's spawn.
+- **Compact hook stderr** — no new hooks added by R6a; existing hooks (R1a + R5.5) inherited.
 
 ---
 
@@ -81,116 +99,125 @@ This round inherits from `_shared-ux-baseline.md`:
 ### 3.1 Orchestrator vs executor split
 
 ```
-/vg:deploy <phase> [--env=sandbox|staging|prod] [--force]
+/vg:deploy <phase> [--envs=...] [--all-envs] [--dry-run] [--non-interactive] [--prod-confirm-token=...] [--allow-build-incomplete]
    │
    ├── ENTRY SKILL (commands/vg/deploy.md, ≤500 lines)
-   │     │
-   │     ├── STEP 1: Preflight
-   │     │     - Phase exists at .vg/phases/<P>/
-   │     │     - Build artifact ready (read PHASE-STATE.md or BUILD-STATE.json)
-   │     │     - vg.config.md has env block
-   │     │
-   │     ├── STEP 2: Env selection
-   │     │     - Read DEPLOY-STATE.json existing blocks
-   │     │     - Read vg.config.md env policy (which envs are configured)
-   │     │     - Suggest env (default: lowest unsatisfied env in config)
-   │     │
-   │     ├── STEP 3: User confirm
-   │     │     - AskUserQuestion: "Deploy phase <P> to <env>?"
-   │     │     - Block if no confirm
-   │     │
-   │     ├── STEP 4: Spawn vg-deploy-executor
-   │     │     - Pre-spawn narrate (green pill)
-   │     │     - Agent(subagent_type="vg-deploy-executor", prompt={phase, env, force, vg_config})
-   │     │     - Post-spawn narrate (cyan pill on success, red on fail)
-   │     │
-   │     ├── STEP 5: Verify executor result
-   │     │     - DEPLOY-STATE.json updated with deployed.{env} block
-   │     │     - Smoke check status recorded
-   │     │     - Deploy log file exists
-   │     │
-   │     └── STEP 6: Emit telemetry + close
-   │           - deploy.completed event
-   │           - State marker .vg/phases/<P>/.step-markers/deploy-{env}.done
+   │
+   │   ## Step 0 — Parse args, validate prerequisites      [UNCHANGED scope]
+   │     - resolve phase dir
+   │     - check build-complete via PIPELINE-STATE
+   │     - emit phase.deploy_started telemetry
+   │
+   │   ## Step 0a — Select envs + prod danger gate         [UNCHANGED scope]
+   │     - multi-select AskUserQuestion (or flags)
+   │     - prod 3-option danger gate
+   │     - validate envs exist in vg.config.md
+   │
+   │   ## Step 1 — Deploy loop (sequential per env)        [REFACTORED]
+   │     for env in selected_envs:
+   │       narrate-spawn green: "vg-deploy-executor spawning env=$env"
+   │       Agent(subagent_type="vg-deploy-executor", prompt={...})
+   │       narrate-spawn cyan/red based on result
+   │       collect result into local accumulator
+   │     # All per-env work moved into subagent.
+   │     # Failure handling (continue/skip/abort) stays in orchestrator
+   │     # because it requires user interaction (AskUserQuestion).
+   │
+   │   ## Step 2 — Merge results into DEPLOY-STATE.json    [MOSTLY UNCHANGED]
+   │     - read existing DEPLOY-STATE (preserve preferred_env_for keys)
+   │     - merge per-env results (sha, deployed_at, health, deploy_log, previous_sha, dry_run)
+   │     - emit phase.deploy_completed telemetry
+   │
+   │   ## Final — mark + run-complete                      [UNCHANGED]
    │
    └── SUBAGENT (.claude/agents/vg-deploy-executor.md)
-         - Receives: {phase, env, force, vg_config_excerpt}
-         - Executes: per-env sequence (SSH, upload, restart, smoke)
-         - Logs to: .vg/phases/<P>/.deploy-log.{env}.txt
-         - Returns: {commit_sha, deployed_at, smoke_status, exit_code, log_path}
-         - Writes: deployed.{env} block in DEPLOY-STATE.json
+         - Receives: {phase, env, run_prefix, build_cmd, restart_cmd, health_cmd, seed_cmd, pre_cmd, local_sha, previous_sha, dry_run}
+         - Executes: pre → build → restart → health-retry-6× → seed
+         - Logs to: ${PHASE_DIR}/.deploy-log.{env}.txt
+         - Returns: {env, sha, deployed_at, health, deploy_log, previous_sha, dry_run, error?}
+         - Does NOT write DEPLOY-STATE.json (orchestrator merges in Step 2)
 ```
 
-### 3.2 Per-env policy (loaded into subagent, not orchestrator)
+### 3.2 What stays in orchestrator (NOT extracted)
 
-| Env | Smoke threshold | Auto-rollback | Log retention | Confirm gate |
-|---|---|---|---|---|
-| sandbox | 1 endpoint up | no | 7 days | optional (skip with --yes) |
-| staging | 3 endpoints + auth probe | no | 30 days | required |
-| prod | full smoke suite + DB write probe | yes (on smoke fail) | 90 days | required (2nd factor: explicit out-of-scope, future enhancement) |
+- Phase + build-complete validation (Step 0).
+- Env selection UI + prod danger gate (Step 0a) — requires AskUserQuestion.
+- Per-env failure handling (continue / skip-failed / abort-all) — requires AskUserQuestion.
+- DEPLOY-STATE.json merge logic (Step 2) — preserves `preferred_env_for` keys per rule 5.
+- Telemetry emission (Step 0 start + Step 2 end).
+- Step markers (must_touch_markers).
 
-Subagent loads this table from `commands/vg/_shared/deploy/env-handling.md`. Orchestrator does NOT load it.
+### 3.3 What moves to subagent
 
-### 3.3 DEPLOY-STATE.json schema (UNCHANGED)
+- Config parsing for current env (RUN_PREFIX, BUILD_CMD, RESTART_CMD, HEALTH_CMD, SEED_CMD, PRE_CMD).
+- Sequential exec: pre → build → restart → health (6× retry, 30s total) → seed.
+- Capture exec result (sha, deployed_at, health, deploy_log path, previous_sha, dry_run).
+- Append to `${PHASE_DIR}/.deploy-log.{env}.txt`.
+
+### 3.4 DEPLOY-STATE.json schema (UNCHANGED)
+
+Real schema (verified against current `commands/vg/deploy.md` Step 2):
 
 ```json
 {
   "phase": "P1",
-  "schema_version": "1.0",
   "deployed": {
     "sandbox": {
-      "commit_sha": "abc123",
+      "sha": "abc123",
       "deployed_at": "2026-05-03T14:22:18Z",
-      "smoke_status": "pass",
-      "exit_code": 0,
-      "deploy_log_path": ".vg/phases/P1/.deploy-log.sandbox.txt"
+      "health": "ok",
+      "deploy_log": "${PHASE_DIR}/.deploy-log.sandbox.txt",
+      "previous_sha": "f00ba12",
+      "dry_run": false
     },
     "staging": null,
     "prod": null
-  }
+  },
+  "preferred_env_for": { ... },
+  "preferred_env_for_skipped": false
 }
 ```
 
-Backward compatibility: existing DEPLOY-STATE.json files read by R6a deploy skill must produce identical behavior to pre-R6a. Schema migration is NOT in scope.
+**Field types:**
+| Field | Type | Notes |
+|---|---|---|
+| `phase` | string | Set once at first deploy |
+| `deployed` | object | Container; keys = env names |
+| `deployed.<env>` | object \| null | null = not yet deployed |
+| `deployed.<env>.sha` | string | Git HEAD at deploy time |
+| `deployed.<env>.deployed_at` | string | ISO-8601 UTC |
+| `deployed.<env>.health` | enum | `"ok"` \| `"failed"` \| `"dry-run"` |
+| `deployed.<env>.deploy_log` | string | Path to log file |
+| `deployed.<env>.previous_sha` | string \| null | For rollback hint (rule 6) |
+| `deployed.<env>.dry_run` | boolean | True if --dry-run |
+| `preferred_env_for` | object | Set by /vg:scope step 1b — PRESERVED |
+| `preferred_env_for_skipped` | boolean | PRESERVED |
 
-### 3.4 Slim entry layout (≤500 lines)
+**No `schema_version` field exists today; this round does NOT introduce one.**
+
+### 3.5 Slim entry layout (≤500 lines)
 
 ```markdown
 # /vg:deploy
 
-[frontmatter — must_emit_telemetry includes deploy.executor_*]
+[frontmatter — UNCHANGED]
 
-<HARD-GATE>...</HARD-GATE>
+<rules>...</rules>     [UNCHANGED — all 7 rules preserved]
 
-## Red Flags
-| ... |
+<objective>...</objective>
 
-## STEP 1 — Preflight (≤50 lines)
-[checks + bash + emit-tasklist]
-
-## STEP 2 — Env Selection (≤80 lines)
-[read DEPLOY-STATE + vg.config, compute suggestion]
-
-## STEP 3 — User Confirm (≤40 lines)
-[AskUserQuestion + block on cancel]
-
-## STEP 4 — Spawn Executor (≤60 lines)
-[narrate-spawn + Agent(vg-deploy-executor) + handle return]
-
-## STEP 5 — Verify Result (≤60 lines)
-[assert DEPLOY-STATE updated, smoke status recorded]
-
-## STEP 6 — Close (≤40 lines)
-[emit telemetry, write step marker]
+## Step 0 — Parse args, validate prerequisites      [~50 lines]
+## Step 0a — Select envs + prod danger gate         [~140 lines — UI-heavy]
+## Step 1 — Deploy loop (slim — spawn per env)      [~70 lines, was ~190]
+## Step 2 — Merge results into DEPLOY-STATE.json    [~80 lines]
+## Final — mark + run-complete                      [~10 lines]
 
 ## References
 - _shared/deploy/overview.md
-- _shared/deploy/env-handling.md
-- _shared/deploy/deploy-state.md
-- _shared/deploy/executor-delegation.md
+- _shared/deploy/per-env-executor-contract.md
 ```
 
-Total target: ~330 lines body + 100 lines frontmatter/HARD-GATE/Red Flags = ~430 lines.
+Total target: ~430 lines body + ~50 lines frontmatter/rules = ~480 lines.
 
 ---
 
@@ -201,7 +228,7 @@ Total target: ~330 lines body + 100 lines frontmatter/HARD-GATE/Red Flags = ~430
 ```markdown
 ---
 name: vg-deploy-executor
-description: Execute per-env deploy sequence (SSH upload, service restart, smoke check). Spawned by /vg:deploy entry skill. Reports DEPLOY-STATE.json deployed.{env} block.
+description: Execute per-env deploy sequence (pre → build → restart → health-retry → seed). Spawned by /vg:deploy entry skill, ONE invocation per env. Returns result JSON; does NOT write DEPLOY-STATE.json (orchestrator merges).
 tools: Bash, Read, Write, Edit, Grep
 model: claude-sonnet-4-6
 ---
@@ -209,53 +236,78 @@ model: claude-sonnet-4-6
 
 ### 4.2 Input contract
 
-The orchestrator's spawn prompt MUST include:
+The orchestrator's spawn prompt MUST include all of:
 
 - `phase` — phase ID (e.g. "P1")
-- `env` — one of `sandbox|staging|prod`
-- `force` — boolean (skip "already deployed at this commit" check)
-- `vg_config_excerpt` — the `env.{env}` block from `vg.config.md` (SSH host, build cmd, deploy path, smoke endpoints)
-- `commit_sha` — current HEAD sha (orchestrator passes; subagent does NOT re-resolve)
-- `policy_ref` — pointer to `commands/vg/_shared/deploy/env-handling.md` for per-env policy table
+- `phase_dir` — absolute path to phase directory
+- `env` — one of the configured env names (sandbox/staging/prod)
+- `run_prefix` — string from `vg.config.md env.<env>.run_prefix` (often `ssh user@host`)
+- `build_cmd` — string (e.g. `cd /var/www && npm run build`)
+- `restart_cmd` — string
+- `health_cmd` — string returning HTTP status or exit code
+- `seed_cmd` — string (or empty if no seed step)
+- `pre_cmd` — string (or empty if no pre step)
+- `local_sha` — current git HEAD (orchestrator passes; subagent does NOT re-resolve)
+- `previous_sha` — value of existing `deployed.<env>.sha` from DEPLOY-STATE.json (or null if first deploy)
+- `dry_run` — boolean
+- `policy_ref` — pointer to `commands/vg/_shared/deploy/per-env-executor-contract.md`
 
 ### 4.3 Output contract
 
-Subagent returns a single JSON object via stdout (last line):
+Subagent returns a single JSON object as the LAST line of stdout:
 
 ```json
 {
-  "status": "success" | "smoke_fail" | "deploy_fail",
-  "commit_sha": "abc123",
+  "env": "sandbox",
+  "sha": "abc123",
   "deployed_at": "2026-05-03T14:22:18Z",
-  "smoke_status": "pass" | "fail" | "partial",
-  "smoke_details": [{"endpoint": "/health", "status": 200}, ...],
-  "exit_code": 0,
-  "deploy_log_path": ".vg/phases/P1/.deploy-log.sandbox.txt"
+  "health": "ok",
+  "deploy_log": "${PHASE_DIR}/.deploy-log.sandbox.txt",
+  "previous_sha": "f00ba12",
+  "dry_run": false,
+  "error": null
 }
 ```
 
-Subagent ALSO writes `deployed.{env}` block to `.vg/phases/<P>/DEPLOY-STATE.json` directly. Orchestrator verifies the JSON file matches the returned object (cross-check).
+On failure: `health: "failed"`, `error: "<one-line cause>"`. The `deploy_log` path always points to a real file (subagent writes the log even on failure).
 
-### 4.4 Error modes
+Subagent does NOT touch DEPLOY-STATE.json. Orchestrator Step 2 merges results.
 
-| Mode | Subagent action | Orchestrator action |
-|---|---|---|
-| SSH unreachable | Return `{status: "deploy_fail", smoke_status: "skipped"}` + write log | Narrate red pill, do NOT update DEPLOY-STATE, prompt user |
-| Build artifact missing | Return early without SSH attempt, `{status: "deploy_fail"}` | Block — direct user to run `/vg:build` first |
-| Smoke fail (non-prod) | Update DEPLOY-STATE with `smoke_status: "fail"` + log | Notify user, do NOT auto-rollback (sandbox/staging policy) |
-| Smoke fail (prod) | Auto-rollback per env-handling.md | Narrate rollback in user-facing log |
+### 4.4 Workflow (subagent body)
+
+1. **Pre** (if `pre_cmd` non-empty): run via Bash, append to deploy log, abort with `health: "failed"` if non-zero.
+2. **Build**: run `<run_prefix> <build_cmd>`, append output to deploy log, abort on non-zero.
+3. **Restart**: run `<run_prefix> <restart_cmd>`, append, abort on non-zero.
+4. **Health retry**: 6× attempts with 5s sleep between (30s total). Each attempt: run `<run_prefix> <health_cmd>`, capture exit code. Pass on first 0; fail after 6 attempts.
+5. **Seed** (if `seed_cmd` non-empty AND health passed): run `<run_prefix> <seed_cmd>`, append, abort on non-zero.
+6. **Capture timestamp**: `date -u +%FT%TZ`.
+7. **Emit JSON** on last stdout line.
+
+`--dry-run` short-circuits: print commands to log, do NOT execute, return `health: "dry-run"`.
 
 ### 4.5 Tool restrictions
 
-Subagent MUST NOT:
-- Spawn other subagents (no Agent tool).
-- Read source code outside the build artifact (no exploration).
-- Modify code.
+ALLOWED: Bash (SSH/curl/local exec), Read (vg.config + per-env-executor-contract), Write/Edit (deploy log file).
+FORBIDDEN: Agent (no nested spawns), WebSearch, WebFetch.
 
-Subagent MAY:
-- SSH to env hosts (Bash).
-- Read `vg.config.md`, `commands/vg/_shared/deploy/env-handling.md`, build artifact manifest.
-- Write to `.vg/phases/<P>/DEPLOY-STATE.json` (atomic), `.vg/phases/<P>/.deploy-log.{env}.txt` (append).
+Subagent MAY write to:
+- `${PHASE_DIR}/.deploy-log.<env>.txt` (append).
+
+Subagent MUST NOT write to:
+- `${PHASE_DIR}/DEPLOY-STATE.json` (orchestrator-only).
+- Any other phase artifact.
+
+### 4.6 Error modes
+
+| Stage failure | Returned `health` | Returned `error` |
+|---|---|---|
+| pre_cmd non-zero | `"failed"` | `"pre_cmd exit ${code}"` |
+| build_cmd non-zero | `"failed"` | `"build_cmd exit ${code}"` |
+| restart_cmd non-zero | `"failed"` | `"restart_cmd exit ${code}"` |
+| health 6× non-zero | `"failed"` | `"health_cmd failed after 6 attempts (last exit ${code})"` |
+| seed_cmd non-zero | `"failed"` | `"seed_cmd exit ${code}"` |
+
+Orchestrator Step 1 reads `health` from each result and chains the next env iff health=ok OR user picked "skip-failed" via AskUserQuestion in failure-handling subloop.
 
 ---
 
@@ -265,100 +317,121 @@ Subagent MAY:
 commands/vg/
   deploy.md                              REFACTOR: 588 → ≤500 lines (slim entry)
   _shared/deploy/                        NEW DIR
-    overview.md                          NEW — flow diagram + step contract
-    env-handling.md                      NEW — per-env policy table + smoke specs
-    deploy-state.md                      NEW — DEPLOY-STATE.json schema + read/write rules
-    executor-delegation.md               NEW — subagent input/output contract (mirrors §4)
+    overview.md                          NEW — flow diagram + step responsibility table
+    per-env-executor-contract.md         NEW — subagent input/output contract (mirrors §4)
 
 .claude/agents/
   vg-deploy-executor.md                  NEW — subagent definition (frontmatter + workflow body)
 
 scripts/
-  vg-narrate-spawn.sh                    EXISTS — used in STEP 4
+  vg-narrate-spawn.sh                    EXISTS — used in Step 1 spawn loop
 
 scripts/hooks/
   vg-meta-skill.md                       EXTEND — append "deploy"-specific Red Flags section
 
-tests/skills/                            NEW DIR (or add to existing)
+tests/skills/                            (created in R5.5 or this round if absent)
   test_deploy_slim_size.py               NEW — assert deploy.md ≤500 lines
-  test_deploy_subagent_delegation.py     NEW — assert STEP 4 spawns vg-deploy-executor
-  test_deploy_telemetry_events.py        NEW — assert must_emit includes deploy.executor_*
-  test_deploy_state_schema_compat.py     NEW — assert pre-R6a DEPLOY-STATE.json files parse correctly
+  test_deploy_subagent_delegation.py     NEW — assert Step 1 spawns vg-deploy-executor
+  test_deploy_telemetry_preserved.py     NEW — assert frontmatter must_emit retains phase.deploy_started + phase.deploy_completed
+  test_deploy_step_markers_preserved.py  NEW — assert all 5 markers still listed in must_touch_markers
+  test_deploy_state_schema_real.py       NEW — exercise the merge logic against a synthetic in-memory DEPLOY-STATE; assert all real fields preserved
 ```
+
+NOTE: no `tests/fixtures/deploy-state/*.json` — no real fixtures exist in the repo to lock against. The schema test instead uses an in-memory dict matching the real schema.
 
 ---
 
-## 6. Error handling, migration, testing
+## 6. Telemetry events (UNCHANGED from current)
 
-### 6.1 Error handling
+The current frontmatter declares 2 events:
 
-All blocks follow the compact 3-line stderr pattern from R1a. Subagent failure is a narration event (red pill), not a hard hook block — orchestrator decides whether to retry, prompt user, or abort.
+```yaml
+must_emit_telemetry:
+  - event_type: "phase.deploy_started"
+    phase: "${PHASE_NUMBER}"
+  - event_type: "phase.deploy_completed"
+    phase: "${PHASE_NUMBER}"
+```
 
-### 6.2 Migration
+R6a does NOT change these. Downstream gates (review/test/roam env-recommendation via `enrich-env-question.py`) depend on `phase.deploy_completed` payload structure.
 
-- Existing `commands/vg/deploy.md` runs: stand as-is until R6a executes.
-- Post-R6a: existing DEPLOY-STATE.json files (pre-R6a) MUST parse identically. `test_deploy_state_schema_compat.py` enforces this with fixtures from real prior runs.
+R6a's pytest `test_deploy_telemetry_preserved.py` asserts both events remain in `must_emit_telemetry` after refactor.
+
+---
+
+## 7. Error handling, migration, testing
+
+### 7.1 Error handling
+
+Subagent failure → orchestrator Step 1 reads result.health, narrates red pill, surfaces deploy log path to user via AskUserQuestion (continue / skip-failed / abort-all). This MATCHES current rule 4 ("per-env failure handling — does not auto-abort"). No new error paths.
+
+All blocks follow the compact 3-line stderr pattern from R1a (no new hooks added).
+
+### 7.2 Migration
+
+- Existing `commands/vg/deploy.md` continues to work until R6a refactor lands.
+- Post-R6a: existing DEPLOY-STATE.json files continue to parse identically — schema unchanged.
 - No data migration. No env config schema change.
-- `.codex/skills/vg-deploy/SKILL.md` mirror: defer to dedicated round (Codex mirror is out of scope).
+- Codex mirror: defer.
 
-### 6.3 Testing
+### 7.3 Testing
 
-**Pytest static**:
+**Pytest static** (5 tests):
+
 - `test_deploy_slim_size.py` — `wc -l commands/vg/deploy.md ≤ 500`.
-- `test_deploy_subagent_delegation.py` — grep entry skill for `Agent(subagent_type="vg-deploy-executor"`; assert ≥1 match in STEP 4 section.
-- `test_deploy_telemetry_events.py` — parse frontmatter, assert `must_emit_telemetry` contains `deploy.executor_spawned`, `deploy.executor_returned` (or `deploy.executor_failed`), `deploy.completed`.
-- `test_deploy_state_schema_compat.py` — load 3 fixture DEPLOY-STATE.json files (representative of pre-R6a runs), assert they parse + roundtrip without data loss.
+- `test_deploy_subagent_delegation.py` — grep entry skill body for `Agent(subagent_type="vg-deploy-executor"` AND for `vg-narrate-spawn.sh vg-deploy-executor`. Both ≥ 1 in the Step 1 section.
+- `test_deploy_telemetry_preserved.py` — parse YAML frontmatter, assert `must_emit_telemetry` contains entries for both `phase.deploy_started` and `phase.deploy_completed`.
+- `test_deploy_step_markers_preserved.py` — parse frontmatter, assert `must_touch_markers` includes all 5 of `0_parse_and_validate`, `0a_env_select_and_confirm`, `1_deploy_per_env`, `2_persist_summary`, `complete`.
+- `test_deploy_state_schema_real.py` — synthesize an in-memory pre-deploy DEPLOY-STATE dict with `preferred_env_for` keys + 1 existing env; pass it through the Step 2 merge logic via a test harness; assert all real fields present + preserved keys preserved.
 
-**Pytest dynamic** (optional, requires fixture deploy target):
-- `test_deploy_executor_smoke.py` — invoke executor against a localhost mock SSH target, assert DEPLOY-STATE updated correctly. Skipped in CI by default; manual.
+**Mock dogfood** (manual, in plan Task 9):
 
-**Manual dogfood**:
-1. Pick 1 phase from a project with sandbox env configured.
-2. Run `/vg:deploy <phase> --env=sandbox`.
-3. Verify:
-   - STEP 4 narrates green pill on spawn, cyan on return.
-   - DEPLOY-STATE.json has `deployed.sandbox` block with `smoke_status: pass`.
-   - Deploy log file exists at expected path.
-   - Telemetry event log shows all `deploy.*` events emitted.
+- Stub `vg.config.md` env.sandbox with `run_prefix = ""`, `build_cmd = "true"`, `restart_cmd = "true"`, `health_cmd = "echo ok"`, `seed_cmd = ""`. Run `/vg:deploy <phase> --envs=sandbox --non-interactive`. Verify chip narration + DEPLOY-STATE.json populated + telemetry events emitted.
 
-### 6.4 Exit criteria
+NO real-deploy dogfood — repo has no live infra; pretending otherwise is theatre.
+
+### 7.4 Exit criteria
 
 R6a PASSES when ALL of:
 
 1. `commands/vg/deploy.md` ≤ 500 lines.
 2. `.claude/agents/vg-deploy-executor.md` exists with valid frontmatter (parseable).
-3. `commands/vg/_shared/deploy/{overview,env-handling,deploy-state,executor-delegation}.md` exist.
-4. All pytest static tests pass.
-5. Manual dogfood: 1 phase deploy to sandbox PASS end-to-end.
-6. R5.5 hook patches merged (prerequisite).
+3. `commands/vg/_shared/deploy/{overview,per-env-executor-contract}.md` exist.
+4. All 5 pytest tests pass.
+5. Mock dogfood: 1 phase + stubbed sandbox env succeeds end-to-end (chip narration + DEPLOY-STATE merged + telemetry emitted).
+6. R5.5 hook patches merged (already merged: `d932710`).
 
 ---
 
-## 7. Round sequencing
+## 8. Round sequencing
 
-R6a depends on R5.5 (hooks-source-isolation). Reason: dogfood will spawn `vg-deploy-executor` from possibly partial sessions; without R5.5 the allow-list false-block could fire.
+R6a depends on R5.5 (already merged). R6a is independent of R6b (amend+debug) and may execute in parallel.
 
-R6a is independent of R6b (amend+debug) and may execute in parallel.
+```
+R5.5 ✅ merged
+       │
+       ├──► R6a (deploy)  ──► merge
+       │
+       └──► R6b (amend+debug) ──► merge
+```
 
 ---
 
-## 8. References
+## 9. References
 
 - Inherits UX baseline: `docs/superpowers/specs/_shared-ux-baseline.md`
-- Inherits frontmatter pattern: `docs/superpowers/specs/2026-05-03-vg-blueprint-pilot-design.md`
-- Sibling: `docs/superpowers/specs/2026-05-03-vg-r5.5-hooks-source-isolation-design.md`
-- Sibling: `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md`
+- Sibling: `docs/superpowers/specs/2026-05-03-vg-r5.5-hooks-source-isolation-design.md` (merged)
+- Sibling: `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md` (revised companion)
 - Existing skill body: `commands/vg/deploy.md` (588 lines, source for refactor)
-- Codex spec mirror reference: `.codex/skills/vg-deploy/SKILL.md` (defer)
-- Mobile-deploy shared ref: `vg:_shared:mobile-deploy`
-- Deploy-logging shared ref: `vg:_shared:deploy-logging`
+- Investigation report (verified 2026-05-03): structure of all 3 commands + lack of fixtures.
+- Codex spec mirror: `.codex/skills/vg-deploy/SKILL.md` (defer).
 
 ---
 
-## 9. UX baseline (mandatory cross-flow)
+## 10. UX baseline (mandatory cross-flow)
 
 Per `_shared-ux-baseline.md`, R6a honors:
 
-- **Per-task artifact split** — DEPLOY-STATE.json's `deployed.{env}` block IS the per-unit Layer 1; the flat file IS Layer 2/3 (consumers grep `deployed.<env>`). No additional split needed. Consumer pattern: `vg-load --phase N --artifact deploy-state --env <e>` (already supported).
-- **Subagent spawn narration** — every `Agent(vg-deploy-executor)` call wraps with `vg-narrate-spawn.sh`. STEP 4 of slim entry shows the canonical pre/post pattern.
-- **Compact hook stderr** — no new hooks added by R6a; existing hooks (R1a) already follow the pattern. Subagent failures are narration events, not hook blocks.
+- **Per-task artifact split** — DEPLOY-STATE.json's `deployed.{env}` block IS the per-unit Layer 1; the flat file IS Layer 2/3 (consumers grep `deployed.<env>`). No additional split needed. Consumer pattern: `vg-load --phase N --artifact deploy-state --env <e>` (already supported via grep).
+- **Subagent spawn narration** — every `Agent(vg-deploy-executor)` in Step 1's per-env loop wraps with `vg-narrate-spawn.sh`. Each env iteration → 1 spawn → green pill at start, cyan/red at end.
+- **Compact hook stderr** — no new hooks added by R6a. Existing hooks (R1a + R5.5 patches) inherited.
