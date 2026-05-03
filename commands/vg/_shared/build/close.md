@@ -128,7 +128,7 @@ mkdir -p "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers" 2>/dev/null
 
 Verifies R7 markers, runs the terminal validator slate (business-rule-implemented, interface-standards, flow-compliance, route-schema-coverage, OpenAPI export, API truthcheck loop), emits `build.completed` telemetry, calls `vg-orchestrator run-complete`, flips `PIPELINE-STATE.json` to `executed` / `build-complete`, and updates ROADMAP status. The pre-built artifacts that this step relies on (SUMMARY.md, INTERFACE-STANDARDS.{md,json}, API-DOCS.md, `.build-progress.json`, BUILD-LOG layers) are produced upstream by waves and the post-execution group; this step commits the closing telemetry and gate verdicts, it does not regenerate artifacts.
 
-Per **R1a UX baseline Req 1** (3-layer split for any flat artifact), the BUILD-LOG family follows the convention: `BUILD-LOG/wave-*.md` (Layer 1 per-wave) + `BUILD-LOG/index.md` (Layer 2 navigation) + `BUILD-LOG.md` (Layer 3 flat concat). Those layers are emitted by waves (Task 6) — close.md only commits whatever the waves wrote.
+Per **R1a UX baseline Req 1** (3-layer split for any flat artifact), the BUILD-LOG family follows the convention: `BUILD-LOG/task-*.md` (Layer 1 per-task — `vg-build-task-executor` writes one per spawn) + `BUILD-LOG/index.md` (Layer 2 TOC — `vg-build-post-executor` writes) + `BUILD-LOG.md` (Layer 3 flat concat — `vg-build-post-executor` enumerates `BUILD-LOG/task-*.md` lexicographically and writes the atomic concat). Both Layer 2 + Layer 3 are produced by the post-executor in STEP 5, NOT by waves; close.md only commits whatever the post-executor wrote.
 
 <HARD-GATE>
 You MUST emit `build.completed` via `vg-orchestrator emit-event` before
@@ -140,9 +140,11 @@ API-DOCS.md, .build-progress.json) MUST exist in PHASE_DIR before this
 step runs — they are produced upstream and verified by the validator
 slate here.
 
-The 3-layer BUILD-LOG split (BUILD-LOG/wave-*.md, BUILD-LOG/index.md,
-BUILD-LOG.md) is written by waves (Task 6) per R1a UX baseline Req 1;
-this step commits them but does NOT generate them.
+The 3-layer BUILD-LOG split (BUILD-LOG/task-*.md per-task layer 1
+written by each `vg-build-task-executor`, BUILD-LOG/index.md TOC layer
+2 + BUILD-LOG.md flat concat layer 3 written by `vg-build-post-executor`
+in STEP 5) is materialized upstream per R1a UX baseline Req 1; this step
+commits whatever exists on disk but does NOT generate any of the layers.
 
 Truthcheck-enabled runs are fail-closed: `apps/api/openapi.json` MUST
 exist (probe or pre-export) before the truthcheck loop, otherwise
