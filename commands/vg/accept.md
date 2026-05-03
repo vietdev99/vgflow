@@ -55,13 +55,16 @@ runtime_contract:
       phase: "${PHASE_NUMBER}"
     - event_type: "accept.completed"
       phase: "${PHASE_NUMBER}"
-  # forbidden flags (override-reason MUST accompany each):
+  # forbidden flags (each MUST be paired with --override-reason="<text>" — the
+  # override mechanism itself, NOT listed because it IS what makes the others
+  # acceptable). Each accepted bypass MUST also call:
+  #   vg-orchestrator override --flag <flag> --reason "<text>"
+  # so override.used fires for run-complete contract + OVERRIDE-DEBT.md entry.
   # --allow-uat-skips:    Batch 3 B4 — log when UAT quorum breached
   # --allow-empty-uat:    Batch 3 B4 — log when .uat-responses.json absent
   # --allow-unreachable:  existing (3b gate)
   # --allow-deferred:     existing (DEFERRED bypass in /vg:next)
   forbidden_without_override:
-    - "--override-reason"
     - "--allow-uat-skips"
     - "--allow-empty-uat"
     - "--allow-unreachable"

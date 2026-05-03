@@ -41,6 +41,22 @@ PY
 
 RESP_JSON="${PHASE_DIR}/.uat-responses.json"
 
+# Helper: resolve --override-reason="..." (canonical) with --reason='...' fallback (legacy).
+_uat_extract_reason() {
+  local reason
+  reason=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason=\"[^\"]+\"" | sed "s/--override-reason=\"//; s/\"$//")
+  [ -z "$reason" ] && reason=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason='[^']+'" | sed "s/--override-reason='//; s/'$//")
+  if [ -z "$reason" ]; then
+    reason=$(echo "$ARGUMENTS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
+    [ -n "$reason" ] && echo "⚠ --reason='...' is legacy; prefer --override-reason=\"...\" (entry contract)" >&2
+  fi
+  printf '%s' "$reason"
+}
+
+# Source rationalization-guard + override-debt helpers up front for all 3 paths.
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/rationalization-guard.sh" 2>/dev/null || true
+
 # Gate 1: response file must exist with content
 if [ ! -s "$RESP_JSON" ]; then
   echo "⛔ UAT quorum gate: .uat-responses.json missing or empty." >&2
@@ -51,9 +67,25 @@ if [ ! -s "$RESP_JSON" ]; then
       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"no_response_json\"}" >/dev/null 2>&1 || true
     exit 1
   fi
-  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+  EMPTY_REASON=$(_uat_extract_reason)
+  if [ -z "$EMPTY_REASON" ]; then
+    echo "⛔ --allow-empty-uat requires --override-reason=\"<why shipping with no UAT responses>\"" >&2
+    exit 1
+  fi
+  # Rationalization guard — empty UAT = theatre vector, highest risk.
+  if type -t rationalization_guard_check >/dev/null 2>&1; then
+    RATGUARD_RESULT=$(rationalization_guard_check "uat-empty" \
+      "Skipping UAT response persistence = theatre. The Section A/B answers were never captured." \
+      "phase=${PHASE_NUMBER} reason=${EMPTY_REASON}")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "uat-empty" "--allow-empty-uat" "$PHASE_NUMBER" "accept.uat_quorum_gate" "$EMPTY_REASON"; then
+      exit 1
+    fi
+  fi
+  # Canonical override emit — fires override.used + OVERRIDE-DEBT entry.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--allow-empty-uat" --reason "$EMPTY_REASON" 2>/dev/null || true
   type -t log_override_debt >/dev/null 2>&1 && \
-    log_override_debt "accept-uat-empty" "${PHASE_NUMBER}" "UAT ran without persisted responses" "${PHASE_DIR}"
+    log_override_debt "accept-uat-empty" "${PHASE_NUMBER}" "$EMPTY_REASON" "${PHASE_DIR}"
 fi
 
 # Gate 1b: response JSON coverage cross-check (CrossAI R6 fix).

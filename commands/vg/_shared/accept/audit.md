@@ -63,10 +63,16 @@ except Exception as exc:
 
 if [ "$BASELINE_RC" -ne 0 ]; then
   if [[ "$ARGUMENTS" =~ --allow-baseline-drift ]]; then
+    BASELINE_REASON=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason=\"[^\"]+\"" | sed "s/--override-reason=\"//; s/\"$//")
+    [ -z "$BASELINE_REASON" ] && BASELINE_REASON=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason='[^']+'" | sed "s/--override-reason='//; s/'$//")
+    [ -z "$BASELINE_REASON" ] && BASELINE_REASON="critical baseline drift accepted by user"
     echo "⚠ Security baseline drift — OVERRIDE accepted via --allow-baseline-drift"
+    # Canonical override emit — fires override.used + OVERRIDE-DEBT entry.
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "--allow-baseline-drift" --reason "$BASELINE_REASON" 2>/dev/null || true
     type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
       "--allow-baseline-drift" "$PHASE_NUMBER" "accept.6b.security-baseline" \
-      "critical baseline drift accepted by user" \
+      "$BASELINE_REASON" \
       "accept-baseline-${PHASE_NUMBER}"
     echo "override: baseline-drift phase=${PHASE_NUMBER} ts=$(date -u +%FT%TZ)" \
       >> "${PHASE_DIR}/accept-state.log" 2>/dev/null || true
@@ -77,7 +83,7 @@ if [ "$BASELINE_RC" -ne 0 ]; then
     echo "   re-run /vg:accept ${PHASE_NUMBER}."
     echo ""
     echo "   Override (NOT recommended, logs to override-debt):"
-    echo "     /vg:accept ${PHASE_NUMBER} --allow-baseline-drift"
+    echo "     /vg:accept ${PHASE_NUMBER} --allow-baseline-drift --override-reason=\"<text>\""
     exit 1
   fi
 else

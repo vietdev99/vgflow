@@ -361,9 +361,18 @@ PY
     fi
 
     if [[ "$ARGUMENTS" =~ --allow-unreachable ]]; then
-      REASON=$(echo "$ARGUMENTS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
+      # Canonical override flag is --override-reason="..." (entry contract).
+      # Accept legacy --reason='...' for backward compat but warn if used.
+      REASON=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason=\"[^\"]+\"" | sed "s/--override-reason=\"//; s/\"$//")
       if [ -z "$REASON" ]; then
-        echo "⛔ --allow-unreachable requires --reason='<why shipping with known gaps>'"
+        REASON=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason='[^']+'" | sed "s/--override-reason='//; s/'$//")
+      fi
+      if [ -z "$REASON" ]; then
+        REASON=$(echo "$ARGUMENTS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
+        [ -n "$REASON" ] && echo "⚠ --reason='...' is legacy; prefer --override-reason=\"...\" (entry contract)" >&2
+      fi
+      if [ -z "$REASON" ]; then
+        echo "⛔ --allow-unreachable requires --override-reason=\"<why shipping with known gaps>\""
         exit 1
       fi
       # v1.9.0 T1: rationalization guard — shipping with known UNREACHABLE goals is critical bypass.
@@ -375,8 +384,10 @@ PY
       fi
       echo "⚠ --allow-unreachable set with reason: ${REASON}"
       echo "   Recording to override-debt register + UAT.md 'Unreachable Debt' section"
-      # Log to override-debt (helper from _shared/override-debt.md)
-      override_debt_record "unreachable-accept" "$PHASE_NUMBER" "$REASON" 2>/dev/null || \
+      # Canonical override emit — fires override.used (run-complete contract) + OVERRIDE-DEBT entry.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag "--allow-unreachable" --reason "$REASON" 2>/dev/null || \
+        override_debt_record "unreachable-accept" "$PHASE_NUMBER" "$REASON" 2>/dev/null || \
         echo "unreachable-accept: phase=${PHASE_NUMBER} reason=\"${REASON}\" ts=$(date -u +%FT%TZ)" \
           >> "${PHASE_DIR}/build-state.log"
       # Stash for write_uat_md to surface
@@ -475,14 +486,21 @@ PY
     echo "  2. /vg:override-resolve <DEBT-ID> --reason='<why>' [--wont-fix]"
     echo "     (v1.9.0+ — for overrides without natural re-run trigger. --wont-fix = permanent decline via AskUserQuestion confirmation. Marks WONT_FIX, logs telemetry.)"
     echo ""
-    echo "  3. /vg:accept ${PHASE_NUMBER} --allow-unresolved-overrides --reason='<justification>'"
+    echo "  3. /vg:accept ${PHASE_NUMBER} --allow-unresolved-overrides --override-reason=\"<justification>\""
     echo "     (Accept path — logs NEW debt entry, still blocks the NEXT accept. Not a forgive, a defer.)"
     echo ""
 
     if [[ "$ARGUMENTS" =~ --allow-unresolved-overrides ]]; then
-      REASON=$(echo "$ARGUMENTS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
+      REASON=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason=\"[^\"]+\"" | sed "s/--override-reason=\"//; s/\"$//")
       if [ -z "$REASON" ]; then
-        echo "⛔ --allow-unresolved-overrides requires --reason='<why shipping with unresolved overrides>'"
+        REASON=$(echo "$ARGUMENTS" | grep -oE -- "--override-reason='[^']+'" | sed "s/--override-reason='//; s/'$//")
+      fi
+      if [ -z "$REASON" ]; then
+        REASON=$(echo "$ARGUMENTS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
+        [ -n "$REASON" ] && echo "⚠ --reason='...' is legacy; prefer --override-reason=\"...\" (entry contract)" >&2
+      fi
+      if [ -z "$REASON" ]; then
+        echo "⛔ --allow-unresolved-overrides requires --override-reason=\"<why shipping with unresolved overrides>\""
         exit 1
       fi
       # v1.9.0 T1: rationalization guard — meta-override (forgive prior overrides). Highest-risk gate.
@@ -494,6 +512,9 @@ PY
       fi
       echo "⚠ --allow-unresolved-overrides set with reason: ${REASON}"
       echo "   Recording NEW debt entry (this acceptance itself becomes tracked debt)."
+      # Canonical override emit — fires override.used + OVERRIDE-DEBT entry.
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag "--allow-unresolved-overrides" --reason "$REASON" 2>/dev/null || true
       # Log as new override-debt entry (critical severity — shows up on NEXT accept too)
       if type -t log_override_debt >/dev/null 2>&1; then
         log_override_debt "--allow-unresolved-overrides" "$PHASE_NUMBER" \
