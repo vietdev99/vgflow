@@ -67,3 +67,33 @@ def test_spawn_count_no_active_run_allows(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     rc, _ = _spawn(tmp_path, "vg-build-task-executor", "task_id=task-04")
     assert rc == 0
+
+
+def test_spawn_count_resets_when_wave_rolls_forward(tmp_path, monkeypatch):
+    """R2 round-2 E1 critical-1 regression — when waves-overview overwrites
+    .wave-spawn-plan.json for wave 2 but wave 1's .spawn-count.json still
+    sits with remaining=[], the next spawn must NOT be denied against the
+    stale empty queue. Guard must rebuild count from the new plan when
+    wave_id (or expected[]) shifts.
+    """
+    monkeypatch.chdir(tmp_path)
+    run_id = "run-rollforward"
+    _setup_run(tmp_path, run_id, expected_tasks=["task-04"])  # wave 2 plan
+
+    # Write a stale count from wave 1 — exhausted queue.
+    count_path = tmp_path / f".vg/runs/{run_id}/.spawn-count.json"
+    count_path.write_text(
+        json.dumps({
+            "wave_id": 1,
+            "expected": ["task-01", "task-02"],
+            "spawned": ["task-01", "task-02"],
+            "remaining": [],
+        })
+    )
+    # Plan wave_id=3 (test fixture) differs from stale count wave_id=1.
+    rc, stderr = _spawn(tmp_path, "vg-build-task-executor", "task_id=task-04")
+    assert rc == 0, f"guard should allow after wave_id roll-forward; stderr={stderr!r}"
+    rebuilt = json.loads(count_path.read_text())
+    assert rebuilt["wave_id"] == 3
+    assert rebuilt["spawned"] == ["task-04"]
+    assert rebuilt["remaining"] == []

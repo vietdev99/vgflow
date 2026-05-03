@@ -159,6 +159,7 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
     expected = plan.get("expected") or []
     if not isinstance(expected, list):
         return None
+    plan_wave_id = plan.get("wave_id")
 
     prompt = tool_input.get("prompt", "") or ""
     task_id = _extract_task_id(prompt)
@@ -171,23 +172,31 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
         )
 
     # Load existing count or initialize from plan.
+    # R2 round-2 (E1 critical-1) — when waves-overview overwrites
+    # `.wave-spawn-plan.json` for a NEW wave but the prior wave's
+    # `.spawn-count.json` is still on disk with `remaining=[]`, the next
+    # spawn would be denied against a stale empty queue. Detect wave_id
+    # mismatch (or shape mismatch on `expected`) and rebuild the count
+    # state from the new plan instead of silently inheriting the previous
+    # wave's exhausted queue.
+    fresh_count = {
+        "wave_id": plan_wave_id,
+        "expected": expected,
+        "spawned": [],
+        "remaining": list(expected),
+    }
     if count_path.exists():
         try:
             count = json.loads(count_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            count = {
-                "wave_id": plan.get("wave_id"),
-                "expected": expected,
-                "spawned": [],
-                "remaining": list(expected),
-            }
+            count = fresh_count
+        else:
+            # Wave rolled forward — drop stale spawned[]/remaining[].
+            if (count.get("wave_id") != plan_wave_id
+                    or count.get("expected") != expected):
+                count = fresh_count
     else:
-        count = {
-            "wave_id": plan.get("wave_id"),
-            "expected": expected,
-            "spawned": [],
-            "remaining": list(expected),
-        }
+        count = fresh_count
 
     remaining = count.get("remaining") or []
     spawned = count.get("spawned") or []
