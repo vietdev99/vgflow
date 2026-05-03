@@ -19,6 +19,8 @@ Two sub-steps in this ref:
 Read phase, validate `/vg:review` + `/vg:test` both completed with PASS (otherwise refuse to run). Parse flags. Initialize output dir.
 
 ```bash
+vg-orchestrator step-active 0_parse_and_validate
+
 PHASE_DIR=".vg/phases/${PHASE_NUMBER}"
 ROAM_DIR="${PHASE_DIR}/roam"
 mkdir -p "${ROAM_DIR}/proposed-specs"
@@ -36,6 +38,7 @@ if [[ "$REVIEW_VERDICT" != "PASS" ]] || [[ "$TEST_VERDICT" != "PASS" ]]; then
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0_parse_and_validate 2>/dev/null || true
 
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
   "roam.session.started" \
@@ -62,6 +65,8 @@ re-composes briefs, re-spawns executors. Detect existing state and route:
 ### Detection + branching
 
 ```bash
+vg-orchestrator step-active 0aa_resume_check
+
 EXISTING_CONFIG="${ROAM_DIR}/ROAM-CONFIG.json"
 HAS_RUN_BEFORE=false
 [ -f "$EXISTING_CONFIG" ] && HAS_RUN_BEFORE=true
@@ -164,6 +169,7 @@ echo "$(date +%s)|${ROAM_RESUME_MODE}" > "${ROAM_DIR}/.tmp/0aa-confirmed.marker"
   --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mode\":\"${ROAM_RESUME_MODE}\",\"had_prior_state\":${HAS_RUN_BEFORE}}" 2>/dev/null || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0aa_resume_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0aa_resume_check.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0aa_resume_check 2>/dev/null || true
 ```
 
 **Step 0a behavior under resume (v2.42.10):** Step 0a ALWAYS fires its 3-question batch, regardless of `$ROAM_RESUME_MODE`. Under resume, prior values are loaded as `ROAM_PRIOR_ENV/MODEL/MODE` and used as pre-fill, but user must confirm.
