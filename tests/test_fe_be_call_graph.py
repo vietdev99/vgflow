@@ -132,3 +132,25 @@ def test_gap_detector_passes_when_all_fe_calls_have_routes(tmp_path: Path) -> No
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_fe_extractor_handles_trailing_concat_variable(tmp_path: Path) -> None:
+    """Bug fix Task 3.5: axios.get('/api/users/' + userId) must produce /api/users/:param,
+    not /api/users/ (under-detection of gaps when URL ends with variable)."""
+    f = tmp_path / "Page.tsx"
+    f.write_text(
+        "axios.get('/api/users/' + userId);\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["python3", str(FE_EXTRACTOR), "--root", str(tmp_path), "--format", "json"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = json.loads(result.stdout)["calls"]
+    assert len(calls) == 1
+    assert calls[0]["method"] == "GET"
+    # Bug was: path_template == '/api/users/' (trailing variable dropped)
+    # Fix: append :param for trailing identifier
+    assert calls[0]["path_template"] == "/api/users/:param", \
+        f"expected '/api/users/:param', got {calls[0]['path_template']!r}"

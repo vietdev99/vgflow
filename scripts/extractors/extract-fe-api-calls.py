@@ -74,7 +74,11 @@ def _resolve_first_arg(arg: str) -> str | None:
             # Find next `+` or end.
             plus = _CONCAT_RE.search(arg, pos)
             if plus is None:
-                # Trailing junk; bail.
+                # Trailing runtime expression (e.g. axios.get('/api/users/' + userId)).
+                # Without this, the trailing identifier is silently dropped,
+                # under-detecting FE→BE gaps when the URL ends with a variable.
+                if arg[pos:].strip():
+                    parts.append(":param")
                 break
             parts.append(":param")
             pos = plus.end()
