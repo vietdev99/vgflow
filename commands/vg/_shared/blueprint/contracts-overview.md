@@ -1,5 +1,14 @@
 # blueprint contracts group — STEP 4 (2b/2b5/2b5a/2b5d)
 
+<!-- # Length exception: file ~601 lines, exceeds 500-line ref guideline.
+     Splitting STEP 4 across sub-step files would scatter the contracts
+     subagent spawn (4.1-4.3), the Codex test-goal lane (4.4 / 2b5a),
+     the CRUD-SURFACES expansion (2b5d), and the flow-detect step (2b7)
+     into 4+ refs that all share PHASE_DIR / PHASE_NUMBER setup and
+     overlap on telemetry/marker emission. Spawn payload + return
+     contract for the heavy subagent live in contracts-delegation.md
+     (sibling). Length is intentional — keeps STEP 4 co-located. -->
+
 HEAVY step. You MUST delegate the artifact generation to
 `vg-blueprint-contracts` subagent (tool name `Agent`, not `Task`).
 

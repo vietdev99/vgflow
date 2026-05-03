@@ -1,5 +1,12 @@
 # blueprint plan group — STEP 3 (2a_plan)
 
+<!-- # Length exception: file ~599 lines, exceeds 500-line ref guideline.
+     Splitting this overview would scatter pre-spawn setup, post-spawn
+     validation, and the planner spawn site across multiple refs and
+     break read-locality for /vg:blueprint STEP 3. The actual spawn
+     payload + return contract live in plan-delegation.md (sibling).
+     Length is intentional — keeps single-step orchestration co-located. -->
+
 HEAVY step. Original spec ~673 lines. You MUST delegate to the
 `vg-blueprint-planner` subagent (tool name `Agent`, NOT `Task`).
 
