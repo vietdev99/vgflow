@@ -1,6 +1,6 @@
 ---
 name: vg-test-goal-verifier
-description: Dual-mode goal verification — trust-review spot-checks (TRUST_REVIEW=true, default v1.14.0+) or full replay loop + topological sort + console baseline check (TRUST_REVIEW=false legacy). Returns JSON envelope only; no file writes outside ${VG_TMP}.
+description: "Dual-mode goal verification — trust-review spot-checks (TRUST_REVIEW=true, default v1.14.0+) or full replay loop + topological sort + console baseline check (TRUST_REVIEW=false legacy). Returns JSON envelope only; no file writes outside ${VG_TMP}."
 tools: [Read, Bash, Glob, Grep]
 model: sonnet
 ---

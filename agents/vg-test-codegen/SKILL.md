@@ -1,6 +1,6 @@
 ---
 name: vg-test-codegen
-description: Generate Playwright test specs per goal, enforce L1/L2 selector binding gate, and return structured JSON envelope with escalations.
+description: "Generate Playwright test specs per goal, enforce L1/L2 selector binding gate, and return structured JSON envelope with escalations."
 tools: [Read, Write, Edit, Bash, Glob, Grep]
 model: sonnet
 ---
