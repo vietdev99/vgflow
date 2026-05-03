@@ -1,5 +1,13 @@
 # build post-execution delegation contract (vg-build-post-executor subagent)
 
+<!-- # Exception: contract document, not step ref — H1/HARD-GATE not required.
+     This ref describes a JSON envelope + prompt template + return contract
+     for the `vg-build-post-executor` subagent. It has no `step-active` /
+     `mark-step` lifecycle of its own — `post-execution-overview.md` STEP 5
+     owns those. The reviewer audit (B1/B2 FAIL) flagged the missing
+     `# build <name> (STEP N)` H1 + top HARD-GATE; both are intentionally
+     absent because this file is a contract, not an executable step body. -->
+
 This file contains the input envelope, prompt template, and output
 JSON contract for `Agent(subagent_type="vg-build-post-executor",
 prompt=...)`.
