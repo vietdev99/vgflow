@@ -1,6 +1,20 @@
-# Scope close (STEP 7 — `5_commit_and_next`)
+# scope close (STEP 7)
 
+> Marker: `5_commit_and_next`.
 > Contract pin write, decisions-trace gate, atomic git commit, mark final step, emit `scope.completed`, run-complete.
+
+<HARD-GATE>
+Final step. §0 fires `step-active 5_commit_and_next` BEFORE work.
+§5 fires `mark-step` + `scope.completed` event + `run-complete`.
+If run-complete returns non-zero (Stop hook gate failure), exit non-zero
+so the caller surfaces the violation.
+</HARD-GATE>
+
+## §0. Mark step active (gate enforcement)
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 5_commit_and_next
+```
 
 ## §1. PIPELINE-STATE summary
 

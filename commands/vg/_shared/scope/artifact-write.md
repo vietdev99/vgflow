@@ -1,6 +1,21 @@
-# Scope artifact write (STEP 4 — `2_artifact_generation`)
+# scope artifact-write (STEP 4)
 
+> Marker: `2_artifact_generation`.
 > Atomic group commit: writes CONTEXT.md (Layer 3 flat) + CONTEXT/D-NN.md per decision (Layer 1) + CONTEXT/index.md (Layer 2) + DISCUSSION-LOG.md (append-only).
+
+<HARD-GATE>
+§0 fires `step-active 2_artifact_generation` BEFORE any work.
+§5 (DISCUSSION-LOG.md) is a **must_write** — you MUST issue an actual
+Write or Edit tool call (no shell heredoc, no pseudocode). The Stop hook
+fails the run if the file is missing.
+§7 fires `mark-step 2_artifact_generation` after all writes succeed.
+</HARD-GATE>
+
+## §0. Mark step active (gate enforcement)
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 2_artifact_generation
+```
 
 ## §1. Build CONTEXT.md.staged
 
@@ -116,26 +131,44 @@ print(f"✓ split {len(matches)} decisions → CONTEXT/D-*.md + index.md")
 PY
 ```
 
-## §5. DISCUSSION-LOG.md (APPEND-ONLY)
+## §5. DISCUSSION-LOG.md (APPEND-ONLY) — IMPERATIVE WRITE
 
-If file exists, read content, then append new session block (preserve previous sessions verbatim). Otherwise create.
+**This is a `must_write` artifact.** You MUST issue a real Write or Edit
+tool call here (not shell heredoc, not pseudocode). The Stop hook fails
+the run if `${PHASE_DIR}/DISCUSSION-LOG.md` is missing.
 
-Append:
+### §5a. Detect existing file
+
+```bash
+DLOG="${PHASE_DIR}/DISCUSSION-LOG.md"
+if [ -f "$DLOG" ]; then
+  DLOG_MODE="append"
+  DLOG_EXISTING_BYTES=$(wc -c < "$DLOG")
+  echo "▸ DISCUSSION-LOG.md exists (${DLOG_EXISTING_BYTES} bytes) — APPEND mode"
+else
+  DLOG_MODE="create"
+  echo "▸ DISCUSSION-LOG.md absent — CREATE mode"
+fi
+```
+
+### §5b. Apply write — REQUIRED tool call (AI runtime)
+
+The session block to append/create has this shape:
 
 ```markdown
-# Discussion Log — Phase {N}
+# Discussion Log — Phase {N}                           ← only on CREATE
 
 ## Session {ISO date} — {Initial Scope | Re-scope | Update}
 
 ### Round 1: Domain & Business
 **Q:** {AI's question/analysis — abbreviated}
 **A:** {user's response — full text}
-**Locked:** D-01, D-02, D-03
+**Locked:** P{N}.D-01, P{N}.D-02, P{N}.D-03
 
 ### Round 2: Technical Approach
 **Q:** ...
 **A:** ...
-**Locked:** D-04, D-05
+**Locked:** P{N}.D-04, P{N}.D-05
 
 ### Round 3: API Design
 ### Round 4: UI/UX
@@ -144,14 +177,26 @@ Append:
 {deep probe Q&A pairs}
 ```
 
+**MANDATORY tool selection (no shell heredoc allowed):**
+
+| `$DLOG_MODE` | Tool | Action |
+|--------------|------|--------|
+| `create`     | `Write` | Write the **full content** above (header + session block) to `$DLOG` |
+| `append`     | `Edit`  | Read `$DLOG` first, then `Edit` to append the new `## Session ...` block at end-of-file. `old_string` = last existing line; `new_string` = same line + `\n\n<new session block>`. Append-only — NEVER touch existing session blocks. |
+
+### §5c. Verify write landed (HARD BLOCK)
+
 ```bash
-# AI writes via Write/Edit tool — do NOT use shell heredoc that risks overwrite of existing append-only file
-# Pseudocode:
-#   if exists DISCUSSION-LOG.md:
-#       read existing → preserve verbatim
-#       append "## Session ..." block
-#   else:
-#       create with header + this session block
+[ -f "$DLOG" ] || {
+  echo "⛔ DISCUSSION-LOG.md not written — must_write contract violation. Re-issue the Write/Edit tool call." >&2
+  exit 2
+}
+DLOG_AFTER_BYTES=$(wc -c < "$DLOG")
+if [ "$DLOG_MODE" = "append" ] && [ "$DLOG_AFTER_BYTES" -le "$DLOG_EXISTING_BYTES" ]; then
+  echo "⛔ DISCUSSION-LOG.md did not grow (${DLOG_EXISTING_BYTES}→${DLOG_AFTER_BYTES} bytes) — append failed." >&2
+  exit 2
+fi
+echo "✓ DISCUSSION-LOG.md written (${DLOG_AFTER_BYTES} bytes total)"
 ```
 
 ## §6. Schema validation gate (HARD BLOCK on drift)

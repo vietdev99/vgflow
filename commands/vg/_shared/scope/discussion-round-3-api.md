@@ -1,7 +1,13 @@
-# Round 3 — API Design
+# scope discussion-round-3-api (STEP 2 / Round 3)
 
 > Locks endpoint notes embedded in existing decisions (category=technical/api).
 > Per-answer challenger + per-round expander: see `discussion-overview.md` §A and §B.
+
+<HARD-GATE>
+Round 3 of 5 inside STEP 2. Per-answer challenger + per-round expander
+mandatory. Endpoints locked here drive blueprint 2b5 → TEST-GOALS binding.
+Do NOT mark `1_deep_discussion` here — owner is `discussion-deep-probe.md`.
+</HARD-GATE>
 
 ## Conversational preamble (R9 rule)
 

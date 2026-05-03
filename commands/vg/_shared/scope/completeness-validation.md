@@ -1,6 +1,20 @@
-# Scope completeness validation (STEP 5 — `3_completeness_validation`)
+# scope completeness-validation (STEP 5)
 
+> Marker: `3_completeness_validation`.
 > 4 automated checks on the generated CONTEXT.md. Surfaces warnings + hard-blocks on critical gaps.
+
+<HARD-GATE>
+You MUST run all 4 checks (A endpoint coverage, B design ref, C decision
+completeness, D orphan detection). `step-active` fires before checks,
+`mark-step` after. BLOCK on any Check A/C gap; WARN on B (default fidelity)
+and D.
+</HARD-GATE>
+
+## Step active (gate enforcement)
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 3_completeness_validation
+```
 
 ## Check A — Endpoint Coverage (⛔ BLOCK)
 

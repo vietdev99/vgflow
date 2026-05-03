@@ -1,10 +1,28 @@
-# Scope CrossAI + reflection + test-strategy (STEP 6)
+# scope crossai (STEP 6)
 
 > Wraps `4_crossai_review` + `4_5_bootstrap_reflection` + `4_6_test_strategy` step markers.
+
+<HARD-GATE>
+3 sub-steps in order: §1-§3b (CrossAI review), §4 (bootstrap reflection),
+§5 (TEST-STRATEGY draft). Each MUST fire `step-active <marker>` before
+its bash and `mark-step` after.
+
+Skipping CrossAI (`--skip-crossai`) is enforced by `crossai-skip-guard.sh`
+helper which logs `crossai.skipped` event + appends `--skip-crossai`
+override-debt. The helper is the sole entry-point for the user_flag skip
+audit-trail (do NOT call `vg-orchestrator override --flag --skip-crossai`
+manually here — duplicate emission).
+
+Subagent type for vg-reflector spawn is `general-purpose` (Important #4
+fix) — no `agents/vg-reflector/SKILL.md` exists; `general-purpose` reads
+the prompt template inline.
+</HARD-GATE>
 
 ## §1. CrossAI skip enforcement (HARD-GATE — v2.5.2.9+)
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 4_crossai_review
+
 source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/crossai-skip-guard.sh" 2>/dev/null || {
   echo "⚠ crossai-skip-guard.sh missing — không enforce được skip audit trail" >&2
 }
@@ -123,6 +141,8 @@ vg-orchestrator mark-step scope 4_crossai_review
 Skip silently if `.vg/bootstrap/` absent. Otherwise:
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 4_5_bootstrap_reflection
+
 if [ -d ".vg/bootstrap" ]; then
   REFLECT_STEP="scope"
   REFLECT_TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -135,12 +155,31 @@ fi
 
 Then in AI runtime (only if `.vg/bootstrap/` exists):
 
-`Agent(subagent_type="vg-reflector", prompt=<per reflection-trigger.md template>)`
+`Agent(subagent_type="general-purpose", model="haiku", prompt=<see below>)`
+
+> Important #4 fix: previous version used `subagent_type="vg-reflector"` but
+> no `agents/vg-reflector/SKILL.md` exists (only `.claude/skills/vg-reflector/SKILL.md`,
+> which is a Skill template — not a Claude subagent type). The Agent tool
+> only resolves registered subagent types; an unknown type errors out. Use
+> `general-purpose` and inline the reflector prompt from the skill template.
+
+Build the prompt by reading `.claude/skills/vg-reflector/SKILL.md` (the
+authoritative reflector workflow) and `commands/vg/_shared/reflection-trigger.md`
+(the spawn template). Pass step="scope", phase="${PHASE_NUMBER}",
+output="${REFLECT_OUT}". The subagent reads events.db + artifacts +
+DISCUSSION-LOG.md (NEVER the AI transcript — echo-chamber risk) and writes
+candidate L-IDs to `${REFLECT_OUT}`.
 
 On return:
 
 ```bash
 bash scripts/vg-narrate-spawn.sh vg-reflector returned "<N candidates drafted>"
+```
+
+If the spawn fails (subagent error / timeout):
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-reflector failed "reflection skipped — see stderr"
 ```
 
 If `REFLECT_OUT` has candidates, show interactive y/n/e/s prompt — `y` → delegate to `/vg:learn --promote L-{id}`.
@@ -154,6 +193,8 @@ vg-orchestrator mark-step scope 4_5_bootstrap_reflection 2>/dev/null || true
 ## §5. TEST-STRATEGY draft (`4_6_test_strategy`)
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 4_6_test_strategy
+
 TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
 [ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
 if [ -f "$TESTER_PRO_CLI" ]; then

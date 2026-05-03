@@ -1,7 +1,7 @@
 ---
 name: vg:scope
 description: Deep phase discussion — 5 structured rounds producing enriched CONTEXT.md + DISCUSSION-LOG.md
-argument-hint: "<phase> [--skip-crossai] [--auto] [--update] [--deepen=D-XX] [--override-reason=<text>]"
+argument-hint: "<phase> [--skip-crossai] [--skip-crossai-output] [--auto] [--update] [--deepen=D-XX] [--override-reason=<text>] [--skip-env-preference] [--reset-env-preference] [--env-preference=<mode>] [--allow-decisions-untraced] [--force] [--non-interactive]"
 allowed-tools:
   - Read
   - Write
@@ -28,11 +28,21 @@ runtime_contract:
   must_touch_markers:
     - "0_parse_and_validate"
     - "1_deep_discussion"
+    # Step 3 (env preference) — single declared marker for the env-preference ref.
+    # Naming kept as `1b_env_preference` for compat with scripts/emit-tasklist.py
+    # CHECKLIST_DEFS["vg:scope"] (S2-owned). Nit #2 deferred (rename would
+    # require coordinated S2 update).
+    - "1b_env_preference"
     - "2_artifact_generation"
     - "3_completeness_validation"
     - "5_commit_and_next"
-    # Flag-gated marker (skip via override flag with debt entry)
+    # Flag-gated markers — CrossAI step + its sub-markers all skip together
+    # when the user passes --skip-crossai (with --override-reason debt entry).
     - name: "4_crossai_review"
+      required_unless_flag: "--skip-crossai"
+    - name: "4_5_bootstrap_reflection"
+      required_unless_flag: "--skip-crossai"
+    - name: "4_6_test_strategy"
       required_unless_flag: "--skip-crossai"
   must_emit_telemetry:
     - event_type: "scope.tasklist_shown"
@@ -45,6 +55,7 @@ runtime_contract:
       phase: "${PHASE_NUMBER}"
   forbidden_without_override:
     - "--skip-crossai"
+    - "--skip-crossai-output"
     - "--override-reason"
 ---
 

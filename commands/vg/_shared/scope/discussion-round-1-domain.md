@@ -1,7 +1,14 @@
-# Round 1 — Domain & Business
+# scope discussion-round-1-domain (STEP 2 / Round 1)
 
 > Locks `P${PHASE_NUMBER}.D-XX` decisions for category=business.
 > Per-answer challenger + per-round expander patterns: see `discussion-overview.md` §A and §B.
+
+<HARD-GATE>
+This is Round 1 of 5 inside STEP 2. You MUST run per-answer challenger
+after EVERY user answer and per-round expander before advancing to R2.
+Do NOT mark `1_deep_discussion` here — that marker is owned by
+`discussion-deep-probe.md` (after R5 + Deep Probe completes).
+</HARD-GATE>
 
 ## Pre-analysis (AI does first)
 

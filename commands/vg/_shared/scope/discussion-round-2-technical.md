@@ -1,7 +1,14 @@
-# Round 2 — Technical Approach
+# scope discussion-round-2-technical (STEP 2 / Round 2)
 
 > Locks `P${PHASE_NUMBER}.D-XX` decisions for category=technical (+ `P${PHASE_NUMBER}.D-surfaces` if multi-surface, `P${PHASE_NUMBER}.D-utilities` if NEW helpers).
 > Per-answer challenger + per-round expander: see `discussion-overview.md` §A and §B.
+
+<HARD-GATE>
+Round 2 of 5 inside STEP 2. Multi-surface gate (§1) MUST run first if
+config.surfaces is declared. Per-answer challenger + per-round expander
+mandatory. Do NOT mark `1_deep_discussion` here — owner is
+`discussion-deep-probe.md`.
+</HARD-GATE>
 
 ## §1. Multi-surface gate (FIRST — only if config.surfaces declared)
 

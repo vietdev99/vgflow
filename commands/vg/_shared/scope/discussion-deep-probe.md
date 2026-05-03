@@ -1,6 +1,13 @@
-# Deep Probe Loop (mandatory — minimum 5 probes after Round 5)
+# scope discussion-deep-probe (STEP 2 / Deep Probe Loop)
 
+> Mandatory minimum 5 probes after Round 5.
 > Per-answer challenger pattern: see `discussion-overview.md` §A.
+
+<HARD-GATE>
+Final sub-step of STEP 2. You MUST run minimum 5 probes after R5. This
+ref is the **single owner** of `1_deep_discussion` mark-step (Critical-3
+fix — was duplicated in `discussion-overview.md` §D, now removed there).
+</HARD-GATE>
 
 ## Purpose
 
@@ -63,7 +70,12 @@ When exhausted, AI states: *"I've analyzed all {N} decisions for conflicts, edge
 ## Mark step (END of STEP 2)
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 1_deep_discussion
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 1_deep_discussion
 ```
+
+> Critical-3 fix: this is the **single owner** for `1_deep_discussion`.
+> `discussion-overview.md` §D used to also mark the same step — removed
+> there to avoid double-touch (see review §Critical-3).
 
 Read `_shared/scope/env-preference.md` next.

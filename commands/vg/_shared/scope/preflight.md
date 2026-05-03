@@ -1,6 +1,21 @@
-# Scope preflight (STEP 1)
+# scope preflight (STEP 1)
 
 > Imperative ref — follow each section in order. DO NOT skip any.
+
+<HARD-GATE>
+You MUST execute sections 0-9 in order. Sections 1-3 (parse args, SPECS
+gate, profile detection short-circuit) run BEFORE `vg-orchestrator
+run-start` so non-feature profiles can `exit 0` without leaving a
+half-finished run for the Stop hook (Critical-4 fix).
+
+Section 4b emits `override.used` events for every `forbidden_without_override`
+flag handled here (`--override-reason`, `--skip-crossai-output`); the
+`--skip-crossai` flag is handled by `crossai-skip-guard.sh` from STEP 6
+(Critical-5 fix).
+
+Section 9 fires `step-active 0_parse_and_validate` AFTER tasklist evidence
+is signed (gated by PreToolUse hook) then `mark-step` and the started event.
+</HARD-GATE>
 
 ## 0. Inject rule cards (Harness v2.6.1 — fix AUDIT.md D4 finding)
 
@@ -14,22 +29,59 @@
 
 ## 1. Parse args + load config
 
+> Allowlist + reject unknown — fixes Important #1 (env flags + `--skip-crossai-output`
+> were silently swallowed as `PHASE_NUMBER` by the previous catch-all `*`).
+
 ```bash
 SKIP_CROSSAI=false
+SKIP_CROSSAI_OUTPUT=false
 AUTO_MODE=false
 UPDATE_MODE=false
+NON_INTERACTIVE=false
 DEEPEN_DECISION=""
+SKIP_ENV_PREF=false
+RESET_ENV_PREF=false
+ENV_PREF_INLINE=""
+ALLOW_DECISIONS_UNTRACED=false
+FORCE_TEST_STRATEGY=false
+PHASE_NUMBER=""
 
 for arg in $ARGUMENTS; do
   case "$arg" in
-    --skip-crossai) SKIP_CROSSAI=true ;;
-    --auto)         AUTO_MODE=true ;;
-    --update)       UPDATE_MODE=true ;;
-    --deepen=*)     DEEPEN_DECISION="${arg#*=}" ;;
-    --override-reason=*) OVERRIDE_REASON="${arg#*=}" ;;
-    *)              PHASE_NUMBER="$arg" ;;
+    --skip-crossai)              SKIP_CROSSAI=true ;;
+    --skip-crossai-output)       SKIP_CROSSAI_OUTPUT=true ;;
+    --crossai)                   ;;  # explicit-on (default behavior, accepted no-op)
+    --auto)                      AUTO_MODE=true ;;
+    --non-interactive)           NON_INTERACTIVE=true ;;
+    --update)                    UPDATE_MODE=true ;;
+    --deepen=*)                  DEEPEN_DECISION="${arg#*=}" ;;
+    --override-reason=*)         OVERRIDE_REASON="${arg#*=}" ;;
+    --skip-env-preference)       SKIP_ENV_PREF=true ;;
+    --reset-env-preference)      RESET_ENV_PREF=true ;;
+    --env-preference=*)          ENV_PREF_INLINE="${arg#*=}" ;;
+    --allow-decisions-untraced)  ALLOW_DECISIONS_UNTRACED=true ;;
+    --force)                     FORCE_TEST_STRATEGY=true ;;
+    --redetect-ui-scope)         ;;  # blueprint-style flag, ignored here
+    --skip-design-discovery)     ;;  # blueprint-style flag, ignored here
+    --*)
+      echo "⛔ Unknown flag: $arg" >&2
+      echo "   Accepted flags: $(grep -E '^\s+--' .claude/commands/vg/scope.md | head -1 || true)" >&2
+      echo "   See argument-hint in commands/vg/scope.md frontmatter for canonical list." >&2
+      exit 1
+      ;;
+    *)
+      if [ -n "$PHASE_NUMBER" ]; then
+        echo "⛔ Multiple phase positionals supplied ('$PHASE_NUMBER', '$arg') — pass exactly one." >&2
+        exit 1
+      fi
+      PHASE_NUMBER="$arg"
+      ;;
   esac
 done
+
+[ -n "$PHASE_NUMBER" ] || {
+  echo "⛔ Missing <phase> positional. Usage: /vg:scope <phase> [flags]" >&2; exit 1
+}
 
 # Mutual-exclusion gates
 if [ "$UPDATE_MODE" = "true" ] && [ "$AUTO_MODE" = "true" ]; then
@@ -41,6 +93,9 @@ fi
 if [ "$SKIP_CROSSAI" = "true" ] && [ -z "${OVERRIDE_REASON:-}" ]; then
   echo "⛔ --skip-crossai requires --override-reason=<text>" >&2; exit 1
 fi
+if [ "$SKIP_CROSSAI_OUTPUT" = "true" ] && [ -z "${OVERRIDE_REASON:-}" ]; then
+  echo "⛔ --skip-crossai-output requires --override-reason=<text>" >&2; exit 1
+fi
 
 # Config load (exports PLANNING_DIR, PHASES_DIR, PROFILE, REPO_ROOT)
 source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/config-loader.md" 2>/dev/null || \
@@ -50,17 +105,7 @@ PHASE_DIR="${PHASES_DIR}/${PHASE_NUMBER}"
 [ -d "$PHASE_DIR" ] || { echo "⛔ Phase dir missing: $PHASE_DIR — check ROADMAP.md" >&2; exit 1; }
 ```
 
-## 2. Run-start (registers session for Stop hook)
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start \
-    vg:scope "${PHASE_NUMBER}" "${ARGUMENTS}" || {
-  echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2
-  exit 1
-}
-```
-
-## 3. SPECS.md gate
+## 2. SPECS.md gate (precedes run-start so non-feature short-circuit doesn't open a half-finished run)
 
 ```bash
 [ -f "${PHASE_DIR}/SPECS.md" ] || {
@@ -69,7 +114,11 @@ PHASE_DIR="${PHASES_DIR}/${PHASE_NUMBER}"
 }
 ```
 
-## 4. Phase profile detection (short-circuit for non-feature profiles)
+## 3. Phase profile detection (short-circuit for non-feature profiles, BEFORE run-start)
+
+> Critical-4 fix: this branch may `exit 0` without running the rest of the
+> contract. Doing it BEFORE `run-start` means no run is registered and the
+> Stop hook never fires — no markers / telemetry / writes are owed.
 
 ```bash
 source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/phase-profile.sh" 2>/dev/null || true
@@ -105,8 +154,38 @@ PY
       echo "✓ Scope short-circuit done. Next: /vg:blueprint ${PHASE_NUMBER}"
       exit 0
       ;;
-    feature|*) ;;  # default: 5 rounds
+    feature|*) ;;  # default: 5 rounds — fall through to run-start
   esac
+fi
+```
+
+## 4. Run-start (registers session for Stop hook)
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start \
+    vg:scope "${PHASE_NUMBER}" "${ARGUMENTS}" || {
+  echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2
+  exit 1
+}
+```
+
+## 4b. Override.used emission for `--override-reason` / `--skip-crossai-output`
+
+> Critical-5 fix: `forbidden_without_override` lists these flags so the Stop
+> hook checks for matching `override.used` events at run-complete. The
+> `crossai-skip-guard.sh` helper handles `--skip-crossai`; this block handles
+> the rest so each forbidden flag has an audit-trail event.
+
+```bash
+if [ -n "${OVERRIDE_REASON:-}" ]; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--override-reason" --reason "${OVERRIDE_REASON}" \
+    >/dev/null 2>&1 || echo "⚠ override emission failed for --override-reason (Stop hook may BLOCK)" >&2
+fi
+if [ "${SKIP_CROSSAI_OUTPUT}" = "true" ]; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--skip-crossai-output" --reason "${OVERRIDE_REASON:-skip-crossai-output explicit user flag}" \
+    >/dev/null 2>&1 || echo "⚠ override emission failed for --skip-crossai-output" >&2
 fi
 ```
 
@@ -178,6 +257,7 @@ vg-orchestrator emit-event scope.native_tasklist_projected --phase "${PHASE_NUMB
 ## 9. Mark step + emit started
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 0_parse_and_validate
 vg-orchestrator mark-step scope 0_parse_and_validate
 vg-orchestrator emit-event scope.started --phase "${PHASE_NUMBER}"
 ```

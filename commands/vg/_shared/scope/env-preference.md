@@ -1,6 +1,15 @@
-# Env preference (STEP 3 — `1b_env_preference`)
+# scope env-preference (STEP 3)
 
+> Marker: `1b_env_preference` (kept for emit-tasklist.py compat — see scope.md
+> entry comment on Nit #2).
 > Suggestion-only. Captures sandbox/staging/prod target for downstream review/test/roam/accept. User can SKIP.
+
+<HARD-GATE>
+You MUST execute the bash block in §"Apply answer + persist" — it calls
+`vg-orchestrator step-active 1b_env_preference` BEFORE any skip path,
+then `mark-step` after. Skipping the step-active call leaves the marker
+untracked and the Stop hook will fail.
+</HARD-GATE>
 
 ## Skip conditions
 
@@ -32,6 +41,8 @@ options:
 ## Apply answer + persist
 
 ```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 1b_env_preference
+
 # Skip if non-interactive OR --skip-env-preference
 if [[ "$ARGUMENTS" =~ --skip-env-preference ]] || [[ "$ARGUMENTS" =~ --non-interactive ]]; then
   echo "▸ Skipping env preference step (flag set)"

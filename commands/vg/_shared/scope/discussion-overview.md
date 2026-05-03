@@ -1,8 +1,21 @@
-# Scope deep discussion overview (STEP 2 entry)
+# scope discussion-overview (STEP 2)
 
 > 5 structured rounds + Deep Probe Loop. Each round: AI presents
 > recommendation, user confirms/edits/expands; per-answer challenger;
 > per-round expander. Then advance.
+
+<HARD-GATE>
+You MUST execute all 5 rounds + Deep Probe in order. The deep-probe ref
+(`discussion-deep-probe.md`) is the sole owner of `1_deep_discussion`
+mark-step (Critical-3 fix); this file no longer touches that marker.
+
+For EACH user answer in EACH round you MUST invoke per-answer challenger
+(see §A) AND per-round expander at round end (see §B). Skipping is
+adversarial-suppression risk and was blocked by Codex consensus.
+
+Subagent type is `general-purpose` (NOT a custom `vg-*` type) — Claude
+Agent tool only resolves registered subagent types.
+</HARD-GATE>
 
 ## Sources (load once at top of STEP 2)
 
@@ -54,11 +67,19 @@ Then in AI runtime (only if `$PROMPT` non-empty):
 
 `Agent(subagent_type="general-purpose", model="opus", prompt=<PROMPT>)`
 
-On return:
+On success return:
 
 ```bash
 bash scripts/vg-narrate-spawn.sh scope-challenger returned "<verdict>"
 challenger_dispatch "$subagent_json" "round-${ROUND}" "phase-scope" "${PHASE_NUMBER}"
+```
+
+On Agent error (subagent crash / timeout / non-JSON output) — Nit #1 fix:
+
+```bash
+bash scripts/vg-narrate-spawn.sh scope-challenger failed "round-${ROUND} answer-${ANSWER_N} — <error one-liner>"
+# Treat as no-issue (don't block round) — log to DISCUSSION-LOG.md as
+# "challenger crashed: <reason>"; continue to next answer.
 ```
 
 If `has_issue=true` → AskUserQuestion (3 options):
@@ -88,11 +109,19 @@ bash scripts/vg-narrate-spawn.sh scope-expander spawning "round-${ROUND}"
 
 `Agent(subagent_type="general-purpose", model="opus", prompt=<PROMPT>)`
 
-On return:
+On success return:
 
 ```bash
 bash scripts/vg-narrate-spawn.sh scope-expander returned "<critical:N nice:M>"
 expander_dispatch "$subagent_json" "round-${ROUND}" "phase-scope" "${PHASE_NUMBER}"
+```
+
+On Agent error (subagent crash / timeout / non-JSON output) — Nit #1 fix:
+
+```bash
+bash scripts/vg-narrate-spawn.sh scope-expander failed "round-${ROUND} — <error one-liner>"
+# Treat as no critical_missing (don't block round); log to DISCUSSION-LOG.md
+# under round summary as "expander crashed: <reason>"; advance to next round.
 ```
 
 If `critical_missing[]` non-empty → AskUserQuestion (3 options):
@@ -126,12 +155,10 @@ Namespace enforcement: ALWAYS prefix `P${PHASE_NUMBER}.` (e.g. `P3.2.D-01`). Bar
 
 Do NOT write CONTEXT.md inside discussion rounds — staged only. STEP 4 (`artifact-write.md`) does the atomic file write.
 
-## §D. Mark step at end of STEP 2
+## §D. Advance after Deep Probe
 
-After R5 + Deep Probe completes (no manual gate — Deep Probe ref enforces min-5):
-
-```bash
-vg-orchestrator mark-step scope 1_deep_discussion
-```
+After R5 + Deep Probe completes (no manual gate — Deep Probe ref enforces min-5),
+the **deep-probe ref** is the sole owner of the `1_deep_discussion` marker
+(Critical-3 fix: removed duplicate mark-step that previously fired here).
 
 Proceed to STEP 3 — Read `_shared/scope/env-preference.md`.

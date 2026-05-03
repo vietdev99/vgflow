@@ -1,7 +1,13 @@
-# Round 5 — Test Scenarios
+# scope discussion-round-5-tests (STEP 2 / Round 5)
 
 > Locks TS-XX test scenario notes + verification_strategy embedded in existing decisions.
 > Per-answer challenger + per-round expander: see `discussion-overview.md` §A and §B.
+
+<HARD-GATE>
+Round 5 of 5 inside STEP 2. Per-answer challenger + per-round expander
+mandatory. After R5 advances directly to Deep Probe (`discussion-deep-probe.md`)
+which is the sole owner of `1_deep_discussion` mark-step.
+</HARD-GATE>
 
 ## Conversational preamble (R9 rule)
 

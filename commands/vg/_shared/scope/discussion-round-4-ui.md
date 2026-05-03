@@ -1,8 +1,16 @@
-# Round 4 — UI/UX
+# scope discussion-round-4-ui (STEP 2 / Round 4)
 
 > Locks UI component notes embedded in existing decisions.
 > Profile-aware skip for backend-only / cli-tool / library profiles.
 > Per-answer challenger + per-round expander: see `discussion-overview.md` §A and §B.
+
+<HARD-GATE>
+Round 4 of 5 inside STEP 2. Profile gate (§1) skips this round entirely
+for backend-only/cli-tool/library profiles — that path is required, not
+optional. For UI-bearing profiles, per-answer challenger + per-round
+expander mandatory. Do NOT mark `1_deep_discussion` here — owner is
+`discussion-deep-probe.md`.
+</HARD-GATE>
 
 ## §1. Profile-aware skip (FIRST)
 
