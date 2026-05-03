@@ -25,6 +25,26 @@ specific CRUD surface needs drill-down.
 CONTEXT.md and RUNTIME-MAP.md are KEEP-FLAT — small single docs (CONTEXT)
 or already filtered JSON (RUNTIME-MAP from /vg:review).
 
+## CRUD-SURFACES.md is AUTHORITATIVE (round-2 D2 fix)
+
+When `${PHASE_DIR}/CRUD-SURFACES.md` exists (the resource-level contract
+written by /vg:scope or /vg:blueprint), it is loaded BEFORE the heuristic
+route scanner runs. Its `resources[]` entries become the first surface
+rows in SURFACES.md (tagged `Source: CRUD-SURFACES.md`). Heuristic
+discovery from PLAN/CONTEXT then AUGMENTS — never overrides — the
+authoritative rows.
+
+`roam-discover-surfaces.py --use-vg-load-index` (default ON) wires:
+
+- CRUD-SURFACES.md → JSON parse → resource rows
+- PLAN.md → `vg-load --phase N --artifact plan --index` (slim TOC)
+- API-CONTRACTS.md → `vg-load --phase N --artifact contracts --index`
+- CONTEXT.md / RUNTIME-MAP.md → flat (small)
+
+When `vg-load` is unavailable (CI without the shell helper), the script
+falls back to `${PHASE_DIR}/PLAN/index.md` direct read, then to flat
+PLAN.md CAPPED at 64KB with a stderr warning.
+
 ---
 
 <step name="1_discover_surfaces">
