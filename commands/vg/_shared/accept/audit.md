@@ -1,8 +1,19 @@
 # Audit — STEP 7 (security baseline + learn + UAT.md write)
 
-Maps to 3 steps: `6b_security_baseline` (65 lines),
-`6c_learn_auto_surface` (240 lines), `6_write_uat_md` (172 lines).
-Combined ref because they share a write-once finalization sequence.
+> **Size exception (F3-r2):** This ref is intentionally over the soft
+> 400-line cap (current ~534 lines). It bundles three sub-steps that
+> share a write-once finalization sequence:
+> `6b_security_baseline` (~65 lines), `6c_learn_auto_surface` (~240
+> lines, dominated by the bootstrap shadow/conflict pipeline),
+> `6_write_uat_md` (~190 lines including the markdown template).
+> Splitting would fragment the finalization order and force the entry
+> contract to track three refs instead of one. Treat as an
+> "audit bundle" — keep it monolithic until any single sub-step needs a
+> dedicated ref.
+
+Maps to 3 steps: `6b_security_baseline`, `6c_learn_auto_surface`,
+`6_write_uat_md`. Combined ref because they share a write-once
+finalization sequence.
 
 <HARD-GATE>
 You MUST run all 3 sub-steps in order:

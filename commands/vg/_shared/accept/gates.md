@@ -1,5 +1,17 @@
 # Accept gates — STEP 2 (3-tier preflight gates)
 
+> **Size exception (F3-r2):** This ref is intentionally over the soft
+> 400-line cap (current ~629 lines). It bundles five fail-fast accept
+> gates (`1_artifact_precheck`, `2_marker_precheck`,
+> `3_sandbox_verdict_gate`, `3b_unreachable_triage_gate`,
+> `3c_override_resolution_gate`) that share the same pre-spawn lifecycle
+> + block-resolver wiring. Splitting them per-step would duplicate the
+> shared sourcing of `block-resolver.sh` / `override-debt.sh` /
+> `rationalization-guard.sh` across five files and double the audit
+> surface for the contract-binder. Treat as an appendix-style "gates
+> bundle" — keep it monolithic until any single gate exceeds 200 lines
+> and warrants its own ref.
+
 5 gate steps: `1_artifact_precheck`, `2_marker_precheck`,
 `3_sandbox_verdict_gate`, `3b_unreachable_triage_gate`,
 `3c_override_resolution_gate`. Each gate fail-fast.
