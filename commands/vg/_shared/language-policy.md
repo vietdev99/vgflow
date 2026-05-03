@@ -9,15 +9,33 @@ description: Shared Reference — ÉP AI phải trả lời bằng ngôn ngữ c
 
 **TẤT CẢ user-facing output (narration, AskUserQuestion, response prose, error
 explanations, summary, verdict) PHẢI dùng ngôn ngữ cấu hình trong
-`.claude/vg.config.md`:**
+`.claude/vg.config.md` — 2 keys (đã canonical từ template):**
 
 ```yaml
+# Output language enforcement (this file's primary key):
 language:
-  primary: "vi"        # ngôn ngữ chính — vi (mặc định) | en | ja | ...
+  primary: "vi"                     # vi (default) | en | ja | ...
+  legacy_en_allowed: false          # cho phép EN cho legacy strings? false = strict VN
+  lint_enabled: true                # bật linter check
+  lint_forbidden_terms_extra: []
+  lint_allowed_context:
+    - "command_identifier"
+    - "file_name"
+    - "format_identifier"
+    - "code_identifier"
+
+# Shared narration string table (used by `_shared/narration-i18n.md` t() function):
+narration:
+  locale: "vi"                      # PHẢI khớp language.primary cho consistent voice
   fallback_locale: "en"
+  string_table_path: ".claude/commands/vg/_shared/narration-strings.yaml"
 ```
 
-Nếu file không có `language:` block → **mặc định `vi` (tiếng Việt)**.
+**Quan hệ 2 keys:**
+- `language.primary` — ép TONE/NGÔN NGỮ output prose (rule này enforce qua slim entry blocks)
+- `narration.locale` — lookup key cho t() function khi build narration strings từ YAML table
+
+Cả 2 nên bằng nhau. Nếu file không có cả 2 → **mặc định `vi` (tiếng Việt)**.
 
 ## What "MUST respond in language X" means
 
