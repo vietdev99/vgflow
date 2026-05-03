@@ -238,8 +238,12 @@ Then spawn: `Agent(subagent_type="vg-test-codegen", prompt=<from delegation.md>)
 
 DO NOT generate `.spec.ts` files inline. The subagent enforces L1 (1 retry
 per goal) / L2 (AskUserQuestion escalation) binding gates, console assertion
-in every mutation spec, post-codegen gate 5d-r7 grep, `5d_codegen` /
-`5d_binding_gate` / `5d_deep_probe` marker emission.
+in every mutation spec, post-codegen gate 5d-r7 grep, and emits the
+`5d_codegen` orchestrator marker. `5d_binding_gate` is subagent-internal
+(not surfaced as an orchestrator marker — see codegen/overview.md STEP 5.7
+note + commit `04a5e79`). `5d_deep_probe` and `5d_mobile_codegen` markers
+are emitted inside their orchestrator-side ref steps after the subagent
+returns.
 
 After subagent completes, orchestrator reads:
 - `_shared/test/codegen/deep-probe.md` — orchestrator-side deep probe actions.
