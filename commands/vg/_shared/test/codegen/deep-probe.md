@@ -95,6 +95,14 @@ BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" 
 vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "test" "${PHASE_NUMBER}"
 ```
 
+**MANDATORY narration** — emit colored-tag narration before + after every
+deep-probe spawn (per vg-meta-skill). Silent spawn = audit FAIL.
+
+```bash
+bash scripts/vg-narrate-spawn.sh deep-probe-${GOAL_ID} spawning \
+  "phase ${PHASE_NUMBER} edge-case variants for ${GOAL_ID} (sonnet primary)"
+```
+
 ```
 Agent(subagent_type="general-purpose", model="sonnet",
       name="deep-probe-{goal-id}"):
@@ -123,17 +131,35 @@ Agent(subagent_type="general-purpose", model="sonnet",
     Reuse imports + helpers from happy-path file when available.
 ```
 
+After the spawn returns:
+```bash
+bash scripts/vg-narrate-spawn.sh deep-probe-${GOAL_ID} returned \
+  "deep-probe variants written for ${GOAL_ID}"
+```
+
+If the spawn errors or returns no output:
+```bash
+bash scripts/vg-narrate-spawn.sh deep-probe-${GOAL_ID} failed "<one-line cause>"
+```
+
 ---
 
 ### 5d-deep.3: Adversarial cross-check
 
-After primary generates → spawn adversarial agent (CLI selected in 5d-deep.1):
+After primary generates → spawn adversarial agent (CLI selected in 5d-deep.1).
+Wrap the adversarial spawn in narration the same way as the primary:
 
 ```bash
+bash scripts/vg-narrate-spawn.sh deep-probe-adversarial-${GOAL_ID} spawning \
+  "phase ${PHASE_NUMBER} adversarial cross-check (${ADVERSARIAL_CLI})"
+
 # Invoke adversarial CLI with same input + primary output, ask:
 # 1. Are any variants testing invalid-by-design scenarios? → mark reject
 # 2. Are any `hard` variants actually uncertain edge cases? → demote `advisory`
 # 3. Are there edge-case categories primary missed? → suggest add
+
+bash scripts/vg-narrate-spawn.sh deep-probe-adversarial-${GOAL_ID} returned \
+  "adversarial verdict captured"
 ```
 
 **Consensus rule:**
