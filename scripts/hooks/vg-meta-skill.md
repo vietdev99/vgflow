@@ -163,3 +163,25 @@ Source: `docs/superpowers/specs/2026-05-03-vg-r5.5-hooks-source-isolation-design
 | "Add a schema_version to DEPLOY-STATE.json — best practice" | R6a explicitly does NOT introduce one. Existing consumers don't expect it. |
 
 Source: `docs/superpowers/specs/2026-05-03-vg-r6a-deploy-design.md`
+
+## Amend-specific Red Flags
+
+| Thought | Reality |
+|---|---|
+| "Subagent should auto-apply ripple to PLAN.md" | Rule 6: cascade is INFORMATIONAL only. Subagent is read-only. Orchestrator displays report; user decides next action. |
+| "Skip cascade analysis, just commit Step 6" | Rule 6 still requires the report; user needs awareness before commit. |
+| "Cascade analyzer can write a RIPPLE-ANALYSIS.json file" | NO — output is markdown report on stdout. AMENDMENT-LOG.md (existing) captures change context; cascade is ephemeral inline. |
+| "Skip narrate-spawn for cascade analyzer — read-only is harmless" | UX baseline R2 makes narrate-spawn MANDATORY for ALL spawns. |
+
+## Debug-specific Red Flags
+
+| Thought | Reality |
+|---|---|
+| "Cap fix loop at 3 to prevent infinite retry" | Rule 2: AskUserQuestion-driven, NO max iterations. User-controlled exit. |
+| "Use a subagent for classification (Step 0)" | Rule 3: Auto-classify is heuristic regex (deterministic, fast). Subagent is overkill + slow. |
+| "Skip Step 1 runtime_ui — too complex" | The Agent(vg-debug-ui-discovery) spawn IS the implementation. Skipping = pseudo-code remains. |
+| "MCP unavailable → abort debug session" | Rule 5: fallback to amendment-trigger; do NOT abort. |
+| "Subagent should write to DEBUG-LOG.md directly" | NO — orchestrator owns the append (rule 6: atomic commits per fix). Subagent returns markdown; orchestrator appends. |
+| "Spec_gap should NOT auto-route to /vg:amend" | Rule 4 + flag default is auto-route. Use --no-amend-trigger to disable. |
+
+Source: `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md`
