@@ -127,11 +127,16 @@ Missing → BLOCK with guidance: "Run `/vg:review {phase}` first."
 
 The flags listed in `forbidden_without_override` (test.md runtime_contract)
 MUST be paired with `--override-reason "<≥50 chars>"`. Each accepted skip
-flag emits an `override.used` event via `vg-orchestrator override` so the
-override-debt register has a canonical record:
+flag emits a canonical `override.used` event via `vg-orchestrator override`
+so the override-debt register has a stable record. Lone `--override-reason`
+(no companion skip flag) is also gated and emits its own `override.used`
+event tagged with `flag=--override-reason` — that way the contract drift
+called out in review-v2 A5 can never silently swallow a justification.
 
 ```bash
 # Detect any forbidden skip/allow flags present in $ARGUMENTS.
+# --override-reason itself is also in forbidden_without_override (test.md)
+# but is handled separately below so we can attribute the override event.
 FORBIDDEN_FLAGS=(--skip-deploy --skip-flow --allow-missing-console-check)
 USED_FORBIDDEN=()
 for FF in "${FORBIDDEN_FLAGS[@]}"; do
@@ -140,16 +145,14 @@ for FF in "${FORBIDDEN_FLAGS[@]}"; do
   fi
 done
 
-if [ ${#USED_FORBIDDEN[@]} -gt 0 ]; then
-  if [[ ! " ${ARGUMENTS} " =~ [[:space:]]--override-reason([[:space:]=]) ]]; then
-    echo "⛔ Forbidden flag(s) used without --override-reason:"
-    for FF in "${USED_FORBIDDEN[@]}"; do echo "   ${FF}"; done
-    echo ""
-    echo "Re-run with: --override-reason \"<≥50 char justification>\""
-    exit 1
-  fi
+HAS_OVERRIDE_REASON=false
+if [[ " ${ARGUMENTS} " =~ [[:space:]]--override-reason([[:space:]=]) ]]; then
+  HAS_OVERRIDE_REASON=true
+fi
 
-  # Extract reason text (vg-orchestrator validates ≥50 chars + non-placeholder).
+# Extract reason text once (vg-orchestrator validates ≥50 chars + non-placeholder).
+OVR_REASON=""
+if [ "$HAS_OVERRIDE_REASON" = "true" ]; then
   OVR_REASON=$(echo "$ARGUMENTS" | ${PYTHON_BIN:-python3} -c "
 import re, sys
 arg = sys.stdin.read()
@@ -157,6 +160,16 @@ m = re.search(r'--override-reason[ =](?:\"([^\"]+)\"|(\S.*))', arg)
 if m:
     print((m.group(1) or m.group(2) or '').strip())
 ")
+fi
+
+if [ ${#USED_FORBIDDEN[@]} -gt 0 ]; then
+  if [ "$HAS_OVERRIDE_REASON" != "true" ]; then
+    echo "⛔ Forbidden flag(s) used without --override-reason:"
+    for FF in "${USED_FORBIDDEN[@]}"; do echo "   ${FF}"; done
+    echo ""
+    echo "Re-run with: --override-reason \"<≥50 char justification>\""
+    exit 1
+  fi
 
   for FF in "${USED_FORBIDDEN[@]}"; do
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
@@ -165,6 +178,16 @@ if m:
         exit 1
       }
   done
+elif [ "$HAS_OVERRIDE_REASON" = "true" ]; then
+  # Lone --override-reason (no skip/allow companion). The flag is still
+  # in forbidden_without_override so it MUST emit a canonical override.used
+  # event — otherwise the parser+contract drift detected by review-v2 A5
+  # remains: telemetry would never see the justification.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--override-reason" --reason "$OVR_REASON" || {
+      echo "⛔ vg-orchestrator override rejected --override-reason (reason too short / placeholder)."
+      exit 1
+    }
 fi
 ```
 
