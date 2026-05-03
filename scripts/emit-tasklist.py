@@ -430,7 +430,11 @@ def _write_contract(
         "projection_items": projection_items,
         "projection_item_count": len(projection_items),
         "native_adapters": {
-            "claude": "TodoWrite with one item per projection_items entry (group headers + sub-steps with ↳ prefix)",
+            "claude": (
+                "TodoWrite per projection_items entry. content = item.title VERBATIM "
+                "(do NOT prepend `[id]` or `id:`). PostToolUse hook does tolerant match "
+                "by id OR title, so plain titles work. Sub-steps already include ↳ indent."
+            ),
             "codex": "native tasklist/plan UI — same hierarchy",
             "fallback": "vg-orchestrator run-status --pretty",
         },
