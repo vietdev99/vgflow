@@ -11,7 +11,7 @@ flow at a glance. Detailed per-env executor contract lives in sibling
        ▼
     Step 0   Parse args, validate prerequisites      (orchestrator)
        │     - resolve phase dir
-       │     - check build-complete via PIPELINE-STATE
+       │     - check build-complete via PIPELINE-STATE (skipped if --pre-test)
        │     - emit phase.deploy_started telemetry
        │
        ▼
@@ -66,3 +66,53 @@ It DOES:
 
 - `overview.md` (this file) — Step 1 + Step 2 (high-level flow).
 - `per-env-executor-contract.md` — Step 1 (constructing spawn input + parsing return).
+
+## --pre-test mode (Task 20 — invoked from /vg:build STEP 6.5)
+
+`/vg:deploy --pre-test` is a sanctioned pre-close invocation path. The
+build pipeline calls it from STEP 6.5 (pre-test gate) BEFORE STEP 7
+(close). Distinguishing pre-test from post-close deploys lets downstream
+`/vg:test` and `/vg:review` make different smoke decisions per env.
+
+Behavior when `--pre-test` is set:
+
+| Aspect | Default deploy | `--pre-test` mode |
+|---|---|---|
+| build-complete check | required (or `--allow-build-incomplete` + override) | bypassed (sanctioned) |
+| `--non-interactive` | optional | required (build is non-interactive) |
+| `deployed.<env>.mode` field | `"post-close"` | `"pre-test"` |
+| override-debt logged | yes (if `--allow-build-incomplete`) | no — not a manual override |
+| Telemetry event | `phase.deploy_started`/`completed` | + `deploy.pre_test_invoked` |
+
+Step 0 bypass block:
+
+```bash
+PRE_TEST_MODE=false
+if [[ "$ARGUMENTS" =~ --pre-test ]]; then
+  PRE_TEST_MODE=true
+  echo "▸ /vg:deploy --pre-test: bypass build-complete check (pre-close invocation from build STEP 6.5)"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "deploy.pre_test_invoked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+fi
+
+# Existing build_complete gate, now skipped when PRE_TEST_MODE=true:
+if [ "$PRE_TEST_MODE" = "false" ] && [ ! -f "${PHASE_DIR}/.step-markers/12_run_complete.done" ]; then
+  if [[ ! "$ARGUMENTS" =~ --allow-build-incomplete ]]; then
+    echo "⛔ /vg:deploy: build not complete. Run /vg:build first or pass --allow-build-incomplete + --override-reason"
+    exit 1
+  fi
+fi
+```
+
+Step 2 (DEPLOY-STATE merge) writes `mode` per env:
+
+```python
+deployed_entry = {
+    "url": deployed_url,
+    "deployed_at": iso_timestamp,
+    "phase": phase_number,
+    "mode": "pre-test" if pre_test_mode else "post-close",
+}
+```
+

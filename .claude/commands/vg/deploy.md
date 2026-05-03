@@ -1,7 +1,7 @@
 ---
 name: vg:deploy
 description: Standalone deploy skill — multi-env (sandbox/staging/prod), writes deployed.{env} block to DEPLOY-STATE.json. Optional step between /vg:build and /vg:review/test/roam. Suggestion-only consumers downstream — this skill produces the data; runtime gates use it to recommend env via enrich-env-question.py.
-argument-hint: "<phase> [--envs=sandbox,staging,prod] [--all-envs] [--dry-run] [--non-interactive] [--prod-confirm-token=DEPLOY-PROD-{phase}] [--allow-build-incomplete]"
+argument-hint: "<phase> [--envs=sandbox,staging,prod] [--all-envs] [--dry-run] [--non-interactive] [--prod-confirm-token=DEPLOY-PROD-{phase}] [--allow-build-incomplete] [--pre-test]"
 allowed-tools:
   - Read
   - Write
