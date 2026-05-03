@@ -6,7 +6,7 @@
      preserves the i18n/a11y/cross-phase-ripple/L2-L6 fidelity sequence
      intact; future refactor splits the L2-L6 gate slate into its own ref.
      R2 round-2 expanded the post-spawn validator with BUILD-LOG layer
-     enforcement (build_log_path/sha/index/sub_files). -->.
+     enforcement (build_log_path/sha/index/sub_files). -->
 
 This is the orchestrator-side body of the build pipeline's
 post-execution step (`9_post_execution`). It is heavy: backup spec
