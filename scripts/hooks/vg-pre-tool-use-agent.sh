@@ -47,7 +47,8 @@ Switch \`subagent_type\` to one in the allow-list above.
 [VG diagnostic] Spawn subagent bị chặn vì kiểu '${subagent}' không trong allow-list.
 EOF
 
-  printf "⛔ %s: %s\n→ Read %s for allowed list\n" "$gate_id" "$cause" "$block_file" >&2
+  # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
+  printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for allowed list\n" "$gate_id" "$cause" "$block_file" >&2
 
   if command -v vg-orchestrator >/dev/null 2>&1; then
     vg-orchestrator emit-event vg.block.fired \

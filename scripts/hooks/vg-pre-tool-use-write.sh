@@ -57,7 +57,8 @@ vg-orchestrator emit-event vg.block.handled --gate ${gate_id} \\
 \`\`\`
 EOF
 
-    printf "⛔ %s: %s\n→ Read %s for fix\n→ After fix: vg-orchestrator emit-event vg.block.handled --gate %s\n" \
+    # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
+    printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for fix\n→ After fix: vg-orchestrator emit-event vg.block.handled --gate %s\n" \
       "$gate_id" "$cause" "$block_file" "$gate_id" >&2
 
     if command -v vg-orchestrator >/dev/null 2>&1; then

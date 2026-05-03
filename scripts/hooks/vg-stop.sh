@@ -74,7 +74,8 @@ if [ "${#failures[@]}" -gt 0 ]; then
     echo "- CONTRACT → check \`runtime_contract.must_write\` artifacts + \`must_touch_markers\`."
   } > "$block_file"
 
-  printf "⛔ %s: %d failure(s) for run %s (%s)\n→ Read %s for details + fix\n" \
+  # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
+  printf "\033[38;5;208m%s: %d failure(s) for run %s (%s)\033[0m\n→ Read %s for details + fix\n" \
     "$gate_id" "${#failures[@]}" "$run_id" "$command" "$block_file" >&2
   exit 2
 fi
