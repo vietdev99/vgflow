@@ -126,6 +126,48 @@ def _extract_task_id(prompt: str) -> str | None:
     return matches[-1] if matches else None
 
 
+def _extract_capsule_path(prompt: str) -> str | None:
+    """Parse 'capsule_path=...' or '<task_context_capsule path="...">' from prompt.
+
+    The waves-delegation.md prompt template injects the capsule path two
+    ways:
+      1. Inline 'capsule_path=.task-capsules/task-NN.capsule.json' line
+         (envelope echo).
+      2. `<task_context_capsule path="...">` block attribute (verbatim
+         template).
+    Either form is accepted; first match wins.
+    """
+    m = re.search(
+        r'task_context_capsule\s+path\s*=\s*"([^"]+)"',
+        prompt, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    m = re.search(
+        r"capsule_path\s*[=:]\s*([^\s\"'<>]+)",
+        prompt, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _resolve_capsule_path(raw: str, repo_root: Path) -> Path:
+    """Expand ${PHASE_DIR}/${PHASE} placeholders best-effort and resolve.
+
+    The orchestrator renders the prompt with shell ${VAR} expansion BEFORE
+    Agent() spawn, so by the time the guard sees it the path is normally
+    fully expanded. If we still see literal `${...}` (unrendered template),
+    treat the path as repo-relative on a best-effort basis — `Path.exists`
+    on a literal `${PHASE_DIR}/.task-capsules/...` will return False and
+    we'll deny, which is the right behavior for an unrendered prompt.
+    """
+    p = Path(raw)
+    if not p.is_absolute():
+        p = repo_root / raw
+    return p
+
+
 def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
     """R2 build pilot — assert spawned task_id matches wave-spawn-plan.
 
@@ -169,6 +211,36 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
             "spawn-guard cannot verify against wave plan.\n"
             "Add 'task_id=task-NN' to the subagent prompt so the guard "
             "can match it against .wave-spawn-plan.json."
+        )
+
+    # R2 round-2 (Important-1) — capsule existence gate. The entry
+    # `commands/vg/build.md` HARD-GATE promises that this hook DENIES the
+    # spawn when `.task-capsules/task-${N}.capsule.json` is missing on
+    # disk. The previous implementation only checked subagent_type +
+    # task_id; capsule absence slipped through and the executor crashed
+    # mid-run when it tried to read the capsule.
+    capsule_raw = _extract_capsule_path(prompt)
+    if not capsule_raw:
+        return deny(
+            "\033[38;5;208mvg-build-task-executor spawn missing capsule_path "
+            f"for {task_id}.\033[0m\n"
+            "Render the waves-delegation.md prompt template so the rendered "
+            "prompt includes either:\n"
+            "  capsule_path=.task-capsules/task-NN.capsule.json\n"
+            "OR\n"
+            "  <task_context_capsule path=\"...\">\n"
+            "The capsule is the deterministic context contract assembled "
+            "by pre-executor-check.py; the guard refuses the spawn when "
+            "no path is declared so the executor never runs blind."
+        )
+    capsule_path = _resolve_capsule_path(capsule_raw, REPO_ROOT)
+    if not capsule_path.is_file() or capsule_path.stat().st_size == 0:
+        return deny(
+            "\033[38;5;208mvg-build-task-executor spawn capsule missing on disk: "
+            f"{capsule_path}\033[0m\n"
+            "pre-executor-check.py MUST write this file before Agent() "
+            "spawn (waves-overview.md Step 7). Re-run that script for "
+            f"{task_id} OR fix the rendered capsule_path in the prompt."
         )
 
     # Load existing count or initialize from plan.

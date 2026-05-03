@@ -5,8 +5,14 @@ from pathlib import Path
 GUARD = Path(__file__).resolve().parents[1] / "vg-agent-spawn-guard.py"
 
 
-def _setup_run(tmp_path, run_id, expected_tasks):
-    """Stage active-run + wave-spawn-plan + empty spawn-count files."""
+def _setup_run(tmp_path, run_id, expected_tasks, capsule_tasks=None):
+    """Stage active-run + wave-spawn-plan + capsule files for each task.
+
+    R2 round-2 (Important-1) — guard enforces capsule existence; tests
+    materialize a stub capsule per expected task so happy-path spawns
+    pass the new check. Pass capsule_tasks=[] to skip capsule creation
+    when the test wants to assert the missing-capsule deny path.
+    """
     (tmp_path / ".vg/active-runs").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".vg/active-runs/test-session.json").write_text(
         json.dumps({"run_id": run_id, "command": "vg:build", "session_id": "test-session"})
@@ -15,15 +21,31 @@ def _setup_run(tmp_path, run_id, expected_tasks):
     (tmp_path / f".vg/runs/{run_id}/.wave-spawn-plan.json").write_text(
         json.dumps({"wave_id": 3, "expected": expected_tasks})
     )
+    if capsule_tasks is None:
+        capsule_tasks = expected_tasks
+    capsule_dir = tmp_path / ".task-capsules"
+    capsule_dir.mkdir(parents=True, exist_ok=True)
+    for tid in capsule_tasks:
+        (capsule_dir / f"{tid}.capsule.json").write_text("{}")
 
 
-def _spawn(tmp_path, subagent_type, prompt_extra=""):
-    """Invoke guard with given Agent tool input, return (rc, stderr)."""
+def _spawn(tmp_path, subagent_type, prompt_extra="", capsule_path=None):
+    """Invoke guard with given Agent tool input, return (rc, stderr).
+
+    capsule_path defaults to the canonical .task-capsules/task-04.capsule.json
+    so existing tests stay green; pass an explicit value (or empty
+    string) to exercise capsule-gate behavior.
+    """
+    if capsule_path is None:
+        capsule_path = ".task-capsules/task-04.capsule.json"
+    capsule_line = (
+        f"capsule_path={capsule_path}\n" if capsule_path else ""
+    )
     payload = {
         "tool_name": "Agent",
         "tool_input": {
             "subagent_type": subagent_type,
-            "prompt": f"task_id=task-04\n{prompt_extra}",
+            "prompt": f"task_id=task-04\n{capsule_line}{prompt_extra}",
         },
         "session_id": "test-session",
     }
@@ -67,6 +89,33 @@ def test_spawn_count_no_active_run_allows(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     rc, _ = _spawn(tmp_path, "vg-build-task-executor", "task_id=task-04")
     assert rc == 0
+
+
+def test_spawn_capsule_missing_blocks(tmp_path, monkeypatch):
+    """R2 round-2 Important-1 — capsule absent on disk → spawn DENIED.
+
+    build.md HARD-GATE promises this; previously only subagent_type +
+    task_id were checked.
+    """
+    monkeypatch.chdir(tmp_path)
+    _setup_run(tmp_path, "run-cap-1", expected_tasks=["task-04"], capsule_tasks=[])
+    rc, stderr = _spawn(
+        tmp_path, "vg-build-task-executor",
+        capsule_path=".task-capsules/task-04.capsule.json",
+    )
+    assert rc != 0
+    assert "capsule" in stderr.lower()
+
+
+def test_spawn_capsule_path_missing_in_prompt_blocks(tmp_path, monkeypatch):
+    """No capsule_path in rendered prompt → DENIED with concrete fix hint."""
+    monkeypatch.chdir(tmp_path)
+    _setup_run(tmp_path, "run-cap-2", expected_tasks=["task-04"])
+    rc, stderr = _spawn(
+        tmp_path, "vg-build-task-executor", capsule_path="",  # omit
+    )
+    assert rc != 0
+    assert "capsule_path" in stderr.lower() or "capsule" in stderr.lower()
 
 
 def test_spawn_count_resets_when_wave_rolls_forward(tmp_path, monkeypatch):
