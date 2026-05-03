@@ -1041,8 +1041,22 @@ WAVE_EVIDENCE=$(cat <<EVIDENCE_JSON
 }
 EVIDENCE_JSON
 )
-echo "${WAVE_EVIDENCE}" | "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator wave-complete 2>/dev/null \
-  || echo "⚠ wave-complete emit failed for wave ${N} — Stop hook may flag missing wave.completed" >&2
+# R2 round-3 (E1) — wave-complete REQUIRES wave_n positional and propagates
+# rc=2 on shortfall (HARD BLOCK). Previously this was silenced via 2>/dev/null
+# which let `wave.completed` skip and the Stop hook's contract check to pass
+# falsely. Stop hook only delegates `run-status --check-contract`; the real
+# spawn-count vs expected reconciliation lives in cmd_wave_complete (see
+# R2 round-2 shortfall block in scripts/vg-orchestrator/__main__.py).
+echo "${WAVE_EVIDENCE}" | "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator wave-complete "${N}"
+WAVE_COMPLETE_RC=$?
+if [ "$WAVE_COMPLETE_RC" -eq 2 ]; then
+  echo "⛔ wave-complete BLOCKED for wave ${N} (rc=2) — shortfall, integrity violation, or wave-attribution rejection." >&2
+  echo "   See stderr above. Cannot proceed to next wave; the wave.completed event was NOT emitted." >&2
+  exit 2
+elif [ "$WAVE_COMPLETE_RC" -ne 0 ]; then
+  echo "⛔ wave-complete FAILED for wave ${N} (rc=${WAVE_COMPLETE_RC}) — Stop hook will flag missing wave.completed event." >&2
+  exit 1
+fi
 ```
 
 Only proceed to next wave if `$FAILED_GATE` empty.
