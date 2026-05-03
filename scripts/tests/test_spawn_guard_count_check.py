@@ -172,3 +172,38 @@ def test_spawn_count_resets_when_wave_rolls_forward(tmp_path, monkeypatch):
     assert rebuilt["wave_id"] == 3
     assert rebuilt["spawned"] == ["task-04"]
     assert rebuilt["remaining"] == []
+
+
+def test_spawn_count_fails_closed_when_wave_plan_missing(tmp_path, monkeypatch):
+    """R2 round-3 (Important-1 / C5-E1) — vg-build-task-executor spawn must
+    DENY when .wave-spawn-plan.json is absent for an active VG run.
+    Previously the guard returned None (allow), letting blind executors
+    through. The entry build.md HARD-GATE promises this guard enforces
+    wave-plan attribution; missing plan = no enforcement = fail-closed.
+    """
+    monkeypatch.chdir(tmp_path)
+    run_id = "run-no-plan"
+    # Stage active run, but NOT the wave-spawn-plan.
+    (tmp_path / ".vg/active-runs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".vg/active-runs/test-session.json").write_text(
+        json.dumps({"run_id": run_id, "command": "vg:build", "session_id": "test-session"})
+    )
+    (tmp_path / f".vg/runs/{run_id}").mkdir(parents=True, exist_ok=True)
+    rc, stderr = _spawn(tmp_path, "vg-build-task-executor", "task_id=task-04")
+    assert rc != 0, "spawn must be denied when wave-spawn-plan missing"
+    assert "wave-spawn-plan" in stderr.lower() or "plan-missing" in stderr.lower()
+
+
+def test_spawn_count_fails_closed_when_wave_plan_unparseable(tmp_path, monkeypatch):
+    """R2 round-3 — corrupt .wave-spawn-plan.json → spawn DENIED."""
+    monkeypatch.chdir(tmp_path)
+    run_id = "run-bad-plan"
+    (tmp_path / ".vg/active-runs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".vg/active-runs/test-session.json").write_text(
+        json.dumps({"run_id": run_id, "command": "vg:build", "session_id": "test-session"})
+    )
+    (tmp_path / f".vg/runs/{run_id}").mkdir(parents=True, exist_ok=True)
+    (tmp_path / f".vg/runs/{run_id}/.wave-spawn-plan.json").write_text("{not-json")
+    rc, stderr = _spawn(tmp_path, "vg-build-task-executor", "task_id=task-04")
+    assert rc != 0, "spawn must be denied when wave-spawn-plan unparseable"
+    assert "unparseable" in stderr.lower() or "plan-unparseable" in stderr.lower()

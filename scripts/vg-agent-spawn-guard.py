@@ -255,15 +255,56 @@ def _enforce_spawn_count(hook_input: dict, run_id: str,
 
     plan_path, count_path = _spawn_count_paths(run_id)
     if not plan_path.exists():
-        return None  # no wave plan → R5 not run yet, no enforcement
+        # R2 round-3 (Important-1 / C5-E1) — fail-closed when wave plan
+        # absent for active vg-build-task-executor spawns. Previous behavior
+        # returned None (allow), but the entry build.md HARD-GATE promises
+        # this guard enforces wave-plan attribution. Subagent_type was
+        # already filtered to BUILD_TASK_EXECUTOR above, so missing plan =
+        # orchestrator skipped R5 wave-spawn-plan emission and the guard
+        # cannot verify task_id against expected[]. Reject the spawn and
+        # surface the missing-plan as the cause rather than allowing a
+        # blind executor through.
+        return deny(
+            f"\033[38;5;208mvg-build-task-executor spawn rejected — "
+            f".wave-spawn-plan.json missing for run_id={run_id[:12]}.\033[0m\n"
+            "The orchestrator must write .vg/runs/<run_id>/.wave-spawn-plan.json "
+            "(R5 step in waves-overview.md) BEFORE the first executor spawn so "
+            "this guard can verify task_id ∈ expected[]. Without it, the guard "
+            "cannot enforce wave-plan attribution and refuses the spawn fail-"
+            "closed.\n"
+            "Fix: re-run the wave-start step (waves-overview.md '8c — emit "
+            "wave-spawn-plan') OR pause until R5 emits the plan.",
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-plan-missing",
+        )
 
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        # Same rationale: unparseable plan = no enforcement = fail-closed.
+        return deny(
+            f"\033[38;5;208mvg-build-task-executor spawn rejected — "
+            f".wave-spawn-plan.json unparseable: {exc}\033[0m\n"
+            f"Path: .vg/runs/{run_id[:12]}/.wave-spawn-plan.json\n"
+            "Fix: regenerate the plan via waves-overview.md '8c — emit "
+            "wave-spawn-plan' OR delete the corrupt file and re-run wave-start.",
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-plan-unparseable",
+        )
     expected = plan.get("expected") or []
     if not isinstance(expected, list):
-        return None
+        # Schema-malformed plan: refuse spawn fail-closed.
+        return deny(
+            f"\033[38;5;208mvg-build-task-executor spawn rejected — "
+            f".wave-spawn-plan.json missing/invalid 'expected' field "
+            f"(must be list, got {type(expected).__name__}).\033[0m\n"
+            "The wave plan schema requires `expected: [\"task-NN\", ...]`; "
+            "without it the guard cannot verify task_id attribution.\n"
+            "Fix: regenerate the plan via waves-overview.md '8c — emit "
+            "wave-spawn-plan'.",
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-plan-schema-invalid",
+        )
     plan_wave_id = plan.get("wave_id")
 
     prompt = tool_input.get("prompt", "") or ""
