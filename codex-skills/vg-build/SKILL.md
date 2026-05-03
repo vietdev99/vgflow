@@ -344,6 +344,18 @@ Per spec §1.5, refactor deferred to separate round (88% loop fail
 rate is architectural). This step preserves backup behavior so the
 slim entry can route through it without behavior change.
 
+### STEP 6.5 — Pre-Test Gate (HEAVY, conditional)
+
+Read `_shared/build/pre-test-gate.md`. Runs T1 (static: typecheck + lint +
+debug-leftover grep + secret scan) + T2 (local unit/integration tests).
+Optional T4/T6 deploy + T7 post-deploy health/smoke driven by ENV-BASELINE
++ vg.config policy. Build BLOCKs on T1/T2 failure; deploy/smoke failures
+route through Task 7 classifier (no dead-end BLOCK).
+
+Output: `${PHASE_DIR}/PRE-TEST-REPORT.md`. Skippable via `--skip-pre-test`
++ `--override-reason=<text>` (logs override-debt via override-use, then
+falls through to STEP 7 — does NOT terminate /vg:build).
+
 ### STEP 7 — close (postmortem + run-complete)
 Read `_shared/build/close.md` and follow it exactly.
 Steps 10_postmortem_sanity + 12_run_complete.

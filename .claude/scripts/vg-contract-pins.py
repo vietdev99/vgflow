@@ -111,15 +111,17 @@ def _read_skill(command: str) -> tuple[str, str] | None:
     return (fm, text[m.end():])
 
 
-def _parse_yaml_list_value(block_text: str, value_key: str) -> list[str]:
+def _parse_yaml_list_value(block_text: str, value_key: str) -> list[Any]:
     """Parse a YAML list under a single key, accepting both shorthand
     (`- "marker"`) and structured (`- name: "marker" / severity: warn`)
     forms. `value_key` is which field name to extract from structured
     items (e.g. "name" for must_touch_markers, "event_type" for telemetry).
 
-    Returns ordered, deduped list of values. Comment lines (`#...`) ignored.
+    Returns ordered, deduped list. Plain items stay strings; structured items
+    with extra keys stay dicts so `severity`, `required_unless_flag`, and other
+    non-blocking contract metadata survive pinning.
     """
-    out: list[str] = []
+    out: list[Any] = []
     seen: set[str] = set()
     pending: dict[str, str] | None = None
 
@@ -127,10 +129,14 @@ def _parse_yaml_list_value(block_text: str, value_key: str) -> list[str]:
         nonlocal pending
         if pending is None:
             return
-        v = pending.get("__shorthand__") or pending.get(value_key)
-        if v and v not in seen:
-            seen.add(v)
-            out.append(v)
+        value = pending.get("__shorthand__") or pending.get(value_key)
+        if value and value not in seen:
+            seen.add(value)
+            if "__shorthand__" in pending:
+                out.append(value)
+            else:
+                extra = {k: v for k, v in pending.items() if k != value_key}
+                out.append(dict(pending) if extra else value)
         pending = None
 
     for line in block_text.splitlines():
@@ -160,7 +166,7 @@ def _parse_yaml_list_value(block_text: str, value_key: str) -> list[str]:
     return out
 
 
-def _parse_must_touch_markers(frontmatter: str, body: str) -> list[str]:
+def _parse_must_touch_markers(frontmatter: str, body: str) -> list[Any]:
     """Extract must_touch_markers list, falling back to all `<step>` names
     from the body when the frontmatter doesn't enumerate them.
     """
@@ -182,7 +188,7 @@ def _parse_must_touch_markers(frontmatter: str, body: str) -> list[str]:
     return ordered
 
 
-def _parse_must_emit_telemetry(frontmatter: str) -> list[str]:
+def _parse_must_emit_telemetry(frontmatter: str) -> list[Any]:
     """Extract must_emit_telemetry event_type list from frontmatter."""
     rc = RUNTIME_CONTRACT_RE.search(frontmatter)
     if not rc:

@@ -187,7 +187,7 @@ Invoke this skill as `$vg-build`. Treat all user text after the skill name as ar
 ---
 name: vg:build
 description: Execute phase plans with contract-aware wave-based parallel execution
-argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck]"
+argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck] [--skip-pre-test]"
 allowed-tools:
   - Read
   - Write
@@ -231,6 +231,10 @@ runtime_contract:
     - "${PHASE_DIR}/BUILD-LOG/index.md"
     # Layer 3: flat concat (legacy compat for grep validators)
     - "${PHASE_DIR}/BUILD-LOG.md"
+    # Task 18 (pre-test gate) — PRE-TEST-REPORT.md (renderer at scripts/validators/write-pre-test-report.py)
+    - path: "${PHASE_DIR}/PRE-TEST-REPORT.md"
+      required_unless_flag: "--skip-pre-test"
+      content_min_bytes: 80
   must_touch_markers:
     # OHOK Batch 4 C3 (2026-04-22): contract 8 → 15 markers.
     # Previously 8 steps (1/4/7/8/9/10/11/12) were validated — 11 other
@@ -272,6 +276,11 @@ runtime_contract:
     # severity=warn so a clean build (no evidence) doesn't fail contract check.
     - name: "8_5_in_scope_fix_loop"
       severity: "warn"
+    # Task 18 (pre-test gate) — STEP 6.5 between CrossAI loop and close.
+    # Hard contract per Codex round 2 fix #9: NOT severity=warn — required
+    # unless --skip-pre-test override is logged via override-use.
+    - name: "12_5_pre_test_gate"
+      required_unless_flag: "--skip-pre-test"
   must_emit_telemetry:
     # v1.15.2 — names match vg_run_start/vg_run_complete auto-emits.
     # Previously declared build.phase_start/build.phase_end but 0 emit calls
@@ -300,6 +309,14 @@ runtime_contract:
     - event_type: "build.l4a_gates_passed"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # Task 18 (pre-test gate) — STEP 6.5 telemetry. complete = full T1+T2
+    # ran (with optional deploy); skipped = --skip-pre-test override path.
+    - event_type: "build.pre_test_complete"
+      phase: "${PHASE_NUMBER}"
+      required_unless_flag: "--skip-pre-test"
+    - event_type: "build.pre_test_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     # Every escape hatch must leave a debt-register trail.
     - "--override-reason"
@@ -315,6 +332,8 @@ runtime_contract:
     - "--skip-uimap-injection-audit"
     - "--skip-task-fidelity-audit"
     - "--allow-verify-divergence"
+    # Task 18 (pre-test gate) — escape hatch for STEP 6.5 (T1+T2+deploy+smoke)
+    - "--skip-pre-test"
 ---
 
 
@@ -477,6 +496,18 @@ Read `_shared/build/crossai-loop.md` and follow it exactly.
 Per spec §1.5, refactor deferred to separate round (88% loop fail
 rate is architectural). This step preserves backup behavior so the
 slim entry can route through it without behavior change.
+
+### STEP 6.5 — Pre-Test Gate (HEAVY, conditional)
+
+Read `_shared/build/pre-test-gate.md`. Runs T1 (static: typecheck + lint +
+debug-leftover grep + secret scan) + T2 (local unit/integration tests).
+Optional T4/T6 deploy + T7 post-deploy health/smoke driven by ENV-BASELINE
++ vg.config policy. Build BLOCKs on T1/T2 failure; deploy/smoke failures
+route through Task 7 classifier (no dead-end BLOCK).
+
+Output: `${PHASE_DIR}/PRE-TEST-REPORT.md`. Skippable via `--skip-pre-test`
++ `--override-reason=<text>` (logs override-debt via override-use, then
+falls through to STEP 7 — does NOT terminate /vg:build).
 
 ### STEP 7 — close (postmortem + run-complete)
 Read `_shared/build/close.md` and follow it exactly.

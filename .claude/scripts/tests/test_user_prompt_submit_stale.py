@@ -86,15 +86,45 @@ def _run_hook(tmp: Path, prompt: str,
     )
 
 
-def test_fresh_intra_phase_conflict_still_blocks(tmp_path):
-    """Pre-fix behavior preserved: fresh active review + deploy on same phase = BLOCK."""
+def test_fresh_intra_phase_mainline_conflict_blocks(tmp_path):
+    """Pre-fix behavior preserved: fresh active review + build on same phase = BLOCK
+    (both mainline pipeline commands)."""
     _setup_active_run(tmp_path, command="vg:review", phase="4.1",
                       started_minutes_ago=5)
-    proc = _run_hook(tmp_path, "/vg:deploy 4.1")
+    proc = _run_hook(tmp_path, "/vg:build 4.1")
     assert proc.returncode == 2
     assert "vg-cross-run" in proc.stderr
     assert "active vg:review" in proc.stderr
-    assert "previous" not in proc.stderr  # not the dead-run path
+    assert "finish or abort" in proc.stderr
+
+
+def test_aux_command_does_not_block_mainline(tmp_path):
+    """Hotfix 2026-05-04: deploy active + review on same phase → allow.
+    Deploy is auxiliary (run-anytime); review is mainline. No conflict."""
+    _setup_active_run(tmp_path, command="vg:deploy", phase="4.1",
+                      started_minutes_ago=5)
+    proc = _run_hook(tmp_path, "/vg:review 4.1")
+    assert proc.returncode == 0
+    assert "auxiliary vg:deploy does not block mainline vg:review" in proc.stderr
+
+
+def test_mainline_does_not_block_aux(tmp_path):
+    """Symmetric: review active + deploy on same phase → allow.
+    Review is mainline; deploy is auxiliary."""
+    _setup_active_run(tmp_path, command="vg:review", phase="4.1",
+                      started_minutes_ago=5)
+    proc = _run_hook(tmp_path, "/vg:deploy 4.1")
+    assert proc.returncode == 0
+    assert "auxiliary vg:deploy does not block mainline vg:review" in proc.stderr
+
+
+def test_both_aux_concurrent_allowed(tmp_path):
+    """deploy active + roam on same phase → both auxiliary, allow concurrently."""
+    _setup_active_run(tmp_path, command="vg:deploy", phase="4.1",
+                      started_minutes_ago=5)
+    proc = _run_hook(tmp_path, "/vg:roam 4.1")
+    assert proc.returncode == 0
+    assert "both auxiliary" in proc.stderr
 
 
 def test_stale_run_allows_with_warn(tmp_path):
@@ -129,8 +159,9 @@ def test_blocked_unhandled_run_allows_with_warn(tmp_path):
     assert "run.blocked unhandled" in proc.stderr
 
 
-def test_blocked_then_handled_still_blocks(tmp_path):
-    """run.blocked + vg.block.handled = resolved → run is alive, intra-phase rule applies."""
+def test_blocked_then_handled_still_blocks_for_mainline_pair(tmp_path):
+    """run.blocked + vg.block.handled = resolved → run alive again. Two
+    mainline cmds on same phase still hard-block (preserve pipeline order)."""
     _setup_active_run(tmp_path, command="vg:review", phase="4.1",
                       started_minutes_ago=5,
                       run_id="resolved-run-id")
@@ -142,14 +173,15 @@ def test_blocked_then_handled_still_blocks(tmp_path):
     _insert_event(db, run_id="resolved-run-id", event_type="vg.block.handled",
                   ts_offset_minutes=-1)
 
-    proc = _run_hook(tmp_path, "/vg:deploy 4.1")
+    # Both mainline (review + build) → still hard-block
+    proc = _run_hook(tmp_path, "/vg:build 4.1")
     assert proc.returncode == 2
     assert "active vg:review" in proc.stderr
 
 
-def test_blocked_then_aborted_no_block(tmp_path):
-    """run.blocked + run.aborted = run terminated → cleanup of run-file is
-    expected (orchestrator clears it). If file still here, treat as dead."""
+def test_blocked_then_aborted_alive_marker(tmp_path):
+    """run.blocked + run.aborted = run terminated. File treated as alive
+    (terminal events clear the dead-marker). Mainline-mainline still blocks."""
     _setup_active_run(tmp_path, command="vg:review", phase="4.1",
                       started_minutes_ago=5,
                       run_id="aborted-run-id")
@@ -161,12 +193,8 @@ def test_blocked_then_aborted_no_block(tmp_path):
     _insert_event(db, run_id="aborted-run-id", event_type="run.aborted",
                   ts_offset_minutes=-1)
 
-    proc = _run_hook(tmp_path, "/vg:deploy 4.1")
-    # run.aborted clears the dead-marker, so the run-file is treated as
-    # alive-and-intra-phase-conflict → block. (In practice run.aborted
-    # paired with state_mod.clear_active_run() removes the file, so this
-    # synthetic state is rare. But test pins behavior.)
-    assert proc.returncode == 2
+    proc = _run_hook(tmp_path, "/vg:build 4.1")  # mainline pair
+    assert proc.returncode == 2  # treated alive + mainline conflict
 
 
 def test_different_phase_passes(tmp_path):

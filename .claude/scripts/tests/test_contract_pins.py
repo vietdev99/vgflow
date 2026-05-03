@@ -60,6 +60,8 @@ runtime_contract:
     - "7_finish"
   must_emit_telemetry:
     - event_type: "accept.tasklist_shown"
+    - event_type: "accept.optional_review"
+      severity: "warn"
     - event_type: "accept.completed"
 ---
 
@@ -79,6 +81,8 @@ runtime_contract:
     - "3_complete"
   must_emit_telemetry:
     - event_type: "blueprint.completed"
+    - event_type: "blueprint.edge_cases_generated"
+      severity: "warn"
 ---
 
 <step name="0_parse">test</step>
@@ -143,11 +147,18 @@ def test_extract_parses_yaml_list_forms(tmp_path):
     assert r.returncode == 0, r.stderr
     data = json.loads(r.stdout)
     # Both shorthand strings and structured {name: ...} resolve to marker names
-    assert data["must_touch_markers"] == ["0_gate", "1_artifact",
-                                          "2_advisory", "7_finish"]
-    # event_type list extracted
-    assert data["must_emit_telemetry"] == ["accept.tasklist_shown",
-                                           "accept.completed"]
+    assert data["must_touch_markers"] == [
+        "0_gate",
+        "1_artifact",
+        {"name": "2_advisory", "severity": "warn"},
+        "7_finish",
+    ]
+    # event_type list extracted; structured warn telemetry preserves severity
+    assert data["must_emit_telemetry"] == [
+        "accept.tasklist_shown",
+        {"event_type": "accept.optional_review", "severity": "warn"},
+        "accept.completed",
+    ]
     assert "skill_sha256" in data
 
 
@@ -161,6 +172,8 @@ def test_write_pin_creates_all_commands(tmp_path):
     assert data["schema_version"] == 1
     assert "vg:accept" in data["commands"]
     assert "vg:blueprint" in data["commands"]
+    blueprint_tel = data["commands"]["vg:blueprint"]["must_emit_telemetry"]
+    assert {"event_type": "blueprint.edge_cases_generated", "severity": "warn"} in blueprint_tel
 
 
 def test_write_pin_idempotent_preserves_existing(tmp_path):
