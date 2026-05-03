@@ -302,12 +302,13 @@ def _build_hierarchical_projection(checklists: list[dict]) -> list[dict]:
     """
     items: list[dict] = []
     for c in checklists:
-        sub_count = len(c.get("items") or [])
+        # Group title: just the friendly title (no icon, no step count, no id prefix).
+        # The PostToolUse hook matches todo content against either id or title (tolerant).
         items.append({
             "kind": "group",
             "id": c["id"],
             "parent": None,
-            "title": f"📋 {c['title']} ({sub_count} step{'s' if sub_count != 1 else ''})",
+            "title": c["title"],
             "status": "pending",
         })
         for step in c.get("items") or []:
@@ -476,7 +477,6 @@ def _print_tasklist(
     print(f"  TodoWrite hierarchical projection ({len(projection_items)} items):")
     print("━" * 78)
     for item in projection_items:
-        marker = "📋" if item["kind"] == "group" else "  "
         print(f"  [ ] {item['title']}")
     print("━" * 78)
     print("  Markers required: .step-markers/{name}.done (per sub-step, NOT group)")
