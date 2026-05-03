@@ -574,9 +574,18 @@ else
     echo ""
     echo "## Artifacts"
     echo "---"; cat "${PHASE_DIR}/CONTEXT.md"
-    echo "---"; cat "${PHASE_DIR}"/PLAN*.md
-    echo "---"; cat "${PHASE_DIR}/API-CONTRACTS.md"
-    echo "---"; cat "${PHASE_DIR}/TEST-GOALS.md"
+    echo "---"
+    bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact plan --full 2>/dev/null \
+      || cat "${PHASE_DIR}"/PLAN*.md 2>/dev/null
+    echo "---"
+    bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact contracts --full 2>/dev/null \
+      || cat "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null
+    echo "---"
+    bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact goals --full 2>/dev/null \
+      || cat "${PHASE_DIR}/TEST-GOALS.md" 2>/dev/null
   } > "$CROSSAI_CTX"
 
   # Set up + delegate to crossai-invoke.md

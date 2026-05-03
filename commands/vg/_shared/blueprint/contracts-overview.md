@@ -322,14 +322,26 @@ else
     echo "## CONTEXT.md"
     sed -n '1,260p' "${PHASE_DIR}/CONTEXT.md" 2>/dev/null || true
     echo ""
-    echo "## PLAN.md"
-    sed -n '1,260p' "${PHASE_DIR}/PLAN.md" 2>/dev/null || true
+    echo "## PLAN (index + tasks via vg-load)"
+    bash "${REPO_ROOT}/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact plan --index 2>/dev/null \
+      || sed -n '1,260p' "${PHASE_DIR}/PLAN.md" 2>/dev/null || true
+    bash "${REPO_ROOT}/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact plan --full 2>/dev/null || true
     echo ""
-    echo "## API-CONTRACTS.md"
-    sed -n '1,260p' "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || true
+    echo "## API-CONTRACTS (index + endpoints via vg-load)"
+    bash "${REPO_ROOT}/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact contracts --index 2>/dev/null \
+      || sed -n '1,260p' "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || true
+    bash "${REPO_ROOT}/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact contracts --full 2>/dev/null || true
     echo ""
-    echo "## TEST-GOALS.md FINAL DRAFT"
-    sed -n '1,320p' "${PHASE_DIR}/TEST-GOALS.md" 2>/dev/null || true
+    echo "## TEST-GOALS FINAL DRAFT (index + goals via vg-load)"
+    bash "${REPO_ROOT}/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact goals --index 2>/dev/null \
+      || sed -n '1,320p' "${PHASE_DIR}/TEST-GOALS.md" 2>/dev/null || true
+    bash "${REPO_ROOT}/scripts/vg-load.sh" --phase "${PHASE_NUMBER}" \
+      --artifact goals --full 2>/dev/null || true
     echo ""
     echo "## CRUD-SURFACES.md"
     sed -n '1,260p' "${PHASE_DIR}/CRUD-SURFACES.md" 2>/dev/null || true

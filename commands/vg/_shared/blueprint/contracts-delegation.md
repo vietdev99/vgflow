@@ -48,11 +48,19 @@ NOT browse files outside input. Do NOT ask user — input is the contract.
 
 <inputs>
 @${PHASE_DIR}/CONTEXT.md
-@${PHASE_DIR}/PLAN.md
 @${PHASE_DIR}/INTERFACE-STANDARDS.md
 @${PHASE_DIR}/UI-SPEC.md (if exists)
 @${PHASE_DIR}/UI-MAP.md (if exists)
 @${PHASE_DIR}/VIEW-COMPONENTS.md (if exists)
+
+# PLAN — load via vg-load helper (3-layer split aware). Prefer slim
+# index for cross-task scan, then per-task pulls for the endpoints you
+# need to ground each contract block:
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact plan --index
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact plan --task NN
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact plan --wave N
+# Last-resort full read (legacy):
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact plan --full
 </inputs>
 
 <config>

@@ -90,11 +90,22 @@ ${BOOTSTRAP_RULES_BLOCK}
 </security_test_plan>
 
 <contracts>
-@${PHASE_DIR}/API-CONTRACTS.md (if exists)
+# Load via vg-load helper (3-layer split aware) — falls back to flat
+# concat when split dirs absent. Subagent runs:
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact contracts --index
+# Then per endpoint of interest:
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact contracts --endpoint <slug>
+# Last-resort full read (legacy):
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact contracts --full
 </contracts>
 
 <goals>
-@${PHASE_DIR}/TEST-GOALS.md (if exists)
+# Load via vg-load helper — partial loads keep planner context budget tight.
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact goals --index
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact goals --priority critical
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact goals --goal G-NN
+# Last-resort full read (legacy):
+#   bash scripts/vg-load.sh --phase ${PHASE_NUMBER} --artifact goals --full
 </goals>
 
 <config>
