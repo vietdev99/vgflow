@@ -59,6 +59,44 @@ def _is_unknown_orphan_session(sid: str | None) -> bool:
     )
 
 
+def _is_run_terminal(run_id: str | None) -> bool:
+    """True if run_id has a terminal event in events.db.
+
+    Used by read_active_run to filter stale terminated runs out of the
+    legacy current-run.json fallback path. Without this check, a per-
+    session file deletion (manual rm, FS cleanup, /tmp eviction) silently
+    falls back to legacy mirror which may still contain a run that was
+    aborted or completed long ago — every subsequent mark-step / step-
+    active / emit-event would land on the dead run, write_active_run
+    would resurrect the per-session file, and the cycle persists until
+    the legacy mirror is cleared too.
+
+    Direct sqlite3 to avoid circular import with db.py. Returns False on
+    any error (events.db missing, locked, schema drift) so the legacy
+    fallback path remains available — fail-open preserves self-heal.
+    """
+    if not run_id:
+        return False
+    db_path = REPO_ROOT / ".vg" / "events.db"
+    if not db_path.exists():
+        return False
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM events WHERE run_id = ? AND event_type IN "
+                "('run.completed', 'run.aborted', 'run.stale_cleared') "
+                "LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def _active_run_path(session_id: str) -> Path:
     return ACTIVE_RUNS_DIR / f"{_safe_session_filename(session_id)}.json"
 
@@ -123,6 +161,19 @@ def read_active_run(session_id: str | None = None) -> dict | None:
     if _has_run_id(legacy):
         legacy_sid = legacy.get("session_id")
         if not legacy_sid or legacy_sid == sid or _is_unknown_orphan_session(legacy_sid):
+            # OHOK-FIX-2 (2026-05-03): filter terminal runs out of legacy
+            # fallback. Without this, a per-session file deletion (manual
+            # rm or FS cleanup) silently substitutes a stale aborted/
+            # completed run from the legacy mirror — every subsequent
+            # mark-step/step-active/emit-event lands on the dead run,
+            # write_active_run resurrects the per-session file, and the
+            # zombie persists across user attempts. PrintwayV3 dogfood
+            # session 2026-05-03 hit this: 5 zombie /vg:build phase 2
+            # runs, all events landing on a stale blueprint 4.1 run_id.
+            # See vgflow-bugfix branch fix/orchestrator-orphan-active-run-reconcile.
+            legacy_rid = legacy.get("run_id")
+            if _is_run_terminal(legacy_rid):
+                return None
             return legacy
 
     # No-env callers read as sid="unknown", while run-start stores them under
@@ -134,6 +185,9 @@ def read_active_run(session_id: str | None = None) -> dict | None:
         for f in sorted(ACTIVE_RUNS_DIR.glob("*.json")):
             r = _read_json(f)
             if _has_run_id(r) and _is_unknown_orphan_session(r.get("session_id")):
+                # Same OHOK-FIX-2 filter — don't surface terminal orphan runs.
+                if _is_run_terminal(r.get("run_id")):
+                    continue
                 candidates.append(r)
         if candidates:
             candidates.sort(key=lambda r: r.get("started_at") or "")

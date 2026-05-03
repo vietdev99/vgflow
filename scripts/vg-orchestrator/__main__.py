@@ -346,6 +346,85 @@ def cmd_run_start(args) -> int:
 
     active = state_mod.read_active_run(session_id)
     if active:
+        # OHOK-FIX (2026-05-03): UserPromptSubmit hook
+        # (vg-user-prompt-submit.sh) writes .vg/active-runs/{sid}.json with a
+        # fresh run_id when the user types /vg:<cmd>, BEFORE this orchestrator
+        # call. The hook does NOT insert a runs row in events.db. Without
+        # reconciliation, the skill body's `vg-orchestrator run-start` would
+        # see the active state file and BLOCK with "Active run exists in
+        # THIS session" — even though events.db has no row, so any later
+        # emit-event/mark-step would FK-fail.
+        #
+        # Reconcile: if active state file's command+phase matches this call,
+        # treat as the natural follow-up. If runs row missing → INSERT using
+        # the existing run_id (preserving audit continuity). If runs row
+        # exists → idempotent return. Different cmd/phase still falls through
+        # to the original block-or-clear path (legitimate cross-phase guard).
+        same_intent = (
+            active.get("command") == args.command
+            and (active.get("phase") or "") == (args.phase or "")
+            and not _is_run_stale(active)
+        )
+        if same_intent:
+            existing_run_id = active.get("run_id")
+            if existing_run_id:
+                if db.run_row_exists(existing_run_id):
+                    # True idempotent — orchestrator already started this run.
+                    print(existing_run_id)
+                    return 0
+                # Orphan from hook: reconcile by inserting runs row.
+                extra_str = " ".join(args.extra) if isinstance(args.extra, list) else (args.extra or "")
+                # Synthesize session_id if env var missing (matches OHOK-9 path).
+                effective_sid = session_id or active.get("session_id") or f"session-unknown-{existing_run_id[:8]}"
+                try:
+                    db.create_run_with_id(
+                        run_id=existing_run_id,
+                        command=args.command,
+                        phase=args.phase,
+                        args=extra_str,
+                        started_at=active.get("started_at"),
+                        session_id=effective_sid,
+                        git_sha=_git_sha(),
+                    )
+                except Exception as e:
+                    print(
+                        f"⛔ Failed to reconcile orphan active-run state file "
+                        f"({existing_run_id[:12]}): {e}\n"
+                        f"   State file: .vg/active-runs/{session_id or 'default'}.json\n"
+                        f"   Manual fix: rm the state file then re-invoke /vg:{args.command.replace('vg:','')} {args.phase}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                # Backfill state file with effective session_id if synthesized.
+                if not session_id and active.get("session_id") != effective_sid:
+                    refreshed = dict(active)
+                    refreshed["session_id"] = effective_sid
+                    state_mod.write_active_run(refreshed, session_id=effective_sid)
+                # Emit run.started + {cmd}.started so contract validators see
+                # them in events.db (state file alone wasn't enough).
+                db.append_event(
+                    run_id=existing_run_id,
+                    event_type="run.started",
+                    phase=args.phase,
+                    command=args.command,
+                    actor="orchestrator",
+                    outcome="INFO",
+                    payload={"reconciled_from_hook_state_file": True,
+                             "args": extra_str, "git_sha": _git_sha()},
+                )
+                short_cmd = args.command.replace("vg:", "")
+                db.append_event(
+                    run_id=existing_run_id,
+                    event_type=f"{short_cmd}.started",
+                    phase=args.phase,
+                    command=args.command,
+                    actor="orchestrator",
+                    outcome="INFO",
+                    payload={"reconciled_from_hook_state_file": True},
+                )
+                print(existing_run_id)
+                return 0
+        # Different cmd/phase or stale → fall through to original logic.
         # Same-session active run — existing block-or-stale-clear logic applies.
         # OHOK-4 (2026-04-22): previously blocked forever if prior run crashed
         # without run-complete — user had to manually rm current-run.json.
