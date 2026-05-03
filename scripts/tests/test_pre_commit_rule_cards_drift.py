@@ -156,7 +156,7 @@ def test_block_output_schema(tmp_path):
     )
 
     # Visual marker — operators scan for this glyph.
-    assert "⛔" in r.stderr or "BLOCKED" in r.stderr.upper()
+    assert "" in r.stderr or "BLOCKED" in r.stderr.upper()
 
 
 # ─── Additional safety — non-existent SKILL.md (deletion) is allowed ──

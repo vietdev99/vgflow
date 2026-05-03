@@ -188,7 +188,7 @@ def main() -> int:
     helpers = _resolve_helpers()
 
     if args.skip_visual and args.skip_ast:
-        print("⛔ Both --skip-visual and --skip-ast specified — nothing to verify", file=sys.stderr)
+        print("\033[38;5;208mBoth --skip-visual and --skip-ast specified — nothing to verify\033[0m", file=sys.stderr)
         return 1
 
     fidelity, source = _resolve_threshold(args.phase, helpers["threshold_resolver"])
@@ -206,9 +206,9 @@ def main() -> int:
 
     if not args.skip_visual:
         if helpers["visual_diff"] is None:
-            print("⚠ visual-diff.py not found — skipping visual layer", file=sys.stderr)
+            print("\033[33mvisual-diff.py not found — skipping visual layer\033[0m", file=sys.stderr)
         elif not args.current_screenshots or not args.baseline_screenshots:
-            print("⚠ --current-screenshots/--baseline-screenshots not provided — skipping visual layer",
+            print("\033[33m--current-screenshots/--baseline-screenshots not provided — skipping visual layer\033[0m",
                   file=sys.stderr)
         else:
             visual_result = _run_visual_diff(
@@ -220,9 +220,9 @@ def main() -> int:
 
     if not args.skip_ast:
         if helpers["verify_ui_structure"] is None:
-            print("⚠ verify-ui-structure.py not found — skipping AST layer", file=sys.stderr)
+            print("\033[33mverify-ui-structure.py not found — skipping AST layer\033[0m", file=sys.stderr)
         elif not args.expected_uimap or not args.actual_uimap:
-            print("⚠ --expected-uimap/--actual-uimap not provided — skipping AST layer",
+            print("\033[33m--expected-uimap/--actual-uimap not provided — skipping AST layer\033[0m",
                   file=sys.stderr)
         else:
             ast_result = _run_ast_diff(

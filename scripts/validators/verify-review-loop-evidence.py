@@ -115,7 +115,7 @@ def main() -> int:
         if args.json:
             print(json.dumps({"error": msg}))
         else:
-            print(f"⛔ {msg}", file=sys.stderr)
+            print(f"\033[38;5;208m{msg}\033[0m", file=sys.stderr)
         return 2
 
     iters = _load_iter_files(phase_dir)
@@ -177,7 +177,7 @@ def main() -> int:
         print(json.dumps(result, indent=2))
     else:
         if failures:
-            print(f"⛔ Review loop evidence: {len(failures)}/"
+            print(f"\033[38;5;208mReview loop evidence: {len(failures)}/\033[0m"
                   f"{len(pair_reports)} iteration pair(s) empty\n")
             for f in failures:
                 print(f"  iter {f['iter_from']} → {f['iter_to']}: "

@@ -136,7 +136,7 @@ def main() -> int:
         if args.json:
             print(json.dumps({"error": msg}))
         else:
-            print(f"⛔ {msg}", file=sys.stderr)
+            print(f"\033[38;5;208m{msg}\033[0m", file=sys.stderr)
         return 2
 
     tasks = _parse_plan_tasks(plan_path)
@@ -145,7 +145,7 @@ def main() -> int:
         if args.json:
             print(json.dumps({"error": msg, "tasks_checked": 0}))
         elif not args.quiet:
-            print(f"⚠ {msg}")
+            print(f"\033[33m{msg}\033[0m")
         return 0  # benign — no scoped tasks declared
 
     per_task: list[dict] = []
@@ -203,7 +203,7 @@ def main() -> int:
         print(json.dumps(result, indent=2))
     else:
         if failures:
-            print(f"⛔ Executor context scope: {len(failures)}/"
+            print(f"\033[38;5;208mExecutor context scope: {len(failures)}/\033[0m"
                   f"{len(tasks)} task(s) violate scope\n")
             for r in failures:
                 print(f"  [{r['status']}] {r['task_id']} (seq={r['task_seq']})")

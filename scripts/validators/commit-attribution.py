@@ -428,7 +428,7 @@ def _print_hook_guidance(out: Output) -> None:
     if out.verdict != "BLOCK":
         return
     print("", file=sys.stderr)
-    print("⛔ Commit blocked by VG commit-attribution gate", file=sys.stderr)
+    print("\033[38;5;208mCommit blocked by VG commit-attribution gate\033[0m", file=sys.stderr)
     print("─" * 60, file=sys.stderr)
     for ev in out.evidence:
         ev_type = getattr(ev, "type", "") or "issue"

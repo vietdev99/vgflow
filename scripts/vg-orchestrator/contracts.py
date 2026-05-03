@@ -84,7 +84,7 @@ def _validate_against_schema(contract: dict, command: str) -> None:
         errors = list(validator.iter_errors(contract))
         if errors:
             print(
-                f"⚠ runtime_contract schema issues in {command}:",
+                f"\033[33mruntime_contract schema issues in {command}:\033[0m",
                 file=sys.stderr,
             )
             for err in errors[:5]:  # cap output

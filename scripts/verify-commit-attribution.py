@@ -304,20 +304,20 @@ def main() -> int:
 
     phase_dir = args.phase_dir
     if not phase_dir.exists():
-        print(f"⛔ phase-dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase-dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 1
 
     # Check wave tag exists
     try:
         _git(["rev-parse", "--verify", args.wave_tag])
     except subprocess.CalledProcessError:
-        print(f"⛔ wave-tag not found: {args.wave_tag}", file=sys.stderr)
+        print(f"\033[38;5;208mwave-tag not found: {args.wave_tag}\033[0m", file=sys.stderr)
         return 1
 
     # Load task specs
     all_tasks = _parse_task_files(phase_dir)
     if not all_tasks:
-        print(f"⚠ no tasks parsed from {phase_dir} — cannot verify", file=sys.stderr)
+        print(f"\033[33mno tasks parsed from {phase_dir} — cannot verify\033[0m", file=sys.stderr)
         return 0
 
     # Get commits since wave-tag
@@ -366,10 +366,10 @@ def main() -> int:
             if category.startswith("other-task:"):
                 other_num = category.split(":")[1]
                 commit_violations.append((f, category))
-                flag = f"  ⛔ CROSS-ATTRIBUTION → belongs to task {other_num}"
+                flag = f"  \033[38;5;208mCROSS-ATTRIBUTION → belongs to task {other_num}\033[0m"
             elif category == "unrelated" and args.strict:
                 commit_violations.append((f, category))
-                flag = "  ⚠ unrelated"
+                flag = "  \033[33munrelated\033[0m"
             elif category == "unrelated":
                 flag = "  (unrelated — not strict, skipped)"
             else:

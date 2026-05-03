@@ -127,7 +127,7 @@ def _read_strings() -> dict[str, dict[str, str]]:
     except ImportError:
         if not _yaml_warned:
             print(
-                "⚠ _i18n: PyYAML not installed — narration keys will fall "
+                "\033[33m_i18n: PyYAML not installed — narration keys will fall \033[0m"
                 "back to literal (validator output less readable).",
                 file=sys.stderr,
             )
@@ -143,7 +143,7 @@ def _read_strings() -> dict[str, dict[str, str]]:
         try:
             data = yaml.safe_load(p.read_text(encoding="utf-8", errors="replace")) or {}
         except Exception as e:
-            print(f"⚠ _i18n: {p.name} parse error: {e}", file=sys.stderr)
+            print(f"\033[33m_i18n: {p.name} parse error: {e}\033[0m", file=sys.stderr)
             continue
         _flatten_into(data, merged, prefix="")
     _strings_cache = merged

@@ -173,7 +173,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if not PHASES_DIR.exists():
-        print(f"⛔ .vg/phases/ not found at {PHASES_DIR}", file=sys.stderr)
+        print(f"\033[38;5;208m.vg/phases/ not found at {PHASES_DIR}\033[0m", file=sys.stderr)
         return 2
 
     if args.phase:
@@ -201,7 +201,7 @@ def main() -> int:
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
-        icon = "✓" if (args.apply or total_new == 0) else "⚠"
+        icon = "✓" if (args.apply or total_new == 0) else ""
         print(f"{icon} Bootstrap: {len(reports)} phase(s), "
               f"{total_found} artifacts, {total_new} new entries "
               f"({'written' if args.apply else 'would write, dry-run'})")

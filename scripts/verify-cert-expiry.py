@@ -297,7 +297,7 @@ def main() -> int:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         for c in checks:
-            icon = {"ok": "✓", "warn": "⚠", "block": "✗", "skipped": "·"}.get(c["verdict"], "?")
+            icon = {"ok": "✓", "warn": "", "block": "✗", "skipped": "·"}.get(c["verdict"], "?")
             if c.get("status") == "ok":
                 print(f"  {icon} [{c['platform']}] expires {c['expires_at']}  "
                       f"({c['days_remaining']} days left)")
@@ -306,7 +306,7 @@ def main() -> int:
 
     if failures and not args.lenient:
         print("", file=sys.stderr)
-        print(f"⛔ {len(failures)} signing cert(s) expired or within block window ({args.block_days} days).", file=sys.stderr)
+        print(f"\033[38;5;208m{len(failures)} signing cert(s) expired or within block window ({args.block_days} days).\033[0m", file=sys.stderr)
         print("   Renew cert / keystore before next build. A silent failure here", file=sys.stderr)
         print("   breaks CI mid-deploy — we catch it at gate time instead.", file=sys.stderr)
         return 1

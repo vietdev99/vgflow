@@ -283,7 +283,7 @@ def _mirror_sync_preflight(command: str, phase: str, extra_args: str) -> None:
 
     if mode == "block":
         print(
-            f"⛔ Codex skill mirror drift detected "
+            f"\033[38;5;208mCodex skill mirror drift detected \033[0m"
             f"({drift_count} skill(s) out of sync).\n"
             f"   Running /{command} now risks Codex agents reading stale\n"
             f"   skill contract — trust parity breach.\n\n"
@@ -299,7 +299,7 @@ def _mirror_sync_preflight(command: str, phase: str, extra_args: str) -> None:
 
     # warn mode — pass through with visible warning
     print(
-        f"⚠ Codex skill mirror drift: {drift_count} skill(s) out of sync\n"
+        f"\033[33mCodex skill mirror drift: {drift_count} skill(s) out of sync\033[0m\n"
         f"   Continuing in warn mode (VG_SYNC_CHECK_MODE={mode}).\n"
         f"   Fix: python .claude/scripts/sync-vg-skills.py",
         file=_sys.stderr,
@@ -450,7 +450,7 @@ def cmd_run_start(args) -> int:
     if override_match:
         reason = override_reason_val or ""
         if len(reason) < 50:
-            print(f"⛔ --override-reason too short ({len(reason)} chars, min 50).\n"
+            print(f"\033[38;5;208m--override-reason too short ({len(reason)} chars, min 50).\033[0m\n"
                   f"   Got: {reason!r}\n"
                   f"   Overrides must cite concrete evidence: ticket/issue URL, "
                   f"failing test name, infra blocker, etc. Placeholder reasons "
@@ -468,7 +468,7 @@ def cmd_run_start(args) -> int:
         ]
         for pat in placeholders:
             if _re.search(pat, reason, _re.IGNORECASE):
-                print(f"⛔ --override-reason matches placeholder pattern: {pat!r}\n"
+                print(f"\033[38;5;208m--override-reason matches placeholder pattern: {pat!r}\033[0m\n"
                       f"   Got: {reason!r}\n"
                       f"   Cite concrete evidence: issue URL, test name, CI run ID, etc.",
                       file=sys.stderr)
@@ -491,7 +491,7 @@ def cmd_run_start(args) -> int:
             is_human, approver = verify_human_operator("override-reason")
             if not is_human:
                 print(
-                    "⛔ --override-reason requires TTY session OR signed "
+                    "\033[38;5;208m--override-reason requires TTY session OR signed \033[0m"
                     "approver token (HMAC).\n"
                     "   AI subagents cannot self-inject overrides — this "
                     "would bypass hard security gates with self-crafted\n"
@@ -559,7 +559,7 @@ def cmd_run_start(args) -> int:
                     )
                     if is_rubber_stamp:
                         print(
-                            f"⛔ Rubber-stamp detected: same justification "
+                            f"\033[38;5;208mRubber-stamp detected: same justification \033[0m"
                             f"used in {hit_count} prior phase(s) for "
                             f"{override_flag}.\n"
                             f"   Matching phases: {', '.join(matching[:5])}\n"
@@ -651,7 +651,7 @@ def cmd_run_start(args) -> int:
     if not session_id:
         session_id = f"session-unknown-{run_id[:8]}"
         print(
-            f"⚠ run-start: CLAUDE_SESSION_ID env var missing — tagged "
+            f"\033[33mrun-start: CLAUDE_SESSION_ID env var missing — tagged \033[0m"
             f"run_id={run_id[:12]} with synthetic session={session_id}. "
             f"Cross-session detection still works, but parent caller "
             f"should propagate CLAUDE_SESSION_ID via env for full audit.",
@@ -846,14 +846,14 @@ def cmd_tasklist_projected(args) -> int:
     """
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run. Call run-start first.", file=sys.stderr)
+        print("\033[38;5;208mNo active run. Call run-start first.\033[0m", file=sys.stderr)
         return 1
 
     run_id = current["run_id"]
     contract_path = _REPO_ROOT / ".vg" / "runs" / run_id / "tasklist-contract.json"
     if not contract_path.exists():
         print(
-            f"⛔ tasklist-contract.json missing for run_id={run_id[:12]}.\n"
+            f"\033[38;5;208mtasklist-contract.json missing for run_id={run_id[:12]}.\033[0m\n"
             f"   Run emit-tasklist.py after run-start, then project its items "
             f"to the native task UI before continuing.",
             file=sys.stderr,
@@ -863,7 +863,7 @@ def cmd_tasklist_projected(args) -> int:
     try:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        print(f"⛔ tasklist-contract.json is unreadable: {exc}", file=sys.stderr)
+        print(f"\033[38;5;208mtasklist-contract.json is unreadable: {exc}\033[0m", file=sys.stderr)
         return 2
 
     items = contract.get("items") or []
@@ -884,21 +884,21 @@ def cmd_tasklist_projected(args) -> int:
     # `<flow>.native_tasklist_projected` never fired, breaking run-complete.
     if contract.get("schema") not in ("native-tasklist.v1", "native-tasklist.v2"):
         print(
-            "⛔ tasklist contract schema must be native-tasklist.v1 or v2",
+            "\033[38;5;208mtasklist contract schema must be native-tasklist.v1 or v2\033[0m",
             file=sys.stderr,
         )
         return 2
     if contract.get("run_id") != run_id:
-        print("⛔ tasklist contract belongs to a different run_id", file=sys.stderr)
+        print("\033[38;5;208mtasklist contract belongs to a different run_id\033[0m", file=sys.stderr)
         return 2
     if contract.get("command") != current.get("command"):
-        print("⛔ tasklist contract command does not match active run", file=sys.stderr)
+        print("\033[38;5;208mtasklist contract command does not match active run\033[0m", file=sys.stderr)
         return 2
     if str(contract.get("phase")) != str(current.get("phase")):
-        print("⛔ tasklist contract phase does not match active run", file=sys.stderr)
+        print("\033[38;5;208mtasklist contract phase does not match active run\033[0m", file=sys.stderr)
         return 2
     if not item_ids:
-        print("⛔ tasklist contract contains no task items", file=sys.stderr)
+        print("\033[38;5;208mtasklist contract contains no task items\033[0m", file=sys.stderr)
         return 2
 
     event_type = _tasklist_projection_event_name(current["command"])
@@ -937,7 +937,7 @@ def cmd_tasklist_projected(args) -> int:
 def cmd_step_active(args) -> int:
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run. Call run-start first.", file=sys.stderr)
+        print("\033[38;5;208mNo active run. Call run-start first.\033[0m", file=sys.stderr)
         return 1
 
     current["active_step"] = args.step_name
@@ -1026,7 +1026,7 @@ def cmd_run_complete(args) -> int:
     """Verify runtime_contract evidence, emit completion event, clear current-run."""
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run to complete.", file=sys.stderr)
+        print("\033[38;5;208mNo active run to complete.\033[0m", file=sys.stderr)
         return 1
 
     run_id = current["run_id"]
@@ -1145,7 +1145,7 @@ def _is_reserved_event(event_type: str) -> bool:
 def cmd_emit_event(args) -> int:
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run. Call run-start first.", file=sys.stderr)
+        print("\033[38;5;208mNo active run. Call run-start first.\033[0m", file=sys.stderr)
         return 1
 
     # OHOK-8: block forgery of gate-relevant event types via CLI
@@ -1172,7 +1172,7 @@ def cmd_emit_event(args) -> int:
         try:
             payload = json.loads(args.payload)
         except json.JSONDecodeError as e:
-            print(f"⛔ Invalid payload JSON: {e}", file=sys.stderr)
+            print(f"\033[38;5;208mInvalid payload JSON: {e}\033[0m", file=sys.stderr)
             return 1
 
     evt = db.append_event(
@@ -1200,17 +1200,17 @@ def cmd_emit_crossai_terminal(args) -> int:
     """
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run", file=sys.stderr)
+        print("\033[38;5;208mNo active run\033[0m", file=sys.stderr)
         return 1
     if current["command"] != "vg:build":
-        print(f"⛔ emit-crossai-terminal only valid in vg:build run, "
+        print(f"\033[38;5;208memit-crossai-terminal only valid in vg:build run, \033[0m"
               f"got {current['command']}", file=sys.stderr)
         return 1
 
     try:
         payload = json.loads(args.payload)
     except json.JSONDecodeError as e:
-        print(f"⛔ Invalid payload JSON: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mInvalid payload JSON: {e}\033[0m", file=sys.stderr)
         return 1
 
     run_id = current["run_id"]
@@ -1230,7 +1230,7 @@ def cmd_emit_crossai_terminal(args) -> int:
             max_iter = int(payload.get("max_iterations", 5))
             if iter_count < max_iter:
                 print(
-                    f"⛔ Cannot declare exhausted — only {iter_count}/{max_iter} "
+                    f"\033[38;5;208mCannot declare exhausted — only {iter_count}/{max_iter} \033[0m"
                     f"iterations started. Run more iterations or adjust "
                     f"max_iterations in the loop invocation.",
                     file=sys.stderr,
@@ -1247,7 +1247,7 @@ def cmd_emit_crossai_terminal(args) -> int:
             override_count = r[0] or 0
             if override_count == 0:
                 print(
-                    "⛔ user_override requires override.used event with crossai "
+                    "\033[38;5;208muser_override requires override.used event with crossai \033[0m"
                     "flag first. Run: vg-orchestrator override "
                     "--flag=skip-crossai-build-loop --reason='<ticket/URL, ≥50ch>'",
                     file=sys.stderr,
@@ -1273,7 +1273,7 @@ def cmd_emit_crossai_terminal(args) -> int:
 def cmd_mark_step(args) -> int:
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run. Call run-start first.", file=sys.stderr)
+        print("\033[38;5;208mNo active run. Call run-start first.\033[0m", file=sys.stderr)
         return 1
 
     phase_dir = contracts.resolve_phase_dir(current["phase"])
@@ -1309,7 +1309,7 @@ def cmd_verify_hash_chain(args) -> int:
     if ok:
         print("hash-chain: OK")
         return 0
-    print(f"⛔ hash-chain BROKEN at id={broken_at}: {reason}",
+    print(f"\033[38;5;208mhash-chain BROKEN at id={broken_at}: {reason}\033[0m",
           file=sys.stderr)
     current = state_mod.read_current_run()
     if current:
@@ -1330,10 +1330,10 @@ def cmd_wave_start(args) -> int:
     Same-wave re-start rejected (idempotency)."""
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run. Call run-start first.", file=sys.stderr)
+        print("\033[38;5;208mNo active run. Call run-start first.\033[0m", file=sys.stderr)
         return 1
     if current["command"] != "vg:build":
-        print(f"⛔ wave-start only valid in vg:build runs, not "
+        print(f"\033[38;5;208mwave-start only valid in vg:build runs, not \033[0m"
               f"{current['command']}", file=sys.stderr)
         return 1
 
@@ -1344,7 +1344,7 @@ def cmd_wave_start(args) -> int:
     for e in existing:
         try:
             if json.loads(e["payload_json"]).get("wave") == args.wave_n:
-                print(f"⛔ wave {args.wave_n} already started in this run",
+                print(f"\033[38;5;208mwave {args.wave_n} already started in this run\033[0m",
                       file=sys.stderr)
                 return 1
         except Exception:
@@ -1369,7 +1369,7 @@ def cmd_wave_complete(args) -> int:
     Same-wave re-complete with different evidence = BLOCK (integrity)."""
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run", file=sys.stderr)
+        print("\033[38;5;208mNo active run\033[0m", file=sys.stderr)
         return 1
 
     # Load evidence
@@ -1377,7 +1377,7 @@ def cmd_wave_complete(args) -> int:
         try:
             raw = Path(args.evidence_file).read_text(encoding="utf-8")
         except Exception as e:
-            print(f"⛔ evidence file read error: {e}", file=sys.stderr)
+            print(f"\033[38;5;208mevidence file read error: {e}\033[0m", file=sys.stderr)
             return 1
     else:
         raw = sys.stdin.read()
@@ -1385,7 +1385,7 @@ def cmd_wave_complete(args) -> int:
     try:
         evidence_data = json.loads(raw)
     except json.JSONDecodeError as e:
-        print(f"⛔ evidence_json parse error: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mevidence_json parse error: {e}\033[0m", file=sys.stderr)
         return 1
 
     if evidence_data.get("wave") != args.wave_n:
@@ -1404,7 +1404,7 @@ def cmd_wave_complete(args) -> int:
                 print(f"wave {args.wave_n} already completed (idempotent)")
                 return 0
             else:
-                print(f"⛔ wave {args.wave_n} re-complete with DIFFERENT "
+                print(f"\033[38;5;208mwave {args.wave_n} re-complete with DIFFERENT \033[0m"
                       f"evidence → integrity violation", file=sys.stderr)
                 db.append_event(
                     run_id=current["run_id"],
@@ -1423,7 +1423,7 @@ def cmd_wave_complete(args) -> int:
     validator = (Path(__file__).parent.parent / "validators" /
                  "wave-attribution.py")
     if not validator.exists():
-        print("⛔ wave-attribution validator missing", file=sys.stderr)
+        print("\033[38;5;208mwave-attribution validator missing\033[0m", file=sys.stderr)
         return 1
 
     r = subprocess.run(
@@ -1451,7 +1451,7 @@ def cmd_wave_complete(args) -> int:
                      "evidence_hash": _hash_evidence(raw),
                      "violations": verdict.get("evidence", [])},
         )
-        print(f"⛔ wave {args.wave_n} BLOCK — wave-attribution rejected evidence",
+        print(f"\033[38;5;208mwave {args.wave_n} BLOCK — wave-attribution rejected evidence\033[0m",
               file=sys.stderr)
         print(r.stdout, file=sys.stderr)
         return 2
@@ -1485,14 +1485,14 @@ def cmd_validate(args) -> int:
     validator = (Path(__file__).parent.parent / "validators" /
                  f"{args.validator_name}.py")
     if not validator.exists():
-        print(f"⛔ validator not found: {args.validator_name}",
+        print(f"\033[38;5;208mvalidator not found: {args.validator_name}\033[0m",
               file=sys.stderr)
         return 1
 
     current = state_mod.read_current_run()
     phase = args.phase or (current["phase"] if current else "")
     if not phase:
-        print("⛔ --phase required when no active run", file=sys.stderr)
+        print("\033[38;5;208m--phase required when no active run\033[0m", file=sys.stderr)
         return 1
 
     call_args = [sys.executable, str(validator), "--phase", phase]
@@ -1600,12 +1600,12 @@ def cmd_promote_goal_manual(args) -> int:
     current = state_mod.read_current_run()
     phase = args.phase or (current["phase"] if current else None)
     if not phase:
-        print("⛔ --phase required (no active run)", file=sys.stderr)
+        print("\033[38;5;208m--phase required (no active run)\033[0m", file=sys.stderr)
         return 1
 
     reason = args.reason.strip()
     if len(reason) < 50:
-        print(f"⛔ --reason must be ≥50 chars (got {len(reason)}).\n"
+        print(f"\033[38;5;208m--reason must be ≥50 chars (got {len(reason)}).\033[0m\n"
               f"   Manual promotion is an explicit user decision — require "
               f"concrete user-visible justification not auto-generated prose.",
               file=sys.stderr)
@@ -1619,7 +1619,7 @@ def cmd_promote_goal_manual(args) -> int:
     has_commit_sha = bool(_SHA_RE.search(reason))
     if not (has_ticket or has_commit_sha):
         print(
-            "⛔ --reason must cite an external artifact proving user sign-off.\n"
+            "\033[38;5;208m--reason must cite an external artifact proving user sign-off.\033[0m\n"
             "   Accept one of:\n"
             "   - Ticket URL:   https://github.com/.../issues/42\n"
             "   - Ticket ID:    GH-42, ISSUE-42, JIRA-1234, #42\n"
@@ -1637,7 +1637,7 @@ def cmd_promote_goal_manual(args) -> int:
     resolved, proof_kind = _verify_proof_resolves(reason)
     if not resolved:
         print(
-            "⛔ --reason contains shape-matching proof but NOTHING RESOLVES.\n"
+            "\033[38;5;208m--reason contains shape-matching proof but NOTHING RESOLVES.\033[0m\n"
             "   Shape-only tokens create audit breadcrumbs, not proof.\n"
             "   Must contain at least ONE of:\n"
             "   - A git SHA that exists in this repo (verified via\n"
@@ -1661,7 +1661,7 @@ def cmd_promote_goal_manual(args) -> int:
     prior_count = len(prior) if prior else 0
     if prior_count >= PROMOTE_MANUAL_QUOTA_PER_PHASE:
         print(
-            f"⛔ Phase {phase} has already used {prior_count}/"
+            f"\033[38;5;208mPhase {phase} has already used {prior_count}/\033[0m"
             f"{PROMOTE_MANUAL_QUOTA_PER_PHASE} manual promotion slots.\n"
             f"   Quota exists to prevent bulk-flipping goals to MANUAL as\n"
             f"   escape hatch. Options:\n"
@@ -1678,12 +1678,12 @@ def cmd_promote_goal_manual(args) -> int:
     phase_dirs = list((repo / ".vg" / "phases").glob(f"{phase}-*")) or \
                  list((repo / ".vg" / "phases").glob(f"{phase.zfill(2)}-*"))
     if not phase_dirs:
-        print(f"⛔ phase {phase} not found", file=sys.stderr)
+        print(f"\033[38;5;208mphase {phase} not found\033[0m", file=sys.stderr)
         return 1
 
     matrix = phase_dirs[0] / "GOAL-COVERAGE-MATRIX.md"
     if not matrix.exists():
-        print(f"⛔ {matrix} not found — run /vg:review first to create it",
+        print(f"\033[38;5;208m{matrix} not found — run /vg:review first to create it\033[0m",
               file=sys.stderr)
         return 1
 
@@ -1695,7 +1695,7 @@ def cmd_promote_goal_manual(args) -> int:
     )
     new_text, n = goal_pat.subn(r"\1MANUAL\3", text, count=1)
     if n == 0:
-        print(f"⛔ goal {args.goal_id} not found in {matrix.name}",
+        print(f"\033[38;5;208mgoal {args.goal_id} not found in {matrix.name}\033[0m",
               file=sys.stderr)
         return 1
 
@@ -1789,7 +1789,7 @@ def cmd_promote_goal_manual(args) -> int:
             )
     except Exception as e:
         print(
-            f"⚠ OVERRIDE-DEBT.md write FAILED: {e}\n"
+            f"\033[33mOVERRIDE-DEBT.md write FAILED: {e}\033[0m\n"
             f"   Event still emitted to events.db (audit trail preserved there),\n"
             f"   but human-visible register is out of sync. Investigate:\n"
             f"   - disk full?\n"
@@ -1828,13 +1828,13 @@ def cmd_override(args) -> int:
     """
     current = state_mod.read_current_run()
     if not current:
-        print("⛔ No active run", file=sys.stderr)
+        print("\033[38;5;208mNo active run\033[0m", file=sys.stderr)
         return 1
 
     reason = args.reason.strip()
     if len(reason) < 50:
         print(
-            f"⛔ --reason must be ≥50 chars (got {len(reason)}).\n"
+            f"\033[38;5;208m--reason must be ≥50 chars (got {len(reason)}).\033[0m\n"
             f"   Override is an explicit decision to bypass a gate — the\n"
             f"   reason becomes the audit trail. Terse reasons get rubber-\n"
             f"   stamped by reviewers. Write why this override is safe,\n"
@@ -1847,7 +1847,7 @@ def cmd_override(args) -> int:
     has_commit_sha = bool(_SHA_RE.search(reason))
     if not (has_ticket or has_commit_sha):
         print(
-            "⛔ --reason must cite an external artifact (ticket/URL/PR/commit SHA).\n"
+            "\033[38;5;208m--reason must cite an external artifact (ticket/URL/PR/commit SHA).\033[0m\n"
             "   Accept one of: https://..., GH-42, ISSUE-42, JIRA-1234, #42,\n"
             "   PR-42, or commit hash (≥7 hex chars).\n"
             "   Rationale: override without paper-trail = silent debt. The\n"
@@ -1861,7 +1861,7 @@ def cmd_override(args) -> int:
     resolved, proof_kind = _verify_proof_resolves(reason)
     if not resolved:
         print(
-            "⛔ --reason shape-matches but NOTHING RESOLVES.\n"
+            "\033[38;5;208m--reason shape-matches but NOTHING RESOLVES.\033[0m\n"
             "   Shape-only proof = audit breadcrumb, not real evidence.\n"
             "   Must contain ONE of:\n"
             "   - git SHA in this repo (verified via `git cat-file -t`)\n"
@@ -1884,7 +1884,7 @@ def cmd_override(args) -> int:
             is_human, approver = True, None  # fail-open on gate error
         if not is_human:
             print(
-                "⛔ --allow-* flags require a human operator (TTY session "
+                "\033[38;5;208m--allow-* flags require a human operator (TTY session \033[0m"
                 "or VG_HUMAN_OPERATOR env var).\n"
                 "   Rationale: these flags carry an approver identity for "
                 "audit. AI subagents without an audited approver cannot "
@@ -1999,7 +1999,7 @@ def cmd_override(args) -> int:
             except Exception:
                 pass
             print(
-                f"⚠ Rubber-stamp BYPASSED qua VG_ALLOW_RUBBER_STAMP=1 — "
+                f"\033[33mRubber-stamp BYPASSED qua VG_ALLOW_RUBBER_STAMP=1 — \033[0m"
                 f"matching phases: {', '.join(rs_phases)}. Meta-debt ghi rồi.",
                 file=sys.stderr,
             )
@@ -2032,7 +2032,7 @@ def cmd_override(args) -> int:
     except Exception as e:
         # OHOK-6 (Codex P1): surface loud, emit event — don't swallow
         print(
-            f"⚠ OVERRIDE-DEBT.md write FAILED (cmd_override): {e}\n"
+            f"\033[33mOVERRIDE-DEBT.md write FAILED (cmd_override): {e}\033[0m\n"
             f"   Event OD-{ev['id']:03d} already in events.db (audit trail OK),\n"
             f"   but human-visible register is out of sync. Fix + re-run.",
             file=sys.stderr,
@@ -2067,7 +2067,7 @@ def cmd_run_resume(args) -> int:
 
     run = db.get_run(current["run_id"])
     if not run:
-        print("⛔ current-run.json refs run_id not in runs table — "
+        print("\033[38;5;208mcurrent-run.json refs run_id not in runs table — \033[0m"
               "state corrupted. Use run-repair.", file=sys.stderr)
         return 2
 
@@ -2208,7 +2208,7 @@ def cmd_run_backfill(args) -> int:
     import datetime as _dt
 
     if not args.reason or len(args.reason.strip()) < 10:
-        print("⛔ --reason required, ≥ 10 chars (audit trail).", file=sys.stderr)
+        print("\033[38;5;208m--reason required, ≥ 10 chars (audit trail).\033[0m", file=sys.stderr)
         return 1
 
     conn = _sqlite3.connect(str(db.DB_PATH))
@@ -2220,7 +2220,7 @@ def cmd_run_backfill(args) -> int:
             (args.run_id,),
         ).fetchone()
         if not started:
-            print(f"⛔ run.started event not found for run_id={args.run_id}",
+            print(f"\033[38;5;208mrun.started event not found for run_id={args.run_id}\033[0m",
                   file=sys.stderr)
             print("   Run: vg-orchestrator query-events --event-type=run.started",
                   file=sys.stderr)
@@ -2233,7 +2233,7 @@ def cmd_run_backfill(args) -> int:
             (args.run_id,),
         ).fetchone()
         if terminal:
-            print(f"⛔ run {args.run_id[:8]} already has terminal event "
+            print(f"\033[38;5;208mrun {args.run_id[:8]} already has terminal event \033[0m"
                   f"id={terminal['id']} type={terminal['event_type']} — "
                   f"backfill rejected.", file=sys.stderr)
             return 3
@@ -2245,7 +2245,7 @@ def cmd_run_backfill(args) -> int:
 
     patterns = _BACKFILL_REQUIRED_ARTIFACTS.get(command)
     if patterns is None:
-        print(f"⛔ command {command!r} not in backfill table — supported: "
+        print(f"\033[38;5;208mcommand {command!r} not in backfill table — supported: \033[0m"
               f"{sorted(_BACKFILL_REQUIRED_ARTIFACTS)}", file=sys.stderr)
         return 4
 
@@ -2253,21 +2253,21 @@ def cmd_run_backfill(args) -> int:
     # but the prefix can vary; glob any dir starting with phase number.
     phases_root = _REPO_ROOT / ".vg" / "phases"
     if not phases_root.exists():
-        print(f"⛔ {phases_root} does not exist", file=sys.stderr)
+        print(f"\033[38;5;208m{phases_root} does not exist\033[0m", file=sys.stderr)
         return 5
     matches = sorted(p for p in phases_root.iterdir()
                      if p.is_dir() and (p.name == phase or
                                         p.name.startswith(f"{phase}-") or
                                         p.name.startswith(f"phase-{phase}-")))
     if not matches:
-        print(f"⛔ phase dir for phase={phase} not found under {phases_root}",
+        print(f"\033[38;5;208mphase dir for phase={phase} not found under {phases_root}\033[0m",
               file=sys.stderr)
         return 5
     phase_dir = matches[0]
 
     missing = [p for p in patterns if not list(phase_dir.glob(p))]
     if missing:
-        print(f"⛔ Missing required artifacts for {command} in {phase_dir}:",
+        print(f"\033[38;5;208mMissing required artifacts for {command} in {phase_dir}:\033[0m",
               file=sys.stderr)
         for m in missing:
             print(f"   - {m}", file=sys.stderr)
@@ -2313,7 +2313,7 @@ def cmd_run_backfill(args) -> int:
                 f"  status: active\n"
             )
     except Exception as e:
-        print(f"⚠ OVERRIDE-DEBT.md write failed (audit trail incomplete): {e}",
+        print(f"\033[33mOVERRIDE-DEBT.md write failed (audit trail incomplete): {e}\033[0m",
               file=sys.stderr)
 
     print(f"✓ run.completed backfilled for {args.run_id[:8]} "
@@ -2411,7 +2411,7 @@ def cmd_quarantine(args) -> int:
 
     if args.action == "re-enable":
         if not args.validator:
-            print("⛔ --validator required for re-enable", file=sys.stderr)
+            print("\033[38;5;208m--validator required for re-enable\033[0m", file=sys.stderr)
             return 2
         if args.validator not in state:
             print(f"⛔ '{args.validator}' not in quarantine state.", file=sys.stderr)
@@ -2421,7 +2421,7 @@ def cmd_quarantine(args) -> int:
             return 0
         if not args.reason or len(args.reason) < 10:
             print(
-                "⛔ --reason required (min 10 chars). Re-enabling a "
+                "\033[38;5;208m--reason required (min 10 chars). Re-enabling a \033[0m"
                 "quarantined validator without justification defeats "
                 "the audit trail.\n"
                 "   Example: --reason 'transient infra issue 2026-04-22 "
@@ -2497,7 +2497,7 @@ def cmd_calibrate(args) -> int:
     import subprocess as _sub
     script = _REPO_ROOT / ".claude" / "scripts" / "registry-calibrate.py"
     if not script.exists():
-        print(f"⛔ registry-calibrate.py not found at {script}",
+        print(f"\033[38;5;208mregistry-calibrate.py not found at {script}\033[0m",
               file=sys.stderr)
         return 1
 
@@ -2519,7 +2519,7 @@ def cmd_calibrate(args) -> int:
         reason = getattr(args, "reason", "") or ""
         if len(reason) < 50:
             print(
-                "⛔ --reason required (min 50 chars). Calibration "
+                "\033[38;5;208m--reason required (min 50 chars). Calibration \033[0m"
                 "changes alter hard gate behavior — audit text must "
                 "explain the data + operator verification.",
                 file=sys.stderr,
@@ -2536,13 +2536,13 @@ def cmd_calibrate(args) -> int:
             is_human, approver = verify_human_operator("calibrate-apply")
         except Exception as e:
             print(
-                f"⛔ caller-auth unavailable: {e}",
+                f"\033[38;5;208mcaller-auth unavailable: {e}\033[0m",
                 file=sys.stderr,
             )
             return 2
         if not is_human:
             print(
-                f"⛔ calibrate {args.action} requires TTY OR signed "
+                f"\033[38;5;208mcalibrate {args.action} requires TTY OR signed \033[0m"
                 "approver token (HMAC). AI subagents cannot self-mutate "
                 "validator severity.\n"
                 "   To approve as human:\n"
@@ -2580,7 +2580,7 @@ def cmd_calibrate(args) -> int:
         if args.action == "apply":
             sid = getattr(args, "suggestion_id", "") or ""
             if not sid:
-                print("⛔ --suggestion-id required for apply",
+                print("\033[38;5;208m--suggestion-id required for apply\033[0m",
                       file=sys.stderr)
                 return 2
             cmd_args += ["--suggestion-id", sid]
@@ -2637,7 +2637,7 @@ def cmd_calibrate(args) -> int:
             pass
         return result.returncode
 
-    print(f"⛔ unknown calibrate action: {args.action}", file=sys.stderr)
+    print(f"\033[38;5;208munknown calibrate action: {args.action}\033[0m", file=sys.stderr)
     return 2
 
 
@@ -2697,7 +2697,7 @@ def cmd_learn(args) -> int:
         import subprocess as _sub
         script = _REPO_ROOT / ".claude" / "scripts" / "learn-tier-classify.py"
         if not script.exists():
-            print(f"⛔ learn-tier-classify.py not found at {script}",
+            print(f"\033[38;5;208mlearn-tier-classify.py not found at {script}\033[0m",
                   file=sys.stderr)
             return 1
         cmd_args = [sys.executable, str(script), "--all"]
@@ -2710,7 +2710,7 @@ def cmd_learn(args) -> int:
         cid = (getattr(args, "candidate", "") or "").strip()
         if not cid:
             print(
-                "⛔ --candidate <L-XXX> required for review",
+                "\033[38;5;208m--candidate <L-XXX> required for review\033[0m",
                 file=sys.stderr,
             )
             return 2
@@ -2726,13 +2726,13 @@ def cmd_learn(args) -> int:
 
     # ─── Mutating actions — auth-gated ────────────────────────────────
     if args.action not in ("promote", "reject"):
-        print(f"⛔ unknown learn action: {args.action}", file=sys.stderr)
+        print(f"\033[38;5;208munknown learn action: {args.action}\033[0m", file=sys.stderr)
         return 2
 
     cid = (getattr(args, "candidate", "") or "").strip()
     if not cid:
         print(
-            f"⛔ --candidate <L-XXX> required for {args.action}",
+            f"\033[38;5;208m--candidate <L-XXX> required for {args.action}\033[0m",
             file=sys.stderr,
         )
         return 2
@@ -2740,7 +2740,7 @@ def cmd_learn(args) -> int:
     reason = (getattr(args, "reason", "") or "").strip()
     if len(reason) < 50:
         print(
-            f"⛔ --reason required (min 50 chars) for {args.action}.\n"
+            f"\033[38;5;208m--reason required (min 50 chars) for {args.action}.\033[0m\n"
             f"   Promoting/rejecting a learn candidate alters the rule\n"
             f"   set injected into every subsequent executor prompt.\n"
             f"   Audit text must justify the decision concretely:\n"
@@ -2758,12 +2758,12 @@ def cmd_learn(args) -> int:
         from allow_flag_gate import verify_human_operator  # type: ignore
         is_human, approver = verify_human_operator(f"learn-{args.action}")
     except Exception as e:
-        print(f"⛔ caller-auth unavailable: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mcaller-auth unavailable: {e}\033[0m", file=sys.stderr)
         return 2
 
     if not is_human:
         print(
-            f"⛔ learn {args.action} requires TTY OR signed approver "
+            f"\033[38;5;208mlearn {args.action} requires TTY OR signed approver \033[0m"
             "token (HMAC).\n"
             "   AI subagents cannot self-mutate the bootstrap rule set —\n"
             "   a fabricated candidate could be self-promoted into every\n"
@@ -3660,13 +3660,13 @@ def _run_validators(command: str, phase: str, run_id: str,
             if not r.stdout.strip():
                 continue
             # Some validators stream a non-JSON warning before the JSON body
-            # (e.g. container-hardening prints "⚠ No Dockerfile found" then
+            # (e.g. container-hardening prints "\033[33mNo Dockerfile found\033[0m" then
             # JSON). Find the JSON object by locating the first "{" line.
             stdout = r.stdout
             json_start = stdout.find("{")
             if json_start < 0:
                 # No JSON body in stdout — validator emits human-friendly text
-                # by default (e.g. "✓ All good", "⛔ 4 skill(s) drift"). Older
+                # by default (e.g. "✓ All good", "\033[38;5;208m4 skill(s) drift\033[0m"). Older
                 # validators predate the _common.py emit helper or treat --json
                 # as opt-in. Synthesize a verdict from the exit code so the
                 # orchestrator doesn't quarantine validators that simply haven't
@@ -4065,7 +4065,7 @@ def _format_block_message(command: str, phase: str,
         recovery_available = False
 
     lines = [
-        "⛔ VG runtime_contract violations — cannot complete run.",
+        "\033[38;5;208mVG runtime_contract violations — cannot complete run.\033[0m",
         "",
         f"Command: /{command} {phase}",
         "",
@@ -4116,7 +4116,7 @@ def _now_iso() -> str:
 def cmd_orphans_list(args) -> int:
     if _orphans_mod is None:
         print(
-            "⛔ orchestrator: _orphans module unavailable", file=sys.stderr,
+            "\033[38;5;208morchestrator: _orphans module unavailable\033[0m", file=sys.stderr,
         )
         return 1
     return _orphans_mod.orphans_list(args)
@@ -4125,7 +4125,7 @@ def cmd_orphans_list(args) -> int:
 def cmd_orphans_collect(args) -> int:
     if _orphans_mod is None:
         print(
-            "⛔ orchestrator: _orphans module unavailable", file=sys.stderr,
+            "\033[38;5;208morchestrator: _orphans module unavailable\033[0m", file=sys.stderr,
         )
         return 1
     return _orphans_mod.orphans_collect(args)
@@ -4134,7 +4134,7 @@ def cmd_orphans_collect(args) -> int:
 def cmd_orphans_apply(args) -> int:
     if _orphans_mod is None:
         print(
-            "⛔ orchestrator: _orphans module unavailable", file=sys.stderr,
+            "\033[38;5;208morchestrator: _orphans module unavailable\033[0m", file=sys.stderr,
         )
         return 1
     return _orphans_mod.orphans_apply(args)
@@ -4407,7 +4407,7 @@ def main() -> int:
     try:
         return args.func(args)
     except Exception as e:
-        print(f"⛔ orchestrator error: {e}", file=sys.stderr)
+        print(f"\033[38;5;208morchestrator error: {e}\033[0m", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
         return 1

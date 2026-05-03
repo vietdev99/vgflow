@@ -255,7 +255,7 @@ def main() -> int:
                         run_id = snap.get("run_id")
     if not run_id:
         print(
-            "⛔ No --run-id and no per-session/legacy run pointer "
+            "\033[38;5;208mNo --run-id and no per-session/legacy run pointer \033[0m"
             "(.vg/active-runs/{session_id}.json or .vg/current-run.json).",
             file=sys.stderr,
         )
@@ -289,7 +289,7 @@ def main() -> int:
         }, indent=2))
     else:
         if failures:
-            print(f"⛔ Artifact freshness: {len(failures)}/{len(results)} failed\n")
+            print(f"\033[38;5;208mArtifact freshness: {len(failures)}/{len(results)} failed\033[0m\n")
             for r in failures:
                 print(f"  [{r['verdict']}] {r['path']}")
                 if r.get("reason"):

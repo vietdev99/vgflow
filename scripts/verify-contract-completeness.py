@@ -226,10 +226,10 @@ def main() -> int:
     phase_dir = Path(args.phase_dir).resolve()
     code_root = Path(args.code_root).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
     if not code_root.is_dir():
-        print(f"⛔ Code root not found: {code_root}", file=sys.stderr)
+        print(f"\033[38;5;208mCode root not found: {code_root}\033[0m", file=sys.stderr)
         return 2
 
     surfaces = load_crud_surfaces(phase_dir)
@@ -252,7 +252,7 @@ def main() -> int:
             routes = load_routes_static(rsj_root) if rsj_root.is_file() else []
 
     if not routes and not args.quiet:
-        print(f"  ⚠ no routes-static.json available — run scripts/extract-routes-static.py first for full coverage")
+        print(f"  \033[33mno routes-static.json available — run scripts/extract-routes-static.py first for full coverage\033[0m")
 
     models = grep_db_models(code_root)
     bg_jobs = grep_background_jobs(code_root)
@@ -287,7 +287,7 @@ def main() -> int:
         if payload["verdict"] == "COMPLETE":
             print(f"✓ Contract completeness OK ({len(routes)} routes, {len(models)} models all mapped)")
         else:
-            tag = "⛔" if args.severity == "block" else "⚠ "
+            tag = "" if args.severity == "block" else ""
             print(f"{tag} Contract completeness: INCOMPLETE")
             if uncovered_routes:
                 print(f"   {len(uncovered_routes)} routes NOT mapped to declared resource:")

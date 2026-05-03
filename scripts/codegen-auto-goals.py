@@ -213,7 +213,7 @@ def main() -> int:
             tmp.replace(spec_path)
             written.append(spec_filename)
         except OSError as e:
-            print(f"  ⚠ failed to write {spec_filename}: {e}", file=sys.stderr)
+            print(f"  \033[33mfailed to write {spec_filename}: {e}\033[0m", file=sys.stderr)
 
     if args.json:
         print(json.dumps({

@@ -242,7 +242,7 @@ def main() -> int:
 
     root = Path(args.project_root).resolve()
     if not root.exists():
-        print(f"⛔ project-root does not exist: {root}", file=sys.stderr)
+        print(f"\033[38;5;208mproject-root does not exist: {root}\033[0m", file=sys.stderr)
         return 2
 
     sast = _scan(root)
@@ -278,14 +278,14 @@ def main() -> int:
             if not args.quiet:
                 print("✓ No OAuth code detected — nothing to verify.")
         elif verdict == "FAIL":
-            print(f"⛔ OAuth PKCE: {len(blocks)} block(s), {len(warns)} warn(s)")
+            print(f"\033[38;5;208mOAuth PKCE: {len(blocks)} block(s), {len(warns)} warn(s)\033[0m")
             for b in blocks:
                 print(f"  [BLOCK] {b}")
             for w in warns:
                 print(f"  [WARN]  {w}")
         elif verdict == "WARN":
             if not args.quiet:
-                print(f"⚠ OAuth PKCE: {len(warns)} warn(s)")
+                print(f"\033[33mOAuth PKCE: {len(warns)} warn(s)\033[0m")
                 for w in warns:
                     print(f"  [WARN]  {w}")
         elif not args.quiet:

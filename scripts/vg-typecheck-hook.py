@@ -103,7 +103,7 @@ def main() -> int:
     err_lines = (r.stdout + r.stderr).splitlines()
     # Trim to last 30 lines (most relevant)
     err_tail = "\n".join(err_lines[-30:])
-    log(f"⛔ typecheck FAIL {target}:\n{err_tail}")
+    log(f"\033[38;5;208mtypecheck FAIL {target}:\033[0m\n{err_tail}")
     print(json.dumps({
         "decision": "block",
         "reason": (

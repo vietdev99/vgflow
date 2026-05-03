@@ -289,24 +289,24 @@ def main() -> int:
 
     phase_dir = args.phase_dir
     if not phase_dir.exists():
-        print(f"⛔ phase-dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase-dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     progress = load_progress(phase_dir)
     if not progress:
-        print(f"⚠ no .build-progress.json — wave was never started, nothing to reconcile", file=sys.stderr)
+        print(f"\033[33mno .build-progress.json — wave was never started, nothing to reconcile\033[0m", file=sys.stderr)
         return 0
 
     wave = args.wave or progress.get("current_wave")
     wave_tag = progress.get("wave_tag")
     if not wave_tag:
-        print(f"⛔ progress file has no wave_tag — cannot reconcile against git", file=sys.stderr)
+        print(f"\033[38;5;208mprogress file has no wave_tag — cannot reconcile against git\033[0m", file=sys.stderr)
         return 2
 
     # Verify wave_tag exists
     rc, _ = git(["rev-parse", "--verify", wave_tag])
     if rc != 0:
-        print(f"⛔ wave_tag {wave_tag} not found in git — was it pruned?", file=sys.stderr)
+        print(f"\033[38;5;208mwave_tag {wave_tag} not found in git — was it pruned?\033[0m", file=sys.stderr)
         return 2
 
     commits = commits_in_wave(wave_tag)
@@ -378,7 +378,7 @@ def main() -> int:
             "FAILED_RETRY":    "✗",
             "NEW_UNTRACKED":   "?",
             "EXTRA_UNEXPECTED":"?",
-        }.get(verdict, "⛔")
+        }.get(verdict, "")
         print(f"{icon} {verdict} — tasks {tasks}")
         for c in classifications:
             if c["verdict"] == verdict:
@@ -394,10 +394,10 @@ def main() -> int:
     has_desync = "DESYNC_EXTRA_COMMIT" in buckets
 
     if has_corruption:
-        print("⛔ Integrity verdict: CORRUPTION detected — manual review required.")
+        print("\033[38;5;208mIntegrity verdict: CORRUPTION detected — manual review required.\033[0m")
         return 1
     if has_orphan or has_desync:
-        print("⚠ Integrity verdict: recoverable issues — follow recovery commands above.")
+        print("\033[33mIntegrity verdict: recoverable issues — follow recovery commands above.\033[0m")
         return 1
     print("✓ Integrity verdict: clean — no corruption, no abandoned work.")
     return 0

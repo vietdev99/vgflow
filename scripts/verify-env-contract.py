@@ -47,10 +47,10 @@ def load_yaml(path: Path) -> dict:
         body = m.group(1) if m else text
         return yaml.safe_load(body) or {}
     except ImportError:
-        print("⛔ pyyaml required to parse ENV-CONTRACT.md", file=sys.stderr)
+        print("\033[38;5;208mpyyaml required to parse ENV-CONTRACT.md\033[0m", file=sys.stderr)
         return {}
     except Exception as e:
-        print(f"⛔ parse error: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mparse error: {e}\033[0m", file=sys.stderr)
         return {}
 
 
@@ -148,7 +148,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     surfaces = load_crud_surfaces(phase_dir)
@@ -162,7 +162,7 @@ def main() -> int:
             if not args.quiet:
                 print("  (kit:static-sast only — ENV-CONTRACT optional, skipping preflight)")
             return 0
-        print(f"⛔ ENV-CONTRACT.md missing or empty at {env_path}", file=sys.stderr)
+        print(f"\033[38;5;208mENV-CONTRACT.md missing or empty at {env_path}\033[0m", file=sys.stderr)
         print(f"   For phases with UI runtime kits, ENV-CONTRACT is required (v2.39.0+).", file=sys.stderr)
         print(f"   Copy template: cp .claude/commands/vg/_shared/templates/ENV-CONTRACT-template.md {env_path}", file=sys.stderr)
         return 2
@@ -170,7 +170,7 @@ def main() -> int:
     checks = contract.get("preflight_checks") or []
     if not checks:
         if not args.quiet:
-            print("  ⚠ ENV-CONTRACT.md has no preflight_checks — env state unverified")
+            print("  \033[33mENV-CONTRACT.md has no preflight_checks — env state unverified\033[0m")
         return 0
 
     if args.check:
@@ -202,7 +202,7 @@ def main() -> int:
         if not failures:
             print(f"✓ ENV-CONTRACT preflight: {len(checks)} probe(s) all pass")
         else:
-            print(f"⛔ ENV-CONTRACT preflight: {len(failures)}/{len(checks)} FAILED")
+            print(f"\033[38;5;208mENV-CONTRACT preflight: {len(failures)}/{len(checks)} FAILED\033[0m")
             for f in failures:
                 print(f"   {f['name']}: expected={f['expected']!r} observed={f['observed']!r}")
             print(f"   Report: {out_path}")

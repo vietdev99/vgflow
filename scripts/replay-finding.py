@@ -164,27 +164,27 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     findings_doc = load_findings(phase_dir)
     if not findings_doc:
-        print(f"⛔ REVIEW-FINDINGS.json missing in {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mREVIEW-FINDINGS.json missing in {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     finding = find_by_id(findings_doc, args.finding_id)
     if not finding:
-        print(f"⛔ Finding {args.finding_id} not found in REVIEW-FINDINGS.json", file=sys.stderr)
+        print(f"\033[38;5;208mFinding {args.finding_id} not found in REVIEW-FINDINGS.json\033[0m", file=sys.stderr)
         return 2
 
     replay = finding.get("replay") or {}
     if not replay:
-        print(f"⛔ Finding {args.finding_id} has no replay manifest (pre-v2.39 or worker did not emit it)", file=sys.stderr)
+        print(f"\033[38;5;208mFinding {args.finding_id} has no replay manifest (pre-v2.39 or worker did not emit it)\033[0m", file=sys.stderr)
         return 2
 
     sequence = replay.get("request_sequence") or []
     if not sequence:
-        print(f"⛔ Replay manifest empty for {args.finding_id}", file=sys.stderr)
+        print(f"\033[38;5;208mReplay manifest empty for {args.finding_id}\033[0m", file=sys.stderr)
         return 2
 
     if args.dry_run:
@@ -231,7 +231,7 @@ def main() -> int:
                 if not r.get("matches"):
                     print(f"   {r['step']}: expected {r.get('expected_status')} observed {r.get('observed_status')}")
         if payload["commit_drift"]:
-            print(f"   ⚠ commit drift: recorded {recorded_commit[:8]} vs current {current_commit[:8]}")
+            print(f"   \033[33mcommit drift: recorded {recorded_commit[:8]} vs current {current_commit[:8]}\033[0m")
 
     return 0 if all_match else 1
 

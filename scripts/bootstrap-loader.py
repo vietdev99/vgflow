@@ -208,7 +208,7 @@ def _load_schema() -> dict:
     try:
         return _parse_yaml(schema_path.read_text(encoding="utf-8")) or {}
     except Exception as e:
-        print(f"⚠ bootstrap-loader: schema parse failed: {e}", file=sys.stderr)
+        print(f"\033[33mbootstrap-loader: schema parse failed: {e}\033[0m", file=sys.stderr)
         return {"allowlist": [], "denylist": []}
 
 
@@ -293,16 +293,16 @@ def _parse_rule_file(path: Path) -> dict | None:
     try:
         text = path.read_text(encoding="utf-8")
     except Exception as e:
-        print(f"⚠ bootstrap-loader: cannot read {path}: {e}", file=sys.stderr)
+        print(f"\033[33mbootstrap-loader: cannot read {path}: {e}\033[0m", file=sys.stderr)
         return None
 
     if not text.startswith("---"):
-        print(f"⚠ bootstrap-loader: {path} missing frontmatter", file=sys.stderr)
+        print(f"\033[33mbootstrap-loader: {path} missing frontmatter\033[0m", file=sys.stderr)
         return None
 
     end = text.find("\n---", 4)
     if end == -1:
-        print(f"⚠ bootstrap-loader: {path} unterminated frontmatter", file=sys.stderr)
+        print(f"\033[33mbootstrap-loader: {path} unterminated frontmatter\033[0m", file=sys.stderr)
         return None
 
     fm_text = text[4:end]
@@ -311,7 +311,7 @@ def _parse_rule_file(path: Path) -> dict | None:
     try:
         fm = _parse_yaml(fm_text) or {}
     except Exception as e:
-        print(f"⚠ bootstrap-loader: {path} frontmatter parse error: {e}", file=sys.stderr)
+        print(f"\033[33mbootstrap-loader: {path} frontmatter parse error: {e}\033[0m", file=sys.stderr)
         return None
 
     if not isinstance(fm, dict):
@@ -332,7 +332,7 @@ def load_overlay(overlay_path: Path | None = None) -> tuple[dict, list[str]]:
     try:
         raw = _parse_yaml(overlay_path.read_text(encoding="utf-8")) or {}
     except Exception as e:
-        print(f"⚠ bootstrap-loader: overlay.yml parse failed: {e}", file=sys.stderr)
+        print(f"\033[33mbootstrap-loader: overlay.yml parse failed: {e}\033[0m", file=sys.stderr)
         return {}, ["<parse error>"]
     if not isinstance(raw, dict):
         return {}, ["<not a dict>"]
@@ -365,7 +365,7 @@ def load_rules(
             if evaluate_scope(scope, context):
                 matched.append(rule)
         except ScopeEvalError as e:
-            print(f"⚠ bootstrap-loader: {rf} scope eval error: {e}", file=sys.stderr)
+            print(f"\033[33mbootstrap-loader: {rf} scope eval error: {e}\033[0m", file=sys.stderr)
             continue
     return matched
 
@@ -396,7 +396,7 @@ def load_patches(
             if evaluate_scope(scope, context):
                 anchors[anchor] = patch.get("prose", "")
         except ScopeEvalError as e:
-            print(f"⚠ bootstrap-loader: patch scope error: {e}", file=sys.stderr)
+            print(f"\033[33mbootstrap-loader: patch scope error: {e}\033[0m", file=sys.stderr)
     return anchors
 
 

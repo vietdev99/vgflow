@@ -260,13 +260,13 @@ def main() -> int:
     data = _load_yaml_or_json(path)
     waives = data.get("waives") or []
     if not isinstance(waives, list):
-        print(f"⛔ triage file has invalid `waives` (must be list)", file=sys.stderr)
+        print(f"\033[38;5;208mtriage file has invalid `waives` (must be list)\033[0m", file=sys.stderr)
         return 2
 
     approvers = {a.strip() for a in args.approvers.split(",") if a.strip()}
     today = _parse_date(args.today) if args.today else _dt.date.today()
     if today is None:
-        print(f"⛔ invalid --today value", file=sys.stderr)
+        print(f"\033[38;5;208minvalid --today value\033[0m", file=sys.stderr)
         return 2
 
     per_waive_issues: list[dict] = []
@@ -306,7 +306,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if all_issues:
-            print(f"⛔ DAST waive approver: {len(all_issues)} issue(s)\n")
+            print(f"\033[38;5;208mDAST waive approver: {len(all_issues)} issue(s)\033[0m\n")
             for i in all_issues:
                 if i["check"] == "rubber_stamp_pattern":
                     print(f"  [{i['check']}] approver={i['approver']!r} "

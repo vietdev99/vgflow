@@ -297,7 +297,7 @@ def main(argv: list[str]) -> int:
 
     skill_files = [Path(p) for p in glob(args.skills_glob, recursive=True)]
     if not skill_files:
-        print(f"⛔ No skills matched glob: {args.skills_glob}", file=sys.stderr)
+        print(f"\033[38;5;208mNo skills matched glob: {args.skills_glob}\033[0m", file=sys.stderr)
         return 1
 
     all_rules: list[Rule] = []

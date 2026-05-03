@@ -46,12 +46,12 @@ MANIFEST_PATH = THIS_DIR / "dispatch-manifest.json"
 
 def load_manifest() -> dict:
     if not MANIFEST_PATH.exists():
-        sys.stderr.write(f"⛔ manifest not found: {MANIFEST_PATH}\n")
+        sys.stderr.write(f"\033[38;5;208mmanifest not found: {MANIFEST_PATH}\033[0m\n")
         return {"validators": {}}
     try:
         return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        sys.stderr.write(f"⛔ manifest JSON parse error: {exc}\n")
+        sys.stderr.write(f"\033[38;5;208mmanifest JSON parse error: {exc}\033[0m\n")
         return {"validators": {}}
 
 
@@ -188,7 +188,7 @@ def main() -> int:
         if not unmapped:
             print("✓ All on-disk validators are mapped in dispatch-manifest.json")
             return 0
-        print(f"⚠ {len(unmapped)} validator(s) on disk without manifest entry:")
+        print(f"\033[33m{len(unmapped)} validator(s) on disk without manifest entry:\033[0m")
         for name in unmapped:
             print(f"  - {name}")
         print()
@@ -198,7 +198,7 @@ def main() -> int:
     if args.show:
         record = show_one(args.show)
         if not record:
-            sys.stderr.write(f"⛔ no manifest entry for: {args.show}\n")
+            sys.stderr.write(f"\033[38;5;208mno manifest entry for: {args.show}\033[0m\n")
             return 1
         print(json.dumps({args.show: record}, indent=2))
         return 0
@@ -214,7 +214,7 @@ def main() -> int:
         return 0
 
     if not args.command:
-        sys.stderr.write("⛔ --command required (or --audit / --show / --list-all)\n")
+        sys.stderr.write("\033[38;5;208m--command required (or --audit / --show / --list-all)\033[0m\n")
         p.print_help(sys.stderr)
         return 1
 

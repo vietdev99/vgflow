@@ -171,12 +171,12 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     template = load_compliance_template()
     if not template:
-        print("⛔ FLOW-COMPLIANCE.yaml template not found", file=sys.stderr)
+        print("\033[38;5;208mFLOW-COMPLIANCE.yaml template not found\033[0m", file=sys.stderr)
         return 2
 
     profile = args.profile or detect_profile(phase_dir)
@@ -211,7 +211,7 @@ def main() -> int:
             if accept_audit["verdict"] == "COMPLIANT":
                 print(f"✓ Flow compliance OK across all flows (profile={profile})")
             else:
-                print(f"⛔ Flow compliance FAILED:")
+                print(f"\033[38;5;208mFlow compliance FAILED:\033[0m")
                 for c in non_compliant:
                     print(f"   {c['command']}: missing {', '.join(c['missing_required']) or '(see report)'}")
                 print(f"   accept itself: {', '.join(accept_audit['missing_required']) or 'OK'}")
@@ -229,11 +229,11 @@ def main() -> int:
         if audit["verdict"] == "COMPLIANT":
             print(f"✓ Flow compliance: {args.command} (profile={profile}) — all required evidence present")
         elif args.skip_compliance:
-            print(f"⚠ Flow compliance: {args.command} non-compliant but override active")
+            print(f"\033[33mFlow compliance: {args.command} non-compliant but override active\033[0m")
             print(f"   Missing: {', '.join(audit['missing_required'])}")
             print(f"   Reason: {args.skip_compliance}")
         else:
-            tag = "⛔" if args.severity == "block" else "⚠ "
+            tag = "" if args.severity == "block" else ""
             print(f"{tag} Flow compliance: {args.command} NON-COMPLIANT (profile={profile})")
             print(f"   Missing required evidence: {', '.join(audit['missing_required'])}")
             print(f"   Override: --skip-compliance=\"<reason>\" logs OVERRIDE-DEBT")

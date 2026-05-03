@@ -119,10 +119,10 @@ def main() -> int:
               f"components have testid")
         return 0
 
-    print(f"⚠ {len(violations)}/{scanned} UI files use i18n on interactive elements "
+    print(f"\033[33m{len(violations)}/{scanned} UI files use i18n on interactive elements \033[0m"
           f"WITHOUT data-testid:")
     for v in violations:
-        print(f"  ⛔ {v}")
+        print(f"  \033[38;5;208m{v}\033[0m")
     print("")
     print("Why this matters: test specs codegen will fall back to getByText() with")
     print("Vietnamese strings. Next i18n update will silently break those specs.")

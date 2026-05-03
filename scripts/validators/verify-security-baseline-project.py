@@ -194,7 +194,7 @@ def main() -> int:
 
     if not args.target_url and only is None:
         # At least one non-target sub-validator still runs; but warn.
-        print("⚠  No --target-url provided. Target-dependent sub-validators "
+        print("\033[33m No --target-url provided. Target-dependent sub-validators \033[0m"
               "will be skipped.", file=sys.stderr)
 
     subreports: list[dict] = []
@@ -255,7 +255,7 @@ def main() -> int:
         })
 
     if not at_least_one_ran:
-        print("⛔ No sub-validators ran. Check --target-url / "
+        print("\033[38;5;208mNo sub-validators ran. Check --target-url / \033[0m"
               "project-root / --only.", file=sys.stderr)
         return 2
 
@@ -272,10 +272,10 @@ def main() -> int:
         print(json.dumps(aggregate, indent=2))
     else:
         if critical_block:
-            print(f"⛔ Security baseline: critical BLOCK — "
+            print(f"\033[38;5;208mSecurity baseline: critical BLOCK — \033[0m"
                   f"{aggregate_blocks} block(s), {aggregate_warns} warn(s)\n")
         elif aggregate_warns and not args.quiet:
-            print(f"⚠  Security baseline: {aggregate_warns} WARN (no "
+            print(f"\033[33m Security baseline: {aggregate_warns} WARN (no \033[0m"
                   f"critical blocks)")
         elif not args.quiet:
             print(

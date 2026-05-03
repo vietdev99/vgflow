@@ -134,7 +134,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     roles = [r.strip() for r in args.roles.split(",") if r.strip()]
@@ -151,7 +151,7 @@ def main() -> int:
                 print(f"  (no nav-discovery-{role}.json found — skipping role)")
 
     if not per_role:
-        print(f"⛔ No per-role nav-discovery files found in {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mNo per-role nav-discovery files found in {phase_dir}\033[0m", file=sys.stderr)
         return 1
 
     merged = merge(per_role, roles)

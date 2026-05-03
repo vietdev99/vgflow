@@ -467,7 +467,7 @@ def main() -> int:
 
     phase_dir = find_phase_dir(args.phase)
     if not phase_dir:
-        sys.stderr.write(f"⛔ phase {args.phase} not found\n")
+        sys.stderr.write(f"\033[38;5;208mphase {args.phase} not found\033[0m\n")
         return 2
 
     review_dir = phase_dir / "crossai-build-verify"
@@ -505,7 +505,7 @@ def main() -> int:
     # Now: any rc != 0 or unparsable output ⇒ exit 2 (infra), not exit 0.
     if codex_rc != 0:
         sys.stderr.write(
-            f"⛔ Codex CLI failed rc={codex_rc} — cannot verify build. "
+            f"\033[38;5;208mCodex CLI failed rc={codex_rc} — cannot verify build. \033[0m"
             f"Treat as INFRA_FAILURE, do not declare CLEAN.\n"
         )
         emit_event(
@@ -519,7 +519,7 @@ def main() -> int:
         return 2
     if gemini_rc != 0:
         sys.stderr.write(
-            f"⛔ Gemini CLI failed rc={gemini_rc} — cannot verify build. "
+            f"\033[38;5;208mGemini CLI failed rc={gemini_rc} — cannot verify build. \033[0m"
             f"Treat as INFRA_FAILURE, do not declare CLEAN.\n"
         )
         emit_event(
@@ -539,7 +539,7 @@ def main() -> int:
 
     if not codex_verdict:
         sys.stderr.write(
-            "⛔ Codex output not parseable (no <crossai-build-verdict> XML "
+            "\033[38;5;208mCodex output not parseable (no <crossai-build-verdict> XML \033[0m"
             "block). Cannot verify — treat as INFRA_FAILURE not CLEAN.\n"
         )
         emit_event(
@@ -552,7 +552,7 @@ def main() -> int:
         return 2
     if not gemini_verdict:
         sys.stderr.write(
-            "⛔ Gemini output not parseable (no <crossai-build-verdict> XML "
+            "\033[38;5;208mGemini output not parseable (no <crossai-build-verdict> XML \033[0m"
             "block). Cannot verify — treat as INFRA_FAILURE not CLEAN.\n"
         )
         emit_event(
@@ -648,7 +648,7 @@ if __name__ == "__main__":
         # to investigate. Validator later BLOCKs on missing events anyway —
         # this just surfaces the real cause earlier.
         sys.stderr.write(
-            f"⛔ vg-build-crossai-loop.py INFRA_FAILURE (emit): {e}\n"
+            f"\033[38;5;208mvg-build-crossai-loop.py INFRA_FAILURE (emit): {e}\033[0m\n"
             f"   Iteration events may be missing — validator will BLOCK at\n"
             f"   run-complete. Investigate .vg/events.db + run-start state,\n"
             f"   then re-invoke this script.\n"

@@ -527,7 +527,7 @@ def main() -> int:
                 else:
                     log(f"migrate-state failed rc={ar_rc}, stderr={ar_err[:200]}")
                     msg = (
-                        f"⛔ Marker-drift auto-recovery FAILED.\n\n"
+                        f"\033[38;5;208mMarker-drift auto-recovery FAILED.\033[0m\n\n"
                         f"migrate-state rc={ar_rc}\n"
                         f"stderr: {ar_err.strip()[:500]}\n\n"
                         f"Original violations:\n{msg}\n\n"
@@ -606,7 +606,7 @@ def main() -> int:
     # then retry Stop. We do NOT auto-escape anymore.
     log(f"orchestrator unexpected rc={rc}, stderr={stderr[:500]}")
     err_msg = (
-        f"⛔ vg-orchestrator run-complete returned unexpected rc={rc}.\n"
+        f"\033[38;5;208mvg-orchestrator run-complete returned unexpected rc={rc}.\033[0m\n"
         f"   This is NOT a BLOCK from contract violations — it's a bug or\n"
         f"   transient state issue. Previous versions soft-approved here,\n"
         f"   which let AI claim PASS without real verification.\n\n"

@@ -114,7 +114,7 @@ def _merge_context(
     lines = [f"# Aggregated BLOCK: {instances[0].gate_id}",
              f"Total instances: {total}"]
     if total > cap:
-        lines.append(f"⚠ Capped to first {cap} instances (sorted by severity)")
+        lines.append(f"\033[33mCapped to first {cap} instances (sorted by severity)\033[0m")
     lines.append("")
     lines.append("## Instances")
     for i, inst in enumerate(instances, 1):

@@ -183,7 +183,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if not args.phase and not args.milestone:
-        print("⛔ --phase or --milestone required", file=sys.stderr)
+        print("\033[38;5;208m--phase or --milestone required\033[0m", file=sys.stderr)
         return 1
 
     cfg = _read_config()
@@ -219,7 +219,7 @@ def main() -> int:
     if args.json:
         print(json.dumps(result))
     else:
-        emoji = {"PASS": "✓", "WARN": "⚠", "BLOCK": "⛔"}[verdict]
+        emoji = {"PASS": "✓", "WARN": "", "BLOCK": ""}[verdict]
         print(f"{emoji} Token cost: {tokens:,} / {budget:,} ({pct:.1f}%) — {scope}")
         if verdict == "BLOCK":
             print(f"  Over hard budget. Investigate: /vg:telemetry --command agent_invocation")

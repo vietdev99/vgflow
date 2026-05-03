@@ -130,7 +130,7 @@ def cmd_verify(strict: bool) -> int:
     """
     baseline = load_baseline()
     if baseline is None:
-        print(f"⛔ Baseline manifest missing at {MANIFEST_PATH}.")
+        print(f"\033[38;5;208mBaseline manifest missing at {MANIFEST_PATH}.\033[0m")
         print("   Run: python distribution-check.py --generate")
         return 2
 
@@ -148,7 +148,7 @@ def cmd_verify(strict: bool) -> int:
         print(f"✓ Distribution integrity OK — {len(current)} files match baseline.")
         return 0
 
-    print(f"⚠ Distribution drift detected: {total_drift} item(s).")
+    print(f"\033[33mDistribution drift detected: {total_drift} item(s).\033[0m")
     for rel in added:
         print(f"  + ADDED    {rel}")
     for rel in removed:
@@ -187,5 +187,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as e:
-        print(f"⛔ distribution-check crashed: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mdistribution-check crashed: {e}\033[0m", file=sys.stderr)
         sys.exit(2)

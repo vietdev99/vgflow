@@ -286,7 +286,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir)
     if not phase_dir.is_dir():
-        print(f"⛔ phase-dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase-dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     # Phase number: strip leading zeros from dir name like "07.12-..."
@@ -294,7 +294,7 @@ def main() -> int:
 
     tasks = parse_plan_tasks(phase_dir)
     if not tasks:
-        print(f"⚠ no tasks found in {phase_dir}/*PLAN*.md — nothing to verify", file=sys.stderr)
+        print(f"\033[33mno tasks found in {phase_dir}/*PLAN*.md — nothing to verify\033[0m", file=sys.stderr)
         return 0
 
     goal_keywords = parse_test_goals(phase_dir)
@@ -348,7 +348,7 @@ def main() -> int:
 
     if failures and not args.lenient:
         print("", file=sys.stderr)
-        print(f"⛔ {failures} task(s) claim goals without bound tests.", file=sys.stderr)
+        print(f"\033[38;5;208m{failures} task(s) claim goals without bound tests.\033[0m", file=sys.stderr)
         print("   Each task listing <goals-covered>G-XX</goals-covered> MUST commit", file=sys.stderr)
         print("   a test file referencing either the goal id or a keyword from its", file=sys.stderr)
         print("   success criteria in TEST-GOALS.md.", file=sys.stderr)

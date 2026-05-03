@@ -364,7 +364,7 @@ def main() -> int:
 
     root = Path(args.project_root).resolve()
     if not root.exists():
-        print(f"⛔ project-root does not exist: {root}", file=sys.stderr)
+        print(f"\033[38;5;208mproject-root does not exist: {root}\033[0m", file=sys.stderr)
         return 2
 
     sast = _scan_sast(root)
@@ -404,10 +404,10 @@ def main() -> int:
     else:
         if verdict == "NO_JWT":
             if not args.quiet:
-                print("⚠ No JWT library usage detected — cannot verify "
+                print("\033[33mNo JWT library usage detected — cannot verify \033[0m"
                       "session policy. Skipping.")
         elif verdict == "FAIL":
-            print(f"⛔ JWT session policy: {len(blocks)} block(s), "
+            print(f"\033[38;5;208mJWT session policy: {len(blocks)} block(s), \033[0m"
                   f"{len(warns)} warn(s)")
             for b in blocks:
                 print(f"  [BLOCK] {b}")
@@ -415,7 +415,7 @@ def main() -> int:
                 print(f"  [WARN]  {w}")
         elif verdict == "WARN":
             if not args.quiet:
-                print(f"⚠ JWT session policy: {len(warns)} warn(s)")
+                print(f"\033[33mJWT session policy: {len(warns)} warn(s)\033[0m")
                 for w in warns:
                     print(f"  [WARN]  {w}")
         elif not args.quiet:

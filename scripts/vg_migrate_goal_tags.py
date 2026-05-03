@@ -89,7 +89,7 @@ def phase_status(phase_dir: Path) -> str:
 
 def scan() -> int:
     if not PHASES_DIR.exists():
-        print(f"⛔ Không tìm thấy {PHASES_DIR}")
+        print(f"\033[38;5;208mKhông tìm thấy {PHASES_DIR}\033[0m")
         return 1
 
     phases = sorted(p for p in PHASES_DIR.iterdir() if p.is_dir())
@@ -133,7 +133,7 @@ def clone(phase_name: str) -> int:
             src = cand[0]
             phase_name = src.name
         else:
-            print(f"⛔ Phase không xác định: {phase_name}")
+            print(f"\033[38;5;208mPhase không xác định: {phase_name}\033[0m")
             return 1
 
     dest = SANDBOX_DIR / phase_name
@@ -171,7 +171,7 @@ def clone(phase_name: str) -> int:
 def suggest(phase_name: str) -> int:
     sandbox = SANDBOX_DIR / phase_name
     if not sandbox.exists():
-        print(f"⛔ Sandbox chưa clone: {sandbox}")
+        print(f"\033[38;5;208mSandbox chưa clone: {sandbox}\033[0m")
         print(f"   Run: python {sys.argv[0]} clone {phase_name}")
         return 1
 
@@ -180,7 +180,7 @@ def suggest(phase_name: str) -> int:
     sandbox_test = sandbox / "SANDBOX-TEST.md"
 
     if not ctx.exists():
-        print(f"⛔ CONTEXT.md không có trong sandbox")
+        print(f"\033[38;5;208mCONTEXT.md không có trong sandbox\033[0m")
         return 1
 
     ctx_text = ctx.read_text(encoding="utf-8", errors="ignore")
@@ -282,12 +282,12 @@ def apply(phase_name: str) -> int:
     canonical_ctx = PHASES_DIR / phase_name / "CONTEXT.md"
 
     if not diff_path.exists():
-        print(f"⛔ SUGGESTED-TAGS.diff chưa có ở {diff_path}")
+        print(f"\033[38;5;208mSUGGESTED-TAGS.diff chưa có ở {diff_path}\033[0m")
         print(f"   Run: python {sys.argv[0]} suggest {phase_name}")
         return 1
 
     if not canonical_ctx.exists():
-        print(f"⛔ Canonical CONTEXT.md không tồn tại: {canonical_ctx}")
+        print(f"\033[38;5;208mCanonical CONTEXT.md không tồn tại: {canonical_ctx}\033[0m")
         return 1
 
     # Parse approved suggestions (dòng bắt đầu bằng `+`)
@@ -329,7 +329,7 @@ def apply(phase_name: str) -> int:
         # Simpler: find first `**Test Scenarios:**` hoặc `**Endpoints:**` section trong goal block
         # Nếu goal_id không ở CONTEXT.md (old format), append vào end of file với note
         if gid not in ctx_text:
-            print(f"  ⚠ {gid} không tìm thấy trong canonical CONTEXT.md — skip.")
+            print(f"  \033[33m{gid} không tìm thấy trong canonical CONTEXT.md — skip.\033[0m")
             continue
 
         # Append tag vào dưới goal_id mention (crude but safe)
@@ -353,7 +353,7 @@ def apply(phase_name: str) -> int:
             print(f"  ✓ {gid}: {sug['tag']}: {sug['value']}")
 
         if not match_found:
-            print(f"  ⚠ {gid} pattern match failed — skip.")
+            print(f"  \033[33m{gid} pattern match failed — skip.\033[0m")
 
     canonical_ctx.write_text(ctx_text, encoding="utf-8")
     print()

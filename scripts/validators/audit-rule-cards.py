@@ -262,7 +262,7 @@ def _delegate_schema_check(skill_filter: str | None) -> int:
     )
     if not verifier_path.exists():
         sys.stderr.write(
-            f"⛔ verify-skill-invariants.py not found at {verifier_path}\n"
+            f"\033[38;5;208mverify-skill-invariants.py not found at {verifier_path}\033[0m\n"
             "   Phase P validator missing — install or run /vg:update\n"
         )
         return 2

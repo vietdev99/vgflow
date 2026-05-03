@@ -98,7 +98,7 @@ def main() -> int:
 
     # Emit warning via additionalContext per Claude Code hooks docs
     warning = (
-        f"⚠ VG SKILL FILE EDITED: {rel}\n"
+        f"\033[33mVG SKILL FILE EDITED: {rel}\033[0m\n"
         f"   This file is cached at session start. Current session still uses "
         f"the PRE-EDIT content. Changes apply from NEXT session only.\n"
         f"   If the user asks 'why didn't my change take effect?' — explain this. "

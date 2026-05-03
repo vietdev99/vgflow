@@ -230,7 +230,7 @@ def _report_human(results: list[dict], quiet: bool) -> str:
 
     if issues:
         lines.append(
-            f"⛔ Command contract coverage: {len(issues)}/{total} command(s) "
+            f"\033[38;5;208mCommand contract coverage: {len(issues)}/{total} command(s) \033[0m"
             f"need fix\n"
         )
         grouped: dict = {}
@@ -294,7 +294,7 @@ def main() -> int:
     commands_dir = repo_root / ".claude" / "commands" / "vg"
 
     if not commands_dir.is_dir():
-        print(f"⛔ Commands dir not found: {commands_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mCommands dir not found: {commands_dir}\033[0m", file=sys.stderr)
         return 2
 
     # Discover skill files
@@ -310,7 +310,7 @@ def main() -> int:
             f for f in skill_files if f.stem == args.command
         ]
         if not skill_files:
-            print(f"⛔ Command not found: {args.command}", file=sys.stderr)
+            print(f"\033[38;5;208mCommand not found: {args.command}\033[0m", file=sys.stderr)
             return 2
 
     results = []

@@ -206,7 +206,7 @@ def main() -> int:
         paths = [Path(p) for p in _glob.glob(args.glob)]
 
     if not paths:
-        print(f"⛔ No files matched: {args.path or args.glob}", file=sys.stderr)
+        print(f"\033[38;5;208mNo files matched: {args.path or args.glob}\033[0m", file=sys.stderr)
         return 1
 
     results = [_validate_one(p, args.require_xpath) for p in paths]
@@ -220,7 +220,7 @@ def main() -> int:
         }, indent=2))
     else:
         if failures:
-            print(f"⛔ CrossAI XML validation: {len(failures)}/{len(results)} failed\n")
+            print(f"\033[38;5;208mCrossAI XML validation: {len(failures)}/{len(results)} failed\033[0m\n")
             for r in failures:
                 print(f"  [FAIL] {r['path']}")
                 print(f"    {r['reason']}")

@@ -66,7 +66,7 @@ def cmd_approve(args) -> int:
         ci_mode_allowed, nonce_reason = _gate.consume_nonce(ack)
 
     if not _gate._is_tty() and not ci_mode_allowed:
-        print("⛔ `vg-auth approve` requires a TTY (interactive shell).",
+        print("\033[38;5;208m`vg-auth approve` requires a TTY (interactive shell).\033[0m",
               file=sys.stderr)
         if ci_mode_active and ack and not ci_mode_allowed:
             print(f"   CI-mode ACK rejected: {nonce_reason}",
@@ -103,7 +103,7 @@ def cmd_approve(args) -> int:
     elif args.flag:
         flag_scope = args.flag
     else:
-        print("⛔ --flag <name> or --any-flag required", file=sys.stderr)
+        print("\033[38;5;208m--flag <name> or --any-flag required\033[0m", file=sys.stderr)
         return 1
 
     ttl_seconds = max(60, int(args.ttl_days) * 86400)
@@ -138,7 +138,7 @@ def cmd_verify(args) -> int:
             "reason": reason,
         }, indent=2))
     else:
-        status = "✓ VALID" if valid else "⛔ INVALID"
+        status = "✓ VALID" if valid else "\033[38;5;208mINVALID\033[0m"
         print(f"{status} — handle={handle!r} reason={reason}")
     return 0 if valid else 1
 
@@ -152,7 +152,7 @@ def cmd_issue_nonce(args) -> int:
     it single-use.
     """
     if not _gate._is_tty():
-        print("⛔ `vg-auth issue-nonce` requires a TTY (interactive shell).",
+        print("\033[38;5;208m`vg-auth issue-nonce` requires a TTY (interactive shell).\033[0m",
               file=sys.stderr)
         print("   Nonces bootstrap trust — AI subagent cannot self-issue.",
               file=sys.stderr)

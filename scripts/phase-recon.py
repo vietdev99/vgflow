@@ -867,7 +867,7 @@ def main():
 
     phase_dir: Path = args.phase_dir
     if not phase_dir.exists():
-        print(f"⛔ Phase dir missing: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir missing: {phase_dir}\033[0m", file=sys.stderr)
         sys.exit(1)
 
     # Derive phase num from dir name (handle both "7.3-foo" and "07.3-foo")
@@ -898,10 +898,10 @@ def main():
     try:
         state = assemble_state(phase_dir, phase_num, args.profile)
     except FileNotFoundError as e:
-        print(f"⛔ {e}", file=sys.stderr)
+        print(f"\033[38;5;208m{e}\033[0m", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"⛔ Recon parse error: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mRecon parse error: {e}\033[0m", file=sys.stderr)
         sys.exit(2)
 
     if args.json_only:

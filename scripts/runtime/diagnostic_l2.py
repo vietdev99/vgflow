@@ -85,14 +85,14 @@ def render_single_advisory(
     """
     if locale == "vi":
         return (
-            f"⚠ {proposal.gate_id}\n\n"
+            f"\033[33m{proposal.gate_id}\033[0m\n\n"
             f"Chẩn đoán: {proposal.diagnosis}\n\n"
             f"Đề xuất sửa (confidence={proposal.confidence:.0%}):\n"
             f"  {proposal.proposed_fix}\n\n"
             f"Áp dụng đề xuất này? [Y]es / [n]o / [d]etails"
         )
     return (
-        f"⚠ {proposal.gate_id}\n\n"
+        f"\033[33m{proposal.gate_id}\033[0m\n\n"
         f"Diagnosis: {proposal.diagnosis}\n\n"
         f"Recommended fix (confidence={proposal.confidence:.0%}):\n"
         f"  {proposal.proposed_fix}\n\n"

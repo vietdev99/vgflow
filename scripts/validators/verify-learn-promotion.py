@@ -230,7 +230,7 @@ def main() -> int:
         print(json.dumps(result, indent=2))
     else:
         if failures:
-            print(f"⛔ Learn promotion: {len(failures)}/{len(promotions)} "
+            print(f"\033[38;5;208mLearn promotion: {len(failures)}/{len(promotions)} \033[0m"
                   "promoted rule(s) did NOT appear in first subsequent run's prompts\n")
             for f in failures:
                 print(f"  [{f['rule_id']}] {f['title']}")

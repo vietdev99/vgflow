@@ -230,14 +230,14 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if blocks or unreachable:
-            print(f"⛔ Security headers: {len(blocks)} BLOCK, "
+            print(f"\033[38;5;208mSecurity headers: {len(blocks)} BLOCK, \033[0m"
                   f"{len(warns)} WARN across {len(paths)} path(s)\n")
             for p in per_path:
                 for v in p.get("violations", []):
                     print(f"  [{v['severity']}] {p['path']} :: "
                           f"{v['header']} — {v['issue']}")
         elif warns and not args.quiet:
-            print(f"⚠  Security headers: {len(warns)} WARN (no blocks)")
+            print(f"\033[33m Security headers: {len(warns)} WARN (no blocks)\033[0m")
             for p in per_path:
                 for v in p.get("violations", []):
                     print(f"  [WARN] {p['path']} :: "

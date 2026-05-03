@@ -113,7 +113,7 @@ def _exclusive_lock(path: Path, timeout_s: float = 5.0) -> Iterator[None]:
         # Neither lock primitive available — degrade to no-op + warn.
         import sys
         sys.stderr.write(
-            "⚠ fixture_cache: no fcntl/msvcrt available; cache lock is no-op. "
+            "\033[33mfixture_cache: no fcntl/msvcrt available; cache lock is no-op. \033[0m"
             "Concurrent writers risk last-write-wins clobbering.\n"
         )
         try:

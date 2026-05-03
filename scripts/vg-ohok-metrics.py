@@ -368,7 +368,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if not DB_PATH.exists():
-        print(f"⛔ events.db not found at {DB_PATH}", file=sys.stderr)
+        print(f"\033[38;5;208mevents.db not found at {DB_PATH}\033[0m", file=sys.stderr)
         return 1
 
     since_dt = _parse_since(args.since) if args.since else None

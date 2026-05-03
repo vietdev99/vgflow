@@ -137,7 +137,7 @@ def main() -> int:
 
     root = Path(args.search_root).resolve()
     if not root.exists():
-        print(f"⛔ search-root does not exist: {root}", file=sys.stderr)
+        print(f"\033[38;5;208msearch-root does not exist: {root}\033[0m", file=sys.stderr)
         return 2
 
     ignore_dirs = {d.lower() for d in DEFAULT_IGNORE}
@@ -178,7 +178,7 @@ def main() -> int:
 
     if over and args.fail_action == "block" and not args.lenient:
         print("", file=sys.stderr)
-        print(f"⛔ {len(over)} bundle(s) exceed budget:", file=sys.stderr)
+        print(f"\033[38;5;208m{len(over)} bundle(s) exceed budget:\033[0m", file=sys.stderr)
         for e in over:
             print(f"   - {e['path']}: {e['size_mb']} MB > {e['budget_mb']} MB", file=sys.stderr)
         return 1

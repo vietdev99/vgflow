@@ -164,7 +164,7 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
     task_id = _extract_task_id(prompt)
     if not task_id:
         return deny(
-            "⛔ vg-build-task-executor spawn missing task_id in prompt; "
+            "\033[38;5;208mvg-build-task-executor spawn missing task_id in prompt; \033[0m"
             "spawn-guard cannot verify against wave plan.\n"
             "Add 'task_id=task-NN' to the subagent prompt so the guard "
             "can match it against .wave-spawn-plan.json."
@@ -216,7 +216,7 @@ def _enforce_spawn_count(hook_input: dict, run_id: str) -> int | None:
         # Persistence failure shouldn't block the spawn — log to stderr
         # so users notice, but allow the spawn to proceed.
         sys.stderr.write(
-            f"⚠ vg-agent-spawn-guard: failed to persist spawn-count for "
+            f"\033[33mvg-agent-spawn-guard: failed to persist spawn-count for \033[0m"
             f"run {run_id}; continuing (non-fatal).\n"
         )
     return None  # allow

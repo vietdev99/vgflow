@@ -354,7 +354,7 @@ def render_template(template: str, narration: dict, vars_: dict) -> str:
         # narration uat_* key
         if key in narration:
             return narration[key]
-        return f"⛔[unresolved:{key}]"
+        return f"\033[38;5;208m[unresolved:{key}]\033[0m"
     return INTERP_RE.sub(repl, template)
 
 
@@ -396,13 +396,13 @@ def main() -> int:
 
     phase_dir = find_phase_dir(args.phase)
     if not phase_dir:
-        print(f"⛔ Phase dir not found for {args.phase}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found for {args.phase}\033[0m", file=sys.stderr)
         return 1
 
     template_path = _find_template("uat-narrative-prompt.md.tmpl")
     design_block_template_path = _find_template("uat-narrative-design-ref-block.md.tmpl")
     if not template_path:
-        print("⛔ Template uat-narrative-prompt.md.tmpl not found in templates/",
+        print("\033[38;5;208mTemplate uat-narrative-prompt.md.tmpl not found in templates/\033[0m",
               file=sys.stderr)
         return 1
 
@@ -414,7 +414,7 @@ def main() -> int:
     locale = args.locale or cfg.get("locale", "vi")
     narration = load_narration(locale)
     if not narration:
-        print(f"⚠ narration-strings.yaml not found / empty — uat_* keys will fail to interpolate",
+        print(f"\033[33mnarration-strings.yaml not found / empty — uat_* keys will fail to interpolate\033[0m",
               file=sys.stderr)
 
     accounts = load_accounts()

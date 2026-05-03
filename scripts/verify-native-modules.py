@@ -238,7 +238,7 @@ def main() -> int:
     failures = [r for r in results if r["verdict"] == "fail"]
     if failures and not args.lenient:
         print("", file=sys.stderr)
-        print(f"⛔ {len(failures)} native-module check(s) failed.", file=sys.stderr)
+        print(f"\033[38;5;208m{len(failures)} native-module check(s) failed.\033[0m", file=sys.stderr)
         for f in failures:
             print(f"   - {f['label']}: {f.get('reason', 'unknown')}", file=sys.stderr)
         return 1

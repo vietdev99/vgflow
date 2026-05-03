@@ -125,7 +125,7 @@ def resolve_scope(scope: str | None) -> list[Path]:
         if not p.is_absolute():
             p = (REPO_ROOT / p).resolve()
         if not p.exists():
-            sys.stderr.write(f"⛔ scope file not found: {p}\n")
+            sys.stderr.write(f"\033[38;5;208mscope file not found: {p}\033[0m\n")
             sys.exit(3)
         return [p]
     if scope.startswith("since:"):
@@ -138,7 +138,7 @@ def resolve_scope(scope: str | None) -> list[Path]:
             ).stdout
         except subprocess.CalledProcessError as e:
             sys.stderr.write(
-                f"⛔ git diff failed for since:{sha}: {e.stderr}\n"
+                f"\033[38;5;208mgit diff failed for since:{sha}: {e.stderr}\033[0m\n"
             )
             sys.exit(3)
         return [REPO_ROOT / line.strip() for line in out.splitlines()
@@ -148,7 +148,7 @@ def resolve_scope(scope: str | None) -> list[Path]:
         phases_dir = REPO_ROOT / ".vg" / "phases"
         if not phases_dir.exists():
             sys.stderr.write(
-                f"⚠ no .vg/phases/ — scope=phase-{phase_num} resolves to "
+                f"\033[33mno .vg/phases/ — scope=phase-{phase_num} resolves to \033[0m"
                 "all tracked files (no phase context)\n"
             )
             return _git_tracked_files()
@@ -160,7 +160,7 @@ def resolve_scope(scope: str | None) -> list[Path]:
                                p.name.startswith(f"phase-{phase_num}-"))
         )
         if not matches:
-            sys.stderr.write(f"⛔ phase dir not found: {scope}\n")
+            sys.stderr.write(f"\033[38;5;208mphase dir not found: {scope}\033[0m\n")
             sys.exit(3)
         # Phase scope = files modified in commits referencing that phase.
         # Heuristic: git log grep for "({phase_num}-" or "(phase-{phase_num}"
@@ -177,7 +177,7 @@ def resolve_scope(scope: str | None) -> list[Path]:
                         if line.strip()})
         return [REPO_ROOT / f for f in files
                 if (REPO_ROOT / f).exists()]
-    sys.stderr.write(f"⛔ invalid --scope: {scope}\n")
+    sys.stderr.write(f"\033[38;5;208minvalid --scope: {scope}\033[0m\n")
     sys.exit(3)
 
 
@@ -189,7 +189,7 @@ def _git_tracked_files() -> list[Path]:
             check=True, timeout=30,
         ).stdout
     except subprocess.CalledProcessError as e:
-        sys.stderr.write(f"⛔ git ls-files failed: {e.stderr}\n")
+        sys.stderr.write(f"\033[38;5;208mgit ls-files failed: {e.stderr}\033[0m\n")
         sys.exit(3)
     return [REPO_ROOT / line.strip() for line in out.splitlines()
             if line.strip() and (REPO_ROOT / line.strip()).exists()]
@@ -442,7 +442,7 @@ def main() -> int:
             )
             if r.stdout.strip():
                 sys.stderr.write(
-                    "⛔ working tree dirty. Commit/stash first or pass "
+                    "\033[38;5;208mworking tree dirty. Commit/stash first or pass \033[0m"
                     "--allow-dirty.\n"
                 )
                 return 3
@@ -531,7 +531,7 @@ def _print_scan(report: Report) -> None:
     for file, fixes in by_file.items():
         print(f"  {file}")
         for f in fixes:
-            sev = "⚠ " if f.severity == "warn" else "  "
+            sev = "" if f.severity == "warn" else "  "
             short = f.snippet[:70] + ("…" if len(f.snippet) > 70 else "")
             print(f"    {sev}L{f.line:>5}  [{f.fix_type:<22}]  {short}")
 

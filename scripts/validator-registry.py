@@ -129,7 +129,7 @@ def _save_registry(data: dict) -> None:
             encoding="utf-8",
         )
     except ImportError:
-        print("⛔ PyYAML required to save registry. Install: pip install PyYAML",
+        print("\033[38;5;208mPyYAML required to save registry. Install: pip install PyYAML\033[0m",
               file=sys.stderr)
         sys.exit(2)
 
@@ -175,7 +175,7 @@ def cmd_list(args, reg: dict) -> int:
 def cmd_describe(args, reg: dict) -> int:
     entry = next((e for e in reg["validators"] if e.get("id") == args.id), None)
     if not entry:
-        print(f"⛔ validator id not in registry: {args.id}", file=sys.stderr)
+        print(f"\033[38;5;208mvalidator id not in registry: {args.id}\033[0m", file=sys.stderr)
         return 1
     if args.json:
         print(json.dumps(entry, indent=2))
@@ -194,7 +194,7 @@ def cmd_missing(args, reg: dict) -> int:
         print(json.dumps({"missing_from_registry": missing}, indent=2))
     else:
         if missing:
-            print(f"⚠ {len(missing)} validator(s) on disk but not in registry:\n")
+            print(f"\033[33m{len(missing)} validator(s) on disk but not in registry:\033[0m\n")
             for m in missing:
                 print(f"  - {m}")
         else:
@@ -211,7 +211,7 @@ def cmd_orphans(args, reg: dict) -> int:
         print(json.dumps({"orphan_registry_entries": orphans}, indent=2))
     else:
         if orphans:
-            print(f"⚠ {len(orphans)} registry entry(ies) with no file on disk:\n")
+            print(f"\033[33m{len(orphans)} registry entry(ies) with no file on disk:\033[0m\n")
             for o in orphans:
                 print(f"  - {o}")
         else:
@@ -222,7 +222,7 @@ def cmd_orphans(args, reg: dict) -> int:
 def cmd_disable(args, reg: dict) -> int:
     entry = next((e for e in reg["validators"] if e.get("id") == args.id), None)
     if not entry:
-        print(f"⛔ validator id not in registry: {args.id}", file=sys.stderr)
+        print(f"\033[38;5;208mvalidator id not in registry: {args.id}\033[0m", file=sys.stderr)
         return 1
     entry["disabled"] = True
     entry["disabled_reason"] = args.reason
@@ -236,7 +236,7 @@ def cmd_disable(args, reg: dict) -> int:
 def cmd_enable(args, reg: dict) -> int:
     entry = next((e for e in reg["validators"] if e.get("id") == args.id), None)
     if not entry:
-        print(f"⛔ validator id not in registry: {args.id}", file=sys.stderr)
+        print(f"\033[38;5;208mvalidator id not in registry: {args.id}\033[0m", file=sys.stderr)
         return 1
     for k in ("disabled", "disabled_reason", "disabled_until"):
         entry.pop(k, None)
@@ -270,7 +270,7 @@ def cmd_validate(args, reg: dict) -> int:
         print(json.dumps({"errors": errors, "valid": not errors}, indent=2))
     else:
         if errors:
-            print(f"⛔ Registry schema {len(errors)} error(s):")
+            print(f"\033[38;5;208mRegistry schema {len(errors)} error(s):\033[0m")
             for e in errors:
                 print(f"  - {e}")
         else:

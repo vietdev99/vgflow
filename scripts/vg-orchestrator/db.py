@@ -215,6 +215,63 @@ def create_run(command: str, phase: str, args: str = "",
     return _retry_locked(_do)
 
 
+def run_row_exists(run_id: str) -> bool:
+    """True if runs table has a row for run_id.
+
+    Used by cmd_run_start to detect orphan active-run state files written
+    by UserPromptSubmit hook (vg-user-prompt-submit.sh) before any
+    orchestrator call inserts the runs row. Without this check, downstream
+    emit-event/mark-step calls FK-fail on the orphan run_id.
+    """
+    def _do() -> bool:
+        conn = connect()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM runs WHERE run_id = ? LIMIT 1", (run_id,)
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    return _retry_locked(_do)
+
+
+def create_run_with_id(run_id: str, command: str, phase: str, args: str = "",
+                       started_at: str | None = None,
+                       session_id: str | None = None,
+                       git_sha: str | None = None) -> str:
+    """Insert runs row using a caller-supplied run_id.
+
+    Used to reconcile orphan active-run state files: hook generated the
+    run_id at prompt-submit time and wrote it to .vg/active-runs/{sid}.json,
+    but never inserted the runs row. cmd_run_start now bridges the gap by
+    inserting the row using the SAME run_id from state file, preserving
+    audit continuity (session_id, started_at) instead of creating a fresh
+    run_id that would orphan the state file's record.
+    """
+    ts = started_at or _utc_now()
+
+    def _do() -> str:
+        conn = connect()
+        try:
+            _begin_immediate(conn)
+            try:
+                conn.execute(
+                    "INSERT INTO runs(run_id, command, phase, args, started_at, "
+                    "session_id, git_sha) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (run_id, command, phase, args, ts, session_id, git_sha),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                _rollback_safe(conn)
+                raise
+        finally:
+            conn.close()
+        return run_id
+
+    return _retry_locked(_do)
+
+
 def update_run_session(run_id: str, session_id: str) -> None:
     """Backfill the session_id for an already-created run row.
 

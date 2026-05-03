@@ -69,8 +69,8 @@ def test_synth_pass_for_text_stdout_exit_zero(orchestrator):
 
 
 def test_synth_warn_for_text_stdout_exit_one(orchestrator):
-    """Validator prints '⚠ Drift' and exits 1 → WARN (not crash)."""
-    fake = _make_completed("⚠ 4 skills out of sync\n", 1)
+    """Validator prints '\033[33mDrift\033[0m' and exits 1 → WARN (not crash)."""
+    fake = _make_completed("\033[33m4 skills out of sync\033[0m\n", 1)
     with patch("subprocess.run", return_value=fake):
         with patch.object(orchestrator, "_resolve_extra_arg", return_value=None):
             blocks = orchestrator._run_validators(

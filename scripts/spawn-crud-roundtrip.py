@@ -228,7 +228,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     if args.debug:
@@ -240,13 +240,13 @@ def main() -> int:
         if args.dry_run:
             print(f"  (no resources declared in {phase_dir}/CRUD-SURFACES.md)")
             return 0
-        print(f"⛔ No resources in {phase_dir}/CRUD-SURFACES.md", file=sys.stderr)
+        print(f"\033[38;5;208mNo resources in {phase_dir}/CRUD-SURFACES.md\033[0m", file=sys.stderr)
         return 1
 
     tokens = load_tokens(phase_dir)
     kit_text = load_kit_prompt(REPO_ROOT)
     if not kit_text:
-        print("⛔ crud-roundtrip.md kit prompt not found", file=sys.stderr)
+        print("\033[38;5;208mcrud-roundtrip.md kit prompt not found\033[0m", file=sys.stderr)
         return 1
 
     base_url = resolve_base_url(phase_dir)
@@ -272,7 +272,7 @@ def main() -> int:
     needs_base_url = any(r["resource"].get("kit") == "crud-roundtrip" for r in plan)
     if needs_base_url and not base_url:
         print(
-            "⛔ base_url not found in any of: "
+            "\033[38;5;208mbase_url not found in any of: \033[0m"
             "phase_dir/.claude/vg.config.md, phase_dir/vg.config.md, "
             "REPO_ROOT/.claude/vg.config.md, REPO_ROOT/vg.config.md. "
             "crud-roundtrip kit requires base_url.",
@@ -284,7 +284,7 @@ def main() -> int:
     if not args.quiet:
         print(f"▸ Plan: {len(plan)} workflow(s), estimated cost ~${estimated:.3f} (Gemini Flash)")
     if args.cost_cap and estimated > args.cost_cap:
-        print(f"⛔ Estimated cost ${estimated:.3f} > --cost-cap ${args.cost_cap}", file=sys.stderr)
+        print(f"\033[38;5;208mEstimated cost ${estimated:.3f} > --cost-cap ${args.cost_cap}\033[0m", file=sys.stderr)
         return 1
 
     runs_dir = phase_dir / "runs"

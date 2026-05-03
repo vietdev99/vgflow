@@ -61,7 +61,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     surfaces = load_crud_surfaces(phase_dir)
@@ -138,7 +138,7 @@ def main() -> int:
         if not gaps:
             print(f"✓ CRUD runs coverage OK ({len(expected)} (resource × role) pairs, all populated)")
         else:
-            tag = "⛔" if args.severity == "block" else "⚠ "
+            tag = "" if args.severity == "block" else ""
             print(f"{tag} CRUD runs coverage: {len(gaps)} gap(s)")
             for g in gaps:
                 print(f"   {g['resource']} × {g['role']}: {g['reason']}")

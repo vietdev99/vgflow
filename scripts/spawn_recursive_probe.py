@@ -890,7 +890,7 @@ def prompt_target_env(phase_name: str, stdin=None, stdout=None,
     if env == "prod" and not skip_prod_confirm:
         confirmed = confirm_prod_target(phase_name, stdin, stdout)
         if not confirmed:
-            print("⛔ Prod target not confirmed. Aborting.", file=sys.stderr)
+            print("\033[38;5;208mProd target not confirmed. Aborting.\033[0m", file=sys.stderr)
             sys.exit(1)
     return env
 
@@ -1256,7 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             auto_plan, manual_plan = split_hybrid(plan, cfg)
         except ValueError as exc:
-            sys.stderr.write(f"⛔ {exc}\n")
+            sys.stderr.write(f"\033[38;5;208m{exc}\033[0m\n")
             return 1
 
         if not auto_plan and not manual_plan:

@@ -140,7 +140,7 @@ def main() -> int:
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
-            print(f"⛔ manifest unreadable: {e}", file=sys.stderr)
+            print(f"\033[38;5;208mmanifest unreadable: {e}\033[0m", file=sys.stderr)
             return 2
         violations.extend(_scan_manifest_for_violations(manifest, args.cutover_phase))
 
@@ -158,7 +158,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if violations:
-            print(f"{'⛔' if blocking else '⚠'} Legacy-manifest creation check: "
+            print(f"{'' if blocking else ''} Legacy-manifest creation check: "
                   f"{len(violations)} violation(s), {len(blocking)} blocking\n")
             for v in violations:
                 print(f"  [{v['severity']}] {v.get('path', v.get('run_id'))}: "

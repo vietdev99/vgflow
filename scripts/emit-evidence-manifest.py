@@ -156,7 +156,7 @@ def main() -> int:
     if not run_id:
         if not current:
             print(
-                "⛔ No --run-id and .vg/current-run.json missing. "
+                "\033[38;5;208mNo --run-id and .vg/current-run.json missing. \033[0m"
                 "Cannot resolve run_id.",
                 file=sys.stderr,
             )
@@ -176,7 +176,7 @@ def main() -> int:
     artifact_hash = _sha256(artifact_path)
     if artifact_hash is None:
         print(
-            f"⛔ Cannot read artifact: {artifact_path} "
+            f"\033[38;5;208mCannot read artifact: {artifact_path} \033[0m"
             f"(does it exist? was it written yet?)",
             file=sys.stderr,
         )

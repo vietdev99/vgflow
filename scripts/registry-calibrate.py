@@ -762,7 +762,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 def _gate_reason(reason: str) -> int | None:
     if not reason or len(reason) < 50:
         print(
-            "⛔ --reason required (min 50 chars). Calibration changes "
+            "\033[38;5;208m--reason required (min 50 chars). Calibration changes \033[0m"
             "alter hard gate behavior — audit text must explain WHY "
             "the data crossed threshold and what the operator verified.",
             file=sys.stderr,
@@ -778,7 +778,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
     is_human, approver, err = _verify_human()
     if not is_human:
         msg = (
-            "⛔ calibrate apply requires TTY session OR signed approver "
+            "\033[38;5;208mcalibrate apply requires TTY session OR signed approver \033[0m"
             "token (HMAC). AI subagents cannot self-mutate validator "
             "severity — would defeat the audit trail.\n"
             "   To approve as human:\n"
@@ -802,7 +802,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         )
         return 1
     ok, msg = _apply_suggestion(target, args.reason, approver or "tty")
-    print(("✓ " if ok else "⛔ ") + msg, file=sys.stdout if ok else sys.stderr)
+    print(("✓ " if ok else "") + msg, file=sys.stdout if ok else sys.stderr)
     return 0 if ok else 1
 
 
@@ -813,7 +813,7 @@ def cmd_apply_all(args: argparse.Namespace) -> int:
     is_human, approver, err = _verify_human()
     if not is_human:
         print(
-            "⛔ calibrate apply-all requires TTY OR HMAC token + reason."
+            "\033[38;5;208mcalibrate apply-all requires TTY OR HMAC token + reason.\033[0m"
             + (f" ({err})" if err else ""),
             file=sys.stderr,
         )
@@ -1051,7 +1051,7 @@ def cmd_apply_decay(args: argparse.Namespace) -> int:
     is_human, approver, err = _verify_human()
     if not is_human:
         msg = (
-            "⛔ calibrate apply-decay requires TTY session OR signed "
+            "\033[38;5;208mcalibrate apply-decay requires TTY session OR signed \033[0m"
             "approver token (HMAC). AI subagents cannot self-mutate "
             "validator severity — would defeat the audit trail.\n"
             "   To approve as human:\n"

@@ -133,7 +133,7 @@ def is_in_negative_example(line: str) -> bool:
     markers = ("NEVER", "don't", "do not", "banned", "forbidden",
                "không bao giờ", "KHÔNG", "DO NOT", "Don't", "đừng",
                "ANTI-PATTERN", "anti-pattern", "anti pattern", "wrong:",
-               "BAD:", "❌", "⛔", "🚫",
+               "BAD:", "❌", "", "🚫",
                # v2.47.2 additions for source-code prose
                "MUST NOT", "must not", "Must not", "Bypass:", "bypass:",
                "anti --no-verify", "no-no-verify", "non-negotiable",

@@ -194,7 +194,7 @@ def main() -> int:
 
     root = Path(args.root).resolve()
     if not root.is_dir():
-        print(f"⛔ Root not found: {root}", file=sys.stderr)
+        print(f"\033[38;5;208mRoot not found: {root}\033[0m", file=sys.stderr)
         return 1
 
     excl = set(args.exclude_dirs.split(",")) if args.exclude_dirs else DEFAULT_EXCLUDE_DIRS

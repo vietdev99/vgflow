@@ -234,7 +234,7 @@ def main() -> int:
     out_path = phase_dir / args.output
 
     if not phase_dir.is_dir():
-        print(f"⛔ phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 1
 
     # Cache hit
@@ -249,7 +249,7 @@ def main() -> int:
     context_path = phase_dir / "CONTEXT.md"
 
     if not specs_path.exists():
-        print(f"⛔ SPECS.md not found: {specs_path}", file=sys.stderr)
+        print(f"\033[38;5;208mSPECS.md not found: {specs_path}\033[0m", file=sys.stderr)
         return 1
 
     specs = specs_path.read_text(encoding="utf-8", errors="ignore")
@@ -264,7 +264,7 @@ def main() -> int:
             print(f"▸ Detecting UI scope via Haiku ({HAIKU_MODEL})...", file=sys.stderr)
         parsed, raw = invoke_haiku(specs, context)
         if parsed is None:
-            print(f"⚠ Haiku failed ({raw[:200]}), falling back to grep heuristic", file=sys.stderr)
+            print(f"\033[33mHaiku failed ({raw[:200]}), falling back to grep heuristic\033[0m", file=sys.stderr)
             result = grep_fallback(specs, context)
             result["model"] = "fallback-grep"
             result["method"] = "fallback-grep-after-ai-failure"

@@ -293,7 +293,7 @@ def main() -> int:
             if not args.quiet:
                 print(f"✓ No pre-v2.5.2 uncategorized entries need reclassification")
             return 0
-        icon = "✓" if args.apply else "⚠"
+        icon = "✓" if args.apply else ""
         action = "reclassified" if args.apply else "would reclassify (dry-run)"
         print(f"{icon} {count} entries {action}:")
         for u in updates:
@@ -302,7 +302,7 @@ def main() -> int:
         return 0 if args.apply else 1
 
     if not REGISTRY_PATH.exists():
-        print(f"⛔ registry.yaml not found at {REGISTRY_PATH}",
+        print(f"\033[38;5;208mregistry.yaml not found at {REGISTRY_PATH}\033[0m",
               file=sys.stderr)
         return 2
 
@@ -333,7 +333,7 @@ def main() -> int:
         return 0
 
     # Dry-run
-    print(f"⚠ Registry drift: {len(missing_entries)} validator(s) on disk "
+    print(f"\033[33mRegistry drift: {len(missing_entries)} validator(s) on disk \033[0m"
           f"but not cataloged.\n")
     for rid, p, d in missing_entries:
         print(f"  - {rid}")

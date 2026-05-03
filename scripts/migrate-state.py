@@ -363,7 +363,7 @@ def resolve_phase_dir(phase_arg: str) -> Path | None:
                 print(f"   {m.name}", file=sys.stderr)
             return None
     if not candidates[0].is_dir():
-        print(f"⛔ Phase not found: {phase_arg}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase not found: {phase_arg}\033[0m", file=sys.stderr)
         return None
     return candidates[0]
 
@@ -385,7 +385,7 @@ def main(argv: list[str]) -> int:
     args = p.parse_args(argv)
 
     if not PHASES_DIR.is_dir():
-        print(f"⛔ Phase directory not found: {PHASES_DIR}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase directory not found: {PHASES_DIR}\033[0m", file=sys.stderr)
         return 2
 
     # Mode resolution

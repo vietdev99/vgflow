@@ -243,10 +243,10 @@ def main():
     specs_path = args.phase_dir / 'SPECS.md'
 
     if not ctx_path.exists():
-        print(f"⛔ CONTEXT.md not found at {ctx_path}", file=sys.stderr)
+        print(f"\033[38;5;208mCONTEXT.md not found at {ctx_path}\033[0m", file=sys.stderr)
         return 1
     if not specs_path.exists():
-        print(f"⛔ SPECS.md not found at {specs_path}", file=sys.stderr)
+        print(f"\033[38;5;208mSPECS.md not found at {specs_path}\033[0m", file=sys.stderr)
         return 1
 
     ctx = ctx_path.read_text(encoding='utf-8')
@@ -313,7 +313,7 @@ def main():
         print()
         for k in ('check_a', 'check_c'):
             c = result[k]
-            icon = {'PASS': '✓', 'WARN': '⚠', 'BLOCK': '⛔'}[c['status']]
+            icon = {'PASS': '✓', 'WARN': '', 'BLOCK': ''}[c['status']]
             print(f"  {icon} Check {k[-1].upper()} ({c['name']}): {c['status']}")
             if c['status'] != 'PASS':
                 if k == 'check_a':

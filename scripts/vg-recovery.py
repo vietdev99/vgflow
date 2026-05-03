@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"))
 try:
     from recovery_paths import get_recovery_paths
 except ImportError:
-    print("⛔ recovery_paths.py not found. Re-sync vgflow.", file=sys.stderr)
+    print("\033[38;5;208mrecovery_paths.py not found. Re-sync vgflow.\033[0m", file=sys.stderr)
     sys.exit(1)
 
 
@@ -108,7 +108,7 @@ def render_menu(violations: list[str], command: str, phase: str) -> None:
     for v_type in violations:
         paths = get_recovery_paths(v_type, command, phase)
         if not paths:
-            print(f"⚠ [{v_type}] no recovery paths registered — generic fallback only:")
+            print(f"\033[33m[{v_type}] no recovery paths registered — generic fallback only:\033[0m")
             print("  - Run skill to completion (let validators see real evidence)")
             print("  - Or: vg-orchestrator override --flag <f> --reason <text>")
             print("  - Or: vg-orchestrator run-abort --reason <text>")
@@ -254,7 +254,7 @@ def main() -> int:
                     if a.get("stderr"):
                         print(f"      stderr: {a['stderr'][:120]}")
                 elif status == "no_auto_path":
-                    print(f"  ⚠ [{v}] no auto_executable path — manual fix needed")
+                    print(f"  \033[33m[{v}] no auto_executable path — manual fix needed\033[0m")
                 elif status == "skipped_workflow_instruction":
                     print(f"  ⏭ [{v}] {a.get('path_id', '?')} skipped (workflow, not shell)")
                 else:

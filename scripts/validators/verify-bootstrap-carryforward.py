@@ -177,7 +177,7 @@ def main() -> int:
                 "active_rules_count": len(active_rules),
             }))
         else:
-            print(f"⚠ {msg}")
+            print(f"\033[33m{msg}\033[0m")
         return 2
 
     if not active_rules:
@@ -231,7 +231,7 @@ def main() -> int:
         print(json.dumps(result, indent=2))
     else:
         if failures:
-            print(f"⛔ Bootstrap carryforward: {len(failures)}/"
+            print(f"\033[38;5;208mBootstrap carryforward: {len(failures)}/\033[0m"
                   f"{len(active_rules)} active rule(s) missing from prompts\n")
             for f in failures:
                 print(f"  [{f['rule_id']}] {f['title']}")

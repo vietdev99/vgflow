@@ -331,12 +331,12 @@ def main() -> int:
         print(f"Privacy manifest audit — issues: {len(all_issues)} "
               f"(major={len(major)}, minor={len(minor)})")
         for i in all_issues:
-            icon = "✗" if i.get("severity") == "major" else "⚠"
+            icon = "✗" if i.get("severity") == "major" else ""
             print(f"  {icon} [{i.get('platform')}] {i.get('type')}: {i.get('detail')}")
 
     if major and not args.lenient:
         print("", file=sys.stderr)
-        print(f"⛔ {len(major)} major privacy-manifest inconsistency(ies).", file=sys.stderr)
+        print(f"\033[38;5;208m{len(major)} major privacy-manifest inconsistency(ies).\033[0m", file=sys.stderr)
         print("   Store rejection risk — resolve BEFORE submission.", file=sys.stderr)
         return 1
 

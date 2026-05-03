@@ -206,7 +206,7 @@ def main() -> int:
 
     root = Path(args.root).resolve()
     if not root.is_dir():
-        print(f"⛔ Scan root not a directory: {root}", file=sys.stderr)
+        print(f"\033[38;5;208mScan root not a directory: {root}\033[0m", file=sys.stderr)
         return 2
 
     all_findings: list[dict] = []

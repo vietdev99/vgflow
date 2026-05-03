@@ -222,12 +222,12 @@ def main() -> int:
 
     root = Path(args.project_root).resolve()
     if not root.exists():
-        print(f"⛔ project-root missing: {root}", file=sys.stderr)
+        print(f"\033[38;5;208mproject-root missing: {root}\033[0m", file=sys.stderr)
         return 2
 
     ecosystem = args.ecosystem or _detect_ecosystem(root)
     if ecosystem is None:
-        print("⛔ No lockfile detected (package-lock.json, pnpm-lock.yaml, "
+        print("\033[38;5;208mNo lockfile detected (package-lock.json, pnpm-lock.yaml, \033[0m"
               "yarn.lock, Cargo.lock, requirements.txt)", file=sys.stderr)
         return 2
 
@@ -278,13 +278,13 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if blocks:
-            print(f"⛔ Dependency vuln budget: {len(blocks)} BLOCK, "
+            print(f"\033[38;5;208mDependency vuln budget: {len(blocks)} BLOCK, \033[0m"
                   f"{len(warns)} WARN\n")
             for v in violations:
                 print(f"  [{v['severity']}] {v['bucket']}: found "
                       f"{v['found']} / budget {v['budget']}")
         elif warns and not args.quiet:
-            print(f"⚠  Dep vuln: {len(warns)} WARN within budget tolerance")
+            print(f"\033[33m Dep vuln: {len(warns)} WARN within budget tolerance\033[0m")
             for v in warns:
                 print(f"  [WARN] {v['bucket']}: found "
                       f"{v['found']} / budget {v['budget']}")

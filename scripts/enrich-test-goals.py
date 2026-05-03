@@ -398,7 +398,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     existing_ids, declared_per_view = load_existing_goals(phase_dir)
@@ -424,7 +424,7 @@ def main() -> int:
             if element_count >= args.threshold and per_view_stub_count.get(view_url, 0) == 0:
                 gaps.append(f"  {view_url}: {element_count} elements scanned, 0 auto-goals emitted")
         if gaps:
-            print("⛔ Enrichment gaps — these views had elements scanned but no goals derived:")
+            print("\033[38;5;208mEnrichment gaps — these views had elements scanned but no goals derived:\033[0m")
             for g in gaps:
                 print(g)
             return 1
@@ -448,11 +448,11 @@ def main() -> int:
         agg = REPO_ROOT / "scripts" / "aggregate_recursive_goals.py"
         if not agg.is_file():
             if not args.quiet:
-                print("⚠ aggregate_recursive_goals.py not found; skipping G-RECURSE-* merge",
+                print("\033[33maggregate_recursive_goals.py not found; skipping G-RECURSE-* merge\033[0m",
                       file=sys.stderr)
         elif not runs_dir.is_dir():
             if not args.quiet:
-                print(f"⚠ no runs/ subdir at {runs_dir}; skipping G-RECURSE-* merge",
+                print(f"\033[33mno runs/ subdir at {runs_dir}; skipping G-RECURSE-* merge\033[0m",
                       file=sys.stderr)
         else:
             import subprocess as _sp
@@ -469,7 +469,7 @@ def main() -> int:
                 "stderr": r.stderr.strip(),
             }
             if r.returncode != 0 and not args.quiet:
-                print(f"⚠ aggregate_recursive_goals.py exit={r.returncode}: "
+                print(f"\033[33maggregate_recursive_goals.py exit={r.returncode}: \033[0m"
                       f"{r.stderr.strip()}", file=sys.stderr)
 
     if args.json:

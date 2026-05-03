@@ -52,7 +52,7 @@ def _resolve_command_file(command: str) -> Path:
 def _get_step_list(command: str, profile: str, mode: str | None = None) -> list[str]:
     cmd_file = _resolve_command_file(command)
     if not cmd_file.exists():
-        print(f"⛔ Command file not found: {cmd_file}", file=sys.stderr)
+        print(f"\033[38;5;208mCommand file not found: {cmd_file}\033[0m", file=sys.stderr)
         return []
     filter_cmd = [
         sys.executable, str(FILTER_STEPS),
@@ -67,7 +67,7 @@ def _get_step_list(command: str, profile: str, mode: str | None = None) -> list[
         capture_output=True, text=True, timeout=10,
     )
     if proc.returncode != 0:
-        print(f"⛔ filter-steps failed: {proc.stderr}", file=sys.stderr)
+        print(f"\033[38;5;208mfilter-steps failed: {proc.stderr}\033[0m", file=sys.stderr)
         return []
     ids = proc.stdout.strip()
     return [s.strip() for s in ids.split(",") if s.strip()] if ids else []
@@ -360,7 +360,7 @@ def _emit_event(
         )
         return proc.returncode == 0
     except Exception as exc:
-        print(f"⚠ emit-event failed: {exc}", file=sys.stderr)
+        print(f"\033[33memit-event failed: {exc}\033[0m", file=sys.stderr)
         return False
 
 

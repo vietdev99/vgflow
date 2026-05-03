@@ -250,7 +250,7 @@ def main() -> int:
         if args.json:
             print(json.dumps(report, indent=2))
         else:
-            print(f"⛔ sync.sh failed (exit {sync_rc})", file=sys.stderr)
+            print(f"\033[38;5;208msync.sh failed (exit {sync_rc})\033[0m", file=sys.stderr)
             print(sync_out[-1000:])
         return 3
 
@@ -272,7 +272,7 @@ def main() -> int:
         if args.json:
             print(json.dumps(report, indent=2))
         else:
-            print(f"⛔ Post-sync verify FAILED — "
+            print(f"\033[38;5;208mPost-sync verify FAILED — \033[0m"
                   f"{post_data.get('drift_count', 0)} items still drifting")
         return 4
 

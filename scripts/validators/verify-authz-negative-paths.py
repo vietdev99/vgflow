@@ -153,7 +153,7 @@ def main() -> int:
     resources = fixtures.get("resources", []) or []
 
     if not users or not resources:
-        print("⚠  Empty users or resources in fixtures — treating as WARN",
+        print("\033[33m Empty users or resources in fixtures — treating as WARN\033[0m",
               file=sys.stderr)
         report = {"warn": "empty fixtures",
                   "users": len(users), "resources": len(resources),
@@ -161,7 +161,7 @@ def main() -> int:
         if args.json:
             print(json.dumps(report, indent=2))
         else:
-            print("⚠  Empty fixtures — nothing probed")
+            print("\033[33m Empty fixtures — nothing probed\033[0m")
         return 0
 
     allow_codes = {int(s.strip()) for s in args.allow_status.split(",")
@@ -280,7 +280,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if blocks:
-            print(f"⛔ AuthZ negative paths: {len(blocks)} leaks, "
+            print(f"\033[38;5;208mAuthZ negative paths: {len(blocks)} leaks, \033[0m"
                   f"{len(warns)} warns\n")
             for v in blocks:
                 print(f"  [BLOCK] {v.get('check')}: {v.get('reason')}")
@@ -288,7 +288,7 @@ def main() -> int:
             for v in warns:
                 print(f"  [WARN] {v.get('check')}: {v.get('reason')}")
         elif warns and not args.quiet:
-            print(f"⚠  AuthZ: {len(warns)} WARN (no leaks)")
+            print(f"\033[33m AuthZ: {len(warns)} WARN (no leaks)\033[0m")
             for v in warns:
                 print(f"  [WARN] {v.get('check')}: {v.get('reason')}")
         elif not args.quiet:

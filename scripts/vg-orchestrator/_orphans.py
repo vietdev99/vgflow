@@ -314,7 +314,7 @@ def orphans_collect(args) -> int:
     list_path = pdir / ORPHAN_LIST_NAME
     if not list_path.exists():
         print(
-            "⛔ orphans-collect: missing "
+            "\033[38;5;208morphans-collect: missing \033[0m"
             f"{list_path.relative_to(repo).as_posix()} — run "
             "`vg-orchestrator orphans-list` first.",
             file=sys.stderr,
@@ -338,7 +338,7 @@ def orphans_collect(args) -> int:
             decisions = _read_decision_file(f)
         except (json.JSONDecodeError, ValueError) as exc:
             print(
-                f"⛔ orphans-collect: {f.name} unparseable — {exc}",
+                f"\033[38;5;208morphans-collect: {f.name} unparseable — {exc}\033[0m",
                 file=sys.stderr,
             )
             return 1
@@ -346,14 +346,14 @@ def orphans_collect(args) -> int:
             err = _validate_decision(d)
             if err:
                 print(
-                    f"⛔ orphans-collect: {f.name} — {err}",
+                    f"\033[38;5;208morphans-collect: {f.name} — {err}\033[0m",
                     file=sys.stderr,
                 )
                 return 1
             vid = d["validator_id"]
             if vid in seen:
                 print(
-                    f"⛔ orphans-collect: duplicate decision for {vid} "
+                    f"\033[38;5;208morphans-collect: duplicate decision for {vid} \033[0m"
                     f"(also in earlier file)",
                     file=sys.stderr,
                 )
@@ -363,7 +363,7 @@ def orphans_collect(args) -> int:
 
     if missing_files:
         print(
-            "⛔ orphans-collect: missing per-agent decision file(s): "
+            "\033[38;5;208morphans-collect: missing per-agent decision file(s): \033[0m"
             f"{', '.join(missing_files)} (expected at "
             f"{pdir.relative_to(repo).as_posix()}/)",
             file=sys.stderr,
@@ -373,7 +373,7 @@ def orphans_collect(args) -> int:
     not_decided = sorted(expected_ids - seen)
     if not_decided:
         print(
-            "⛔ orphans-collect: missing decisions for "
+            "\033[38;5;208morphans-collect: missing decisions for \033[0m"
             f"{len(not_decided)} validator(s): "
             f"{', '.join(not_decided[:10])}"
             + (" …" if len(not_decided) > 10 else ""),
@@ -384,7 +384,7 @@ def orphans_collect(args) -> int:
     extra = sorted(seen - expected_ids)
     if extra:
         print(
-            "⛔ orphans-collect: decision(s) for validators not in "
+            "\033[38;5;208morphans-collect: decision(s) for validators not in \033[0m"
             f"orphan-list: {', '.join(extra[:10])}"
             + (" …" if len(extra) > 10 else ""),
             file=sys.stderr,
@@ -713,7 +713,7 @@ def orphans_apply(args) -> int:
     decisions_path = pdir / DECISIONS_MERGED_NAME
     if not decisions_path.exists():
         print(
-            "⛔ orphans-apply: missing "
+            "\033[38;5;208morphans-apply: missing \033[0m"
             f"{decisions_path.relative_to(repo).as_posix()} — run "
             "`vg-orchestrator orphans-collect` first.",
             file=sys.stderr,
@@ -723,7 +723,7 @@ def orphans_apply(args) -> int:
     payload = json.loads(decisions_path.read_text(encoding="utf-8"))
     decisions = payload.get("decisions", [])
     if not decisions:
-        print("⛔ orphans-apply: decisions array empty", file=sys.stderr)
+        print("\033[38;5;208morphans-apply: decisions array empty\033[0m", file=sys.stderr)
         return 1
 
     reg = _load_registry(repo)

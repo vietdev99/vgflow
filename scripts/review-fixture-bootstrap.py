@@ -100,7 +100,7 @@ def load_seed_users(seed_path: Path) -> dict:
     try:
         import yaml
     except ImportError:
-        print("⛔ pyyaml required for seed users parsing — pip install pyyaml", file=sys.stderr)
+        print("\033[38;5;208mpyyaml required for seed users parsing — pip install pyyaml\033[0m", file=sys.stderr)
         return {}
     return yaml.safe_load(seed_path.read_text(encoding="utf-8")) or {}
 
@@ -117,15 +117,15 @@ def issue_token(base_url: str, login_endpoint: str, email: str, password: str) -
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        print(f"  ⚠ login failed for {email}: HTTP {e.code} {e.reason}", file=sys.stderr)
+        print(f"  \033[33mlogin failed for {email}: HTTP {e.code} {e.reason}\033[0m", file=sys.stderr)
         return None
     except (urllib.error.URLError, json.JSONDecodeError) as e:
-        print(f"  ⚠ login error for {email}: {e}", file=sys.stderr)
+        print(f"  \033[33mlogin error for {email}: {e}\033[0m", file=sys.stderr)
         return None
 
     token = body.get("token") or body.get("access_token") or body.get("Authorization")
     if not token:
-        print(f"  ⚠ login response for {email} has no token field", file=sys.stderr)
+        print(f"  \033[33mlogin response for {email} has no token field\033[0m", file=sys.stderr)
         return None
 
     if not token.startswith("Bearer "):
@@ -182,7 +182,7 @@ def main() -> int:
 
     cfg = load_review_config()
     if not cfg.get("roles"):
-        print("⛔ vg.config.md → review.roles missing or empty.", file=sys.stderr)
+        print("\033[38;5;208mvg.config.md → review.roles missing or empty.\033[0m", file=sys.stderr)
         return 1
 
     base_url = cfg.get("base_url")
@@ -194,25 +194,25 @@ def main() -> int:
 
     if args.check:
         if not seed_path.is_file():
-            print(f"⛔ Seed users file not found: {seed_path}", file=sys.stderr)
+            print(f"\033[38;5;208mSeed users file not found: {seed_path}\033[0m", file=sys.stderr)
             print(f"   Create it with admin/user credentials. See vg.config.template.md.", file=sys.stderr)
             return 1
         seed = load_seed_users(seed_path)
         missing = [r for r in cfg["roles"] if r != "anon" and r not in seed]
         if missing:
-            print(f"⛔ Seed file missing roles: {missing}", file=sys.stderr)
+            print(f"\033[38;5;208mSeed file missing roles: {missing}\033[0m", file=sys.stderr)
             return 1
         if not args.quiet:
             print(f"✓ Seed file OK: {len(seed)} role(s) declared.")
         return 0
 
     if not base_url:
-        print("⛔ vg.config.md → review.auth.base_url missing.", file=sys.stderr)
+        print("\033[38;5;208mvg.config.md → review.auth.base_url missing.\033[0m", file=sys.stderr)
         return 1
 
     seed = load_seed_users(seed_path)
     if not seed:
-        print(f"⛔ Seed users file missing or empty: {seed_path}", file=sys.stderr)
+        print(f"\033[38;5;208mSeed users file missing or empty: {seed_path}\033[0m", file=sys.stderr)
         return 1
 
     tokens: dict = {}

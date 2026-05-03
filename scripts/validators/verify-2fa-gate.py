@@ -171,7 +171,7 @@ def main() -> int:
 
     root = Path(args.project_root).resolve()
     if not root.exists():
-        print(f"⛔ project-root does not exist: {root}", file=sys.stderr)
+        print(f"\033[38;5;208mproject-root does not exist: {root}\033[0m", file=sys.stderr)
         return 2
 
     declared: list[dict] = []
@@ -239,12 +239,12 @@ def main() -> int:
             if not args.quiet:
                 print("✓ No 2FA goals declared — skipping check.")
         elif verdict == "FAIL":
-            print(f"⛔ 2FA gate: {len(blocks)} block(s)")
+            print(f"\033[38;5;208m2FA gate: {len(blocks)} block(s)\033[0m")
             for b in blocks:
                 print(f"  [BLOCK] {b}")
         elif verdict == "WARN":
             if not args.quiet:
-                print(f"⚠ 2FA gate: {len(warns)} warn(s)")
+                print(f"\033[33m2FA gate: {len(warns)} warn(s)\033[0m")
                 for w in warns:
                     print(f"  [WARN]  {w}")
         elif not args.quiet:

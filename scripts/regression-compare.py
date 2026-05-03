@@ -358,7 +358,7 @@ def main():
 
     baselines_data = load_json(args.baselines)
     if not baselines_data:
-        print(f"⛔ Cannot load baselines: {args.baselines}", file=sys.stderr)
+        print(f"\033[38;5;208mCannot load baselines: {args.baselines}\033[0m", file=sys.stderr)
         sys.exit(1)
 
     vitest = parse_vitest_failures(load_json(args.vitest_results) if args.vitest_results else None)

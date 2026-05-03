@@ -164,20 +164,20 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve() if args.phase_dir else find_phase_dir(args.phase)
     if phase_dir is None:
-        print(f"⛔ Phase dir not found for phase: {args.phase}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found for phase: {args.phase}\033[0m", file=sys.stderr)
         return 2
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     rmap = load_json(phase_dir / "RUNTIME-MAP.json")
     if not rmap:
-        print(f"⛔ RUNTIME-MAP.json missing in {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mRUNTIME-MAP.json missing in {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     goals_path = phase_dir / "TEST-GOALS.md"
     if not goals_path.is_file():
-        print(f"⛔ TEST-GOALS.md missing in {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mTEST-GOALS.md missing in {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     goals, fmt = parse_test_goals(goals_path)
@@ -185,7 +185,7 @@ def main() -> int:
         # FAIL CLOSED (was: return 0 silently). Unparseable TEST-GOALS means
         # we cannot enforce the invariant. Treat as a gap.
         msg = (
-            f"⛔ TEST-GOALS.md unparseable — neither YAML frontmatter blocks nor "
+            f"\033[38;5;208mTEST-GOALS.md unparseable — neither YAML frontmatter blocks nor \033[0m"
             f"`## Goal G-XX` markdown headers found in {goals_path}. Validator "
             f"cannot enforce coverage invariant. Fix the file format then re-run."
         )
@@ -261,7 +261,7 @@ def main() -> int:
                 f"all have elements + steps)"
             )
         else:
-            tag = "⛔" if args.severity == "block" else "⚠ "
+            tag = "" if args.severity == "block" else ""
             print(f"{tag} Runtime-map coverage: {len(gaps)}/{ui_goals_total} gap(s) (format={fmt})")
             for g in gaps:
                 print(

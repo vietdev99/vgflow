@@ -58,7 +58,7 @@ def main(argv: list[str]) -> int:
     base = Path(argv[1]) if len(argv) > 1 else Path(".claude/commands/vg")
 
     if not base.is_dir():
-        print(f"⛔ host commands dir not found: {base}")
+        print(f"\033[38;5;208mhost commands dir not found: {base}\033[0m")
         return 2
 
     violations = []
@@ -77,7 +77,7 @@ def main(argv: list[str]) -> int:
 
     if violations:
         print()
-        print(f"⛔ {len(violations)} host(s) missing reflection wiring:")
+        print(f"\033[38;5;208m{len(violations)} host(s) missing reflection wiring:\033[0m")
         for v in violations:
             print(v)
         print()

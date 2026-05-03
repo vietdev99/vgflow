@@ -144,7 +144,7 @@ def main() -> int:
                               "verdict": "BLOCK",
                               "ok": False, "error": str(e)}))
         else:
-            print(f"⛔ parse failed: {e}", file=sys.stderr)
+            print(f"\033[38;5;208mparse failed: {e}\033[0m", file=sys.stderr)
         return 2
 
     if args.today:
@@ -195,7 +195,7 @@ def main() -> int:
             )
         else:
             print(
-                f"⛔ {len(breaches)} SLA breach(es) "
+                f"\033[38;5;208m{len(breaches)} SLA breach(es) \033[0m"
                 f"(> {args.max_days}d old):"
             )
             for b in top10:

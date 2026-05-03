@@ -87,7 +87,7 @@ def resolve_review_cmd() -> list[str]:
         pass
 
     raise SystemExit(
-        "⛔ Cannot resolve /vg:review entry command.\n"
+        "\033[38;5;208mCannot resolve /vg:review entry command.\033[0m\n"
         "   Tried (in priority order):\n"
         "     1. VG_REVIEW_CMD env var          — not set\n"
         "     2. `claude` CLI on PATH           — not found\n"

@@ -154,12 +154,12 @@ def main() -> int:
 
     contract = parse_contract(project_md)
     if not contract:
-        print("⚠ No Shared Utility Contract section found in PROJECT.md — skipping check.")
+        print("\033[33mNo Shared Utility Contract section found in PROJECT.md — skipping check.\033[0m")
         return 0
 
     plan_files = sorted(phase_dir.glob("PLAN*.md"))
     if not plan_files:
-        print(f"⚠ No PLAN*.md in {phase_dir} — nothing to check.")
+        print(f"\033[33mNo PLAN*.md in {phase_dir} — nothing to check.\033[0m")
         return 0
 
     findings: List[Finding] = []
@@ -224,10 +224,10 @@ def main() -> int:
         print(f"WARN findings: {len(warns)}")
         print()
         for f in blocks:
-            print(f"⛔ BLOCK Task {f.task_num} — `{f.helper_name}`")
+            print(f"\033[38;5;208mBLOCK Task {f.task_num} — `{f.helper_name}`\033[0m")
             print(f"   {f.message}")
         for f in warns:
-            print(f"⚠ WARN Task {f.task_num} — `{f.helper_name}`")
+            print(f"\033[33mWARN Task {f.task_num} — `{f.helper_name}`\033[0m")
             print(f"   {f.message}")
 
     if blocks:

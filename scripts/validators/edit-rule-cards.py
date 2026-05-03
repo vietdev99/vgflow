@@ -188,10 +188,10 @@ def find_or_create_section(content: str, header: str) -> tuple[str, int, int]:
 
 def cmd_add(args: argparse.Namespace) -> int:
     if args.tag not in VALID_TAGS:
-        sys.stderr.write(f"⛔ --tag must be one of {VALID_TAGS}\n")
+        sys.stderr.write(f"\033[38;5;208m--tag must be one of {VALID_TAGS}\033[0m\n")
         return 1
     if not args.body or len(args.body) < 10:
-        sys.stderr.write("⛔ --body must be ≥10 chars\n")
+        sys.stderr.write("\033[38;5;208m--body must be ≥10 chars\033[0m\n")
         return 1
 
     content = read_manual(args.skill)
@@ -202,7 +202,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         section_header = "## Top-level (apply to ALL steps)"
     else:
         if not args.step:
-            sys.stderr.write("⛔ --step required (or use --top for global rule)\n")
+            sys.stderr.write("\033[38;5;208m--step required (or use --top for global rule)\033[0m\n")
             return 1
         section_header = f"### Step: `{args.step}`"
 
@@ -241,7 +241,7 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 def cmd_override(args: argparse.Namespace) -> int:
     if args.new_tag not in VALID_TAGS:
-        sys.stderr.write(f"⛔ --new-tag must be one of {VALID_TAGS}\n")
+        sys.stderr.write(f"\033[38;5;208m--new-tag must be one of {VALID_TAGS}\033[0m\n")
         return 1
 
     content = read_manual(args.skill)
@@ -281,7 +281,7 @@ def cmd_override(args: argparse.Namespace) -> int:
 
 def cmd_add_anti(args: argparse.Namespace) -> int:
     if not args.body or len(args.body) < 10:
-        sys.stderr.write("⛔ --body must be ≥10 chars\n")
+        sys.stderr.write("\033[38;5;208m--body must be ≥10 chars\033[0m\n")
         return 1
 
     content = read_manual(args.skill)
@@ -368,14 +368,14 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_remove(args: argparse.Namespace) -> int:
     path = manual_file_path(args.skill)
     if not path.exists():
-        sys.stderr.write(f"⛔ no manual file for {args.skill}\n")
+        sys.stderr.write(f"\033[38;5;208mno manual file for {args.skill}\033[0m\n")
         return 1
     content = path.read_text(encoding="utf-8")
 
     pattern = rf"\n- \*\*{re.escape(args.rule_id)}\*\*.*?(?=\n- |\n##|\Z)"
     new_content, count = re.subn(pattern, "", content, flags=re.DOTALL)
     if count == 0:
-        sys.stderr.write(f"⛔ {args.rule_id} not found in {args.skill}\n")
+        sys.stderr.write(f"\033[38;5;208m{args.rule_id} not found in {args.skill}\033[0m\n")
         return 1
 
     write_manual(args.skill, new_content)

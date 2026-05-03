@@ -306,7 +306,7 @@ def main() -> int:
         print(f"WARN findings:     {len(warns)} (copies >= {args.threshold_warn})")
         print()
         for f in blocks:
-            print(f"⛔ BLOCK `{f.helper_name}` — {len(f.all_copies)} copies across repo")
+            print(f"\033[38;5;208mBLOCK `{f.helper_name}` — {len(f.all_copies)} copies across repo\033[0m")
             print(f"   Introduced here: {f.introduced_in}")
             print(f"   All copies:")
             for p in f.all_copies[:10]:
@@ -316,7 +316,7 @@ def main() -> int:
             print(f"   Fix: extract to packages/utils/ + rewrite imports.")
             print()
         for f in warns:
-            print(f"⚠ WARN `{f.helper_name}` — {len(f.all_copies)} copies")
+            print(f"\033[33mWARN `{f.helper_name}` — {len(f.all_copies)} copies\033[0m")
             print(f"   Introduced here: {f.introduced_in}")
             for p in f.all_copies:
                 print(f"     - {p}")

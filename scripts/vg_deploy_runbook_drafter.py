@@ -201,7 +201,7 @@ def detect_lessons_patterns(entries: list[dict]) -> list[str]:
     for cmd, cnt in cmd_counts.items():
         if cnt > 1:
             patterns.append(
-                f"⚠ Lệnh chạy {cnt} lần: `{cmd[:60]}...` — retry hay pattern khác?"
+                f"\033[33mLệnh chạy {cnt} lần: `{cmd[:60]}...` — retry hay pattern khác?\033[0m"
             )
 
     return patterns
@@ -414,7 +414,7 @@ def main(argv: list[str]) -> int:
 
     phase_dir = Path(args.phase_dir)
     if not phase_dir.exists():
-        print(f"⛔ Phase dir không tồn tại: {phase_dir}")
+        print(f"\033[38;5;208mPhase dir không tồn tại: {phase_dir}\033[0m")
         return 1
 
     staged = draft_runbook(phase_dir)
@@ -427,7 +427,7 @@ def main(argv: list[str]) -> int:
         n = len(parse_deploy_log(log))
         print(f"   Parsed {n} commands từ .deploy-log.txt")
     else:
-        print(f"   ⚠ .deploy-log.txt không tồn tại — sections 2-4 sẽ trống")
+        print(f"   \033[33m.deploy-log.txt không tồn tại — sections 2-4 sẽ trống\033[0m")
 
     return 0
 

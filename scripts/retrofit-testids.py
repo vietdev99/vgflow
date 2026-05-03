@@ -332,7 +332,7 @@ def main() -> int:
             path.write_text(new_content, encoding="utf-8")
             print(f"  ✓ {rel} ({len(findings)} insertion(s))")
         except Exception as e:
-            print(f"  ⛔ {rel}: {e}")
+            print(f"  \033[38;5;208m{rel}: {e}\033[0m")
 
     print("\n▸ Patching PLAN.md with retrofit section...")
     patch_plan_with_testids(plan_path, findings_by_file)

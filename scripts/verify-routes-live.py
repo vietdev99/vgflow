@@ -180,7 +180,7 @@ def main() -> int:
         routes.extend(load_routes_crud_surfaces(Path(args.crud_surfaces).resolve()))
 
     if not routes:
-        print("⛔ No routes loaded. Pass --routes and/or --crud-surfaces.", file=sys.stderr)
+        print("\033[38;5;208mNo routes loaded. Pass --routes and/or --crud-surfaces.\033[0m", file=sys.stderr)
         return 2
 
     seen: set[tuple[str, str]] = set()
@@ -218,7 +218,7 @@ def main() -> int:
         if not args.quiet:
             print(f"✓ Probed {len(results)} routes against {args.base_url}")
             for cls, n in sorted(counts.items(), key=lambda kv: -kv[1]):
-                marker = "⚠ " if cls == "drift" else "  "
+                marker = "" if cls == "drift" else "  "
                 print(f"  {marker}{cls}: {n}")
             print(f"  Output: {out_path}")
 

@@ -124,12 +124,12 @@ def main() -> int:
 
     phase_dir = find_phase_dir(args.phase)
     if not phase_dir:
-        print(f"⛔ phase {args.phase} not found", file=sys.stderr)
+        print(f"\033[38;5;208mphase {args.phase} not found\033[0m", file=sys.stderr)
         return 1
 
     context = phase_dir / "CONTEXT.md"
     if not context.exists():
-        print(f"⛔ {context} not found", file=sys.stderr)
+        print(f"\033[38;5;208m{context} not found\033[0m", file=sys.stderr)
         return 1
 
     text = context.read_text(encoding="utf-8", errors="replace")
@@ -142,7 +142,7 @@ def main() -> int:
             print("✓ No unresolved branching — all option/alternative "
                   "decisions have sub-decisions or 'finalized' notes.")
             return 0
-        print(f"⚠ {len(findings)} unresolved branching decision(s):")
+        print(f"\033[33m{len(findings)} unresolved branching decision(s):\033[0m")
         for f in findings:
             print(f"   • {f['decision_id']} mentions {f['branching_keyword']!r}: "
                   f"{f['snippet']}")
@@ -165,5 +165,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as e:
-        print(f"⛔ scope-reflector crashed: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mscope-reflector crashed: {e}\033[0m", file=sys.stderr)
         sys.exit(2)

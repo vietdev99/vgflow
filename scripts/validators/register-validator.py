@@ -61,14 +61,14 @@ def split_csv(value: str) -> list[str]:
 def validate_choices(values: list[str], allowed: set[str], label: str) -> None:
     bad = [v for v in values if v not in allowed]
     if bad:
-        sys.stderr.write(f"⛔ invalid {label} value(s): {bad}\n")
+        sys.stderr.write(f"\033[38;5;208minvalid {label} value(s): {bad}\033[0m\n")
         sys.stderr.write(f"   allowed: {sorted(allowed)}\n")
         sys.exit(1)
 
 
 def load_manifest() -> dict:
     if not MANIFEST_PATH.exists():
-        sys.stderr.write(f"⛔ manifest missing: {MANIFEST_PATH}\n")
+        sys.stderr.write(f"\033[38;5;208mmanifest missing: {MANIFEST_PATH}\033[0m\n")
         sys.exit(1)
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
@@ -95,12 +95,12 @@ def main() -> int:
 
     name = args.name.strip()
     if not name:
-        sys.stderr.write("⛔ --name cannot be empty\n")
+        sys.stderr.write("\033[38;5;208m--name cannot be empty\033[0m\n")
         return 1
 
     validator_path = THIS_DIR / f"{name}.py"
     if not validator_path.exists():
-        sys.stderr.write(f"⛔ validator file does not exist: {validator_path}\n")
+        sys.stderr.write(f"\033[38;5;208mvalidator file does not exist: {validator_path}\033[0m\n")
         sys.stderr.write(f"   Create the validator first, then register it.\n")
         return 1
 

@@ -240,7 +240,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"source={result.source} profile={result.profile or '-'} "
               f"threshold={result.threshold}", file=sys.stderr)
     if result.warning:
-        print(f"⚠ threshold-resolver: {result.warning}", file=sys.stderr)
+        print(f"\033[33mthreshold-resolver: {result.warning}\033[0m", file=sys.stderr)
     print(result.threshold)
     return 0
 

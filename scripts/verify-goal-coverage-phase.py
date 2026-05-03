@@ -204,7 +204,7 @@ def main() -> int:
     repo_root = Path(args.repo_root).resolve()
 
     if not (phase_dir / "TEST-GOALS.md").is_file():
-        print(f"⛔ TEST-GOALS.md not found in {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mTEST-GOALS.md not found in {phase_dir}\033[0m", file=sys.stderr)
         return 1
 
     rc, summary = verify(phase_dir, repo_root, strict=not args.advisory)

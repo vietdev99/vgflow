@@ -206,7 +206,7 @@ def main() -> int:
     if not phase_dir.is_absolute():
         phase_dir = REPO_ROOT / phase_dir
     if not phase_dir.exists():
-        print(f"⛔ phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     test_goals_path = phase_dir / "TEST-GOALS.md"
@@ -295,7 +295,7 @@ def main() -> int:
         print(json.dumps(result, indent=2))
     else:
         if gaps:
-            print(f"⚠ Test requirements: {len(gaps)}/{len(per_goal)} "
+            print(f"\033[33mTest requirements: {len(gaps)}/{len(per_goal)} \033[0m"
                   "goals have gaps\n")
             for g in gaps:
                 print(f"  [{g.get('priority', 'unknown')}] {g.get('goal_id')}: "

@@ -243,7 +243,7 @@ def main() -> int:
             })
         else:
             if not args.quiet:
-                print("⚠  No Dockerfile found — skipping hardening check",
+                print("\033[33m No Dockerfile found — skipping hardening check\033[0m",
                       file=sys.stderr)
             report = {
                 "dockerfile": None, "compose": None,
@@ -278,13 +278,13 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if blocks:
-            print(f"⛔ Container hardening: {len(blocks)} BLOCK, "
+            print(f"\033[38;5;208mContainer hardening: {len(blocks)} BLOCK, \033[0m"
                   f"{len(warns)} WARN\n")
             for v in all_violations:
                 if v["severity"] in ("BLOCK", "WARN"):
                     print(f"  [{v['severity']}] {v['check']}: {v['issue']}")
         elif warns and not args.quiet:
-            print(f"⚠  Container hardening: {len(warns)} WARN (no blocks)")
+            print(f"\033[33m Container hardening: {len(warns)} WARN (no blocks)\033[0m")
             for v in warns:
                 print(f"  [WARN] {v['check']}: {v['issue']}")
         elif not args.quiet:

@@ -226,7 +226,7 @@ def main() -> int:
         run_id = args.run_id
 
     if not run_id:
-        print("⛔ empty run_id", file=sys.stderr)
+        print("\033[38;5;208mempty run_id\033[0m", file=sys.stderr)
         return 2
 
     findings: list[dict] = []
@@ -247,7 +247,7 @@ def main() -> int:
         if out["ok"]:
             print(f"✓ clean-failure-state OK for run {run_id[:12]}")
         else:
-            print(f"⛔ {len(findings)} cleanliness finding(s) for "
+            print(f"\033[38;5;208m{len(findings)} cleanliness finding(s) for \033[0m"
                   f"run {run_id[:12]}:")
             for f in findings:
                 print(f"  - {f['kind']}: {f.get('detail', '')}")

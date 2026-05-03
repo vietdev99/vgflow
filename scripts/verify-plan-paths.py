@@ -121,12 +121,12 @@ def main() -> int:
 
     phase_dir = args.phase_dir
     if not phase_dir.exists():
-        print(f"⛔ phase-dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase-dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 1
 
     plans = list(phase_dir.glob("PLAN*.md"))
     if not plans:
-        print(f"⚠ no PLAN*.md found in {phase_dir} — nothing to verify", file=sys.stderr)
+        print(f"\033[33mno PLAN*.md found in {phase_dir} — nothing to verify\033[0m", file=sys.stderr)
         return 0
 
     all_tasks: list[dict] = []
@@ -134,7 +134,7 @@ def main() -> int:
         all_tasks.extend(parse_plan(p))
 
     if not all_tasks:
-        print(f"⚠ no tasks parsed from {plans[0].name} — verify PLAN format", file=sys.stderr)
+        print(f"\033[33mno tasks parsed from {plans[0].name} — verify PLAN format\033[0m", file=sys.stderr)
         return 0
 
     # Collect parent dirs of files THIS phase creates — but only if the task's
@@ -195,7 +195,7 @@ def main() -> int:
         task_issues = []
         for tag, path in paths:
             verdict, detail = classify_path(path, args.repo_root, creator_parents)
-            icon = {"VALID": "✓", "WARN": "⚠", "FAIL": "⛔"}[verdict]
+            icon = {"VALID": "✓", "WARN": "", "FAIL": ""}[verdict]
             task_issues.append((tag, path, verdict, detail, icon))
             if verdict == "FAIL":
                 fail_count += 1
@@ -222,7 +222,7 @@ def main() -> int:
     pkg_issues = _check_package_scopes(phase_dir, args.repo_root)
     if pkg_issues:
         print()
-        print(f"⚠ {len(pkg_issues)} package-scope mismatch(es) in PLAN:")
+        print(f"\033[33m{len(pkg_issues)} package-scope mismatch(es) in PLAN:\033[0m")
         for issue in pkg_issues:
             print(f"    {issue}")
         warn_count += len(pkg_issues)

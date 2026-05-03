@@ -212,15 +212,15 @@ def main() -> int:
 
     col_width = max(len(n) for n, _, _ in h.checks) + 2
     for name, status, detail in h.checks:
-        icon = {"OK": "✓", "WARN": "⚠", "BLOCK": "⛔"}[status]
+        icon = {"OK": "✓", "WARN": "", "BLOCK": ""}[status]
         print(f"  {icon} {name:<{col_width}} {status:<6}  {detail}")
     print()
 
     if h.any_block:
-        print("⛔ Stack has BLOCKING issues — investigate before running /vg:* commands")
+        print("\033[38;5;208mStack has BLOCKING issues — investigate before running /vg:* commands\033[0m")
         return 2
     if h.any_warn:
-        print("⚠ Stack has warnings — review above")
+        print("\033[33mStack has warnings — review above\033[0m")
         return 1
     print("✓ All v2.2 components healthy")
     return 0

@@ -213,7 +213,7 @@ def main():
 
     phases_dir = args.phases_dir
     if not phases_dir.exists():
-        print(f"⛔ phases dir not found: {phases_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphases dir not found: {phases_dir}\033[0m", file=sys.stderr)
         sys.exit(1)
 
     repo_root = args.repo_root or Path(".")
@@ -239,7 +239,7 @@ def main():
             phases.append(data)
 
     if not phases:
-        print("⛔ No accepted phases found (no UAT.md)", file=sys.stderr)
+        print("\033[38;5;208mNo accepted phases found (no UAT.md)\033[0m", file=sys.stderr)
         sys.exit(2)
 
     # Aggregate

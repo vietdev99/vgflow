@@ -50,7 +50,7 @@ def parse_ios_plist(path: Path) -> list[str]:
         with path.open("rb") as fh:
             data = plistlib.load(fh)
     except Exception as exc:
-        print(f"⚠ failed to parse {path}: {exc}", file=sys.stderr)
+        print(f"\033[33mfailed to parse {path}: {exc}\033[0m", file=sys.stderr)
         return []
     return [k for k in data.keys() if k.endswith("UsageDescription")]
 
@@ -65,7 +65,7 @@ def parse_android_manifest(path: Path) -> list[str]:
     try:
         tree = ET.parse(str(path))
     except Exception as exc:
-        print(f"⚠ failed to parse {path}: {exc}", file=sys.stderr)
+        print(f"\033[33mfailed to parse {path}: {exc}\033[0m", file=sys.stderr)
         return []
     root = tree.getroot()
     perms = []
@@ -89,7 +89,7 @@ def parse_expo_app_json(path: Path) -> dict[str, list[str]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        print(f"⚠ failed to parse {path}: {exc}", file=sys.stderr)
+        print(f"\033[33mfailed to parse {path}: {exc}\033[0m", file=sys.stderr)
         return {"ios": [], "android": []}
 
     expo = data.get("expo", data)
@@ -176,7 +176,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir)
     if not phase_dir.is_dir():
-        print(f"⛔ phase-dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase-dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     context_text = load_context_text(phase_dir)
@@ -252,7 +252,7 @@ def main() -> int:
 
     if failures and not args.lenient:
         print("", file=sys.stderr)
-        print(f"⛔ {len(failures)} permission(s) declared but not justified in CONTEXT.md.", file=sys.stderr)
+        print(f"\033[38;5;208m{len(failures)} permission(s) declared but not justified in CONTEXT.md.\033[0m", file=sys.stderr)
         print("   Each declared permission must be referenced in CONTEXT.md either as:", file=sys.stderr)
         print("     Permission: NSCameraUsageDescription", file=sys.stderr)
         print("   or mentioned inside a D-XX decision block that explains why it's needed.", file=sys.stderr)

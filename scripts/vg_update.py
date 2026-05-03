@@ -116,7 +116,7 @@ def three_way_merge(ancestor, current, upstream) -> MergeResult:
             # v2.41.3 (Issue #53 Bug #1) — without explicit encoding, Python on
             # Windows defaults to locale.getpreferredencoding() = cp1252. UTF-8
             # bytes >= 0x80 (⛔ → 0xe2,0x9b,0x94 etc) either crash with
-            # UnicodeDecodeError or silently mojibake-decode (e.g. "⛔" → "â›"").
+            # UnicodeDecodeError or silently mojibake-decode (e.g. "" → "â›"").
             # write_text(...) downstream then re-encodes mojibake as UTF-8,
             # silently corrupting hundreds of files in a single update run.
             encoding="utf-8",
@@ -646,7 +646,7 @@ def cmd_verify_gates(args):
         to_version=args.manifest_version,
         output_dir=output_dir,
     )
-    print("⛔ {} gate integrity conflict(s) detected. See {}/gate-conflicts.md".format(
+    print("\033[38;5;208m{} gate integrity conflict(s) detected. See {}/gate-conflicts.md\033[0m".format(
         total, output_dir.as_posix()))
     print("   Run `/vg:reapply-patches --verify-gates` to resolve.")
     return 1
@@ -677,7 +677,7 @@ def scan_hard_gates(commands_dir: Path):
         for m in STEP_RE.finditer(text):
             step_name = m.group(1)
             block = m.group(0)  # full <step>...</step>
-            if ("exit 1" not in block) and ("⛔ BLOCK" not in block) and ("⛔  BLOCK" not in block):
+            if ("exit 1" not in block) and ("\033[38;5;208mBLOCK\033[0m" not in block) and ("\033[38;5;208m BLOCK\033[0m" not in block):
                 continue
             # Fingerprint = first 80 chars of the inner block content, stripped
             inner = m.group(2).strip()
@@ -726,7 +726,7 @@ def cmd_build_gate_manifest(args):
 
 def main():
     # v2.41.3 (Issue #53 Bug #2) — Windows console defaults to cp1252; any
-    # print("⛔ ...") raises UnicodeEncodeError. Reconfigure stdout/stderr to
+    # print("\033[38;5;208m...\033[0m") raises UnicodeEncodeError. Reconfigure stdout/stderr to
     # UTF-8 with replace-on-encode-fail so the helper still emits a parseable
     # message even on legacy consoles. No-op on Linux/macOS where the default
     # is already UTF-8.

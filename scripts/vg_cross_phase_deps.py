@@ -225,7 +225,7 @@ def cmd_check_dependents(accepting_phase: str) -> int:
     if not pending:
         print(f"✓ Không source phase nào đang chờ phase {accepting_phase}.")
         return 0
-    print(f"⚠ {len(pending)} goals chờ phase {accepting_phase} ship:")
+    print(f"\033[33m{len(pending)} goals chờ phase {accepting_phase} ship:\033[0m")
     sources = sorted({r["source"] for r in pending})
     for src in sources:
         gids = [r["goal_id"] for r in pending if r["source"] == src]
@@ -241,7 +241,7 @@ def cmd_check_milestone_complete() -> int:
     if not pending:
         print(f"✓ Tất cả DEFERRED deps đã flipped — milestone có thể complete.")
         return 0
-    print(f"⛔ Còn {len(pending)} cross-phase dependencies chưa flipped:")
+    print(f"\033[38;5;208mCòn {len(pending)} cross-phase dependencies chưa flipped:\033[0m")
     for r in pending:
         print(f"  • Phase {r['source']} goal {r['goal_id']} chờ phase {r['depends_on']} "
               f"(added {r['added_at']})")

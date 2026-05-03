@@ -261,7 +261,7 @@ def main() -> int:
         try:
             existing = json.loads(settings_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            print(f"⛔ Cannot parse existing settings ({e}). Aborting to avoid clobber.")
+            print(f"\033[38;5;208mCannot parse existing settings ({e}). Aborting to avoid clobber.\033[0m")
             return 1
     else:
         existing = {}

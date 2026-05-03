@@ -365,5 +365,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as e:
-        print(f"⛔ vg-wired-check crashed: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mvg-wired-check crashed: {e}\033[0m", file=sys.stderr)
         sys.exit(2)

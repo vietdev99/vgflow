@@ -249,7 +249,7 @@ def main() -> int:
     endpoints = parse_contracts(contracts_path)
     if not endpoints:
         out_path.write_text(
-            "⛔ API contract probe setup error — 0 endpoints parsed from API-CONTRACTS.md\n",
+            "\033[38;5;208mAPI contract probe setup error — 0 endpoints parsed from API-CONTRACTS.md\033[0m\n",
             encoding="utf-8",
         )
         return 2

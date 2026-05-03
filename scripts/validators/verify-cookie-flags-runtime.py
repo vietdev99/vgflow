@@ -213,7 +213,7 @@ def main() -> int:
         try:
             user, pwd = args.credentials.split(":", 1)
         except ValueError:
-            print("⛔ --credentials must be user:password", file=sys.stderr)
+            print("\033[38;5;208m--credentials must be user:password\033[0m", file=sys.stderr)
             return 2
         body = urllib.parse.urlencode({
             "username": user, "password": pwd,
@@ -253,11 +253,11 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if blocks:
-            print(f"⛔ Cookie flags: {len(blocks)} BLOCK, {len(warns)} WARN\n")
+            print(f"\033[38;5;208mCookie flags: {len(blocks)} BLOCK, {len(warns)} WARN\033[0m\n")
             for v in all_violations:
                 print(f"  [{v['severity']}] {v['cookie']}: {v['issue']}")
         elif warns and not args.quiet:
-            print(f"⚠  Cookie flags: {len(warns)} WARN (no blocks)")
+            print(f"\033[33m Cookie flags: {len(warns)} WARN (no blocks)\033[0m")
             for v in warns:
                 print(f"  [WARN] {v['cookie']}: {v['issue']}")
         elif not args.quiet:

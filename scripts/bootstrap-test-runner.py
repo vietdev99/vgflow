@@ -667,12 +667,12 @@ SCENARIO_RUNNERS = {
 
 def main() -> int:
     if not TESTS_DIR.exists():
-        print("⛔ no .vg/bootstrap/tests/ directory")
+        print("\033[38;5;208mno .vg/bootstrap/tests/ directory\033[0m")
         return 2
 
     fixtures = sorted(TESTS_DIR.glob("*.yml"))
     if not fixtures:
-        print("⚠ no fixture *.yml files found")
+        print("\033[33mno fixture *.yml files found\033[0m")
         return 0
 
     pass_n = fail_n = skip_n = 0
@@ -682,19 +682,19 @@ def main() -> int:
         try:
             fx = _bl._parse_yaml(fx_path.read_text(encoding="utf-8")) or {}
         except Exception as e:
-            print(f"  ⛔ {fx_path.name}: parse error — {e}")
+            print(f"  \033[38;5;208m{fx_path.name}: parse error — {e}\033[0m")
             fail_n += 1
             continue
 
         name = fx.get("name", fx_path.stem)
         runner = SCENARIO_RUNNERS.get(name)
         if runner is None:
-            print(f"  ⚠ {name}: no runner registered — SKIP")
+            print(f"  \033[33m{name}: no runner registered — SKIP\033[0m")
             skip_n += 1
             continue
 
         verdict, detail = runner(fx)
-        icon = {"PASS": "✓", "FAIL": "⛔", "SKIP": "⋯"}.get(verdict, "?")
+        icon = {"PASS": "✓", "FAIL": "", "SKIP": "⋯"}.get(verdict, "?")
         print(f"  {icon} {name}: {verdict} — {detail}")
         if verdict == "PASS":
             pass_n += 1

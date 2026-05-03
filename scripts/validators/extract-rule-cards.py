@@ -530,7 +530,7 @@ def _extract_step_rules(step_body: str) -> list[dict]:
         # — heuristic: if context contains ⛔ within ±200 chars, skip.
         ctx_start = max(0, m.start() - 200)
         ctx_end = min(len(step_body), m.end() + 200)
-        if "⛔" in step_body[ctx_start:ctx_end]:
+        if "" in step_body[ctx_start:ctx_end]:
             continue
         silent_gate_hits.append(body)
 
@@ -757,7 +757,7 @@ def main() -> int:
         skill_files = [f for f in skill_files if args.skill in str(f)]
 
     if not skill_files:
-        print("⛔ no skill files found", file=sys.stderr)
+        print("\033[38;5;208mno skill files found\033[0m", file=sys.stderr)
         return 2
 
     summary = {"skills": [], "total_rules": 0, "total_antis": 0}
@@ -767,7 +767,7 @@ def main() -> int:
         try:
             data = extract_skill(skill_path, validator_descriptions)
         except Exception as exc:
-            print(f"⛔ {skill_path.name}: parse error: {exc}", file=sys.stderr)
+            print(f"\033[38;5;208m{skill_path.name}: parse error: {exc}\033[0m", file=sys.stderr)
             errors += 1
             continue
 

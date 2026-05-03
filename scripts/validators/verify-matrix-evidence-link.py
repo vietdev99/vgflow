@@ -112,21 +112,21 @@ def main() -> int:
         else:
             phase_dir = find_phase_dir(args.phase)
             if not phase_dir:
-                print(f"⛔ Phase dir not found for phase={args.phase}", file=sys.stderr)
+                print(f"\033[38;5;208mPhase dir not found for phase={args.phase}\033[0m", file=sys.stderr)
                 return 2
 
         if not phase_dir.is_dir():
-            print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+            print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
             return 2
 
         matrix_path = phase_dir / "GOAL-COVERAGE-MATRIX.md"
         rmap_path = phase_dir / "RUNTIME-MAP.json"
 
         if not matrix_path.is_file():
-            print(f"⛔ GOAL-COVERAGE-MATRIX.md missing in {phase_dir}", file=sys.stderr)
+            print(f"\033[38;5;208mGOAL-COVERAGE-MATRIX.md missing in {phase_dir}\033[0m", file=sys.stderr)
             return 2
         if not rmap_path.is_file():
-            print(f"⛔ RUNTIME-MAP.json missing in {phase_dir}", file=sys.stderr)
+            print(f"\033[38;5;208mRUNTIME-MAP.json missing in {phase_dir}\033[0m", file=sys.stderr)
             return 2
 
         rows = parse_matrix(matrix_path)
@@ -232,7 +232,7 @@ def main() -> int:
         print(output.to_json())
     else:
         if output.verdict == "BLOCK":
-            print(f"⛔ Matrix evidence link: {len(output.evidence)} mismatch(es)")
+            print(f"\033[38;5;208mMatrix evidence link: {len(output.evidence)} mismatch(es)\033[0m")
             for e in output.evidence:
                 print(f"   [{e.type}] {e.message}")
                 if e.fix_hint:

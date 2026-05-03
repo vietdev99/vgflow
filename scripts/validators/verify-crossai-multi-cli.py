@@ -227,7 +227,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if failures:
-            print(f"⛔ CrossAI multi-CLI consensus: {len(failures)} check(s) failed\n")
+            print(f"\033[38;5;208mCrossAI multi-CLI consensus: {len(failures)} check(s) failed\033[0m\n")
             for f in failures:
                 print(f"  [{f['check']}] {f['reason']}")
         elif not args.quiet:

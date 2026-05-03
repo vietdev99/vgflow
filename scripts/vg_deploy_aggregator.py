@@ -735,7 +735,7 @@ def write_perf_baseline(phases: list[Path]) -> Path:
                 continue
             median = vals[len(vals) // 2]
             if pt[key] > median * 1.5 and median > 0:
-                return f"⚠ {key} slow 1.5×"
+                return f"\033[33m{key} slow 1.5×\033[0m"
         return "✅"
 
     if not phase_timings:

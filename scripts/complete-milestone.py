@@ -218,13 +218,13 @@ def run_checks(milestone: str, phases: list[Path],
         )
     if sec_critical > 0 and not allow_open_critical:
         blockers.append(
-            f"⛔ {sec_critical} CRITICAL threat(s) OPEN in SECURITY-REGISTER.md.\n"
+            f"\033[38;5;208m{sec_critical} CRITICAL threat(s) OPEN in SECURITY-REGISTER.md.\033[0m\n"
             "   Either resolve them, or pass --allow-open-critical=\"<reason>\" "
             "to log an OVERRIDE-DEBT entry and proceed."
         )
     if debt_critical > 0 and not allow_open_override_debt:
         blockers.append(
-            f"⛔ {debt_critical} CRITICAL OVERRIDE-DEBT entries unresolved.\n"
+            f"\033[38;5;208m{debt_critical} CRITICAL OVERRIDE-DEBT entries unresolved.\033[0m\n"
             "   Run /vg:override-resolve <id> on each, or pass "
             "--allow-open-override-debt=\"<reason>\" to defer to next milestone."
         )
@@ -263,7 +263,7 @@ def main() -> int:
         if args.json:
             print(json.dumps({"error": msg, "gate_pass": False}, indent=2))
         else:
-            print(f"⛔ {msg}", file=sys.stderr)
+            print(f"\033[38;5;208m{msg}\033[0m", file=sys.stderr)
         return 2
 
     gate_pass, blockers, payload = run_checks(

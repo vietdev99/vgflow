@@ -190,7 +190,7 @@ def main() -> int:
         if args.json:
             print(json.dumps(msg, indent=2))
         else:
-            print(f"⚠ SKIP — TEST-GOALS.md missing in {phase_dir}")
+            print(f"\033[33mSKIP — TEST-GOALS.md missing in {phase_dir}\033[0m")
         return 0
 
     if args.skip_adversarial:
@@ -202,7 +202,7 @@ def main() -> int:
         if args.json:
             print(json.dumps(msg, indent=2))
         else:
-            print(f"⚠ OVERRIDE — adversarial coverage skipped: "
+            print(f"\033[33mOVERRIDE — adversarial coverage skipped: \033[0m"
                   f"{args.skip_adversarial}")
             print(f"  Audit trail: emit override.proposed event manually "
                   f"or via /vg:override-resolve.")
@@ -214,7 +214,7 @@ def main() -> int:
         if args.json:
             print(json.dumps(msg, indent=2))
         else:
-            print(f"⛔ {err}")
+            print(f"\033[38;5;208m{err}\033[0m")
         return 2
 
     findings: list[dict] = []
@@ -243,7 +243,7 @@ def main() -> int:
             print(f"✓ adversarial coverage OK ({len(goals)} goal(s) "
                   f"examined, no gaps)")
         else:
-            print(f"⚠ {len(findings)} adversarial-coverage gap(s) "
+            print(f"\033[33m{len(findings)} adversarial-coverage gap(s) \033[0m"
                   f"in {len(goals)} goal(s):")
             for f in findings:
                 print(f"  [{f['goal_id']}] {f['title']}")

@@ -318,7 +318,7 @@ def main() -> int:
     if args.mode in ("sast", "both") and args.project_root:
         root = Path(args.project_root).resolve()
         if not root.exists():
-            print(f"⛔ project-root missing: {root}", file=sys.stderr)
+            print(f"\033[38;5;208mproject-root missing: {root}\033[0m", file=sys.stderr)
             return 2
         sast_result = _scan_sast(root)
         if sast_result["leaky_calls"]:
@@ -338,7 +338,7 @@ def main() -> int:
     if args.mode in ("runtime", "both") and args.log_file:
         log_path = Path(args.log_file).resolve()
         if not log_path.exists():
-            print(f"⛔ log-file missing: {log_path}", file=sys.stderr)
+            print(f"\033[38;5;208mlog-file missing: {log_path}\033[0m", file=sys.stderr)
             return 2
         runtime_result = _scan_runtime(log_path)
         if runtime_result["bearer_hits"]:
@@ -392,7 +392,7 @@ def main() -> int:
         print(json.dumps(output, indent=2, default=str))
     else:
         if verdict == "FAIL":
-            print(f"⛔ Log hygiene: {len(blocks)} block(s), "
+            print(f"\033[38;5;208mLog hygiene: {len(blocks)} block(s), \033[0m"
                   f"{len(warns)} warn(s)")
             for b in blocks:
                 print(f"  [BLOCK] {b}")
@@ -400,7 +400,7 @@ def main() -> int:
                 print(f"  [WARN]  {w}")
         elif verdict == "WARN":
             if not args.quiet:
-                print(f"⚠ Log hygiene: {len(warns)} warn(s)")
+                print(f"\033[33mLog hygiene: {len(warns)} warn(s)\033[0m")
                 for w in warns:
                     print(f"  [WARN]  {w}")
         elif not args.quiet:

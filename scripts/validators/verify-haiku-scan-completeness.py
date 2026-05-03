@@ -57,7 +57,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     nav = load_json(phase_dir / "nav-discovery.json")
@@ -105,7 +105,7 @@ def main() -> int:
         if not gaps:
             print(f"✓ Haiku scan completeness OK ({len(expected_scans)} views, all elements >= {args.min_elements})")
         else:
-            tag = "⛔" if args.severity == "block" else "⚠ "
+            tag = "" if args.severity == "block" else ""
             print(f"{tag} Haiku scan completeness: {len(gaps)} gap(s)")
             for g in gaps:
                 print(f"   {g['view']} — {g['reason']} (elements={g.get('elements_total', 'n/a')})")

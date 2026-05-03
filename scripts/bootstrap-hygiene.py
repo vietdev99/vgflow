@@ -450,7 +450,7 @@ def cmd_import(args) -> int:
     if not src or not Path(src).exists():
         print(f"Input tarball missing: {src}")
         return 1
-    print(f"⚠ Import is destructive. Merging {src} over current .vg/bootstrap/")
+    print(f"\033[33mImport is destructive. Merging {src} over current .vg/bootstrap/\033[0m")
     print("Press ENTER to continue, Ctrl-C to cancel...")
     try:
         input()

@@ -288,7 +288,7 @@ def main() -> int:
 
     registry = _load_registry(registry_path)
     if not registry:
-        print(f"⛔ registry empty or unreadable: {registry_path}",
+        print(f"\033[38;5;208mregistry empty or unreadable: {registry_path}\033[0m",
               file=sys.stderr)
         return 2
 
@@ -319,7 +319,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         if findings:
-            print(f"⚠ Validator drift: {len(findings)} finding(s)\n")
+            print(f"\033[33mValidator drift: {len(findings)} finding(s)\033[0m\n")
             for f in findings:
                 print(f"  [{f['pattern']}] {f['validator']}: {f['detail']}")
         elif not args.quiet:

@@ -161,7 +161,7 @@ def main() -> int:
 
     phase_dir = Path(args.phase_dir).resolve()
     if not phase_dir.is_dir():
-        print(f"⛔ Phase dir not found: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase dir not found: {phase_dir}\033[0m", file=sys.stderr)
         return 2
 
     runs = load_runs(phase_dir)
@@ -208,10 +208,10 @@ def main() -> int:
         if payload["verdict"] == "STRONG":
             print(f"✓ Coverage challenge: {len(sampled)}/{len(runs)} runs sampled — all evidence supports claims")
         elif payload["verdict"] == "WEAK":
-            print(f"⚠ Coverage challenge: {total_weak} step(s) marked pass with empty evidence ({len(weak_runs)} run(s) affected)")
+            print(f"\033[33mCoverage challenge: {total_weak} step(s) marked pass with empty evidence ({len(weak_runs)} run(s) affected)\033[0m")
             print(f"   Coverage matrix accepted as-is but flagged for human review")
         else:
-            tag = "⛔" if args.severity == "block" else "⚠ "
+            tag = "" if args.severity == "block" else ""
             print(f"{tag} Coverage challenge: {total_false} FALSE-PASS step(s) detected ({len(degraded_runs)} run(s))")
             for c in degraded_runs:
                 print(f"   {c['resource']} × {c['role']}: {c['false_pass_count']} false-pass step(s)")

@@ -195,7 +195,7 @@ def main() -> int:
             )
         else:
             print(
-                f"⛔ allow-flag patterns detected "
+                f"\033[38;5;208mallow-flag patterns detected \033[0m"
                 f"({len(events)} events in last {args.lookback_days}d):"
             )
             if rubber:

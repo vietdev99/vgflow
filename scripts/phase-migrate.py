@@ -39,7 +39,7 @@ from typing import Any
 def load_state(phase_dir: Path) -> dict:
     state_path = phase_dir / ".recon-state.json"
     if not state_path.exists():
-        print(f"⛔ .recon-state.json missing in {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208m.recon-state.json missing in {phase_dir}\033[0m", file=sys.stderr)
         print("   Run phase-recon.py first.", file=sys.stderr)
         sys.exit(1)
     return json.loads(state_path.read_text(encoding="utf-8"))
@@ -117,10 +117,10 @@ def exec_rename(phase_dir: Path, source: str, target: str,
     src = phase_dir / source
     tgt = phase_dir / target
     if not src.exists():
-        print(f"    ⛔ source missing: {source}", file=sys.stderr)
+        print(f"    \033[38;5;208msource missing: {source}\033[0m", file=sys.stderr)
         return False
     if tgt.exists():
-        print(f"    ⛔ target exists: {target} (refusing overwrite — archive first)", file=sys.stderr)
+        print(f"    \033[38;5;208mtarget exists: {target} (refusing overwrite — archive first)\033[0m", file=sys.stderr)
         return False
     print(f"    rename {source} → {target}")
     if dry_run:
@@ -141,10 +141,10 @@ def exec_seed_or_draft(phase_dir: Path, source: str, target: str,
     src = phase_dir / source
     tgt = phase_dir / target
     if not src.exists():
-        print(f"    ⛔ source missing: {source}", file=sys.stderr)
+        print(f"    \033[38;5;208msource missing: {source}\033[0m", file=sys.stderr)
         return False
     if tgt.exists():
-        print(f"    ⛔ target exists: {target} — skip (would overwrite; archive source manually)", file=sys.stderr)
+        print(f"    \033[38;5;208mtarget exists: {target} — skip (would overwrite; archive source manually)\033[0m", file=sys.stderr)
         return False
     raw = src.read_text(encoding="utf-8")
     draft = wrap_draft(migration_type, source, raw, phase_num, target_label)
@@ -170,10 +170,10 @@ def exec_append(phase_dir: Path, source: str, target: str,
     src = phase_dir / source
     tgt = phase_dir / target
     if not src.exists():
-        print(f"    ⛔ source missing: {source}", file=sys.stderr)
+        print(f"    \033[38;5;208msource missing: {source}\033[0m", file=sys.stderr)
         return False
     if not tgt.exists():
-        print(f"    ⛔ target missing: {target} — cannot append; use seed migration first", file=sys.stderr)
+        print(f"    \033[38;5;208mtarget missing: {target} — cannot append; use seed migration first\033[0m", file=sys.stderr)
         return False
     raw = src.read_text(encoding="utf-8")
     now = datetime.now(tz=timezone.utc).isoformat()
@@ -212,7 +212,7 @@ def exec_consolidate_sequence(phase_dir: Path, phase_num: str, kind: str,
     if not numbered:
         return True  # nothing to do, not an error
     if target.exists():
-        print(f"    ⛔ {kind_upper}.md exists — numbered {kind_upper}s left; archive manually if desired",
+        print(f"    \033[38;5;208m{kind_upper}.md exists — numbered {kind_upper}s left; archive manually if desired\033[0m",
               file=sys.stderr)
         return False
 
@@ -263,7 +263,7 @@ def exec_archive(phase_dir: Path, filename: str,
     """Archive a single file (rot, superseded, or user-requested)."""
     src = phase_dir / filename
     if not src.exists():
-        print(f"    ⛔ source missing: {filename}", file=sys.stderr)
+        print(f"    \033[38;5;208msource missing: {filename}\033[0m", file=sys.stderr)
         return False
     dest = manifest.archive_dir / filename
     print(f"    archive {filename} (reason: {reason})")
@@ -280,10 +280,10 @@ def exec_rename_rot(phase_dir: Path, filename: str,
     src = phase_dir / filename
     tgt = phase_dir / target
     if not src.exists():
-        print(f"    ⛔ source missing: {filename}", file=sys.stderr)
+        print(f"    \033[38;5;208msource missing: {filename}\033[0m", file=sys.stderr)
         return False
     if tgt.exists():
-        print(f"    ⛔ target exists: {target} — archive instead", file=sys.stderr)
+        print(f"    \033[38;5;208mtarget exists: {target} — archive instead\033[0m", file=sys.stderr)
         return False
     print(f"    promote {filename} → {target}")
     if dry_run:
@@ -312,7 +312,7 @@ def apply_migration(phase_dir: Path, state: dict, migration_id: str,
         None,
     )
     if not candidate:
-        print(f"  ⛔ migration ID not found: {migration_id}", file=sys.stderr)
+        print(f"  \033[38;5;208mmigration ID not found: {migration_id}\033[0m", file=sys.stderr)
         return False
 
     source = candidate["source"]
@@ -324,7 +324,7 @@ def apply_migration(phase_dir: Path, state: dict, migration_id: str,
 
     # Target already exists → refuse (user must archive source manually or we archive it without overwriting)
     if candidate["priority"] == "conflict":
-        print(f"    ⚠ target exists — this migration requires target {target} missing. Skipping.",
+        print(f"    \033[33mtarget exists — this migration requires target {target} missing. Skipping.\033[0m",
               file=sys.stderr)
         return False
 
@@ -341,7 +341,7 @@ def apply_migration(phase_dir: Path, state: dict, migration_id: str,
         return exec_append(phase_dir, source, target, mtype,
                            APPEND_HEADINGS[mtype], manifest, dry_run)
 
-    print(f"    ⛔ unknown migration type: {mtype}", file=sys.stderr)
+    print(f"    \033[38;5;208munknown migration type: {mtype}\033[0m", file=sys.stderr)
     return False
 
 
@@ -363,14 +363,14 @@ def apply_archive(phase_dir: Path, state: dict, rot_id: str,
                   manifest: Manifest, dry_run: bool) -> bool:
     rot = next((r for r in state.get("rot_to_archive", []) if r["id"] == rot_id), None)
     if not rot:
-        print(f"  ⛔ rot ID not found: {rot_id}", file=sys.stderr)
+        print(f"  \033[38;5;208mrot ID not found: {rot_id}\033[0m", file=sys.stderr)
         return False
     action = rot.get("action", "archive")
     if action == "rename":
         # Promote versioned to canonical
         target = rot.get("target")
         if not target:
-            print(f"  ⛔ rot {rot_id} has action=rename but no target", file=sys.stderr)
+            print(f"  \033[38;5;208mrot {rot_id} has action=rename but no target\033[0m", file=sys.stderr)
             return False
         return exec_rename_rot(phase_dir, rot["file"], target, manifest, dry_run)
     return exec_archive(phase_dir, rot["file"], rot.get("reason", ""), manifest, dry_run)
@@ -398,7 +398,7 @@ def main():
 
     phase_dir: Path = args.phase_dir.resolve()
     if not phase_dir.exists():
-        print(f"⛔ phase dir missing: {phase_dir}", file=sys.stderr)
+        print(f"\033[38;5;208mphase dir missing: {phase_dir}\033[0m", file=sys.stderr)
         sys.exit(1)
 
     state = load_state(phase_dir)

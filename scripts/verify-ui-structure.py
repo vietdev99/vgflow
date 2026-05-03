@@ -71,7 +71,7 @@ def extract_json_from_markdown(md_path: Path) -> dict | None:
     try:
         return json.loads(m.group(1))
     except json.JSONDecodeError as e:
-        print(f"⛔ UI-MAP.md chứa JSON không hợp lệ: {e}", file=sys.stderr)
+        print(f"\033[38;5;208mUI-MAP.md chứa JSON không hợp lệ: {e}\033[0m", file=sys.stderr)
         return None
 
 
@@ -272,11 +272,11 @@ def main() -> int:
     actual = load_tree(Path(args.actual))
 
     if expected is None:
-        print(f"⛔ Không đọc được cây kế hoạch: {args.expected}", file=sys.stderr)
+        print(f"\033[38;5;208mKhông đọc được cây kế hoạch: {args.expected}\033[0m", file=sys.stderr)
         print("   File phải là JSON trực tiếp hoặc markdown có ```json``` code block.", file=sys.stderr)
         return 1
     if actual is None:
-        print(f"⛔ Không đọc được cây thực tế: {args.actual}", file=sys.stderr)
+        print(f"\033[38;5;208mKhông đọc được cây thực tế: {args.actual}\033[0m", file=sys.stderr)
         print("   Sinh bằng: node .claude/scripts/generate-ui-map.mjs --format json --output <path>", file=sys.stderr)
         return 1
 
@@ -289,7 +289,7 @@ def main() -> int:
             return 1
         key, value = parsed
         if key != "owner_wave_id":
-            print(f"⛔ --scope key not supported: {key!r}. Phase 15 only supports owner-wave-id.",
+            print(f"\033[38;5;208m--scope key not supported: {key!r}. Phase 15 only supports owner-wave-id.\033[0m",
                   file=sys.stderr)
             return 1
         # Use the embedded JSON code block "root" if present (Phase 15 ui-map.v1.json)
@@ -297,7 +297,7 @@ def main() -> int:
         scope_root = expected.get("root", expected)
         filtered = filter_subtree_by_wave(scope_root, value)
         if filtered is None:
-            print(f"⚠ Wave-scoped filter: no nodes own owner_wave_id={value!r} in expected tree. "
+            print(f"\033[33mWave-scoped filter: no nodes own owner_wave_id={value!r} in expected tree. \033[0m"
                   "Nothing to verify for this wave (PASS).", file=sys.stderr)
             return 0
         # Wrap back into expected shape (preserves any non-root metadata)
