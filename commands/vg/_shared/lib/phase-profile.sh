@@ -133,17 +133,30 @@ detect_phase_profile() {
       # migrations/* is allowed in feature specs (e.g., "we'll touch
       # migrations/123.sql when bumping a single column") without
       # forcing the migration profile.
+      #
+      # v2.47.3 (Issues #89 #90):
+      # - #89: narrow path regex — pre-fix bare 'schema' substring matched
+      #   Mongoose model files (`models/UserSchema.js`, `schemas/userSchema.js`),
+      #   GraphQL types (`graphql/schema.ts`), Joi/Yup validators
+      #   (`validation/schema.json`) — none of which are DB migrations.
+      #   PrintwayV3 P3.2 (Mongoose-backed payment phase) had ≥2 such files
+      #   in PLAN.md → wrongly classified as migration → required ROLLBACK.md.
+      #   Now require: actual migrations/ or migrate/ directory, prisma/schema.prisma
+      #   exact filename, db/schema.{rb,sql} (Rails-style), or .sql at end of path.
+      # - #90: replace `grep -cE ... || echo 0` (which produced "0\n0" when
+      #   grep found 0 matches and exited 1, breaking integer comparison)
+      #   with a 2-stage extract+count using grep -o + a wc-l fallback.
       local mig_path_count
-      # v2.47.2 (2026-05-02) — bugfix: word-boundary on `schema` to avoid
-      # false-positive match on filenames like `area.subschema.ts`. Without
-      # \b…\b, any path containing "schema" as substring (subschema, schemas,
-      # schemavalidator) counted toward the migration quorum, flipping
-      # feature phases to migration profile (which then SKIP API-CONTRACTS.md
-      # + TEST-GOALS.md generation — wrong for feature work). Discovered
-      # while re-blueprinting Phase 2 (catalog-pricing) on 2026-05-02 in
-      # PrintwayV3 dogfood; ported back to source.
-      mig_path_count=$(grep -cE '<file-path>[^<]*(migrations|\bschema\b|\.sql)[^<]*</file-path>' "$plan" 2>/dev/null || echo 0)
-      if [ "$mig_path_count" -ge 2 ]; then
+      mig_path_count=$(
+        {
+          grep -oE '<file-path>[^<]+</file-path>' "$plan" 2>/dev/null \
+            | sed -E 's@</?file-path>@@g' \
+            | grep -cE '(^|/)(migrations?|migrate)/|(^|/)prisma/schema\.prisma$|(^|/)db/schema\.(rb|sql)$|\.sql$' \
+            || true
+        }
+      )
+      mig_path_count="${mig_path_count:-0}"
+      if [ "$mig_path_count" -ge 2 ] 2>/dev/null; then
         echo "migration"
         return 0
       fi
@@ -190,8 +203,8 @@ detect_phase_profile() {
 
 phase_profile_required_artifacts() {
   case "${1:-feature}" in
-    feature)        echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md API-DOCS.md TEST-GOALS.md SUMMARY.md" ;;
-    feature-legacy) echo "CONTEXT.md PLAN.md API-CONTRACTS.md API-DOCS.md TEST-GOALS.md SUMMARY.md" ;;  # v1.9.2.1 — pre-SPECS phases
+    feature)        echo "SPECS.md CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;
+    feature-legacy) echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md SUMMARY.md" ;;  # v1.9.2.1 — pre-SPECS phases
     infra)          echo "SPECS.md PLAN.md SUMMARY.md" ;;
     hotfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
     bugfix)         echo "SPECS.md PLAN.md SUMMARY.md" ;;
@@ -206,11 +219,11 @@ phase_profile_skip_artifacts() {
   case "${1:-feature}" in
     feature)        echo "" ;;
     feature-legacy) echo "SPECS.md" ;;  # v1.9.2.1 — treat SPECS as optional for legacy phases
-    infra)          echo "TEST-GOALS.md API-CONTRACTS.md API-DOCS.md CONTEXT.md RUNTIME-MAP.json" ;;
-    hotfix)         echo "TEST-GOALS.md API-CONTRACTS.md API-DOCS.md CONTEXT.md" ;;
-    bugfix)         echo "API-CONTRACTS.md API-DOCS.md CONTEXT.md" ;;
-    migration)      echo "API-CONTRACTS.md API-DOCS.md TEST-GOALS.md RUNTIME-MAP.json" ;;
-    docs)           echo "CONTEXT.md PLAN.md API-CONTRACTS.md API-DOCS.md TEST-GOALS.md RUNTIME-MAP.json SUMMARY.md" ;;
+    infra)          echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md RUNTIME-MAP.json" ;;
+    hotfix)         echo "TEST-GOALS.md API-CONTRACTS.md CONTEXT.md" ;;
+    bugfix)         echo "API-CONTRACTS.md CONTEXT.md" ;;
+    migration)      echo "API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json" ;;
+    docs)           echo "CONTEXT.md PLAN.md API-CONTRACTS.md TEST-GOALS.md RUNTIME-MAP.json SUMMARY.md" ;;
     *)              echo "" ;;
   esac
 }

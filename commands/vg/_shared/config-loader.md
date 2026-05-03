@@ -33,10 +33,10 @@ VG_TMP="${TMPDIR:-/tmp}"
 mkdir -p "$VG_TMP" 2>/dev/null
 
 # --- Graphify detection (single source of truth) ---
-GRAPHIFY_ENABLED=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /enabled:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "false")
+GRAPHIFY_ENABLED=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /enabled:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "false")
 
 # graph_path from config, then resolve to absolute via $REPO_ROOT
-GRAPH_REL=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /graph_path:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"')
+GRAPH_REL=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /graph_path:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r')
 GRAPH_REL="${GRAPH_REL:-graphify-out/graph.json}"
 if [[ "$GRAPH_REL" = /* ]] || [[ "$GRAPH_REL" =~ ^[A-Za-z]: ]]; then
   GRAPHIFY_GRAPH_PATH="$GRAPH_REL"   # already absolute
@@ -44,11 +44,11 @@ else
   GRAPHIFY_GRAPH_PATH="${REPO_ROOT}/${GRAPH_REL}"
 fi
 
-GRAPHIFY_FALLBACK=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /fallback_to_grep:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "true")
-GRAPHIFY_STALE_WARN=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /staleness_warn_commits:/{print $2; exit}' .claude/vg.config.md 2>/dev/null || echo "50")
+GRAPHIFY_FALLBACK=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /fallback_to_grep:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "true")
+GRAPHIFY_STALE_WARN=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /staleness_warn_commits:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '\r' || echo "50")
 
 GRAPHIFY_ACTIVE="false"
-GRAPHIFY_BLOCK_ON_STALE=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /block_on_stale:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "false")
+GRAPHIFY_BLOCK_ON_STALE=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /block_on_stale:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "false")
 if [ "$GRAPHIFY_ENABLED" = "true" ] && [ -f "$GRAPHIFY_GRAPH_PATH" ]; then
   GRAPH_BUILD_EPOCH=$(stat -c %Y "$GRAPHIFY_GRAPH_PATH" 2>/dev/null || stat -f %m "$GRAPHIFY_GRAPH_PATH" 2>/dev/null)
   if [ -n "$GRAPH_BUILD_EPOCH" ]; then
@@ -112,13 +112,13 @@ fi
 ```bash
 # --- Model selection (per pipeline role) ---
 # Parse models section from config. Commands use these to set Agent model: parameter.
-MODEL_PLANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /planner:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "opus")
-MODEL_CONTRACT_GEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /contract_gen:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "sonnet")
-MODEL_TEST_GOALS=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_goals:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "sonnet")
-MODEL_EXECUTOR=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /executor:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "sonnet")
-MODEL_DEBUGGER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /debugger:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "opus")
-MODEL_SCANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /scanner:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "haiku")
-MODEL_TEST_CODEGEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_codegen:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "sonnet")
+MODEL_PLANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /planner:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "opus")
+MODEL_CONTRACT_GEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /contract_gen:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
+MODEL_TEST_GOALS=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_goals:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
+MODEL_EXECUTOR=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /executor:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
+MODEL_DEBUGGER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /debugger:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "opus")
+MODEL_SCANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /scanner:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "haiku")
+MODEL_TEST_CODEGEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_codegen:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
 ```
 
 After sourcing: all bash blocks MUST use `${PYTHON_BIN}`, `${VG_TMP}/`, `${REPO_ROOT}`, `${GRAPHIFY_GRAPH_PATH}`, `${GRAPHIFY_ACTIVE}`, and model variables `${MODEL_PLANNER}`, `${MODEL_EXECUTOR}`, etc. (instead of duplicating detection logic).
@@ -131,10 +131,15 @@ After sourcing: all bash blocks MUST use `${PYTHON_BIN}`, `${VG_TMP}/`, `${REPO_
 ### BOM Strip + Required Field Validation
 
 ```bash
-# Strip BOM (Windows editors may add UTF-8 BOM) — tightened 2026-04-17
+# Strip BOM + CRLF (Windows editors may add UTF-8 BOM and CR line endings)
+# — tightened 2026-04-17, CR strip added 2026-05-02 (Issue #88).
 # Write stripped content to a clean temp file so downstream parsers can use it.
+# v2.47.3 (Issue #88): also strip trailing CR from every line. Pre-fix, awk
+# parsers reading vg.config.md on Windows-checkout repos produced shell vars
+# with embedded \r — e.g. PLANNING_DIR=".vg\r" → resolve_phase_dir looked for
+# `.vg\r/phases/<phase>` which never exists → BLOCK on every Codex review.
 CONFIG_CLEAN="${VG_TMP:-/tmp}/vg.config.clean.md"
-sed '1s/^\xEF\xBB\xBF//' .claude/vg.config.md > "$CONFIG_CLEAN"
+sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' .claude/vg.config.md > "$CONFIG_CLEAN"
 CONFIG_RAW=$(cat "$CONFIG_CLEAN")
 
 # Check required fields — use CLEAN file (grep on raw file misses first-field if BOM present)
@@ -617,7 +622,7 @@ vg_config_get() {
     $0 ~ t {in_block=1; next}
     in_block && /^[a-z_]/ {in_block=0}
     in_block && $0 ~ f {
-      sub(/^[^:]+:[[:space:]]*/,""); gsub(/["]/,""); print; exit
+      sub(/^[^:]+:[[:space:]]*/,""); gsub(/["\r]/,""); print; exit
     }
   ' "$config" 2>/dev/null)
   echo "${val:-$default}"
@@ -636,7 +641,7 @@ vg_config_get_array() {
     in_top && /^[a-z_]/ {in_top=0}
     in_top && $0 ~ f {in_field=1; next}
     in_field && /^[[:space:]]+-[[:space:]]/ {
-      sub(/^[[:space:]]+-[[:space:]]*/,""); gsub(/["]/,""); print
+      sub(/^[[:space:]]+-[[:space:]]*/,""); gsub(/["\r]/,""); print
       next
     }
     in_field && !/^[[:space:]]+-/ {in_field=0}

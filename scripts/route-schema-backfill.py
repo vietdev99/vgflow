@@ -212,7 +212,7 @@ def match_schemas(routes: list[RouteEntry], handlers: list[HandlerScan]) -> None
     by_name = {h.handler_name: h for h in handlers}
     for r in routes:
         if not r.handler_ref:
-            r.notes.append("\033[33mno handler reference detected — manual lookup\033[0m")
+            r.notes.append("⚠ no handler reference detected — manual lookup")
             continue
         h = by_name.get(r.handler_ref)
         if not h:
@@ -230,16 +230,16 @@ def match_schemas(routes: list[RouteEntry], handlers: list[HandlerScan]) -> None
             r.suggested_response = h.response_inferred
         # Verb-specific hints
         if r.verb in ("get",) and r.suggested_body:
-            r.notes.append("\033[33mGET with body schema — unusual, double-check\033[0m")
+            r.notes.append("⚠ GET with body schema — unusual, double-check")
         if r.verb in ("post", "put", "patch") and not r.suggested_body:
             r.notes.append(
-                "\033[33mmutation verb without body schema detected — \033[0m"
+                "⚠ mutation verb without body schema detected — "
                 "handler may use `req.body.x` directly without parse(); "
                 "define body schema from scratch"
             )
         if not r.suggested_response:
             r.notes.append(
-                "\033[33mresponse schema not inferred — read handler `reply.send()` \033[0m"
+                "⚠ response schema not inferred — read handler `reply.send()` "
                 "or `return value` and define manually"
             )
 

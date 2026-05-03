@@ -179,6 +179,7 @@ Tool name is `Agent`, NOT `Task` (Codex correction #1).
 | "Tôi đã hiểu, không cần đọc reference" | Reference contains step-specific bash commands not in entry |
 | "Spawn Task() như cũ" | Tool name is `Agent`, not `Task` (Codex correction #1) |
 | "Per-decision split overkill" | UX baseline R1 — blueprint already consumes via vg-load.sh; missing = build context overflow |
+| "Sẵn ngữ cảnh, sinh luôn API-CONTRACTS / TEST-GOALS / PLAN cho nhanh" | Rule 4: scope = DISCUSSION only. Sinh artifact đó là job của /vg:blueprint — write từ scope = lệch contract, blueprint sẽ overwrite gây mất công |
 
 ## Steps (7 checklist groups — wired into native tasklist via emit-tasklist.py CHECKLIST_DEFS["vg:scope"])
 

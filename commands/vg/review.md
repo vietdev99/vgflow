@@ -5918,6 +5918,18 @@ from collections import Counter
 c = Counter(r['status'] for r in d.values())
 print(f'Phase 4a surface probes: {len(d)} backend goals probed → {dict(c)}')")
   echo "▸ $PROBED"
+
+  # v2.48.1 (Issue #85) — backfill synthetic goal_sequences[gid] for non-UI
+  # goals from probe results so verify-matrix-evidence-link.py (which only
+  # inspects RUNTIME-MAP goal_sequences[]) sees backend evidence. Closes the
+  # surface-probe schema gap that BLOCKed Phase 3.2 dogfood with 32 non-UI
+  # READY goals flagged matrix_status_without_runtime_sequence.
+  # Idempotent: re-runs overwrite synthetic entries by gid, never overwrites
+  # real browser-recorded sequences.
+  if [ -f "${REPO_ROOT}/.claude/scripts/backfill-surface-probe-runtime.py" ]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/backfill-surface-probe-runtime.py" \
+      --phase-dir "$PHASE_DIR" 2>&1 | sed 's/^/▸ /' || true
+  fi
 fi
 ```
 
