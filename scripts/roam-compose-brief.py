@@ -468,7 +468,27 @@ def main() -> int:
             except Exception as e:
                 print(f"[roam-compose] WARN: bad creds-json: {e}", file=sys.stderr)
 
-    lens_dir = Path(".claude/commands/vg/_shared/lens-prompts")
+    # Round-2 F4 nit: resolve canonical lens-prompts path with mirror fallback.
+    # Canonical lives at commands/vg/_shared/lens-prompts; .claude/ mirror is the
+    # legacy install path. Hardcoding only the .claude/ mirror broke when a
+    # repo-local invocation ran outside the .claude/ harness.
+    lens_dir = None
+    for cand in (
+        Path("commands/vg/_shared/lens-prompts"),
+        Path(".claude/commands/vg/_shared/lens-prompts"),
+    ):
+        if cand.exists():
+            lens_dir = cand
+            break
+    if lens_dir is None:
+        # Last-resort fallback — keep prior behavior so the WARN below fires
+        # per-lens instead of crashing on a None Path.
+        lens_dir = Path(".claude/commands/vg/_shared/lens-prompts")
+        print(
+            f"[roam-compose] WARN: lens-prompts dir not found at canonical "
+            f"or .claude/ mirror — falling back to {lens_dir} (will WARN per lens)",
+            file=sys.stderr,
+        )
 
     cwd_label = args.cwd_convention or f"${{PHASE_DIR}}/roam/{args.model}"
 
