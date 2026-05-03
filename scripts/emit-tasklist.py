@@ -312,17 +312,61 @@ def _build_hierarchical_projection(checklists: list[dict]) -> list[dict]:
             "status": "pending",
         })
         for step in c.get("items") or []:
+            # Humanize step name for display: snake_case → Title Case.
+            # Pure-letter steps with underscores (e.g. retrofit_crud_surfaces_schema
+            # → "Retrofit Crud Surfaces Schema") render readably.
+            # Alphanumeric step IDs (e.g. 2b6c_view_decomposition) keep prefix
+            # then humanize the rest: "2b6c View Decomposition".
+            display = _humanize_step_for_display(step)
             items.append({
                 "kind": "step",
                 "id": step,
                 "parent": c["id"],
-                # Raw step ID is the marker name + already user-recognizable
-                # (e.g. 2b6c_view_decomposition). Avoid _humanize() mangling
-                # alphanumeric IDs into "2 B 6 C View Decomposition".
-                "title": f"  ↳ {step}",
+                "title": f"  ↳ {display}",
                 "status": "pending",
             })
     return items
+
+
+def _humanize_step_for_display(step: str) -> str:
+    """Snake_case step ID → human-readable display title.
+
+    Examples:
+      retrofit_crud_surfaces_schema → "Retrofit CRUD Surfaces Schema"
+      0_gate_integrity_precheck     → "0 Gate Integrity Precheck"
+      2b6c_view_decomposition       → "2b6c View Decomposition"
+      4_load_contracts_and_context  → "4 Load Contracts And Context"
+
+    Preserves leading numeric/alphanumeric markers (0_, 2b6c_, etc) since
+    they encode pipeline ordering. Replaces underscores with spaces and
+    capitalizes word starts. Acronyms (CRUD, API, UI, UX, RBAC) preserved.
+    """
+    if not step:
+        return step
+    parts = step.split("_", 1)
+    # If first part is alphanumeric prefix (e.g. "2b6c", "0"), keep as-is
+    if parts[0] and (parts[0].isdigit() or any(c.isdigit() for c in parts[0])):
+        prefix = parts[0]
+        rest = parts[1] if len(parts) > 1 else ""
+    else:
+        prefix = ""
+        rest = step
+
+    # Title-case the rest, but preserve common acronyms
+    ACRONYMS = {"crud", "api", "ui", "ux", "rbac", "csrf", "jwt", "json",
+                "yaml", "html", "css", "url", "db", "fk", "id", "uat",
+                "qa", "ce", "co", "pr", "mvp", "p0", "p1", "p2", "p3"}
+    words = rest.split("_") if rest else []
+    titled = []
+    for w in words:
+        if w.lower() in ACRONYMS:
+            titled.append(w.upper())
+        elif w:
+            titled.append(w[0].upper() + w[1:])
+    rest_display = " ".join(titled)
+    if prefix and rest_display:
+        return f"{prefix} {rest_display}"
+    return prefix or rest_display
 
 
 def _emit_event(

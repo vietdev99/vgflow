@@ -383,6 +383,24 @@ Write to `${PHASE_DIR}/SPECS.md` with this format:
 
 ```markdown
 ---
+
+<LANGUAGE_POLICY>
+You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
+
+Mặc định trả lời bằng **tiếng Việt** (config: `language.primary` trong
+`.claude/vg.config.md`, fallback `vi` nếu chưa set). Dùng ngôn ngữ con
+người, không technical jargon. Mỗi thuật ngữ tiếng Anh xuất hiện lần đầu
+trong narration: thêm giải thích VN trong dấu ngoặc (per
+`_shared/term-glossary.md`).
+
+Ví dụ:
+- ❌ "Validator failed with 225 evidence count"
+- ✅ "Validator báo 225 trường thiếu — chi tiết ở `[path]`. Mình sẽ sửa rồi chạy lại."
+
+File paths, code identifiers (G-04, Wave 9, getUserById), commit messages,
+CLI commands stay English. AskUserQuestion title + options + question prose:
+ngôn ngữ config.
+</LANGUAGE_POLICY>
 phase: {X}
 status: approved
 created: {YYYY-MM-DD}
