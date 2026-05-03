@@ -9,7 +9,7 @@ REFS = {
     "preflight.md":                500,
     "context.md":                  500,
     "validate-blueprint.md":       500,
-    "waves-overview.md":          1100,  # extracted from backup step 8 (1882 lines), compressed to 1034
+    "waves-overview.md":          1150,  # extracted from backup step 8 (1882 lines), compressed; R2 round-2 added wave_id reset banner + override.used migration notes
     "waves-delegation.md":         500,
     "post-execution-overview.md":  900,  # extracted from backup step 9 (896 lines), preserved at 892
     "post-execution-delegation.md": 500,
