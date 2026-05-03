@@ -55,6 +55,21 @@ files (capsule, plan slice, contract slices, design ref).
   "edge_cases_for_goals": [
     "G-04",
     "G-12"
+  ],
+  "bootstrap_rules": [
+    /* Resolved by orchestrator pre-spawn (Task 11 — L1 scope-matched).
+       Pseudocode (driven from .claude/scripts/lib/rule_resolver.py):
+         from rule_resolver import resolve_rules
+         rules = resolve_rules(
+           rules_file=Path(".vg/BOOTSTRAP-RULES.yaml"),
+           task_files=<list of files this task touches>,
+         )
+       Each rule has: rule_id, severity (BLOCK|TRIAGE_REQUIRED|ADVISORY),
+       enforce (human-readable instruction), verification (cmd kind),
+       verification_arg (cmd argument). Subagent MUST honor BLOCK/TRIAGE_REQUIRED
+       rules; ADVISORY are informational. Replaces the legacy "dump every memory
+       rule into capsule" behavior — only rules whose scope_match matches the
+       task's files are injected. */
   ]
 }
 ```
@@ -77,6 +92,7 @@ files (capsule, plan slice, contract slices, design ref).
 | `build_cmd` | maybe | From `vg.config.md > build_gates.build_cmd`. May be empty. |
 | `binding_requirements` | yes | Citations the subagent's commit MUST satisfy via `// vg-binding: <id>` comments + commit-msg cite. |
 | `edge_cases_for_goals` | maybe | List of goal IDs (G-NN) whose EDGE-CASES this task implements. Subagent MUST load via `vg-load --artifact edge-cases --goal G-NN` and handle each variant_id in code. Empty list = task touches no goals (rare, e.g., infra/migration tasks). |
+| `bootstrap_rules` | maybe | Scope-matched rule cards from `.vg/BOOTSTRAP-RULES.yaml` resolved by `rule_resolver.resolve_rules()`. Empty list = no rules apply to this task's files. Subagent reads `severity` field — BLOCK/TRIAGE_REQUIRED rules MUST be honored before commit; ADVISORY are informational. |
 
 ---
 
