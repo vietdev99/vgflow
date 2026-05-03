@@ -1,5 +1,13 @@
 # test close (STEP 8)
 
+<!-- Exception: oversized ref (≈650 lines).
+     close.md bundles 9 sub-steps (8.1 write_report → 8.3.9 tasklist
+     close-on-complete) that MUST execute as one atomic terminal phase
+     so the run-complete signal sees a consistent set of markers,
+     telemetry events, and reports. Splitting would either fragment
+     the Stop-hook contract (each piece running independently) or
+     require fragile cross-file step ordering. Per review-v2 F3 nit. -->
+
 Final 3 steps: write_report + bootstrap_reflection + complete (with
 profile marker gate, traceability gate, flow compliance, tester-pro
 D22/D23 reports, terminal telemetry, run-complete, tasklist clear).
@@ -39,7 +47,11 @@ import os
 phase_dir = os.environ.get('PHASE_DIR')
 vg_tmp = os.environ.get('VG_TMP')
 
-# 1. Read TEST-GOALS.md — priority per goal
+# 1. Read TEST-GOALS.md — priority per goal.
+# KEEP-FLAT: deterministic verdict computation, NOT AI/codegen context.
+# Pure regex extraction of priority labels feeds the verdict math (review-v2
+# D1 nit). vg-load --goal slice is unnecessary here because no AI agent
+# consumes this read — the embedded Python is a verdict calculator.
 tg_path = next(Path(phase_dir).glob('*TEST-GOALS*.md'), None)
 if not tg_path:
     print(json.dumps({"error": "TEST-GOALS.md missing", "verdict": "FAILED"}))

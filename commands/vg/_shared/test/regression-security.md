@@ -1,5 +1,14 @@
 # test regression + security (STEP 7)
 
+<!-- Exception: oversized ref (≈630 lines).
+     regression-security.md groups 5 profile-gated sub-steps
+     (5e_regression, 5f_security_audit, 5f_mobile_security_audit,
+     5g_performance_check, 5h_security_dynamic) that share severity
+     thresholds, vg.config.md lookups, and sandbox-finding emission.
+     Splitting per-step would duplicate the profile-gate header
+     boilerplate 5x and break the shared severity escalation flow.
+     Per review-v2 F3 nit. -->
+
 5 steps: 5e_regression, 5f_security_audit, 5f_mobile_security_audit, 5g_performance_check, 5h_security_dynamic.
 
 <HARD-GATE>

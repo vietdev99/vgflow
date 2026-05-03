@@ -169,7 +169,11 @@ vg-orchestrator step-active 5c_flow
 
 **Skip conditions:**
 - `--skip-flow` flag → skip
-- `${PHASE_DIR}/FLOW-SPEC.md` absent → check goal chains first:
+- `${PHASE_DIR}/FLOW-SPEC.md` absent → check goal chains first.
+  KEEP-FLAT: deterministic dependency-graph BFS, NOT AI context. The
+  embedded Python parses `**Dependencies:**` lines and counts depth-≥3
+  chains — pure structural analysis, no agent consumption. Per review-v2
+  D1 nit:
   ```bash
   CHAIN_COUNT=$(${PYTHON_BIN} -c "
   import re; from pathlib import Path; from collections import deque
