@@ -21,20 +21,74 @@ import sys
 from pathlib import Path
 
 AXIOS_RE = re.compile(
-    r"""axios\s*\.\s*(get|post|put|patch|delete|head|options)\s*\(\s*['"`]([^'"`]+)['"`]""",
+    r"""axios\s*\.\s*(get|post|put|patch|delete|head|options)\s*\(\s*([^,)]+?)\s*(?:,|\))""",
     re.IGNORECASE,
 )
 FETCH_RE = re.compile(
-    r"""fetch\s*\(\s*['"`]([^'"`]+)['"`]\s*(?:,\s*\{[^}]*method\s*:\s*['"`]([A-Z]+)['"`])?""",
+    r"""fetch\s*\(\s*['"]([^'"]+)['"]\s*(?:,\s*\{[^}]*method\s*:\s*['"`]([A-Z]+)['"`])?""",
 )
 TEMPLATE_FETCH_RE = re.compile(
     r"""fetch\s*\(\s*`([^`]+)`\s*(?:,\s*\{[^}]*method\s*:\s*['"`]([A-Z]+)['"`])?""",
 )
+# Match a single quoted/backtick string OR a concatenation chain like
+#   '/a/' + id + '/b' + foo + '/c'
+# Captures runtime expressions between string segments and replaces with `:param`.
+_STRING_LIT_RE = re.compile(r"""(['"`])((?:\\.|(?!\1).)*)\1""")
+_CONCAT_RE = re.compile(r"""\s*\+\s*""")
 
 
 def _normalize(template: str) -> str:
     """Replace `${var}` and `${expr}` with `:param` markers for comparison."""
     return re.sub(r"\$\{[^}]+\}", ":param", template)
+
+
+def _resolve_first_arg(arg: str) -> str | None:
+    """Resolve an axios first arg into a path template.
+
+    Handles three shapes:
+      - 'literal' or "literal" or `template`
+      - 'a/' + expr + '/b'  (string concatenation chain → expr becomes :param)
+      - bare template literal with ${var}
+
+    Returns None if the arg starts with a non-string identifier (variable URL),
+    since we cannot resolve those statically.
+    """
+    arg = arg.strip()
+    if not arg:
+        return None
+    # Single quoted/backtick string with no concatenation.
+    m = _STRING_LIT_RE.fullmatch(arg)
+    if m:
+        return _normalize(m.group(2))
+    # Concatenation chain: scan tokens separated by `+`.
+    # Bail if first token isn't a string literal (variable URL — out of scope).
+    if not arg[0] in "'\"`":
+        return None
+    parts: list[str] = []
+    pos = 0
+    while pos < len(arg):
+        # Expect string literal at pos.
+        m = _STRING_LIT_RE.match(arg, pos)
+        if not m:
+            # Non-string token between `+` separators → runtime expr → :param.
+            # Find next `+` or end.
+            plus = _CONCAT_RE.search(arg, pos)
+            if plus is None:
+                # Trailing junk; bail.
+                break
+            parts.append(":param")
+            pos = plus.end()
+            continue
+        parts.append(_normalize(m.group(2)))
+        pos = m.end()
+        # Expect `+` separator or end.
+        plus = _CONCAT_RE.match(arg, pos)
+        if plus is None:
+            break
+        pos = plus.end()
+    if not parts:
+        return None
+    return "".join(parts)
 
 
 def _scan_file(path: Path, calls: list[dict]) -> None:
@@ -44,11 +98,14 @@ def _scan_file(path: Path, calls: list[dict]) -> None:
         return
     for i, line in enumerate(text.splitlines(), 1):
         for m in AXIOS_RE.finditer(line):
+            resolved = _resolve_first_arg(m.group(2))
+            if resolved is None:
+                continue
             calls.append({
                 "file": str(path),
                 "line": i,
                 "method": m.group(1).upper(),
-                "path_template": _normalize(m.group(2)),
+                "path_template": resolved,
             })
         for m in FETCH_RE.finditer(line):
             calls.append({

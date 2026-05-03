@@ -78,3 +78,57 @@ def test_be_extractor_finds_fastify(tmp_path: Path) -> None:
     assert result.returncode == 0
     routes = json.loads(result.stdout)["routes"]
     assert any(r["method"] == "GET" and r["path_template"] == "/api/v1/health" for r in routes)
+
+
+def test_gap_detector_finds_fe_call_with_no_be_route(tmp_path: Path) -> None:
+    fe = tmp_path / "fe"
+    be = tmp_path / "be"
+    fe.mkdir()
+    be.mkdir()
+    (fe / "Page.tsx").write_text(
+        "axios.get('/api/v1/admin/invoices/' + id + '/payments');\n",
+        encoding="utf-8",
+    )
+    (be / "router.ts").write_text(
+        "router.post('/api/v1/admin/invoices/:id/payments', h);\n",
+        encoding="utf-8",
+    )
+    gate = REPO / "scripts" / "validators" / "verify-fe-be-call-graph.py"
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    result = subprocess.run(
+        ["python3", str(gate),
+         "--fe-root", str(fe), "--be-root", str(be),
+         "--phase", "test-1.0",
+         "--evidence-out", str(out_dir / "evidence.json")],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 1, f"expected BLOCK, got {result.returncode}: {result.stderr}"
+    evidence = json.loads((out_dir / "evidence.json").read_text(encoding="utf-8"))
+    assert evidence["severity"] == "BLOCK"
+    assert evidence["category"] == "fe_be_call_graph"
+    assert "GET" in evidence["summary"]
+    assert "/api/v1/admin/invoices/:param/payments" in evidence["summary"]
+
+
+def test_gap_detector_passes_when_all_fe_calls_have_routes(tmp_path: Path) -> None:
+    fe = tmp_path / "fe"
+    be = tmp_path / "be"
+    fe.mkdir()
+    be.mkdir()
+    (fe / "Page.tsx").write_text(
+        "axios.get('/api/v1/health');\n",
+        encoding="utf-8",
+    )
+    (be / "router.ts").write_text(
+        "router.get('/api/v1/health', h);\n",
+        encoding="utf-8",
+    )
+    gate = REPO / "scripts" / "validators" / "verify-fe-be-call-graph.py"
+    result = subprocess.run(
+        ["python3", str(gate),
+         "--fe-root", str(fe), "--be-root", str(be),
+         "--phase", "test-1.0"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
