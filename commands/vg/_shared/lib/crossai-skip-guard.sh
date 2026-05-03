@@ -85,6 +85,19 @@ crossai_skip_enforce() {
       log_override_debt "--skip-crossai" "$phase" "$step" "$reason" \
         "crossai-skip-${phase}-${command//:/}" 2>/dev/null || true
     fi
+
+    # Bug S3 fix — also emit canonical override.used event so the
+    # orchestrator's `forbidden_without_override` gate at run-complete
+    # finds an exact flag match. log_override_debt only writes legacy
+    # `override_used` (snake_case) telemetry + a register row; the gate
+    # at __main__.py:4031 requires `override.used` (dotted). Both fire:
+    # register tracking + canonical event emission. Use `--flag=` and
+    # `--reason=` (equals form) because argparse otherwise treats
+    # values starting with `--` as a separate option.
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/vg-orchestrator" override \
+      "--flag=--skip-crossai" \
+      "--reason=${reason:-no_reason_provided}" \
+      >/dev/null 2>&1 || true
   fi
 
   # ALWAYS emit event — no silent skip ever. Replaces the old pattern where
