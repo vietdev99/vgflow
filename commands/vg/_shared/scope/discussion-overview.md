@@ -5,9 +5,12 @@
 > per-round expander. Then advance.
 
 <HARD-GATE>
-You MUST execute all 5 rounds + Deep Probe in order. The deep-probe ref
-(`discussion-deep-probe.md`) is the sole owner of `1_deep_discussion`
-mark-step (Critical-3 fix); this file no longer touches that marker.
+You MUST execute all 5 rounds + Deep Probe in order. This file is the
+START of STEP 2 and MUST emit `step-active 1_deep_discussion` BEFORE
+loading sources / running rounds (Critical-4 r2 fix — was previously
+fired only at the end of STEP 2 inside `discussion-deep-probe.md`,
+leaving the 5 rounds + deep probe untracked). The deep-probe ref keeps
+the matching `mark-step 1_deep_discussion` at STEP 2 END.
 
 For EACH user answer in EACH round you MUST invoke per-answer challenger
 (see §A) AND per-round expander at round end (see §B). Skipping is
@@ -16,6 +19,15 @@ adversarial-suppression risk and was blocked by Codex consensus.
 Subagent type is `general-purpose` (NOT a custom `vg-*` type) — Claude
 Agent tool only resolves registered subagent types.
 </HARD-GATE>
+
+## Step active (BEGIN of STEP 2 — Critical-4 r2 fix)
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 1_deep_discussion
+```
+
+The matching `mark-step 1_deep_discussion` fires at STEP 2 END inside
+`discussion-deep-probe.md` (single-owner pattern preserved).
 
 ## Sources (load once at top of STEP 2)
 
