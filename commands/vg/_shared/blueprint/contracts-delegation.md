@@ -334,15 +334,22 @@ so each profile gets only the checks that fit.
 
 # Return JSON envelope
 
-After all 3 files written, compute sha256 and return:
+After all 3 files written, compute sha256 and return (shape MUST match
+`agents/vg-blueprint-contracts/SKILL.md` "Example return"):
 
 ```json
 {
   "api_contracts_path": "${PHASE_DIR}/API-CONTRACTS.md",
+  "api_contracts_index_path": "${PHASE_DIR}/API-CONTRACTS/index.md",
+  "api_contracts_sub_files": ["${PHASE_DIR}/API-CONTRACTS/post-api-sites.md"],
+  "endpoint_count": 1,
   "api_contracts_sha256": "<hex>",
   "interface_md_path": "${PHASE_DIR}/INTERFACE-STANDARDS.md",
   "interface_json_path": "${PHASE_DIR}/INTERFACE-STANDARDS.json",
   "test_goals_path": "${PHASE_DIR}/TEST-GOALS.md",
+  "test_goals_index_path": "${PHASE_DIR}/TEST-GOALS/index.md",
+  "test_goals_sub_files": ["${PHASE_DIR}/TEST-GOALS/G-00.md"],
+  "goal_count": 1,
   "crud_surfaces_path": "${PHASE_DIR}/CRUD-SURFACES.md",
   "summary": "<one paragraph>",
   "bindings_satisfied": ["PLAN:tasks", "INTERFACE-STANDARDS:error-shape", "INTERFACE-STANDARDS:response-envelope"],
@@ -350,31 +357,43 @@ After all 3 files written, compute sha256 and return:
 }
 ```
 
-`codex_proposal_path` and `codex_delta_path` are populated by main agent
-in STEP 4.4 (separate Codex CLI spawn). Do NOT generate these yourself.
+`codex_proposal_path` and `codex_delta_path` are owned by the MAIN agent
+in STEP 4.4 (separate Codex CLI spawn). Do NOT generate these yourself
+and do NOT include their paths in the return JSON.
 ````
 
 ---
 
 ## Output (subagent returns)
 
+Shape MUST match `agents/vg-blueprint-contracts/SKILL.md` "Example
+return" exactly. Codex proposal/delta paths are NOT in the subagent
+return — main agent owns + populates them in STEP 4.4 (Codex CLI
+spawn happens after this subagent returns).
+
 ```json
 {
   "api_contracts_path": "${PHASE_DIR}/API-CONTRACTS.md",
+  "api_contracts_index_path": "${PHASE_DIR}/API-CONTRACTS/index.md",
+  "api_contracts_sub_files": [
+    "${PHASE_DIR}/API-CONTRACTS/post-api-sites.md"
+  ],
+  "endpoint_count": 1,
   "api_contracts_sha256": "<hex>",
   "interface_md_path": "${PHASE_DIR}/INTERFACE-STANDARDS.md",
   "interface_json_path": "${PHASE_DIR}/INTERFACE-STANDARDS.json",
   "test_goals_path": "${PHASE_DIR}/TEST-GOALS.md",
-  "codex_proposal_path": "${PHASE_DIR}/TEST-GOALS.codex-proposal.md",
-  "codex_delta_path": "${PHASE_DIR}/TEST-GOALS.codex-delta.md",
+  "test_goals_index_path": "${PHASE_DIR}/TEST-GOALS/index.md",
+  "test_goals_sub_files": [
+    "${PHASE_DIR}/TEST-GOALS/G-00.md"
+  ],
+  "goal_count": 1,
   "crud_surfaces_path": "${PHASE_DIR}/CRUD-SURFACES.md",
   "summary": "<one paragraph>",
-  "bindings_satisfied": ["PLAN:tasks", "INTERFACE-STANDARDS:error-shape", ...],
+  "bindings_satisfied": ["PLAN:tasks", "INTERFACE-STANDARDS:error-shape"],
   "warnings": []
 }
 ```
-
-`codex_*` paths populated by main agent (STEP 4.4 in overview).
 
 ---
 

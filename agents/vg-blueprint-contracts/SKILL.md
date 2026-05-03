@@ -19,7 +19,6 @@ You MUST NOT ask user questions.
 - `context_path`
 - `ui_map_path` (optional)
 - `must_cite_bindings`
-- `include_codex_lane` (bool, default true)
 
 ## Required outputs (3-layer split for build context budget)
 
@@ -48,9 +47,16 @@ Each per-goal file contains success criteria + mutation evidence + persistence c
 | `<phase_dir>/INTERFACE-STANDARDS.md` | 500 | response/error envelope rules (single doc, not split) |
 | `<phase_dir>/INTERFACE-STANDARDS.json` | 500 | machine-readable schema (single file) |
 | `<phase_dir>/TEST-GOALS.md` | (no min) | concat of TEST-GOALS/G-NN.md prefixed with index |
-| `<phase_dir>/TEST-GOALS.codex-proposal.md` | 40 | only if `include_codex_lane=true` (single file) |
-| `<phase_dir>/TEST-GOALS.codex-delta.md` | 80 | only if `include_codex_lane=true` (single file) |
 | `<phase_dir>/CRUD-SURFACES.md` | 120 | resource × operation matrix (single file) |
+
+**Codex lane outputs are NOT owned by this subagent.** Main agent runs
+the Codex CLI separately in `_shared/blueprint/contracts-overview.md`
+STEP 4.4 (after this subagent returns) and writes:
+- `<phase_dir>/TEST-GOALS.codex-proposal.md`
+- `<phase_dir>/TEST-GOALS.codex-delta.md`
+
+Do NOT generate these files yourself, do NOT invoke Codex CLI, and do
+NOT include their paths in the return JSON.
 
 Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching `must_cite_bindings`.
 
@@ -72,10 +78,12 @@ Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching `mus
 8. Write `<phase_dir>/TEST-GOALS/index.md` (Layer 2 — goal table by priority).
 9. Concat `TEST-GOALS/index.md` + all `TEST-GOALS/G-*.md` →
    `<phase_dir>/TEST-GOALS.md` (Layer 3 legacy).
-10. If `include_codex_lane`: invoke
-    `bash scripts/vg-codex-test-goal-lane.sh --phase <num>`.
-11. Write CRUD-SURFACES.md (single doc).
-12. Compute sha256 for API-CONTRACTS.md (Layer 3 flat). Return JSON.
+10. Write CRUD-SURFACES.md (single doc).
+11. Compute sha256 for API-CONTRACTS.md (Layer 3 flat). Return JSON.
+
+(Codex proposal/delta lane is owned by the MAIN agent, not this subagent —
+runs after this return per `_shared/blueprint/contracts-overview.md`
+STEP 4.4. Do NOT invoke Codex yourself.)
 
 ## Concat snippets (use bash)
 
@@ -101,8 +109,6 @@ done
 ## Failure modes
 
 - Missing input → `{"error": "missing_input", "field": "<name>"}`.
-- Codex lane fails → return success with `warnings: ["codex_lane_failed: <stderr>"]`,
-  do NOT fail outright.
 - Binding unmet → `{"error": "binding_unmet", "missing": [...]}`.
 
 ## Example return
@@ -128,8 +134,6 @@ done
     ".vg/phases/01-foo/TEST-GOALS/G-02.md"
   ],
   "goal_count": 3,
-  "codex_proposal_path": ".vg/phases/01-foo/TEST-GOALS.codex-proposal.md",
-  "codex_delta_path": ".vg/phases/01-foo/TEST-GOALS.codex-delta.md",
   "crud_surfaces_path": ".vg/phases/01-foo/CRUD-SURFACES.md",
   "summary": "Generated 3 endpoints, 3 G-XX test goals, 1 CRUD surface (sites).",
   "bindings_satisfied": ["PLAN:tasks", "INTERFACE-STANDARDS:error-shape"],

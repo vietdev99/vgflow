@@ -156,14 +156,23 @@ Rules for picking refs:
 
 When mode is "full" (phases 0-13), <context-refs> is optional.
 
-OUTPUT: Write ${PHASE_DIR}/PLAN.md with waves, task attributes, goal
-coverage. Each task MUST contain `<!-- vg-binding: <id> -->` HTML comments
-for each citation in must_cite_bindings.
+OUTPUT: Write the 3-layer artifacts described in vg-blueprint-planner
+SKILL.md (Layer 1 ${PHASE_DIR}/PLAN/task-NN.md per task, Layer 2
+${PHASE_DIR}/PLAN/index.md, Layer 3 ${PHASE_DIR}/PLAN.md flat concat).
+Each task MUST contain `<!-- vg-binding: <id> -->` HTML comments for
+each citation in must_cite_bindings.
 
-Then return JSON to main agent:
+Then return JSON to main agent (shape MUST match SKILL.md "Example return"):
 
 {
   "path": "${PHASE_DIR}/PLAN.md",
+  "index_path": "${PHASE_DIR}/PLAN/index.md",
+  "sub_files": [
+    "${PHASE_DIR}/PLAN/task-01.md",
+    "${PHASE_DIR}/PLAN/task-02.md"
+  ],
+  "task_count": <int>,
+  "wave_count": <int>,
   "sha256": "<sha256sum of PLAN.md>",
   "summary": "<one-paragraph plan summary>",
   "bindings_satisfied": ["CONTEXT:decisions", "INTERFACE-STANDARDS:error-shape"],
@@ -175,9 +184,20 @@ Then return JSON to main agent:
 
 ## Output (subagent returns)
 
+Shape MUST match `agents/vg-blueprint-planner/SKILL.md` "Example return"
+exactly. Drift between this contract and SKILL.md breaks the post-spawn
+validator.
+
 ```json
 {
   "path": "${PHASE_DIR}/PLAN.md",
+  "index_path": "${PHASE_DIR}/PLAN/index.md",
+  "sub_files": [
+    "${PHASE_DIR}/PLAN/task-01.md",
+    "${PHASE_DIR}/PLAN/task-02.md"
+  ],
+  "task_count": 5,
+  "wave_count": 3,
   "sha256": "<hex sha256 of PLAN.md contents>",
   "summary": "<one paragraph summary of plan structure>",
   "bindings_satisfied": ["CONTEXT:decisions", "INTERFACE-STANDARDS:error-shape"],
