@@ -248,10 +248,23 @@ if [ -n "$SEEN_FILES" ]; then
 fi
 
 # R5 enforcement: write explicit spawn plan (orchestrator MUST honor)
+# Two artifacts:
+#   1. ${PHASE_DIR}/.wave-spawn-plan.json — phase-local R5 enforcement view
+#      (parallel/sequential_groups with integer task numbers + conflict_files)
+#   2. .vg/runs/${RUN_ID}/.wave-spawn-plan.json — guard-readable schema
+#      (expected: [task-NN, ...]) consumed by scripts/vg-agent-spawn-guard.py
+#      to validate per-spawn task_id and assert spawned == expected at Stop.
+# Schema for (2) is locked R5 contract — guard reads `expected` key.
 SPAWN_PLAN="${PHASE_DIR}/.wave-spawn-plan.json"
+RUN_ID=$(${PYTHON_BIN} -c "import json,os; sid=os.environ.get('CLAUDE_HOOK_SESSION_ID','default'); p='.vg/active-runs/'+sid+'.json'; print(json.load(open(p))['run_id']) if os.path.exists(p) else (json.load(open('.vg/current-run.json'))['run_id'] if os.path.exists('.vg/current-run.json') else '')" 2>/dev/null || echo "")
+GUARD_PLAN=""
+if [ -n "$RUN_ID" ]; then
+  mkdir -p ".vg/runs/${RUN_ID}" 2>/dev/null
+  GUARD_PLAN=".vg/runs/${RUN_ID}/.wave-spawn-plan.json"
+fi
 
-PYTHONIOENCODING=utf-8 ${PYTHON_BIN} - <<PY > "$SPAWN_PLAN"
-import json, sys
+PYTHONIOENCODING=utf-8 GUARD_PLAN_OUT="$GUARD_PLAN" ${PYTHON_BIN} - <<PY > "$SPAWN_PLAN"
+import json, os, sys
 wave_files = """$(printf '%s\n' "${WAVE_FILES[@]}")"""
 pairs = [line.split(':', 1) for line in wave_files.strip().split('\n') if ':' in line]
 file_to_tasks = {}
@@ -276,9 +289,26 @@ plan = {
     "conflict_files": sorted(set(f for f, tasks in file_to_tasks.items() if len(tasks) >= 2)),
 }
 print(json.dumps(plan, indent=2))
+
+# Write guard-schema variant (when RUN_ID resolves) — locked contract:
+# `expected` is the full ordered task-NN list (parallel first, then each
+# sequential group's tasks in order). The guard pops from `remaining[]`
+# per spawn and asserts `spawned == expected` at wave Stop hook.
+guard_out = os.environ.get("GUARD_PLAN_OUT") or ""
+if guard_out:
+    expected_ids = [f"task-{n:02d}" for n in parallel]
+    for grp in seq_groups:
+        expected_ids.extend(f"task-{n:02d}" for n in grp)
+    guard_plan = {
+        "wave_id": ${N:-0},
+        "expected": expected_ids,
+    }
+    with open(guard_out, "w", encoding="utf-8") as fh:
+        json.dump(guard_plan, fh, indent=2)
 PY
 
-echo "✓ Wave ${N} spawn plan: $SPAWN_PLAN"
+echo "✓ Wave ${N} spawn plan (R5 phase-local): $SPAWN_PLAN"
+[ -n "$GUARD_PLAN" ] && echo "✓ Wave ${N} spawn plan (guard schema): $GUARD_PLAN"
 ```
 
 **SPAWN PLAN ENFORCEMENT (orchestrator MUST follow):**
