@@ -290,6 +290,26 @@ in this slim entry until `.vg/runs/${RUN_ID}/.tasklist-projected.evidence.json`
 exists.
 ```
 
+Also append to `must_emit_telemetry:` block (around line 149) so the
+Stop hook recognizes `review.tasklist_projection_skipped` events
+emitted by the upgraded hook (spec lines 770-781; Codex round-3 B3 fix):
+
+```yaml
+    # Task 34 — tasklist projection enforcement (Bug B)
+    - event_type: "review.tasklist_projection_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+```
+
+Add a test asserting the declaration:
+
+```python
+def test_review_md_declares_tasklist_projection_skipped_telemetry() -> None:
+    text = (REPO_ROOT / "commands/vg/review.md").read_text(encoding="utf-8")
+    assert "review.tasklist_projection_skipped" in text, \
+        "review.md must_emit_telemetry must declare 'review.tasklist_projection_skipped' (else Stop hook silent-skips)"
+```
+
 - [ ] **Step 6: Run tests to verify they pass**
 
 ```bash

@@ -84,8 +84,14 @@ def synthetic_phase(tmp_path: Path) -> Path:
 
 
 def _run(args: list[str], phase_root: Path) -> subprocess.CompletedProcess:
-    """Invoke vg-load.sh with PHASE_ROOT env override."""
-    env = {"PHASE_ROOT": str(phase_root.parent)}  # parent so phases/N1 resolves
+    """Invoke vg-load.sh with PHASES_DIR env override.
+
+    `phase_root` is the per-phase directory (e.g. tmp/.vg/phases/N1).
+    `vg-load.sh` reads `${PHASES_DIR:-.vg/phases}` and appends `/<phase>`
+    — so PHASES_DIR must point at the *parent* (`tmp/.vg/phases`), not at
+    the phase dir itself. (Codex round-3 B1 fix.)
+    """
+    env = {"PHASES_DIR": str(phase_root.parent)}
     return subprocess.run(
         ["bash", str(VG_LOAD), *args],
         capture_output=True,

@@ -2,7 +2,10 @@
 
 **Date:** 2026-05-04
 **Source:** PV3 dogfood discovery (review run `4fe39741`, phase 4.1) + sếp Dũng's blueprint audit + Codex GPT-5.5 round-1 verification (89 findings, verdict ⛔ PAUSE → addressed) + sếp Dũng's multi-actor + drift concerns
-**Status:** Revised **v3** after Codex round 1 + multi-actor analysis — 5 review-UX design choices + RCRURDR correction + blueprint envelope gaps + FE contract gap + multi-actor workflow specs + 3 build-coordination mitigations. Awaiting Codex round-2 verification.
+**Status:** Revised **v3.2** after Codex round-3 task-file verification — patches:
+- Round 1 → v2 (89 findings, 4 hard blockers)
+- Round 2 → v3.1 (64 findings, 5 amendments A-E)
+- Round 3 → v3.2 (27 findings, 6 task-file blockers + this 1 spec lock — `lifecycle: partial` discriminator added; goal_type → lifecycle mapping locked)
 
 ---
 
@@ -47,7 +50,8 @@ To avoid the 3-parallel-name confusion Codex finding #46 flagged:
 - **RCRURDR** — canonical name for the 7-op lifecycle (Read empty → Create → Read populated → Update → Read updated → Delete → Read after delete). Used in spec, schema field `lifecycle: "rcrurdr"`, lens-form-lifecycle prompt, scanner-report-contract `goal_class`.
 - **rcrurd** — the legacy single write+read invariant (Task 22 default). Schema field `lifecycle: "rcrurd"` (= just 1 phase: write + read + assert). Backward-compat default.
 - **`crud-roundtrip`** — the transition kit name (existing, in `_shared/transition-kits/`). Treated as alias for RCRURDR. The kit's prompt instructs operators to capture all 7 lifecycle ops; the `goal_class: crud-roundtrip` in scanner-report-contract maps 1:1 to lifecycle: rcrurdr.
-- **`lifecycle_phases`** — schema field name in `rcrurd_invariant.py` (extended in Task 39, NOT renamed). When `lifecycle: rcrurdr`, this list MUST contain exactly 7 phase entries (read_empty, create, read_populated, update, read_updated, delete, read_after_delete).
+- **`lifecycle_phases`** — schema field name in `rcrurd_invariant.py` (extended in Task 39, NOT renamed). When `lifecycle: rcrurdr`, this list MUST contain exactly 7 phase entries (read_empty, create, read_populated, update, read_updated, delete, read_after_delete). When `lifecycle: partial` (Codex round-3 v3.2 lock), it MUST contain exactly the goal-type-specific subset (3 phases for create_only/update_only/delete_only).
+- **`lifecycle: partial`** — discriminator value (Codex round-3 v3.2 lock) for sub-lifecycle goals (`goal_type ∈ {create_only, update_only, delete_only}`). Same per-phase iterator as rcrurdr but smaller phase list.
 - **`write_phase`** — capsule field (Bug I, Task 41). Indicates which WRITE op the task implements: `create | update | delete | null`. NOT the same as `lifecycle_phases` (which has 7 RCRURDR ops). Read-only tasks have `write_phase: null`. Subagent uses this to pick the right RCRURDR phase block from per-goal invariant.
 
 ## Bug A — Review hard-block without `AskUserQuestion`
@@ -381,7 +385,7 @@ Schema gains a `lifecycle` discriminator + `lifecycle_phases[]` array:
 
 ```yaml
 goal_type: mutation
-lifecycle: rcrurdr  # NEW: "rcrurd" (default, single-cycle, backward-compat) | "rcrurdr" | future "rcurdr" / etc.
+lifecycle: rcrurdr  # NEW: "rcrurd" (default, single-cycle, backward-compat) | "rcrurdr" (full 7-phase) | "partial" (subset for goal_type ∈ {create_only, update_only, delete_only}) | future "rcurdr" / etc.
 
 # Backward-compat: when lifecycle == "rcrurd" (default), the existing fields apply:
 read_after_write_invariant:    # legacy, optional when lifecycle != "rcrurd"
@@ -417,16 +421,29 @@ lifecycle_phases:
     assert: [{ path: $.users[?(@.id==created_id)], op: equals, value_from: literal:null }]
 ```
 
-### Goal-type → required-phases (Codex finding #57)
+### Goal-type → required-phases (Codex finding #57; round-3 v3.2 lock)
+
+The schema validator enforces the required-subset per goal_type AND
+maps each goal_type to a single canonical `lifecycle` discriminator
+value:
 
 ```yaml
-# Sub-lifecycle goals only need a subset:
-goal_type: create_only      # phases: [read_empty, create, read_populated]
-goal_type: update_only      # phases: [read_populated, update, read_updated]
-goal_type: delete_only      # phases: [read_populated, delete, read_after_delete]
-goal_type: crud_full        # = rcrurdr (all 7)
-goal_type: mutation         # legacy single read_after_write_invariant (lifecycle: "rcrurd")
+# Sub-lifecycle goals (lifecycle: "partial"): only need a subset of phases.
+goal_type: create_only      # lifecycle: partial; phases: [read_empty, create, read_populated]
+goal_type: update_only      # lifecycle: partial; phases: [read_populated, update, read_updated]
+goal_type: delete_only      # lifecycle: partial; phases: [read_populated, delete, read_after_delete]
+goal_type: crud_full        # lifecycle: rcrurdr; phases: all 7
+goal_type: mutation         # lifecycle: rcrurd; legacy single read_after_write_invariant
 ```
+
+Discriminator → phase-set mapping (locked, Codex round-3 B5 fix):
+- `lifecycle: rcrurd` ⇒ legacy single-cycle (no `lifecycle_phases[]`; uses `read_after_write_invariant`).
+- `lifecycle: rcrurdr` ⇒ MUST contain all 7 phases.
+- `lifecycle: partial` ⇒ MUST contain the goal-type-specific subset (3 phases). Validator rejects other phase sets.
+
+Tasks 23/24/25 callsite migration in Task 39 must accept all three
+discriminator values; `partial` runs the same per-phase iterator as
+`rcrurdr` but with the smaller phase list.
 
 Schema validator enforces the required-subset per goal_type. Single-cycle `mutation` goals stay backward-compatible.
 

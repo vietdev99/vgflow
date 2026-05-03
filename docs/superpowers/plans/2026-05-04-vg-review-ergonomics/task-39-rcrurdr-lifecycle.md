@@ -316,6 +316,55 @@ Edit `scripts/validators/verify-rcrurd-runtime.py`. When `inv.lifecycle == "rcru
 
 Edit `scripts/codegen-helpers/expectReadAfterWrite.ts`. Add `expectLifecycleRoundtrip(invariant: RCRURDInvariant, page, request)` helper. When `lifecycle: rcrurdr`, iterate phases and emit per-phase write+read+assert calls.
 
+- [ ] **Step 5.5: Register `2b8_rcrurdr_invariants` blueprint step + telemetry event (Codex round-3 S9 + S10 fix)**
+
+Spec architecture summary line 732 + Bug G migration plan reference a
+`2b8_rcrurdr_invariants` step that emits per-goal RCRURD invariants
+during blueprint. Without registering it in the slim entry, downstream
+artifacts (Task 40 references `RCRURD-INVARIANTS/` path) won't get
+populated and Stop hook silent-skips the missing event.
+
+Edit `commands/vg/blueprint.md`:
+
+1. Add to `steps:` block, AFTER `2b7_flow_detect` (line 113):
+
+```yaml
+    # Task 39 (Bug G) — emit per-goal RCRURD invariants from extracted
+    # ```yaml-rcrurd``` fences in TEST-GOALS/G-NN.md. Optional skip:
+    # --skip-rcrurdr (with --override-reason) for phases without crud goals.
+    - name: "2b8_rcrurdr_invariants"
+      severity: "warn"
+      required_unless_flag: "--skip-rcrurdr"
+```
+
+2. Append to `must_emit_telemetry:` block (spec line 786):
+
+```yaml
+    # Task 39 — RCRURDR per-goal invariant emission (Bug G)
+    - event_type: "blueprint.rcrurdr_invariant_emitted"
+      phase: "${PHASE_NUMBER}"
+      severity: "info"
+```
+
+3. Add `--skip-rcrurdr` to the `forbidden_without_override` list
+   alongside `--skip-edge-cases` / `--skip-lens-walk` etc.
+
+4. Add `rcrurdr-invariants` to the valid `--only=<step>` enum (Task 38's
+   `<only-step-list>` block) — it's listed there but Task 38 wrote it
+   pointing at "Task 39 RCRURDR generator"; this Step now ensures the
+   step it references exists.
+
+Add a test to `tests/test_rcrurdr_lifecycle.py`:
+
+```python
+def test_blueprint_md_registers_2b8_rcrurdr_step() -> None:
+    text = (REPO / "commands/vg/blueprint.md").read_text(encoding="utf-8")
+    assert "2b8_rcrurdr_invariants" in text, \
+        "blueprint.md must register 2b8_rcrurdr_invariants step (Task 39 / Bug G)"
+    assert "blueprint.rcrurdr_invariant_emitted" in text, \
+        "blueprint.md must declare blueprint.rcrurdr_invariant_emitted telemetry event"
+```
+
 - [ ] **Step 6: Run tests + commit**
 
 ```bash
@@ -325,6 +374,7 @@ DEV_ROOT=. bash sync.sh --no-global 2>&1 | tail -3
 git add scripts/lib/rcrurd_invariant.py \
         scripts/validators/verify-rcrurd-runtime.py \
         scripts/codegen-helpers/expectReadAfterWrite.ts \
+        commands/vg/blueprint.md \
         tests/test_rcrurdr_lifecycle.py \
         .claude/ codex-skills/ .codex/
 git commit -m "feat(rcrurd): R-C-R-U-R-D-R full lifecycle (Task 39, Bug G)

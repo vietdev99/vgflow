@@ -9,7 +9,7 @@
 - Create: `commands/vg/_shared/blueprint/fe-contracts-overview.md`
 - Create: `commands/vg/_shared/blueprint/fe-contracts-delegation.md`
 - Create: `scripts/validators/verify-fe-contract-block5.py`
-- Modify: `commands/vg/blueprint.md` (add step `2b6_fe_contracts` between existing `2b5e_a_lens_walk` and `2b7_flow_detect`; add `--only=<step>` arg parsing; add 2 telemetry events)
+- Modify: `commands/vg/blueprint.md` (add step `2b6d_fe_contracts` between existing `2b5e_a_lens_walk` and `2b7_flow_detect`; add `--only=<step>` arg parsing; add 2 telemetry events)
 - Modify: `commands/vg/_shared/blueprint/contracts-overview.md` (cite BLOCK 5 fields appendix once Pass 2 wires them)
 - Modify: `commands/vg/_shared/blueprint/close.md` (run `verify-fe-contract-block5.py` before close)
 - Test: `tests/test_blueprint_fe_contracts_pass.py`
@@ -416,7 +416,7 @@ python3 -m pytest tests/test_blueprint_only_step.py -v
 
 Expected: 3 FAILED.
 
-- [ ] **Step 7: Patch `commands/vg/blueprint.md` — declare `--only=<step>` + add `2b6_fe_contracts` step + telemetry**
+- [ ] **Step 7: Patch `commands/vg/blueprint.md` — declare `--only=<step>` + add `2b6d_fe_contracts` step + telemetry**
 
 Modify `commands/vg/blueprint.md`:
 
@@ -426,12 +426,12 @@ Modify `commands/vg/blueprint.md`:
 argument-hint: <phase-id> [--profile=<name>] [--skip-edge-cases] [--skip-lens-walk] [--only=<step>]
 ```
 
-2. **Add new required step `2b6_fe_contracts`** in the steps block, between `2b5e_a_lens_walk` and `2b7_flow_detect`. Insert after the `2b5e_edge_cases` block (around line 94):
+2. **Add new required step `2b6d_fe_contracts`** in the steps block, between `2b5e_a_lens_walk` and `2b7_flow_detect`. Insert after the `2b5e_edge_cases` block (around line 94):
 
 ```yaml
     # Task 38 (Bug F) — Pass 2 FE consumer contracts. Runs after lens-walk +
     # edge-cases so UI-MAP + VIEW-COMPONENTS exist. Profile-gated (web only).
-    - name: "2b6_fe_contracts"
+    - name: "2b6d_fe_contracts"
       profile: "web-fullstack,web-frontend-only"
       severity: "warn"
       required_unless_flag: "--skip-fe-contracts"
@@ -652,7 +652,7 @@ Create `commands/vg/_shared/blueprint/fe-contracts-overview.md`:
 
 ```
 2b_contracts (Pass 1, BE 4 blocks) → ... → 2b5e_a_lens_walk → 2b5e_edge_cases →
-2b6c_view_decomposition → 2b6_ui_spec → 2b6b_ui_map → 2b6_fe_contracts (Pass 2 — THIS) →
+2b6c_view_decomposition → 2b6_ui_spec → 2b6b_ui_map → 2b6d_fe_contracts (Pass 2 — THIS) →
 2b7_flow_detect → 2b8_rcrurdr_invariants → 2b9_workflows → 2c_verify
 ```
 

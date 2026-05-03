@@ -12,7 +12,10 @@
 
 Codex round-1 finding #66 quantified: 19 files × 6 fields = **114 atomic edits**. Pure additive; no logic change.
 
-**Field values per spec line 161-178** (Task 26 spec table). One row per lens.
+**Field values — this table is the canonical source** (originally derived
+from a Task 26 capability-floor spec table; that spec is not in-tree, so
+the executor MUST treat the table below as authoritative). One row per
+lens. (Codex round-3 B6 fix.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -119,6 +122,27 @@ def test_required_probe_kinds_is_list() -> None:
         fm = _load_frontmatter(lens_path)
         kinds = fm.get("required_probe_kinds")
         assert kinds is None or isinstance(kinds, list), f"{lens_path.name}: required_probe_kinds must be list"
+
+
+def test_complexity_distribution_is_not_vacuous() -> None:
+    """Codex round-3 follow-on: ensure the complexity-tier table actually
+    spans the matrix — at least 3 lenses at complexity ≥4, at least 1 at
+    complexity 5 with tier=opus. Prevents migration from silently flattening
+    everything to haiku."""
+    high_complexity_count = 0
+    has_opus_5 = False
+    for lens_path in sorted(LENS_DIR.glob("lens-*.md")):
+        fm = _load_frontmatter(lens_path)
+        score = fm.get("worker_complexity_score")
+        tier = fm.get("recommended_worker_tier")
+        if isinstance(score, int):
+            if score >= 4:
+                high_complexity_count += 1
+            if score == 5 and tier == "opus":
+                has_opus_5 = True
+    assert high_complexity_count >= 3, \
+        f"expected ≥3 lenses with complexity ≥4, got {high_complexity_count}"
+    assert has_opus_5, "expected ≥1 lens with complexity=5 + tier=opus"
 ```
 
 - [ ] **Step 2: Run failing tests**

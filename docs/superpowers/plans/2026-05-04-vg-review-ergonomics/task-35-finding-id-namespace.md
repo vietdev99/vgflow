@@ -300,6 +300,30 @@ Validator runs warn-tier (severity=warn). Promote to BLOCK when:
 Operator-triggered (edit `--severity block` flag default in code), not auto-time-based.
 ```
 
+- [ ] **Step 5.5: Declare `review.finding_id_invalid` telemetry event in `commands/vg/review.md` (Codex round-3 B3 fix)**
+
+Spec lines 770-781: every NEW event MUST appear in slim entry's
+`must_emit_telemetry` block — otherwise Stop hook silent-skips it.
+
+Edit `commands/vg/review.md`. In `must_emit_telemetry:` block (line 149),
+append:
+
+```yaml
+    # Task 35 — finding-ID namespace validator (Bug C)
+    - event_type: "review.finding_id_invalid"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+```
+
+Add a test to `tests/test_finding_id_namespace.py`:
+
+```python
+def test_review_md_declares_finding_id_invalid_telemetry() -> None:
+    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    assert "review.finding_id_invalid" in text, \
+        "review.md must_emit_telemetry must declare 'review.finding_id_invalid' (else Stop hook silent-skips)"
+```
+
 - [ ] **Step 6: Run tests + commit**
 
 ```bash
@@ -310,6 +334,7 @@ DEV_ROOT=. bash sync.sh --no-global 2>&1 | tail -3
 git add scripts/lib/scanner_report_contract.py \
         scripts/validators/verify-finding-id-namespace.py \
         commands/vg/_shared/scanner-report-contract.md \
+        commands/vg/review.md \
         tests/test_finding_id_namespace.py \
         .claude/ codex-skills/ .codex/
 git commit -m "feat(review): finding-ID namespace EP/DR/RV/GC/FN/SC/TM (Task 35, Bug C)

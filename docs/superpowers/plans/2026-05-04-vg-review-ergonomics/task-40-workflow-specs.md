@@ -371,7 +371,10 @@ def synthetic_phase(tmp_path: Path) -> Path:
 
 
 def _run(args: list[str], phase_root: Path) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PHASE_ROOT": str(phase_root.parent)}
+    # vg-load.sh reads PHASES_DIR (plural). PHASES_DIR points at the parent
+    # of the phase dir — so `--phase N1` finds `<PHASES_DIR>/N1`. (Codex
+    # round-3 B1 fix.)
+    env = {**os.environ, "PHASES_DIR": str(phase_root.parent)}
     return subprocess.run(["bash", str(VG_LOAD), *args], capture_output=True, text=True, env=env)
 
 
@@ -501,7 +504,7 @@ def test_overview_md_documents_pass_3_position() -> None:
     assert OVERVIEW_MD.exists()
     text = OVERVIEW_MD.read_text(encoding="utf-8")
     assert "Pass 3" in text
-    assert "2b6_fe_contracts" in text or "2b9_workflows" in text
+    assert "2b6d_fe_contracts" in text or "2b9_workflows" in text
 
 
 def test_blueprint_md_declares_2b9_workflows_step() -> None:
@@ -611,7 +614,7 @@ Create `commands/vg/_shared/blueprint/workflows-overview.md`:
 ## Position in pipeline
 
 ```
-2b_contracts (Pass 1) → ... → 2b6_fe_contracts (Pass 2 Task 38) → 2b7_flow_detect →
+2b_contracts (Pass 1) → ... → 2b6d_fe_contracts (Pass 2 Task 38) → 2b7_flow_detect →
 2b8_rcrurdr_invariants (Task 22 + Task 39) → 2b9_workflows (Pass 3 — THIS) → 2c_verify
 ```
 
@@ -731,7 +734,7 @@ Note: `2b8_rcrurdr_invariants` is the slot after 2b7_flow_detect for Task 39 inv
 4. Add `workflows` to the valid `--only=<step>` list (Task 38's `<only-step-list>` block):
 
 ```
-- `workflows` — re-run Pass 3 (Task 40). Prereqs: 2b6_fe_contracts.
+- `workflows` — re-run Pass 3 (Task 40). Prereqs: 2b6d_fe_contracts.
 ```
 
 - [ ] **Step 13: Wire validator into `close.md`**
