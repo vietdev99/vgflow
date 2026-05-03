@@ -112,7 +112,8 @@ fi
 ## STEP 1.3 — parse args (0_parse_and_validate)
 
 Parse `$ARGUMENTS`: phase_number, flags (--skip-deploy, --regression-only,
---smoke-only, --fix-only).
+--smoke-only, --fix-only, --skip-flow, --allow-missing-console-check,
+--override-reason).
 
 Validate:
 - `${PHASE_DIR}/RUNTIME-MAP.json` exists
@@ -121,6 +122,51 @@ Validate:
 - `${PHASE_DIR}/API-CONTRACTS.md` exists
 
 Missing → BLOCK with guidance: "Run `/vg:review {phase}` first."
+
+**Forbidden-without-override enforcement (A5):**
+
+The flags listed in `forbidden_without_override` (test.md runtime_contract)
+MUST be paired with `--override-reason "<≥50 chars>"`. Each accepted skip
+flag emits an `override.used` event via `vg-orchestrator override` so the
+override-debt register has a canonical record:
+
+```bash
+# Detect any forbidden skip/allow flags present in $ARGUMENTS.
+FORBIDDEN_FLAGS=(--skip-deploy --skip-flow --allow-missing-console-check)
+USED_FORBIDDEN=()
+for FF in "${FORBIDDEN_FLAGS[@]}"; do
+  if [[ " ${ARGUMENTS} " =~ [[:space:]]${FF}([[:space:]=]|$) ]]; then
+    USED_FORBIDDEN+=("$FF")
+  fi
+done
+
+if [ ${#USED_FORBIDDEN[@]} -gt 0 ]; then
+  if [[ ! " ${ARGUMENTS} " =~ [[:space:]]--override-reason([[:space:]=]) ]]; then
+    echo "⛔ Forbidden flag(s) used without --override-reason:"
+    for FF in "${USED_FORBIDDEN[@]}"; do echo "   ${FF}"; done
+    echo ""
+    echo "Re-run with: --override-reason \"<≥50 char justification>\""
+    exit 1
+  fi
+
+  # Extract reason text (vg-orchestrator validates ≥50 chars + non-placeholder).
+  OVR_REASON=$(echo "$ARGUMENTS" | ${PYTHON_BIN:-python3} -c "
+import re, sys
+arg = sys.stdin.read()
+m = re.search(r'--override-reason[ =](?:\"([^\"]+)\"|(\S.*))', arg)
+if m:
+    print((m.group(1) or m.group(2) or '').strip())
+")
+
+  for FF in "${USED_FORBIDDEN[@]}"; do
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "$FF" --reason "$OVR_REASON" || {
+        echo "⛔ vg-orchestrator override rejected $FF (reason too short / placeholder)."
+        exit 1
+      }
+  done
+fi
+```
 
 **NOT_SCANNED rejection gate (tightened 2026-04-17 — GLOBAL rule):**
 
