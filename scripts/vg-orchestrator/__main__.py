@@ -1162,6 +1162,10 @@ def cmd_run_abort(args) -> int:
     if not current:
         print("no-active-run")
         return 0
+    if not db.get_run(current["run_id"]):
+        state_mod.clear_current_run()
+        print(f"cleared-orphan-active-run: {args.reason}")
+        return 0
     db.append_event(
         run_id=current["run_id"],
         event_type="run.aborted",
@@ -1253,6 +1257,19 @@ def cmd_emit_event(args) -> int:
         except json.JSONDecodeError as e:
             print(f"\033[38;5;208mInvalid payload JSON: {e}\033[0m", file=sys.stderr)
             return 1
+
+    # P0 fix 2026-05-03 — merge block-event convenience flags into payload.
+    # Explicit --payload keys win over flags when both are passed (preserves
+    # compat for callers already using --payload with block fields).
+    for flag_name, payload_key in (
+        ("gate", "gate"),
+        ("cause", "cause"),
+        ("resolution", "resolution"),
+        ("block_file", "block_file"),
+    ):
+        flag_val = getattr(args, flag_name, None)
+        if flag_val is not None and payload_key not in payload:
+            payload[payload_key] = flag_val
 
     evt = db.append_event(
         run_id=current["run_id"],
@@ -4063,14 +4080,36 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
         violations.append({"type": "must_write", "missing": missing_files})
 
     # --wave N partial-run exemption: when user explicitly runs a single wave
-    # (e.g. /vg:build 14 --wave 2), the terminal steps (8_execute_waves,
-    # 9_post_execution, 10_postmortem_sanity) + build.completed event are
-    # NOT expected. Full pipeline requires a subsequent /vg:build without --wave.
-    # Partial-run exemption applies to must_touch_markers + must_emit_telemetry,
-    # not to must_write (SUMMARY.md still required — wave work must be logged).
+    # (e.g. /vg:build 14 --wave 2) AND that wave is NOT the final wave of the
+    # phase, the terminal steps (8_execute_waves, 9_post_execution,
+    # 10_postmortem_sanity, 11_crossai_build_verify_loop, 12_run_complete) +
+    # build.completed event are NOT expected. Full pipeline requires a
+    # subsequent /vg:build (without --wave) OR `/vg:build N --wave <max>` to
+    # fire post-execution. Partial-run exemption applies to
+    # must_touch_markers + must_emit_telemetry, not to must_write
+    # (SUMMARY.md still required — wave work must be logged).
+    #
+    # Final-wave detection: when waves-overview.md runs the `--wave N`
+    # filter, it writes `.vg/runs/<run_id>/.is-final-wave` with value
+    # `true` (N == max_wave) or `false` (N < max_wave). When this marker
+    # file says `true`, partial exemption is NOT applied (we expect
+    # full post-execution). Falls back to flag-only detection if marker
+    # file absent (mid-flight invocations or legacy paths).
     is_partial_wave = bool(re.search(r"--wave[=\s]+\d+", run_args or ""))
+    if is_partial_wave and run_id:
+        marker_file = Path(".vg/runs") / run_id / ".is-final-wave"
+        try:
+            if marker_file.exists():
+                final_wave_val = marker_file.read_text().strip().lower()
+                if final_wave_val == "true":
+                    # User ran `--wave <max>` → expect full post-execution
+                    is_partial_wave = False
+        except Exception:
+            pass  # marker unreadable → fall back to flag-only (partial)
     PARTIAL_EXEMPT_MARKERS = {"8_execute_waves", "9_post_execution",
-                              "10_postmortem_sanity", "complete"}
+                              "10_postmortem_sanity",
+                              "11_crossai_build_verify_loop",
+                              "12_run_complete", "complete"}
     PARTIAL_EXEMPT_EVENTS = {"build.completed", "review.completed",
                              "test.completed", "accept.completed"}
 
@@ -4335,7 +4374,25 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["orchestrator", "hook", "validator",
                             "llm-claimed", "user"])
     s.add_argument("--outcome", default="INFO",
-                   choices=["PASS", "BLOCK", "WARN", "INFO"])
+                   choices=["PASS", "BLOCK", "WARN", "INFO", "FAIL"])
+    # Block-event convenience flags (P0 fix 2026-05-03): hooks emit
+    # `vg.block.fired/handled` with --gate/--cause/--resolution/--block-file
+    # following the contract documented in vg-meta-skill.md + every block
+    # diagnostic file's "After fix" section. Pre-fix the parser rejected
+    # them with exit 2; hook callers wrap with `|| true` so the failure
+    # was silently swallowed → ZERO vg.block.* events were ever recorded
+    # → Stop hook diagnostic-pairing gate (vg-stop.sh:20-29) silently
+    # bypassed across all runs. Treating these as first-class flags that
+    # merge into payload_json fixes the contract without breaking any
+    # existing --payload caller.
+    s.add_argument("--gate", default=None,
+                   help="Block gate_id (merged into payload as 'gate')")
+    s.add_argument("--cause", default=None,
+                   help="Block cause text (merged into payload as 'cause')")
+    s.add_argument("--resolution", default=None,
+                   help="Block resolution text (merged into payload as 'resolution')")
+    s.add_argument("--block-file", default=None, dest="block_file",
+                   help="Path to .vg/blocks/{run_id}/{gate_id}.md (merged into payload)")
     s.set_defaults(func=cmd_emit_event)
 
     s = sub.add_parser(
