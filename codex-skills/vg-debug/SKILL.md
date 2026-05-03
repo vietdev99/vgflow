@@ -327,29 +327,61 @@ for kw in $KEYWORDS; do
 done
 ```
 
-### runtime_ui → browser MCP (with fallback)
-- If browser MCP available: spawn small Haiku agent to navigate + snapshot the URL mentioned
-- If unavailable: write findings to discovery/ as amendment + suggest manual reproduce
+### runtime_ui → browser MCP via vg-debug-ui-discovery subagent
+
+Detect MCP availability + extract suspected route from bug description:
 
 ```bash
-# Detect MCP availability
+# MCP detection
 if [ -f "${HOME}/.claude/playwright-locks/playwright-lock.sh" ]; then
   MCP_AVAILABLE=true
 else
   MCP_AVAILABLE=false
 fi
 
-if [ "$MCP_AVAILABLE" = "true" ]; then
-  # Spawn Haiku agent (1 view only, not full review scan)
-  echo "Spawning Haiku for targeted UI discovery..."
-  # Agent(...) call with prompt focused on single URL + bug description
+# Heuristic: extract URL path from bug description, default "unknown"
+SUSPECTED_ROUTE=$(echo "$BUG_DESC" | grep -oE '/[a-zA-Z0-9_/-]+' | head -1)
+[ -z "$SUSPECTED_ROUTE" ] && SUSPECTED_ROUTE="unknown"
+
+# Read base URL from config (sandbox env preferred)
+BASE_URL=$(python3 scripts/lib/vg-config-extract.py "env.sandbox.base_url" 2>/dev/null || echo "http://localhost:3000")
+```
+
+#### Pre-spawn narrate
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-debug-ui-discovery spawning "route=$SUSPECTED_ROUTE mcp=$MCP_AVAILABLE"
+```
+
+#### Spawn
+
+AI: invoke
+`Agent(subagent_type="vg-debug-ui-discovery", prompt={bug_description, suspected_route, debug_id, mcp_available, base_url})`.
+Subagent returns markdown findings block on last stdout. Capture into `FINDINGS_MD`.
+
+#### Post-spawn narrate
+
+```bash
+if [ -n "$FINDINGS_MD" ]; then
+  bash scripts/vg-narrate-spawn.sh vg-debug-ui-discovery returned "route=$SUSPECTED_ROUTE"
 else
-  echo "Browser MCP unavailable — fallback to code-only path."
-  # Treat as static + write notice to DEBUG-LOG
-  echo "**Note:** Browser MCP down. UI bug analyzed from code only. Re-run after MCP up if fix doesn't reproduce." \
-    >> "${DEBUG_DIR}/DEBUG-LOG.md"
+  bash scripts/vg-narrate-spawn.sh vg-debug-ui-discovery failed "no markdown findings block returned"
 fi
 ```
+
+#### Append findings to DEBUG-LOG.md
+
+```bash
+echo "$FINDINGS_MD" >> "${DEBUG_DIR}/DEBUG-LOG.md"
+```
+
+If subagent fell back (rule 5 — MCP unavailable), the findings block
+itself contains the fallback note. Orchestrator may then auto-route to
+`/vg:amend ${PHASE_NUMBER}` if `--no-amend-trigger` is NOT set (per
+existing Step 0 spec_gap routing pattern).
+
+See `.claude/agents/vg-debug-ui-discovery.md` for the full subagent
+contract (workflow STEP A-D, MCP tool list, fallback paths).
 
 ### network → curl reproduce + tail logs
 ```bash

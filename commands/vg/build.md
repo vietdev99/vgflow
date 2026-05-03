@@ -129,6 +129,23 @@ post-execution gates inline. The PreToolUse Agent hook
 
 You MUST narrate every Agent() spawn via vg-narrate-spawn.sh (R1a UX
 baseline Req 2 — green-tag chip).
+
+**Dynamic sub-task append (RULE)** — projection từ emit-tasklist là baseline,
+KHÔNG cứng. Khi execute STEP 4 (`8_execute_waves`) đặc biệt với `--wave N`,
+AI PHẢI append per-task children vào group `Wave Execution` trong TodoWrite
+ngay khi wave start. Pattern (tolerant hook B11.6+):
+
+- Initial: 1 todo per group (group title only, từ projection_items)
+- Wave start: TodoWrite update — keep group, append children:
+  `  ↳ Task 91: route handler /api/sites POST` (pending)
+  `  ↳ Task 92: schema + zod validators` (pending)
+  `  ↳ Task 93: integration test` (pending)
+- Per-task: status pending → in_progress → completed
+- Post-wave: roll up children into group (mark group completed only when all
+  children done)
+
+Operator giờ thấy real-time "AI sẽ làm Task 91/92/93, đang in_progress
+Task 92" thay vì chỉ nhìn 1 dòng `Wave Execution`.
 </HARD-GATE>
 
 ## Red Flags (do not rationalize)

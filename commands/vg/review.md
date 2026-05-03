@@ -270,6 +270,23 @@ Do not improvise a separate checklist. The native UI is a projection of `tasklis
 
 Long-running work still needs visible narration: run Bash jobs over 30s in background and poll with `BashOutput`; summarize Task subagent progress before and after spawning.
 
+**Dynamic sub-task append (RULE)** — projection từ emit-tasklist là baseline,
+KHÔNG cứng. Khi AI execute group/step phức tạp (e.g. `phase2_browser_discovery`
+với nhiều view, `phase2_5_recursive_lens_probe` với nhiều lens), AI PHẢI append
+child todos vào group đó để user thấy real-time progress.
+
+Pattern (tolerant hook B11.6+):
+- Initial: 1 todo per group header
+- During execution: TodoWrite update — keep group header, append children
+  với title `  ↳ <id>: <one-line desc>` (status: pending → in_progress → completed)
+- Examples cho review:
+  - `  ↳ View /campaigns: 12 actions captured`
+  - `  ↳ Lens lens-modal-state: 3 modals probed (1 BLOCKED — focus trap)`
+  - `  ↳ phase2c G-04: enriched with success criteria`
+
+Cho operator visibility "AI sẽ làm gì tiếp / tiến độ tới đâu" mà không phải
+đọc Bash log dài.
+
 **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `BLOCK (chặn)`, `Foundation (nền tảng) drift detected (phát hiện lệch hướng)`, `legacy-v1 (định dạng cũ v1)`, `UNREACHABLE (không tiếp cận được)`. Không áp dụng: file path, code identifier (`D-XX`, `git`, `pnpm`), config tag values, lần lặp lại trong cùng message.
 </TASKLIST_POLICY>
 

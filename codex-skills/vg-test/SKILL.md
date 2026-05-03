@@ -175,6 +175,29 @@ Long-running commands still use background execution + `BashOutput` polling so
 the user sees live logs. Tasklist items are progress projection, not a reason
 to split browser/lens work into extra passes.
 
+**Dynamic sub-task append (RULE)** — projection từ emit-tasklist là baseline,
+KHÔNG cứng. Khi AI đang execute 1 group/step phức tạp (e.g., `8_execute_waves`
+trong build với --wave N có nhiều task), AI PHẢI append child todos vào group
+đó ngay khi bắt đầu wave/step để user thấy real-time progress.
+
+Pattern (PostToolUse hook tolerant — chấp nhận cả group title match + sub-step match):
+- Initial projection: 1 todo per group header (từ projection_items)
+- During wave/step execution: TodoWrite update — giữ group header, append children
+  với title format `  ↳ <task-id>: <one-line desc>` (status: pending → in_progress
+  → completed). Sub-tasks tự discover từ PLAN/index.md task list, RUNTIME-MAP
+  goal_sequences, hoặc actual work items AI đang làm.
+- Examples:
+  - build wave 9: `  ↳ Task 91: route handler /api/sites POST`,
+    `  ↳ Task 92: schema + zod validators`,
+    `  ↳ Task 93: integration test`
+  - review browser discovery: `  ↳ View /campaigns: 12 actions captured`,
+    `  ↳ Lens lens-modal-state: 3 modals probed`
+  - test codegen: `  ↳ G-04: spec.ts generated`,
+    `  ↳ G-07: spec.ts (deep-probe variants pending)`
+
+This gives operator visibility into "AI sẽ làm gì tiếp / tiến độ tới đâu" mà
+không cần đọc Bash output. Hook không reject append vì tolerant match (B11.6+).
+
 **Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `PASSED (đạt)`, `FAILED (thất bại)`, `regression (hồi quy)`, `coverage (độ phủ)`. Không áp dụng: file path, code identifier (`G-XX`, `git`), config tag values, lần lặp lại trong cùng message.
 </TASKLIST_POLICY>
 
