@@ -740,6 +740,24 @@ bash scripts/vg-narrate-spawn.sh vg-build-post-executor failed "<gate-id>: <one-
 Read `post-execution-delegation.md` for the EXACT input envelope,
 prompt template, and output JSON contract.
 
+### Codex runtime spawn path
+
+If the runtime is Codex, apply
+`commands/vg/_shared/codex-spawn-contract.md` instead of calling the
+Claude-only `Agent(...)` syntax:
+
+1. Render `post-execution-delegation.md` into
+   `${VG_TMP:-${PHASE_DIR}/.vg-tmp}/codex-spawns/build-post-executor.prompt.md`.
+2. Run `codex-spawn.sh --tier executor --sandbox workspace-write
+   --spawn-role vg-build-post-executor --spawn-id build-post-executor` with
+   `--out ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/codex-spawns/build-post-executor.json`.
+3. Set `SUBAGENT_OUTPUT="$(cat "$OUT_FILE")"` and run the exact same
+   post-spawn validation below.
+4. Treat missing helper, missing Codex CLI, non-zero exit, empty output,
+   malformed JSON, or invalid summary sha as a HARD BLOCK.
+
+Do NOT verify post-execution inline on Codex.
+
 ---
 
 ## Post-spawn validation
@@ -866,6 +884,61 @@ if unclosed:
 print(f"✓ Post-executor return validated: gates={sorted(gates_passed)}, "
       f"summary+build_log sha256 match, {len(sub_files)} BUILD-LOG sub-files")
 PY
+```
+
+### Step 4.5 — L4a deterministic phase-level gates (BLOCK on violation)
+
+After per-task gates complete and before SUMMARY.md is written, run 3
+deterministic phase-level gates that catch issues per-task gates cannot
+see (cross-file FE↔BE comparisons + cross-document spec drift):
+
+```bash
+EVIDENCE_DIR="${PHASE_DIR}/.evidence"
+mkdir -p "$EVIDENCE_DIR"
+
+# L4a-i: FE → BE call graph (exits 1 + writes evidence on gap)
+FE_ROOT=$(vg_config_get paths.web_pages "apps/web/src")
+BE_ROOT=$(vg_config_get code_patterns.api_routes "apps/api/src")
+"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-fe-be-call-graph.py \
+  --fe-root "$FE_ROOT" --be-root "$BE_ROOT" \
+  --phase "${PHASE_NUMBER}" \
+  --evidence-out "${EVIDENCE_DIR}/fe-be-call-graph.json" || {
+  echo "⛔ L4a-i: FE→BE call graph violations — see ${EVIDENCE_DIR}/fe-be-call-graph.json"
+  L4A_FAILED=1
+}
+
+# L4a-ii: Contract shape (method match for now — body P3)
+"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-contract-shape.py \
+  --contracts-dir "${PHASE_DIR}/API-CONTRACTS" \
+  --fe-root "$FE_ROOT" \
+  --phase "${PHASE_NUMBER}" \
+  --evidence-out "${EVIDENCE_DIR}/contract-shape.json" || {
+  echo "⛔ L4a-ii: contract shape mismatches — see ${EVIDENCE_DIR}/contract-shape.json"
+  L4A_FAILED=1
+}
+
+# L4a-iii: Spec drift (status code heuristic)
+"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-spec-drift.py \
+  --phase-dir "${PHASE_DIR}" \
+  --phase "${PHASE_NUMBER}" \
+  --evidence-out "${EVIDENCE_DIR}/spec-drift.json" || {
+  echo "⛔ L4a-iii: spec drift — see ${EVIDENCE_DIR}/spec-drift.json"
+  L4A_FAILED=1
+}
+
+if [ "${L4A_FAILED:-0}" = "1" ]; then
+  # Emit telemetry — STEP 5.5 (next task) will pick up these evidence files
+  # and run the auto-fix loop. Build does NOT mark complete with L4a violations.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "build.l4a_violations_detected" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"evidence_dir\":\"${EVIDENCE_DIR}\"}" \
+    2>/dev/null || true
+else
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "build.l4a_gates_passed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" \
+    2>/dev/null || true
+fi
 ```
 
 ### Commit SUMMARY.md + state files

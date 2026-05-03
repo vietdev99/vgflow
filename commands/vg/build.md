@@ -60,6 +60,12 @@ runtime_contract:
     - "5_handle_branching"
     - "7_discover_plans"
     - "8_execute_waves"
+    # ─── Post-execution markers (skipped for partial-wave; required for final wave) ───
+    # When `--wave N` is set AND N is NOT the final wave, vg-detect-final-wave
+    # writes `.is-final-wave=false` and the orchestrator's is_partial_wave logic
+    # exempts these markers (PARTIAL_EXEMPT_MARKERS in
+    # scripts/vg-orchestrator/__main__.py). When run-all-waves OR final wave,
+    # all four are required by contract validator.
     - "9_post_execution"
     - "10_postmortem_sanity"
     - "11_crossai_build_verify_loop"
@@ -93,6 +99,16 @@ runtime_contract:
       phase: "${PHASE_NUMBER}"
     - event_type: "build.completed"
       phase: "${PHASE_NUMBER}"
+    # Task 6 (build-fix-loop) — L4a deterministic phase-level gates
+    # (verify-fe-be-call-graph + verify-contract-shape + verify-spec-drift)
+    # run in STEP 5 post-execution. severity=warn (informational signal
+    # to STEP 5.5 fix-loop, not a hard contract block).
+    - event_type: "build.l4a_violations_detected"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "build.l4a_gates_passed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     # Every escape hatch must leave a debt-register trail.
     - "--override-reason"
@@ -210,6 +226,32 @@ On return:
 bash scripts/vg-narrate-spawn.sh vg-build-task-executor returned "task-${N} commit ${SHA}"
 ```
 DO NOT execute waves inline. Spawn-guard (Task 1) blocks shortfall.
+
+### Post-wave gate (final-wave detection)
+
+After STEP 4 returns to entry, BEFORE entering STEP 5, check whether this run
+is a partial-wave (`--wave N` mid-wave) or a final-wave run. The
+`waves-overview.md` orchestration writes `.vg/runs/${RUN_ID}/.is-final-wave`
+with value `true` (run-all-waves OR --wave N is final) or `false` (mid-wave).
+
+```bash
+IS_FINAL_WAVE="true"
+if [ -f ".vg/runs/${RUN_ID}/.is-final-wave" ]; then
+  IS_FINAL_WAVE=$(cat ".vg/runs/${RUN_ID}/.is-final-wave")
+fi
+
+if [ "$IS_FINAL_WAVE" != "true" ]; then
+  echo "▸ Partial-wave run detected (--wave N where N < max). Skipping STEP 5/6/7."
+  echo "  Post-execution markers (9_post_execution, 10_postmortem_sanity,"
+  echo "  11_crossai_build_verify_loop, 12_run_complete) waived by"
+  echo "  is_partial_wave exemption in contract validator."
+  echo "  Run \`/vg:build ${PHASE_NUMBER}\` (no --wave) for the FINAL wave to fire post-execution."
+  # Mark partial-wave run-complete (orchestrator emits run.completed with partial flag)
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete --partial-wave 2>/dev/null || \
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete 2>/dev/null || true
+  exit 0
+fi
+```
 
 ### STEP 5 — post-execution verification (HEAVY)
 Read `_shared/build/post-execution-overview.md` AND `_shared/build/post-execution-delegation.md`.
