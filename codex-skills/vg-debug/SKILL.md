@@ -174,8 +174,48 @@ Output: `.vg/debug/<id>/DEBUG-LOG.md` + atomic commits. If detected spec gap →
 ## Step 0: Parse + classify bug description
 
 Parse `$ARGUMENTS`:
-- First quoted string: bug description (required)
-- Optional flags: `--phase=<N>`, `--no-amend-trigger`, `--from-error-log=<path>`, `--from-uat-feedback="<text>"`
+- First quoted string: bug description (required UNLESS `--resume` or empty-args resume picker triggers)
+- Optional flags: `--phase=<N>`, `--no-amend-trigger`, `--from-error-log=<path>`, `--from-uat-feedback="<text>"`, `--resume=<debug-id>`, `--isolate`
+
+### 0a — Active-session resume check (gsd:debug feature ported)
+
+Before fresh classification, check for unresolved sessions:
+
+```bash
+# List active (= not RESOLVED/ABANDONED/SPEC_GAP_ROUTED) sessions, < 7 days old
+ACTIVE_SESSIONS=$(find .vg/debug -maxdepth 2 -name "DEBUG-LOG.md" -mtime -7 2>/dev/null | while read f; do
+  status=$(grep -E "^\*\*Status:\*\*" "$f" | head -1)
+  if ! echo "$status" | grep -qE "RESOLVED|ABANDONED|SPEC_GAP_ROUTED"; then
+    debug_id=$(basename "$(dirname "$f")")
+    desc=$(grep -E "^\*\*Description:\*\*" "$f" | head -1 | sed 's/^\*\*Description:\*\* *//' | head -c 60)
+    last_iter=$(grep -cE "^### Iteration " "$f" || echo 0)
+    echo "${debug_id}|${desc}|${last_iter}"
+  fi
+done)
+
+# Branch on flags
+if [ -n "$RESUME_ID" ]; then
+  # --resume=<id> explicit: load session, skip classification
+  DEBUG_ID="$RESUME_ID"
+  DEBUG_DIR=".vg/debug/${DEBUG_ID}"
+  [ -d "$DEBUG_DIR" ] || { echo "Resume target $DEBUG_ID not found" >&2; exit 1; }
+  BUG_DESC=$(grep -E "^\*\*Description:\*\*" "${DEBUG_DIR}/DEBUG-LOG.md" | head -1 | sed 's/^\*\*Description:\*\* *//')
+  BUG_TYPE=$(grep -E "^\*\*Classification:\*\*" "${DEBUG_DIR}/DEBUG-LOG.md" | head -1 | sed 's/^\*\*Classification:\*\* *//' | awk '{print $1}')
+  echo "▸ Resuming session ${DEBUG_ID} — ${BUG_DESC}"
+  ITER=$(grep -cE "^### Iteration " "${DEBUG_DIR}/DEBUG-LOG.md" || echo 0)
+  # Skip to step 2 (already classified, just continue iterating)
+  RESUMED=true
+elif [ -z "$BUG_DESC" ] && [ -n "$ACTIVE_SESSIONS" ]; then
+  # No description + active sessions exist: offer pick
+  echo "▸ Active debug sessions:"
+  echo "$ACTIVE_SESSIONS" | awk -F'|' '{ printf "  %d) %s — %s (iter %s)\n", NR, $1, $2, $3 }'
+  # AskUserQuestion: "Resume which session, or [N]ew?" — N starts fresh
+  # If user picks number → set RESUME_ID, re-enter resume branch
+  # If user picks "new" → require new description (loop AskUserQuestion for it)
+fi
+```
+
+If neither resume path triggered:
 
 Validate description non-empty. Empty → BLOCK with usage example.
 
@@ -338,6 +378,35 @@ touch "${DEBUG_DIR}/.markers/1_discovery.done"
 <step name="2_hypothesize_and_fix">
 ## Step 2: Generate hypothesis + apply fix
 
+### Subagent isolation (gsd:debug feature ported, opt-in)
+
+If `--isolate` flag set OR discovery findings combined > 50KB (long investigation
+risks burning main context), spawn `general-purpose` to do hypothesis+fix work
+in isolated 200k context, return result to main. Skip if neither condition:
+
+```bash
+DISCOVERY_SIZE=$(du -sb "${DEBUG_DIR}/discovery" 2>/dev/null | awk '{print $1}')
+if [ "$ISOLATE" = "true" ] || [ "${DISCOVERY_SIZE:-0}" -gt 51200 ]; then
+  bash scripts/vg-narrate-spawn.sh general-purpose spawning "debug-${DEBUG_ID} hypothesize+fix"
+  # Agent(subagent_type="general-purpose"):
+  #   prompt: |
+  #     Continue debug session ${DEBUG_ID}.
+  #     Read ${DEBUG_DIR}/DEBUG-LOG.md + ${DEBUG_DIR}/discovery/* for context.
+  #     Generate 3-5 ranked hypotheses, pick top, apply fix via Edit tool,
+  #     commit atomic with prefix `fix(debug-${DEBUG_ID}): iter ${ITER}`,
+  #     run auto-verify (typecheck/curl/snapshot per BUG_TYPE), append iteration
+  #     entry to DEBUG-LOG.md. Return: { iter: N, commit: SHA, hypothesis: <text>,
+  #     verify_result: pass|fail|skip }
+  #     Constraints: NO destructive ops, NO --no-verify, atomic commit only.
+  bash scripts/vg-narrate-spawn.sh general-purpose returned "iter ${ITER} fix applied"
+  # Skip the inline path below
+else
+  # Inline path (default — short investigations, fast main-context loop)
+fi
+```
+
+### Inline hypothesize + fix (default)
+
 Based on discovery findings, generate **3-5 ranked hypotheses** for root cause. Pick top hypothesis, apply fix.
 
 ```
@@ -384,7 +453,40 @@ Document auto-verify result in DEBUG-LOG.
 </step>
 
 <step name="3_verify_and_loop">
-## Step 3: AskUserQuestion — fixed / retry / more-info
+## Step 3: AskUserQuestion — fixed / retry / more-info / checkpoint
+
+### Checkpoint protocol (gsd:debug feature ported)
+
+Before asking the user, decide if this iteration needs a **CHECKPOINT** (operator
+must validate manually in browser/runtime before AI continues). Auto-checkpoint
+when:
+
+- `BUG_TYPE = runtime_ui` AND auto-verify result is "skip" (MCP unavailable)
+- `BUG_TYPE = network` AND auto-verify status is 5xx (server-side, can't auto-prove fix)
+- AI confidence in fix < 70%
+
+Write checkpoint marker to DEBUG-LOG and present detailed instructions:
+
+```bash
+if [ "$NEED_CHECKPOINT" = "true" ]; then
+  cat >> "${DEBUG_DIR}/DEBUG-LOG.md" <<EOF
+
+## CHECKPOINT: human-verify (iter ${ITER})
+**Type:** ${BUG_TYPE}
+**Fix commit:** ${SHA}
+**Operator instructions:**
+1. ${CHECKPOINT_REPRO_STEPS}
+2. Observe: ${CHECKPOINT_EXPECTED_BEHAVIOR}
+3. Resume after test: \`/vg:debug --resume=${DEBUG_ID}\`
+EOF
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event debug.checkpoint \
+    --payload "{\"debug_id\":\"${DEBUG_ID}\",\"iteration\":${ITER},\"checkpoint_type\":\"human-verify\"}" \
+    --step debug.3_verify_and_loop --actor orchestrator --outcome INFO
+fi
+```
+
+### Loop AskUserQuestion
 
 ```
 AskUserQuestion:
@@ -397,6 +499,8 @@ AskUserQuestion:
       description: "Auto rollback HEAD commit (nếu fix sai), thử hypothesis khác trong list."
     - "Thêm thông tin"
       description: "Bạn nhập thêm context (error log, screenshot path, hoặc clarify) → AI re-classify + tiếp tục"
+    - "Pause — sẽ resume sau"
+      description: "Lưu state, exit clean. Resume bằng: /vg:debug --resume=${DEBUG_ID}"
 ```
 
 Emit user_confirmed event after answer:
@@ -427,6 +531,13 @@ Emit user_confirmed event after answer:
 - Re-classify if new info changes signal (e.g., user pastes status code → reclassify network)
 - Loop back to step 2 with enriched context
 
+**(d) Pause — resume sau:**
+- Append `**Status:** PAUSED at iteration ${ITER}` to DEBUG-LOG
+- Emit `debug.paused` event with iter + checkpoint info
+- Print: `Resume command: /vg:debug --resume=${DEBUG_ID}`
+- Exit clean (run-complete with status=PAUSED, NOT RESOLVED)
+- Active-session resume (Step 0a) will surface this on next no-arg invocation
+
 ```bash
 touch "${DEBUG_DIR}/.markers/3_verify_and_loop.done"
 ```
@@ -451,12 +562,13 @@ Append final summary to DEBUG-LOG.md:
 
 ```markdown
 ## Final
-- **Status:** RESOLVED | ESCALATED_TO_AMEND | ABANDONED
+- **Status:** RESOLVED | ESCALATED_TO_AMEND | ABANDONED | PAUSED
 - **Iterations:** N
 - **Commits:** SHA1, SHA2, ...
 - **Files changed:** path1, path2, ...
 - **Time:** Xm Ys
 - **Lessons:** (if any patterns worth saving — flag for /vg:learn)
+- **Resume command:** (if PAUSED) `/vg:debug --resume=${DEBUG_ID}`
 ```
 
 ```bash
