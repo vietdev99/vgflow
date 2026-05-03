@@ -1,8 +1,8 @@
-# `/vg:review` Ergonomics + Blueprint Wiring — Systematic Fix Design (7 bugs/gaps)
+# `/vg:review` Ergonomics + Blueprint Wiring + Multi-actor Coordination — Systematic Fix Design (11 bugs/gaps)
 
 **Date:** 2026-05-04
-**Source:** PV3 dogfood discovery (review run `4fe39741`, phase 4.1) + sếp Dũng's blueprint audit + Codex GPT-5.5 verification (89 findings, verdict ⛔ PAUSE → addressed in this revision)
-**Status:** Revised v2 after Codex review — 5 design choices + RCRURDR correction + blueprint envelope gaps + FE contract gap. Awaiting re-approval.
+**Source:** PV3 dogfood discovery (review run `4fe39741`, phase 4.1) + sếp Dũng's blueprint audit + Codex GPT-5.5 round-1 verification (89 findings, verdict ⛔ PAUSE → addressed) + sếp Dũng's multi-actor + drift concerns
+**Status:** Revised **v3** after Codex round 1 + multi-actor analysis — 5 review-UX design choices + RCRURDR correction + blueprint envelope gaps + FE contract gap + multi-actor workflow specs + 3 build-coordination mitigations. Awaiting Codex round-2 verification.
 
 ---
 
@@ -17,13 +17,20 @@ Fix 7 systemic UX + design failures spanning `/vg:review` and the blueprint→bu
 3. **Bug C** — Findings get ad-hoc IDs (e.g. AI invented "E-001" for a missing endpoint); user has no way to interpret prefixes. Codex round 1 caught 4 prefix collisions — see Bug C section for the corrected namespace.
 4. **Bug D** — Review defers UI lens probes to `/vg:test` instead of running them; user reads "DEFERRED" rows instead of seeing actual UI bug findings. Task 26 (lens dispatch enforcement) shipped the infrastructure; Bug D wires it into review.md Phase 2.5.
 
-**Build/blueprint-side (Tasks 37-39, "Track B"):**
+**Build/blueprint-side (Tasks 37-40, "Track B"):**
 
 5. **Bug E** — Blueprint produces UI-MAP / CRUD-SURFACES / LENS-WALK / RCRURD invariants but the build subagent envelope only carries some of them. Build FE/mutation tasks guess kit pattern + invariants instead of reading them.
 6. **Bug F** — API-CONTRACTS.md is BE-only (4 blocks: auth, schemas, errors, sample). FE codegen has nothing to read for canonical URL, UI states, query param schema, cache invalidation, optimistic semantics, toast text. Result: "wrong URLs even though code đã gen rồi." Add BLOCK 5 = FE consumer contract.
 7. **Bug G** — RCRURD invariant schema (Task 22) only handles ONE write+read cycle; the actual lens-form-lifecycle pattern is **R-C-R-U-R-D-R** (Read empty → Create → Read populated → Update → Read updated → Delete → Read after delete) = 7 ops, 4 reads. Extend schema with `lifecycle_phases[]` array.
+8. **Bug H** — No artifact captures multi-actor cross-role workflows (e.g. User creates request → Admin approves → User sees result). RCRURDR is single-actor; cred switches + multi-view sequences need a Workflow artifact. Add `WORKFLOW-SPECS.md` blueprint output + per-flow split + Pass 3 subagent.
 
-Each bug is independent at the task level. Tracks A and B can land in parallel.
+**Build coordination mitigations (Tasks 41-43, "Track C"):**
+
+9. **Bug I (M1)** — `pre-executor-check.py` capsule has no `actor_role` / `workflow_id` / `lifecycle_phase` fields. Build subagent doesn't know which side of a multi-actor workflow it's implementing. Extend capsule fields.
+10. **Bug J (M2)** — `wave-N-context.md` cites cross-task constraints by file/field only ("Task 7 + Task 8 reference these enum values"), NOT by workflow/state. Cross-wave workflow coordination invisible — wave 5 USER subagent doesn't know wave 8 ADMIN subagent is downstream. Add cross-wave workflow references.
+11. **Bug K (M3)** — `waves-delegation.md` prompt template has no `<workflow_context>` block. Per-slice size validator is 30 KB warn (advisory, not BLOCK). Add prompt block + promote validator to per-unit ≤ 5K-token BLOCK.
+
+Each bug is independent at the task level. Tracks A, B, C can run partly in parallel (see sequencing graph).
 
 ## Non-goals
 
@@ -427,6 +434,244 @@ All 3 callsites updated in **Task 39**, atomic.
 
 `crud-roundtrip` (transition kit, exists) ↔ `lifecycle: rcrurdr` ↔ `goal_class: crud-roundtrip` (scanner-report-contract). All three terms refer to the same 7-op pattern. Spec Glossary section locks this.
 
+## Bug H — Multi-actor workflow specs (Task 40)
+
+### Current state
+
+Blueprint has no artifact for multi-actor cross-role workflows. The closest patterns:
+- `transition-kits/approval-flow.md` — kit template, NOT an output artifact, no per-flow file generation, not wired into build envelope
+- `FLOW-REGISTRY.md` + `FLOW-SPEC.md` (skills `flow-scan` + `flow-spec`) — generated at TEST pipeline (post-build), build subagent doesn't see them
+
+Sếp's example workflow:
+```
+User X → /sites view → opens CreateSiteModal → submits POST /api/sites
+       → cred switch to admin
+Admin → /admin/site-requests → sees pending request → POST /api/admin/sites/:id/approve
+       → cred switch back to user
+User → /sites → sees approved site in My Sites list
+```
+
+Build subagent implementing the user-side `Create` task has no way to know:
+- Admin-side will look for `status=pending_admin_review` (not `pending_review`, not `awaiting_approval`)
+- User-side post-approval read must filter by `status IN ('approved', 'active')`
+- Cred-switch is at FE codegen level (Playwright `testRoleSwitch()` calls)
+
+Missing artifact = silent drift. Build green, workflow broken.
+
+### Design decision
+
+NEW artifact: `WORKFLOW-SPECS.md` (flat) + `WORKFLOW-SPECS/index.md` + `WORKFLOW-SPECS/WF-NN.md` per-workflow split. Generated by NEW Pass 3 subagent `vg-blueprint-workflows` (runs AFTER Pass 2 FE contracts + UI-MAP + VIEW-COMPONENTS exist).
+
+### Schema (per WF-NN.md)
+
+```yaml
+workflow_id: WF-001
+name: "User request → admin approval → user notification"
+goal_links: [G-04, G-05, G-12]    # cross-actor goals this workflow covers
+actors:
+  - role: user
+    cred_fixture: USER_PUBLISHER_CRED
+  - role: admin
+    cred_fixture: ADMIN_CRED
+steps:
+  - step_id: 1
+    actor: user
+    view: /sites
+    action: open_modal
+    target: CreateSiteModal
+    goals: [G-04]
+  - step_id: 2
+    actor: user
+    action: submit
+    api: POST /api/sites
+    state_after: { request: pending_admin_review }
+  - step_id: 3
+    actor: admin
+    cred_switch_marker: true       # FE codegen injects testRoleSwitch() before this step
+    view: /admin/site-requests
+    action: see_pending
+    api: GET /api/admin/site-requests?status=pending
+  - step_id: 4
+    actor: admin
+    action: click
+    target: ApproveButton
+    api: POST /api/admin/sites/:id/approve
+    state_after: { request: approved }
+  - step_id: 5
+    actor: user
+    cred_switch_marker: true
+    view: /sites
+    action: see_approved
+    visibility_signal: "site appears in My Sites list with active badge"
+state_machine:
+  states: [pending_admin_review, approved, rejected, cancelled]
+  transitions:
+    - { from: null, to: pending_admin_review, by: actor:user, via: step_id:2 }
+    - { from: pending_admin_review, to: approved, by: actor:admin, via: step_id:4 }
+ui_assertions_per_step:
+  - step_id: 1
+    ui_state: form-validation-active
+    rcrurd_invariant_ref: G-04   # links to existing per-goal invariant
+  - step_id: 4
+    ui_state: success-toast + list-row-removed-from-pending
+    rcrurd_invariant_ref: G-12
+  - step_id: 5
+    ui_state: site-card-with-active-badge
+```
+
+### Pass 3 subagent contract
+
+NEW: `agents/vg-blueprint-workflows/SKILL.md` + `commands/vg/_shared/blueprint/workflows-delegation.md`. Inputs:
+- All WF-prefixed sections in CONTEXT.md (or scope output) + UI-MAP + VIEW-COMPONENTS + Pass 1 BE contracts + Pass 2 FE contracts (BLOCK 5)
+- Goals labeled with `actor_role` (added by Task 41) + cross-actor groups
+
+Outputs:
+- `${PHASE_DIR}/WORKFLOW-SPECS.md` (flat)
+- `${PHASE_DIR}/WORKFLOW-SPECS/index.md` (TOC: WF-NN → name → step count → actors)
+- `${PHASE_DIR}/WORKFLOW-SPECS/WF-NN.md` (per-flow detail per schema above)
+
+Backward-compat: phases without multi-actor workflows produce empty index (`flows: []`) + no WF-NN files. Validator BLOCKs only when CONTEXT.md declares workflows but artifacts missing.
+
+### Per-task slice resolver
+
+`vg-load --artifact workflow --workflow WF-NN` returns single WF-NN.md. Build envelope passes `workflow_slice_paths: [...]` per task that participates in any workflow (Task 41 capsule extension resolves).
+
+## Bug I — Capsule extension for actor + workflow awareness (Task 41, M1)
+
+### Current state
+
+`scripts/pre-executor-check.py:574` `build_task_context_capsule()` produces fields:
+- `phase`, `task_num`, `task_title`, `source_artifacts`, `context_refs`, `goals`, `endpoints`, `file_paths`, `required_context`, `execution_contract`, `anti_lazy_read_rules`
+
+NO `actor_role`, `workflow_id`, `workflow_step`, `lifecycle_phase` fields. Build subagent doesn't know "I'm USER half of G-04 implementing step 2 of WF-001."
+
+### Design decision
+
+Extend capsule:
+
+```python
+capsule = {
+    ...existing fields...,
+    "actor_role": "user|admin|system|null",          # parsed from PLAN task <actor> tag
+    "workflow_id": "WF-NN | null",                    # parsed from PLAN task <workflow> tag
+    "workflow_step": int | None,                      # which step in workflow
+    "lifecycle_phase": "create|update|delete|null",   # which RCRURDR phase
+    "execution_contract": {
+        ...existing flags...,
+        "must_match_workflow_state": bool,            # True when workflow_id != None
+        "actor_role_hint": str,                       # subagent uses for cred fixture selection
+    },
+    "anti_lazy_read_rules": [
+        ...existing...,
+        # NEW
+        "If workflow_id is set, read WORKFLOW-SPECS/WF-NN.md slice and verify your code matches the state_after declaration for your step_id.",
+        "Do NOT invent state names — use exact strings from state_machine.states[].",
+    ],
+}
+```
+
+### PLAN task tag conventions
+
+Add to `commands/vg/_shared/blueprint/plan-delegation.md`. PLAN tasks gain optional tags:
+
+```markdown
+## Task 03: Add POST /api/sites handler (user-side create)
+
+<file-path>apps/api/src/modules/sites/routes.ts</file-path>
+<actor>user</actor>                 <!-- NEW -->
+<workflow>WF-001</workflow>          <!-- NEW -->
+<workflow-step>2</workflow-step>     <!-- NEW -->
+<lifecycle-phase>create</lifecycle-phase>   <!-- NEW -->
+```
+
+`pre-executor-check.py` parser extracts these tags + populates capsule fields. Missing tags = `null` (backward-compat).
+
+## Bug J — wave-context.md cross-wave workflow references (Task 42, M2)
+
+### Current state
+
+`commands/vg/_shared/build/context.md` STEP wave-context generation produces files like `wave-3-context.md`:
+
+```markdown
+# Wave 3 Context — Phase 4.1
+3 PARALLEL tasks (distinct files, no conflicts):
+## Task 6 — tx_groups enum extension
+  Cross-task constraint: Task 7 + Task 8 will reference these enum values
+        in their schema definitions — keep names EXACT.
+```
+
+Citations are by **file/field**, not by **workflow/state**. Cross-wave workflow coordination invisible: wave 3 USER subagent doesn't know wave 5 ADMIN subagent depends on its `state_after`.
+
+### Design decision
+
+Update wave-context generation logic in `commands/vg/_shared/build/context.md` STEP. After existing per-wave file/field analysis, add cross-wave workflow analysis:
+
+1. For each task in current wave with `capsule.workflow_id != null`:
+   - Read WORKFLOW-SPECS/<workflow_id>.md
+   - Find related tasks in OTHER waves implementing other steps of this workflow
+   - Cite them in wave-context.md
+2. Output format extension:
+
+```markdown
+## Task 6 — tx_groups enum extension (workflow: WF-001 step 2 USER)
+  Cross-task constraint: Task 7 + Task 8 reference these enum values
+  Cross-WORKFLOW constraint:
+    - Task 12 (wave 5, ADMIN, step 4 of WF-001) reads `state` written by this task
+    - Task 18 (wave 7, USER, step 5 of WF-001) verifies post-approval visibility
+    - Your `state_after` MUST be exactly `pending_admin_review` (per WORKFLOW-SPECS/WF-001.md state_machine.states)
+```
+
+Subagent reads cross-wave constraint, knows downstream actors expect specific state name. Drift caught at code-write time, not runtime.
+
+### Trigger
+
+Wave-context generator queries blueprint output once, builds workflow→tasks index. For each task in current wave, list workflow siblings across waves. Lookup is O(workflow_count × tasks_per_workflow) — small.
+
+## Bug K — Subagent workflow_context block + per-slice size BLOCK (Task 43, M3)
+
+### Current state — prompt template
+
+`commands/vg/_shared/build/waves-delegation.md` prompt has blocks:
+- `<vg_executor_rules>`, `<bootstrap_rules>`, `<build_config>`, `<task_context_capsule>`, `<task_plan_slice>`, `<edge_cases_for_goals>`, `<contract_context>`, `<interface_standards_context>`, `<wave_context>`, `<design_context>`, `<binding_requirements>`
+
+NO `<workflow_context>` block. Subagent doesn't load workflow spec automatically.
+
+### Current state — slice size
+
+`scripts/validators/verify-blueprint-split-size.py` flags 30 KB warn (advisory). No BLOCK. Slices can grow silently.
+
+### Design decision — prompt extension
+
+Add NEW block to waves-delegation.md prompt template:
+
+```
+<workflow_context>
+# If capsule.workflow_id present, load:
+#   bash scripts/vg-load.sh --phase ${phase_number} --artifact workflow --workflow ${capsule.workflow_id}
+# Verify your code matches the state machine for `actor_role: ${capsule.actor_role}`
+# at step `workflow_step: ${capsule.workflow_step}`. Cred-switch boundaries
+# are FE codegen concerns — but YOUR code MUST set status to value declared
+# at this step's `state_after: { ... }` field, NOT invent your own naming.
+${WORKFLOW_SLICE_BLOCK}    # @${workflow_slice_path} when workflow_id present, else "NONE — non-workflow task"
+</workflow_context>
+```
+
+Orchestrator resolves `workflow_slice_path` per capsule.workflow_id during step 8c spawn block. When `workflow_id == null`, block reads `NONE` literal — subagent skips workflow verification.
+
+### Design decision — size BLOCK validator
+
+NEW: `scripts/validators/verify-artifact-slice-size.py`. Per-unit slice rules:
+- ≤ 5K tokens (≈ 20 KB) per per-unit slice (PLAN/task-NN.md, API-CONTRACTS/<slug>.md, TEST-GOALS/G-NN.md, CRUD-SURFACES/<resource>.md, WORKFLOW-SPECS/WF-NN.md)
+- ≤ 1K tokens per index file
+- BLOCK on violation, not warn
+- Runs in blueprint close step + build preflight (both gates ensure size discipline)
+
+Token counting via `tiktoken` (existing dep). Falls back to `len(content) / 4` heuristic if tiktoken unavailable.
+
+### Backward compat (Codex round-1 finding #36)
+
+Existing in-flight phases (PV3 4.1) may have slices exceeding 5K tokens. Add `--allow-oversized-slice` override flag with `override-debt` logging. Phase-by-phase drainage rather than big-bang BLOCK.
+
 ---
 
 ## Architecture summary (revised)
@@ -455,20 +700,27 @@ review.md slim entry (Tracks A — Tasks 33-36)
   │      └── [Task 35] verify-finding-id-namespace.py validates EP|DR|RV|GC|FN|SC|TM-NNN prefixes
   └── close
 
-blueprint.md slim entry (Track B — Tasks 37-39)
+blueprint.md slim entry (Track B — Tasks 37-40)
   ├── ... existing steps unchanged ...
   ├── 2a_plan, 2b_contracts (Pass 1 — BE 4 blocks)
   ├── 2b5e_edge_cases, 2b5e_a_lens_walk (existing)
   ├── [NEW Task 38] 2b6_fe_contracts (Pass 2 — BLOCK 5)
   │      └── vg-blueprint-fe-contracts subagent reads UI-MAP + VIEW-COMPONENTS + BE 4 blocks → emits BLOCK 5
   ├── 2b7_rcrurdr_invariants (Task 22 schema, extended by Task 39)
-  └── close
+  ├── [NEW Task 40] 2b8_workflows (Pass 3 — multi-actor workflow specs)
+  │      └── vg-blueprint-workflows subagent reads BLOCK 5 + UI-MAP + state-machine signals
+  │             → emits WORKFLOW-SPECS.md + index + WF-NN.md per-flow
+  └── close + size validator (Task 43 per-slice ≤ 5K tokens BLOCK)
 
-build.md task envelope (Track B — Task 37)
+build.md task envelope (Track B + C — Tasks 37/41/42/43)
   ├── Existing fields: plan_task_path, contract_slice_paths, ui_map_path, view_components_path, edge_cases_for_goals
   ├── [Task 37] crud_surfaces_slice_path (per-task slice via vg-load)
   ├── [Task 37] lens_walk_slice_path (per-task slice)
-  └── [Task 37] rcrurd_invariants_paths (per-task list of per-goal invariants)
+  ├── [Task 37] rcrurd_invariants_paths (per-task list of per-goal invariants)
+  ├── [Task 41 / Bug I / M1] capsule.actor_role + workflow_id + workflow_step + lifecycle_phase
+  ├── [Task 41] capsule.execution_contract.must_match_workflow_state + actor_role_hint
+  ├── [Task 42 / Bug J / M2] wave-N-context.md cites cross-wave workflow siblings
+  └── [Task 43 / Bug K / M3] subagent prompt <workflow_context> block + per-slice ≤ 5K-token BLOCK validator
 ```
 
 ## Component boundaries
@@ -484,6 +736,11 @@ build.md task envelope (Track B — Task 37)
 - `commands/vg/_shared/lens-prompts/lens-*.md` — frontmatter additions (Task 36a, 19 files × 6 fields).
 - `agents/vg-blueprint-fe-contracts/` (NEW — Task 38) — Pass 2 subagent + delegation contract.
 - `scripts/lib/rcrurd_invariant.py` — extend in place with `lifecycle_phases[]` array (Task 39).
+- `agents/vg-blueprint-workflows/` (NEW — Task 40) — Pass 3 subagent + delegation contract.
+- `commands/vg/_shared/blueprint/workflows-delegation.md` (NEW — Task 40) — Pass 3 prompt template + return JSON shape.
+- `scripts/pre-executor-check.py` — extend `build_task_context_capsule()` with actor_role + workflow_id + workflow_step + lifecycle_phase fields (Task 41).
+- `commands/vg/_shared/build/context.md` — wave-context generation logic update for cross-wave workflow citation (Task 42).
+- `scripts/validators/verify-artifact-slice-size.py` (NEW — Task 43) — per-slice ≤ 5K-token BLOCK validator with `--allow-oversized-slice` escape.
 
 ## Telemetry events declared (Codex finding #53)
 
@@ -503,11 +760,16 @@ In `commands/vg/review.md`:
 In `commands/vg/blueprint.md`:
 - `blueprint.fe_contracts_pass_completed` (info, Task 38)
 - `blueprint.rcrurdr_invariant_emitted` (info, Task 39)
+- `blueprint.workflows_pass_completed` (info, Task 40)
+- `blueprint.slice_size_blocked` (warn, Task 43)
 
 In `commands/vg/build.md`:
 - `build.envelope_slice_resolved` (info, Task 37)
+- `build.capsule_workflow_resolved` (info, Task 41)
+- `build.cross_wave_workflow_cited` (info, Task 42)
+- `build.workflow_state_drift_detected` (warn, Task 43 — emitted by post-execution validator if subagent's commit `state_after` doesn't match WORKFLOW-SPECS declaration)
 
-## Sequencing & dependency graph (Codex finding #68-71)
+## Sequencing & dependency graph (Codex finding #68-71 + multi-actor extension)
 
 ```
 Track A (review pilot, sequential):
@@ -516,20 +778,35 @@ Track A (review pilot, sequential):
   |                                                                            depends on 33 (uses wrapper for BLOCK)
   +-- pure additive (hook diagnostic + slim entry positioning + telemetry); independent
 
-Track B (blueprint/build envelope, partly parallel):
+Track B (blueprint, partly parallel):
   39 (RCRURDR schema)          ──┐
-  38a (BLOCK 5 schema)         ──┤
-                                  ├──> 37 (envelope completeness — depends on 38a + 39 schemas)
-                                  └──> 38b (BLOCK 5 validator + Pass 2 subagent — depends on 38a)
+  38 (BLOCK 5 schema + validator + Pass 2 subagent) ──┤
+                                                       ├──> 37 (build envelope: CRUD-SURFACES + LENS-WALK + RCRURD slices)
+                                                       └──> 40 (Pass 3 workflow specs — depends on Pass 2 BLOCK 5 + UI-MAP)
+
+Track C (build coordination mitigations, depends on Track B):
+  41 (capsule extension actor/workflow fields) ──┐
+                                                   │
+  40 (Track B workflow specs) ──────────────────┤
+                                                   ├──> 42 (wave-context cross-wave references — needs both)
+                                                   └──> 43 (subagent <workflow_context> + size BLOCK validator)
 
 Cross-track:
-  36b (Track A) needs Task 33's wrapper (Track A predecessor) — already covered by Track A's order.
-  37 (Track B) is independent of Track A.
+  36b (Track A) needs 33 (Track A predecessor) ✓
+  37 (Track B) needs 38 + 39 schemas ✓
+  41 (Track C) is independent — capsule extension, can run parallel to 38/39/40
+  42 (Track C) needs 40 + 41
+  43 (Track C) needs 41 + waves-delegation prompt template stable
 ```
 
-Suggested execution: Tracks A and B run in parallel by 2 sessions. Within each track, the order above. **No cross-track blockers** for now.
+Suggested execution (4-track parallel by ≥2 sessions):
+- Session 1: Track A sequential (5 tasks: 34→33→35→36a→36b)
+- Session 2: Track B partly parallel: (39 ‖ 38) → (37 ‖ 40)
+- Session 3 (after Track B mid-point): Track C 41 (parallel to 37/40) → 42 → 43
 
-Plan format: `superpowers:writing-plans` per `docs/superpowers/plans/2026-05-04-vg-review-ergonomics.md` — same flow as Tasks 1-32. **8 tasks total** (33, 34, 35, 36a, 36b, 37, 38a/38b combined, 39).
+**No cross-track blockers** between A and B/C. Tracks A and B/C run independently.
+
+Plan format: `superpowers:writing-plans` per `docs/superpowers/plans/2026-05-04-vg-review-ergonomics.md` — same flow as Tasks 1-32. **11 tasks total** (33, 34, 35, 36a, 36b, 37, 38, 39, 40, 41, 42, 43).
 
 ## Error handling
 
@@ -555,20 +832,24 @@ Each task gets a self-contained test under `tests/`:
 
 Plus integration test `tests/test_review_p4_dogfood_replay.py`: synthetic phase with 1 missing endpoint, run review, assert wrapper triggers + 4 options present + AskUserQuestion JSON shape correct.
 
-## Task breakdown (revised)
+## Task breakdown (revised — 11 tasks)
 
-| Task | Surface | Track | Files |
-|---|---|---|---|
-| **Task 34** | Bug B — slim entry repositioning + hook diagnostic upgrade + telemetry | A | `_shared/lib/tasklist-projection-instruction.md`, `vg-pre-tool-use-bash.sh`, `review.md`, `tests/test_review_tasklist_projection.py` |
-| **Task 33** | Bug A — 2-leg blocking gate wrapper + refactor 13 review *_blocked sites | A | `_shared/lib/blocking-gate-prompt-contract.md`, `_shared/lib/review-fix-loop-delegation.md`, `scripts/lib/blocking-gate-prompt.sh`, `review.md`, `tests/test_blocking_gate_prompt.py` |
-| **Task 35** | Bug C — finding ID namespace EP/DR/RV/GC/FN/SC/TM | A | `scripts/lib/scanner_report_contract.py`, `scripts/validators/verify-finding-id-namespace.py`, `_shared/scanner-report-contract.md`, `tests/test_finding_id_namespace.py` |
-| **Task 36a** | Bug D — lens prompt frontmatter migration (19 files × 6 fields) | A | `_shared/lens-prompts/lens-*.md`, `tests/test_lens_prompt_frontmatter.py` |
-| **Task 36b** | Bug D — wire Task 26 lens dispatch into review.md Phase 2.5 | A | `scripts/spawn_recursive_probe.py`, `review.md`, `tests/test_review_lens_dispatch_wiring.py` |
-| **Task 37** | Bug E — build envelope completeness (per-task slices) | B | `_shared/build/waves-delegation.md`, `scripts/vg-load.sh`, `tests/test_build_envelope_slices.py` |
-| **Task 38** | Bug F — BLOCK 5 schema + Pass 2 vg-blueprint-fe-contracts subagent + validator | B | `agents/vg-blueprint-fe-contracts/`, `_shared/blueprint/contracts-overview.md`, `scripts/validators/verify-fe-contract-block5.py`, `tests/test_blueprint_fe_contracts_pass.py` |
-| **Task 39** | Bug G — extend rcrurd_invariant.py with `lifecycle_phases[]` + Tasks 23/24/25 callsite updates | B | `scripts/lib/rcrurd_invariant.py`, `scripts/validators/verify-rcrurd-runtime.py`, `scripts/codegen-helpers/expectReadAfterWrite.ts`, `tests/test_rcrurdr_lifecycle.py` |
+| Task | Bug | Track | Surface | Files |
+|---|---|---|---|---|
+| **Task 34** | B | A | Slim entry repositioning + hook diagnostic upgrade + telemetry | `_shared/lib/tasklist-projection-instruction.md`, `vg-pre-tool-use-bash.sh`, `review.md`, `tests/test_review_tasklist_projection.py` |
+| **Task 33** | A | A | 2-leg blocking gate wrapper + refactor 13 review *_blocked sites | `_shared/lib/blocking-gate-prompt-contract.md`, `_shared/lib/review-fix-loop-delegation.md`, `scripts/lib/blocking-gate-prompt.sh`, `review.md`, `tests/test_blocking_gate_prompt.py` |
+| **Task 35** | C | A | Finding ID namespace EP/DR/RV/GC/FN/SC/TM | `scripts/lib/scanner_report_contract.py`, `scripts/validators/verify-finding-id-namespace.py`, `_shared/scanner-report-contract.md`, `tests/test_finding_id_namespace.py` |
+| **Task 36a** | D | A | Lens prompt frontmatter migration (19 files × 6 fields) | `_shared/lens-prompts/lens-*.md`, `tests/test_lens_prompt_frontmatter.py` |
+| **Task 36b** | D | A | Wire Task 26 lens dispatch into review.md Phase 2.5 | `scripts/spawn_recursive_probe.py`, `review.md`, `tests/test_review_lens_dispatch_wiring.py` |
+| **Task 37** | E | B | Build envelope completeness (CRUD-SURFACES + LENS-WALK + RCRURD per-task slices) | `_shared/build/waves-delegation.md`, `scripts/vg-load.sh`, `tests/test_build_envelope_slices.py` |
+| **Task 38** | F | B | BLOCK 5 schema + Pass 2 vg-blueprint-fe-contracts subagent + validator | `agents/vg-blueprint-fe-contracts/`, `_shared/blueprint/contracts-overview.md`, `scripts/validators/verify-fe-contract-block5.py`, `tests/test_blueprint_fe_contracts_pass.py` |
+| **Task 39** | G | B | Extend rcrurd_invariant.py with `lifecycle_phases[]` + Tasks 23/24/25 callsite updates | `scripts/lib/rcrurd_invariant.py`, `scripts/validators/verify-rcrurd-runtime.py`, `scripts/codegen-helpers/expectReadAfterWrite.ts`, `tests/test_rcrurdr_lifecycle.py` |
+| **Task 40** | H | B | Multi-actor WORKFLOW-SPECS artifact + Pass 3 vg-blueprint-workflows subagent | `agents/vg-blueprint-workflows/`, `_shared/blueprint/workflows-delegation.md`, `_shared/blueprint/contracts-overview.md` (orchestrator step), `scripts/vg-load.sh`, `tests/test_blueprint_workflows_pass.py` |
+| **Task 41** | I (M1) | C | Capsule extension: actor_role + workflow_id + workflow_step + lifecycle_phase + execution_contract.must_match_workflow_state | `scripts/pre-executor-check.py`, `_shared/blueprint/plan-delegation.md` (PLAN task tag conventions), `tests/test_capsule_workflow_fields.py` |
+| **Task 42** | J (M2) | C | wave-context.md cross-wave workflow references | `_shared/build/context.md`, `tests/test_wave_context_cross_wave.py` |
+| **Task 43** | K (M3) | C | `<workflow_context>` prompt block + verify-artifact-slice-size.py 5K-token BLOCK validator | `_shared/build/waves-delegation.md`, `scripts/validators/verify-artifact-slice-size.py`, `_shared/blueprint/close.md` (validator wiring), `_shared/build/preflight.md` (validator wiring), `tests/test_artifact_slice_size_validator.py` |
 
-8 tasks total. Tasks 33-36 (Track A) sequential within track. Tasks 37-39 (Track B) — Task 39 + Task 38a (schema) can run parallel; Task 37 + Task 38b (validator) depend on the schemas.
+11 tasks total across 3 tracks. Track A 5 tasks (sequential), Track B 4 tasks (mostly parallel), Track C 3 tasks (depend on Track B mid-point).
 
 ## Open follow-ups (not in this spec)
 
