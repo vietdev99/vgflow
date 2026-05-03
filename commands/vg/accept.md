@@ -1,7 +1,7 @@
 ---
 name: vg:accept
 description: Human UAT acceptance — structured checklist driven by VG artifacts (SPECS, CONTEXT, TEST-GOALS, RIPPLE-ANALYSIS)
-argument-hint: "<phase> [--allow-uat-skips] [--allow-empty-uat] [--allow-unreachable] [--allow-deferred] [--override-reason=<text>]"
+argument-hint: "<phase> [--allow-uat-skips] [--allow-empty-uat] [--allow-unreachable] [--override-reason=<text>]"
 allowed-tools:
   - Read
   - Write
@@ -63,12 +63,12 @@ runtime_contract:
   # --allow-uat-skips:    Batch 3 B4 — log when UAT quorum breached
   # --allow-empty-uat:    Batch 3 B4 — log when .uat-responses.json absent
   # --allow-unreachable:  existing (3b gate)
-  # --allow-deferred:     existing (DEFERRED bypass in /vg:next)
+  # --allow-deferred:     belongs to /vg:next (DEFERRED bypass), NOT accept —
+  #                        removed from this contract (was undeclared bypass surface).
   forbidden_without_override:
     - "--allow-uat-skips"
     - "--allow-empty-uat"
     - "--allow-unreachable"
-    - "--allow-deferred"
 ---
 
 <HARD-GATE>

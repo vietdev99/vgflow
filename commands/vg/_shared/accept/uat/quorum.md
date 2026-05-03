@@ -225,10 +225,28 @@ if [ "${CRITICAL_SKIPS:-0}" -gt "${MAX_CRIT_SKIPS:-0}" ]; then
     exit 1
   fi
 
-  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+  # A5-r2 fix: enforce --override-reason + rationalization-guard + canonical
+  # override emit (was missing — round-1 only logged debt locally, never fired
+  # override.used so run-complete contract didn't see the bypass).
+  UAT_SKIPS_REASON=$(_uat_extract_reason)
+  if [ -z "$UAT_SKIPS_REASON" ]; then
+    echo "⛔ --allow-uat-skips requires --override-reason=\"<why shipping with critical skips>\"" >&2
+    exit 1
+  fi
+  if type -t rationalization_guard_check >/dev/null 2>&1; then
+    RATGUARD_RESULT=$(rationalization_guard_check "uat-quorum-skips" \
+      "${CRITICAL_SKIPS} critical UAT items (Section A decisions / Section B READY goals) skipped. Bypass ships unverified user-facing acceptance." \
+      "phase=${PHASE_NUMBER} critical_skips=${CRITICAL_SKIPS} threshold=${MAX_CRIT_SKIPS} reason=${UAT_SKIPS_REASON}")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "uat-quorum-skips" "--allow-uat-skips" "$PHASE_NUMBER" "accept.uat_quorum_gate" "$UAT_SKIPS_REASON"; then
+      exit 1
+    fi
+  fi
+  # Canonical override emit — fires override.used (run-complete contract) + OVERRIDE-DEBT entry.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--allow-uat-skips" --reason "$UAT_SKIPS_REASON" 2>/dev/null || true
   type -t log_override_debt >/dev/null 2>&1 && \
     log_override_debt "accept-uat-quorum" "${PHASE_NUMBER}" \
-    "${CRITICAL_SKIPS} critical UAT skips (threshold ${MAX_CRIT_SKIPS})" "${PHASE_DIR}"
+    "${CRITICAL_SKIPS} critical UAT skips (threshold ${MAX_CRIT_SKIPS}) — ${UAT_SKIPS_REASON}" "${PHASE_DIR}"
 
   echo "⚠ --allow-uat-skips — proceeding, forced DEFERRED verdict (not ACCEPTED)" >&2
   # Rewrite final verdict to DEFER so downstream /vg:next still blocks
