@@ -260,6 +260,7 @@ After all goals processed, return:
 
 ```json
 {
+  "mode": "trust_review | legacy_replay",
   "goals_verified": [
     {
       "goal_id": "G-01",
@@ -281,6 +282,7 @@ After all goals processed, return:
 }
 ```
 
+`mode` MUST be `"trust_review"` when TRUST_REVIEW=true, else `"legacy_replay"`.
 `goals_verified` MUST contain one entry per goal in TEST-GOALS.md.
 `baseline_console_check_pass` MUST always be present (bool).
 ````
@@ -317,6 +319,7 @@ and baseline console check only.
 
 ```json
 {
+  "mode": "trust_review",
   "goals_verified": [
     {
       "goal_id": "G-01",
