@@ -96,7 +96,13 @@ derived from actually looking at the PNG.
 
 **Per-slug agent flow:**
 
-For every SLUG-form `<design-ref>` in PLAN.md tasks:
+For every SLUG-form `<design-ref>` in PLAN.md tasks, wrap each spawn
+with narration so the user sees subagent lifecycle in chat:
+
+```bash
+# Narrate spawn (renders as colored chip in Claude Code / Codex CLI).
+bash scripts/vg-narrate-spawn.sh vg-blueprint-view-decomposer spawning "view decomposition for ${slug} (phase ${PHASE_NUMBER})"
+```
 
 ```
 Agent(subagent_type="general-purpose", model="${MODEL_VIEW_DECOMP:-claude-opus-4-7}"):
@@ -122,6 +128,15 @@ Agent(subagent_type="general-purpose", model="${MODEL_VIEW_DECOMP:-claude-opus-4
     - evidence is 5-15 char description ("blue button top-right") — proves you saw pixels.
 
   output_file: ${PHASE_DIR}/.tmp/view-{slug}.json
+```
+
+```bash
+# After Agent return: narrate result (or failure).
+if [ -s "${PHASE_DIR}/.tmp/view-${slug}.json" ]; then
+  bash scripts/vg-narrate-spawn.sh vg-blueprint-view-decomposer returned "view-${slug}.json written"
+else
+  bash scripts/vg-narrate-spawn.sh vg-blueprint-view-decomposer failed "no output for ${slug}"
+fi
 ```
 
 **Aggregation (orchestrator):**
