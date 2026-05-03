@@ -106,13 +106,16 @@ fi
 
 Use `vg-load --phase ${PHASE_NUMBER} --artifact goals --list` to enumerate
 goals (Layer 1 split per Phase F Task 30). For each goal, expand via
-`vg-load --phase ${PHASE_NUMBER} --artifact goal --id G-NN`. Look up status
-in `GOAL-COVERAGE-MATRIX.md` (KEEP-FLAT, single doc).
+`vg-load --phase ${PHASE_NUMBER} --artifact goals --goal G-NN`. Look up
+status in `GOAL-COVERAGE-MATRIX.md` (KEEP-FLAT, single doc).
 
 ```bash
-# Step 1 — list goals via vg-load
-GOALS_LIST=$(bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" \
+# Step 1 — list goals via vg-load (--list emits filenames like "G-01.md")
+GOALS_LIST_RAW=$(bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" \
   --phase "${PHASE_NUMBER}" --artifact goals --list 2>/dev/null)
+
+# Normalize filenames → bare goal IDs (strip path + .md, drop index/non-G rows)
+GOALS_LIST=$(echo "$GOALS_LIST_RAW" | sed -E 's|^.*/||; s|\.md$||' | grep -E '^G-[0-9]+$' || true)
 
 # Step 2 — expand each + look up coverage status
 COVERAGE="${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
@@ -120,7 +123,7 @@ COVERAGE="${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
 while IFS= read -r gid; do
   [ -z "$gid" ] && continue
   TITLE=$(bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" \
-    --phase "${PHASE_NUMBER}" --artifact goal --id "$gid" 2>/dev/null | \
+    --phase "${PHASE_NUMBER}" --artifact goals --goal "$gid" 2>/dev/null | \
     grep -m1 -oE '^# G-[0-9]+:?\s*.*' | sed -E 's/^# G-[0-9]+:?\s*//' | head -c 100)
   STATUS="UNKNOWN"
   if [ -f "$COVERAGE" ]; then
@@ -206,12 +209,14 @@ tasks (Layer 1 split). For each task, expand via vg-load and grep
 ```bash
 # Use vg-load for per-task expansion
 > "${VG_TMP}/uat-designs.txt"
-TASK_LIST=$(bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" \
+# --list emits filenames like "task-04.md" — strip path + .md + "task-" prefix
+TASK_LIST_RAW=$(bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" \
   --phase "${PHASE_NUMBER}" --artifact plan --list 2>/dev/null)
+TASK_LIST=$(echo "$TASK_LIST_RAW" | sed -E 's|^.*/||; s|\.md$||; s|^task-||' | grep -E '^[0-9]+$' || true)
 while IFS= read -r tid; do
   [ -z "$tid" ] && continue
   bash "${REPO_ROOT}/.claude/scripts/vg-load.sh" \
-    --phase "${PHASE_NUMBER}" --artifact plan-task --id "$tid" 2>/dev/null | \
+    --phase "${PHASE_NUMBER}" --artifact plan --task "$tid" 2>/dev/null | \
     grep -oE '<design-ref>[^<]+</design-ref>' | \
     sed -E 's/<design-ref>([^<]+)<\/design-ref>/\1/' >> "${VG_TMP}/uat-designs.txt"
 done <<< "$TASK_LIST"
