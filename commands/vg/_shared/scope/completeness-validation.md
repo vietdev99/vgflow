@@ -83,21 +83,162 @@ Found → WARN:
 
 ## Surface warnings + emit events
 
+> Critical-5 r2 fix: previous block was pseudocode (`# (... run the 4 checks
+> above ...)` with counters always 0 → mark-step always succeeded silently).
+> The block below implements the 4 checks inline using portable shell + a
+> single python pass over CONTEXT.md + SPECS.md.
+
 ```bash
 WARN_COUNT=0
 BLOCK_COUNT=0
+VALIDATION_LOG=""
 
-# (... run the 4 checks above, increment counters ...)
+# Resolve fidelity (used by Check B production-block branch)
+FIDELITY="default"
+if [ -x "scripts/lib/threshold-resolver.py" ] || [ -f "scripts/lib/threshold-resolver.py" ]; then
+  FIDELITY=$(${PYTHON_BIN:-python3} scripts/lib/threshold-resolver.py \
+    --phase "${PHASE_NUMBER}" 2>/dev/null | grep -oE 'production|default|prototype' | head -1 || echo "default")
+fi
+
+# Run all 4 checks in a single python pass — emits JSON summary to stdout
+VALIDATION_JSON=$(${PYTHON_BIN:-python3} - "${PHASE_DIR}" "${PHASE_NUMBER}" "${FIDELITY}" <<'PY'
+import json, os, re, sys
+from pathlib import Path
+
+phase_dir, phase_num, fidelity = sys.argv[1], sys.argv[2], sys.argv[3]
+phase_dir = Path(phase_dir)
+context_path = phase_dir / "CONTEXT.md"
+specs_path = phase_dir / "SPECS.md"
+
+warnings, blocks = [], []
+if not context_path.exists():
+    blocks.append({"check": "preflight", "msg": f"CONTEXT.md missing at {context_path}"})
+    print(json.dumps({"warnings": warnings, "blocks": blocks}))
+    sys.exit(0)
+
+context = context_path.read_text(encoding="utf-8")
+specs = specs_path.read_text(encoding="utf-8") if specs_path.exists() else ""
+
+# Split into per-decision blocks (### P{N}.D-XX or ### D-XX heading)
+decision_re = re.compile(r"^###\s+(P[0-9.]+\.)?D-([A-Za-z0-9_-]+)\s*:?\s*(.*)$", re.MULTILINE)
+matches = list(decision_re.finditer(context))
+decisions = []
+for i, m in enumerate(matches):
+    start = m.end()
+    end = matches[i + 1].start() if i + 1 < len(matches) else len(context)
+    body = context[start:end]
+    decisions.append({
+        "id": (m.group(1) or "") + "D-" + m.group(2),
+        "title": m.group(3).strip(),
+        "body": body,
+    })
+
+# Check A — Endpoint Coverage (BLOCK): every D-XX with **Endpoints:** has >=1 TS reference
+endpoint_section_re = re.compile(r"\*\*Endpoints?:\*\*", re.IGNORECASE)
+ts_ref_re = re.compile(r"TS-[A-Za-z0-9_-]+", re.IGNORECASE)
+endpoint_line_re = re.compile(r"-\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)", re.IGNORECASE)
+for d in decisions:
+    if endpoint_section_re.search(d["body"]):
+        endpoints = endpoint_line_re.findall(d["body"])
+        ts_refs = ts_ref_re.findall(d["body"])
+        if endpoints and not ts_refs:
+            blocks.append({
+                "check": "A_endpoint_coverage",
+                "decision": d["id"],
+                "msg": f"{d['id']} has endpoints but no test scenario (TS-NN) covering them",
+            })
+
+# Check B — Design Ref Coverage (WARN default; BLOCK if production fidelity)
+ui_section_re = re.compile(r"\*\*UI Components?:\*\*", re.IGNORECASE)
+design_assets_dir = os.environ.get("DESIGN_ASSETS_DIR", "")
+def has_design_ref(decision_body, phase_dir, design_assets_dir):
+    refs = re.findall(r"design[-_][\w.-]+\.(?:png|svg|jpg|jpeg|webp)", decision_body, re.IGNORECASE)
+    if refs:
+        return True
+    # Glob check
+    for p in phase_dir.glob("design-*"):
+        if p.is_file():
+            return True
+    if design_assets_dir:
+        adir = Path(design_assets_dir)
+        if adir.exists() and any(adir.iterdir()):
+            return True
+    return False
+for d in decisions:
+    if ui_section_re.search(d["body"]) and not has_design_ref(d["body"], phase_dir, design_assets_dir):
+        entry = {"check": "B_design_ref", "decision": d["id"]}
+        if fidelity == "production":
+            entry["msg"] = f"{d['id']} has UI components but no design reference. Phase fidelity=production requires design-ref per D-02."
+            blocks.append(entry)
+        elif fidelity == "prototype":
+            pass  # SKIP per spec
+        else:
+            entry["msg"] = f"{d['id']} has UI components but no design reference. Consider /vg:design-extract."
+            warnings.append(entry)
+
+# Check C — Decision Completeness (BLOCK if gap_ratio > 0.10)
+specs_items = re.findall(r"^[-*]\s+\S+", specs, re.MULTILINE) if specs else []
+specs_count = len(specs_items)
+decision_count = len(decisions)
+if specs_count > 0:
+    # Heuristic: count specs items whose first ~6 keyword tokens appear in any decision body+title
+    decisions_blob = "\n".join((d["title"] + " " + d["body"]).lower() for d in decisions)
+    unmapped = []
+    for item in specs_items:
+        tokens = re.findall(r"[a-zA-Z0-9_]{4,}", item.lower())[:6]
+        if not tokens:
+            continue
+        # require at least 1 token to appear in decisions_blob to call it "mapped"
+        if not any(tok in decisions_blob for tok in tokens):
+            unmapped.append(item.strip())
+    gap_count = len(unmapped)
+    gap_ratio = gap_count / specs_count
+    if gap_ratio > 0.10:
+        for item in unmapped[:5]:  # cap surfaced examples
+            blocks.append({
+                "check": "C_decision_completeness",
+                "msg": f"SPECS in-scope item '{item}' has no corresponding decision in CONTEXT.md (gap_ratio={gap_ratio:.2f} > 0.10)",
+            })
+
+# Check D — Orphan Detection (WARN): decisions not traceable to specs items
+if specs:
+    specs_blob = specs.lower()
+    for d in decisions:
+        title_tokens = re.findall(r"[a-zA-Z0-9_]{4,}", d["title"].lower())[:4]
+        if title_tokens and not any(tok in specs_blob for tok in title_tokens):
+            warnings.append({
+                "check": "D_orphan_decision",
+                "decision": d["id"],
+                "msg": f"{d['id']} doesn't map to any SPECS in-scope item — intentional or scope creep?",
+            })
+
+print(json.dumps({"warnings": warnings, "blocks": blocks}))
+PY
+)
+
+WARN_COUNT=$(echo "$VALIDATION_JSON" | ${PYTHON_BIN:-python3} -c 'import json,sys; print(len(json.load(sys.stdin).get("warnings",[])))')
+BLOCK_COUNT=$(echo "$VALIDATION_JSON" | ${PYTHON_BIN:-python3} -c 'import json,sys; print(len(json.load(sys.stdin).get("blocks",[])))')
+
+# Surface human-readable lines
+echo "$VALIDATION_JSON" | ${PYTHON_BIN:-python3} -c '
+import json, sys
+data = json.load(sys.stdin)
+for b in data.get("blocks", []):
+    print(f"⛔ [{b.get(\"check\")}] {b.get(\"msg\")}", file=sys.stderr)
+for w in data.get("warnings", []):
+    print(f"⚠ [{w.get(\"check\")}] {w.get(\"msg\")}", file=sys.stderr)
+'
 
 vg-orchestrator emit-event scope.completeness_validation \
-  --payload "{\"warnings\":${WARN_COUNT},\"blocks\":${BLOCK_COUNT}}" >/dev/null 2>&1 || true
+  --payload "{\"warnings\":${WARN_COUNT},\"blocks\":${BLOCK_COUNT},\"fidelity\":\"${FIDELITY}\"}" \
+  >/dev/null 2>&1 || true
 
 if [ "$BLOCK_COUNT" -gt 0 ]; then
   echo "⛔ ${BLOCK_COUNT} blocking gap(s) found — fix before /vg:blueprint" >&2
   exit 1
 fi
 
-echo "✓ Completeness validation: ${WARN_COUNT} warning(s)"
+echo "✓ Completeness validation: ${WARN_COUNT} warning(s), ${BLOCK_COUNT} block(s), fidelity=${FIDELITY}"
 ```
 
 ## Mark step
