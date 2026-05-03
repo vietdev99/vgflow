@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # PreToolUse on Write/Edit — closes Codex bypass #2 (forgeable evidence).
 # Blocks direct writes to protected evidence/marker/event paths.
+#
+# NOTE: this hook does NOT use the VG context guard. Protected-path
+# enforcement is filesystem-scoped, not session-scoped. Any caller
+# (VG or not) writing to .vg/runs/*/evidence-* or .vg/events.db
+# corrupts the signed evidence pipeline. See R5.5 design §3.3.
+# Regression test: tests/hooks/test_write_protection_unconditional.py
 
 set -euo pipefail
 
