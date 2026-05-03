@@ -44,6 +44,12 @@ runtime_contract:
       phase: "${PHASE_NUMBER}"
     - event_type: "specs.approved"
       phase: "${PHASE_NUMBER}"
+    # specs.rejected is emitted on user-rejection branch; declare so Stop hook
+    # validates either approved OR rejected was emitted (severity=warn since
+    # only one of the two fires per run).
+    - event_type: "specs.rejected"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--override-reason"
 ---

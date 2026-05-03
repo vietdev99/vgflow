@@ -59,6 +59,8 @@ runtime_contract:
   forbidden_without_override:
     - "--skip-crossai"
     - "--skip-crossai-output"
+    - "--skip-env-preference"
+    - "--allow-decisions-untraced"
     - "--override-reason"
 ---
 
