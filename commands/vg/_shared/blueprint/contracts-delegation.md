@@ -409,6 +409,107 @@ If phase has NO CRUD/resource behavior:
 Do NOT apply web table rules to mobile screens. Use `base + platform overlay`
 so each profile gets only the checks that fit.
 
+# Part 4 — EDGE-CASES.md + per-goal split (P1 v2.49+)
+
+For each goal in `TEST-GOALS/G-*.md`, generate edge case variants. Skip if
+phase has `no_crud_reason` (CRUD-SURFACES.resources empty).
+
+**Inputs:**
+- `${PHASE_DIR}/TEST-GOALS/G-*.md` — every goal needs analysis
+- `.claude/commands/vg/_shared/templates/edge-cases-${PROFILE}.md` — taxonomy
+  template per profile (web-fullstack, web-frontend-only, web-backend-only,
+  mobile, cli-tool, library)
+- `${PHASE_DIR}/CRUD-SURFACES.md` — resource × operation matrix for context
+
+**Outputs (3-layer split, mirrors API-CONTRACTS / TEST-GOALS pattern):**
+
+Layer 1 (per-goal, primary):
+```
+${PHASE_DIR}/EDGE-CASES/G-NN.md
+```
+
+Layer 2 (TOC):
+```
+${PHASE_DIR}/EDGE-CASES/index.md
+```
+
+Layer 3 (legacy concat):
+```
+${PHASE_DIR}/EDGE-CASES.md
+```
+
+**Per-goal generation (G-NN.md):**
+
+For each goal, choose **3-10 variants** từ template categories. Variant
+budget guidance:
+- Mutation goal (POST/PATCH/DELETE) → 5-10 variants
+- Read-only goal (GET) → 3-5 variants
+- Compute-only goal (no persistence) → 2-4 variants
+- Trivial (health-check, ping) → 0 variants — explicit skip header
+
+**HARD-GATE — variant_id format strictness:**
+- Format: `<goal_id>-<category_letter><N>`
+- Categories per profile (see template header for full mapping):
+  - web-fullstack/backend: b=boundary, s=state, a=auth, c=concurrency,
+    p=pagination, i=idempotency, t=time, r=resources, e=error_propagation,
+    d=data_validity
+  - web-frontend-only: r=render, s=state, n=network, b=browser, i=input,
+    m=modal, f=form, c=component
+  - mobile-*: p=permission, l=lifecycle, n=network, d=device, x=notification
+  - cli-tool: a=arg, s=stdin, e=env, t=tty, x=exit-code
+  - library: a=api, t=threading, l=lifecycle, c=compat
+- Examples: `G-04-b1`, `G-04-a2`, `G-12-c1`
+
+**Output format per goal (G-NN.md):**
+
+```markdown
+# Edge Cases — G-NN: <goal title>
+
+**Goal source**: ${PHASE_DIR}/TEST-GOALS/G-NN.md
+**Profile**: ${PROFILE}
+**Skipped categories**: [<list category numbers + reason>]
+
+## <Category Name>
+| variant_id | input/scenario | expected_outcome | priority |
+|---|---|---|---|
+| G-NN-c1 | ... | ... | critical/high/medium/low |
+```
+
+**Layer 2 index (EDGE-CASES/index.md):**
+
+```markdown
+# Edge Cases — Phase ${PHASE_NUMBER} (Index)
+
+**Profile**: ${PROFILE}
+**Template**: edge-cases-${PROFILE}.md
+**Total variants**: <N> across <M> goals
+
+| Goal | Title | Variants | Critical | High | Med | Low |
+|---|---|---|---|---|---|---|
+| [G-04](./G-04.md) | <title> | 6 | 3 | 2 | 1 | 0 |
+```
+
+**Layer 3 flat (EDGE-CASES.md):**
+
+```markdown
+<!-- vg-binding: TEST-GOALS:goals -->
+<!-- vg-binding: CRUD-SURFACES:resources -->
+<!-- vg-binding: profile:${PROFILE} -->
+
+# Edge Cases — Phase ${PHASE_NUMBER}
+
+(index content + all per-goal content concatenated)
+```
+
+If phase has `no_crud_reason`:
+```json
+{
+  "skipped": true,
+  "reason": "phase has no CRUD resources"
+}
+```
+And EDGE-CASES.md = single line: `# Edge Cases — Phase ${PHASE_NUMBER}\n\nSkipped: <reason>`.
+
 # Return JSON envelope
 
 After all 3 files written, compute sha256 and return (shape MUST match
@@ -428,11 +529,24 @@ After all 3 files written, compute sha256 and return (shape MUST match
   "test_goals_sub_files": ["${PHASE_DIR}/TEST-GOALS/G-00.md"],
   "goal_count": 1,
   "crud_surfaces_path": "${PHASE_DIR}/CRUD-SURFACES.md",
+  "edge_cases_path": "${PHASE_DIR}/EDGE-CASES.md",
+  "edge_cases_index_path": "${PHASE_DIR}/EDGE-CASES/index.md",
+  "edge_cases_sub_files": ["${PHASE_DIR}/EDGE-CASES/G-00.md"],
+  "edge_cases_skipped": false,
+  "edge_cases_skip_reason": null,
+  "total_variants": 47,
+  "variant_count_per_goal": {"G-04": 6, "G-12": 4},
   "summary": "<one paragraph>",
   "bindings_satisfied": ["PLAN:tasks", "INTERFACE-STANDARDS:error-shape", "INTERFACE-STANDARDS:response-envelope"],
   "warnings": []
 }
 ```
+
+If edge cases skipped (no_crud_reason or --skip-edge-cases):
+- `edge_cases_skipped: true`
+- `edge_cases_skip_reason: "<reason>"`
+- `edge_cases_path/index_path/sub_files`: empty/null
+- `total_variants: 0`, `variant_count_per_goal: {}`
 
 `codex_proposal_path` and `codex_delta_path` are owned by the MAIN agent
 in STEP 4.4 (separate Codex CLI spawn). Do NOT generate these yourself

@@ -118,7 +118,7 @@ CHECKLIST_DEFS = {
         ("blueprint_plan", "Plan", ["2a_plan", "2a5_cross_system_check"]),
         ("blueprint_contracts", "Contracts And Test Goals", [
             "2b_contracts", "2b5_test_goals", "2b5a_codex_test_goal_lane",
-            "2b5d_expand_from_crud_surfaces", "2b7_flow_detect",
+            "2b5e_edge_cases", "2b5d_expand_from_crud_surfaces", "2b7_flow_detect",
         ]),
         ("blueprint_verify", "Verification Gates", [
             "2c_verify", "2c_verify_plan_paths", "2c_utility_reuse",

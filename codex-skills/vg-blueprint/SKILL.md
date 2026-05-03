@@ -210,6 +210,12 @@ Read `_shared/blueprint/contracts-overview.md` AND `_shared/blueprint/contracts-
 Then call `Agent(subagent_type="vg-blueprint-contracts", prompt=<from delegation>)`.
 DO NOT generate contracts inline.
 
+After contracts subagent returns, run `2b5e_edge_cases` sub-step:
+Read `_shared/blueprint/edge-cases.md`. Either re-spawn `vg-blueprint-contracts`
+with Part 4 prompt (edge cases per goal × profile template) or skip with
+override (`--skip-edge-cases` + `--override-reason`). Output: `EDGE-CASES.md`
+(Layer 3) + `EDGE-CASES/index.md` (Layer 2) + `EDGE-CASES/G-NN.md` (Layer 1).
+
 ### STEP 5 — verify (7 grep/path checks)
 Read `_shared/blueprint/verify.md` and follow it exactly.
 

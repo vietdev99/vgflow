@@ -48,6 +48,13 @@ Each per-goal file contains success criteria + mutation evidence + persistence c
 | `<phase_dir>/INTERFACE-STANDARDS.json` | 500 | machine-readable schema (single file) |
 | `<phase_dir>/TEST-GOALS.md` | (no min) | concat of TEST-GOALS/G-NN.md prefixed with index |
 | `<phase_dir>/CRUD-SURFACES.md` | 120 | resource × operation matrix (single file) |
+| `<phase_dir>/EDGE-CASES.md` | 120 | edge cases flat concat (legacy compat) — see Part 4 |
+| `<phase_dir>/EDGE-CASES/index.md` | (no min) | TOC by goal (Layer 2) |
+| `<phase_dir>/EDGE-CASES/G-NN.md` | (no min) | per-goal variants (Layer 1, one file per goal) |
+
+EDGE-CASES outputs are conditional: skipped when phase has `no_crud_reason`
+in CRUD-SURFACES.md (resources empty), OR user passed `--skip-edge-cases`
+flag. Subagent returns `edge_cases_skipped: true` instead of paths.
 
 **Codex lane outputs are NOT owned by this subagent.** Main agent runs
 the Codex CLI separately in `_shared/blueprint/contracts-overview.md`
