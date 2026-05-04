@@ -110,8 +110,10 @@ CLI commands stay English. AskUserQuestion title + options + question prose:
 ngôn ngữ config.
 </LANGUAGE_POLICY>
 phase: {X}
+profile: {feature|infra|hotfix|bugfix|migration|docs}
+platform: {web-fullstack|web-frontend-only|web-backend-only|mobile-rn|mobile-flutter|mobile-native|desktop-electron|desktop-tauri|cli-tool|library|server-setup|server-management}
 status: approved
-created: {YYYY-MM-DD}
+created_at: {YYYY-MM-DD}
 source: ai-draft|user-guided
 ---
 
@@ -125,14 +127,14 @@ source: ai-draft|user-guided
 - {feature/task 1}
 - {feature/task 2}
 
-### Out of Scope
+## Out of Scope
 - {exclusion 1}
 - {exclusion 2}
 
 ## Constraints
 - {constraint 1}
 
-## Success Criteria
+## Success criteria
 - [ ] {measurable criterion 1}
 - [ ] {measurable criterion 2}
 
@@ -140,8 +142,10 @@ source: ai-draft|user-guided
 - {dependency on prior phase or external system}
 ```
 
+- **profile**: project profile from `.claude/vg.config.md` (e.g. `feature`, `bugfix`)
+- **platform**: project platform from `.claude/vg.config.md` (e.g. `web-fullstack`)
 - **source**: `ai-draft` if --auto or user chose option 1, else `user-guided`
-- **created**: today's date YYYY-MM-DD
+- **created_at**: today's date YYYY-MM-DD (schema-canonical key per `.claude/schemas/specs.v1.json`)
 
 ```bash
 # Verify file actually written (catches silent write fail)
