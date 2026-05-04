@@ -312,6 +312,10 @@ verbatim. The PreToolUse-bash hook will BLOCK every `step-active` call
 in this slim entry until `.vg/runs/${RUN_ID}/.tasklist-projected.evidence.json`
 exists.
 
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
+
 <TASKLIST_POLICY>
 **Native task UI projection is REQUIRED.**
 

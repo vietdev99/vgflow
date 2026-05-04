@@ -209,6 +209,10 @@ You MUST call TodoWrite IMMEDIATELY after `create_task_tracker` runs
 emit-tasklist.py — DO NOT continue without it. The PreToolUse Bash hook will
 block all subsequent step-active calls until signed evidence exists.
 
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
+
 Codegen MUST spawn vg-test-codegen (NOT inline). Goal verification MUST
 spawn vg-test-goal-verifier. Console monitoring MUST run after every
 action — silent error skip detected by Stop hook.

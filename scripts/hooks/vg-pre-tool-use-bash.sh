@@ -93,11 +93,22 @@ raise SystemExit(0)
 PY
 }
 
+codex_before_tasklist_projection() {
+  [ "${VG_RUNTIME:-}" = "codex" ] || return 1
+  [ -n "${run_id:-}" ] || return 1
+  case "$command_from_run" in
+    vg:*) ;;
+    *) return 1 ;;
+  esac
+  [ ! -s ".vg/runs/${run_id}/.tasklist-projected.evidence.json" ] || return 1
+  return 0
+}
+
 is_broad_codex_prestep_scan() {
   [[ "$cmd_text" == *"rg --files"* ]] && return 0
   [[ "$cmd_text" =~ (^|[[:space:];|&])find[[:space:]]+\./?([[:space:]]|$) ]] && return 0
-  [[ "$cmd_text" =~ (^|[[:space:];|&])find[[:space:]]+(\.claude|\.codex|commands|scripts)([[:space:]]|$) ]] && return 0
-  if [[ "$cmd_text" =~ (^|[[:space:];|&])rg[[:space:]]+.*(\.claude/scripts|\.claude/commands|\.claude/agents|\.codex/skills|commands/vg|scripts)([[:space:]]|$) ]]; then
+  [[ "$cmd_text" =~ (^|[[:space:];|&])find[[:space:]]+(\.vg|\.claude|\.codex|commands|scripts)([[:space:]]|$) ]] && return 0
+  if [[ "$cmd_text" =~ (^|[[:space:];|&])rg[[:space:]]+.*(\.vg|\.claude/scripts|\.claude/commands|\.claude/agents|\.codex/skills|commands/vg|scripts)([[:space:]]|$) ]]; then
     [[ "$cmd_text" =~ (SKILL\.md|_shared/blueprint/(preflight|design|plan-overview|plan-delegation|contracts-overview|contracts-delegation|verify|close|edge-cases|lens-walk)\.md) ]] && return 1
     return 0
   fi
@@ -163,9 +174,74 @@ emit_codex_prestep_scope_block() {
   exit 2
 }
 
+emit_codex_pretasklist_scope_block() {
+  local gate_id="PreToolUse-codex-pretasklist-scope"
+  local cause="Codex active VG run has not projected the native tasklist; broad workflow scan would consume context before required gates"
+  local block_dir=".vg/blocks/${run_id:-unknown}"
+  local block_file="${block_dir}/${gate_id}.md"
+  mkdir -p "$block_dir" 2>/dev/null
+  {
+    echo "# Block diagnostic — ${gate_id}"
+    echo ""
+    echo "## Cause"
+    echo "$cause"
+    echo ""
+    echo "## Blocked command"
+    echo '```bash'
+    echo "$cmd_text"
+    echo '```'
+    echo ""
+    echo "## Required fix"
+    echo ""
+    echo "Codex is in a VG command before native tasklist projection. Do not run"
+    echo "broad repo/workflow scans here. Continue the command preflight in order:"
+    echo ""
+    echo "1. Execute the next bootstrap/preflight step from the current command ref."
+    echo "2. Run emit-tasklist.py when the command reaches its tasklist step."
+    echo "3. Project the tasklist and write evidence:"
+    echo ""
+    echo '```bash'
+    echo "python3 .claude/scripts/vg-orchestrator tasklist-projected --adapter codex"
+    echo '```'
+    echo ""
+    echo "Allowed before tasklist projection:"
+    echo "- exact sed/cat reads of the current command ref"
+    echo "- exact sed/cat reads of .claude/vg.config.md, .vg/current-run.json, and current phase artifacts"
+    echo "- vg-orchestrator step-active/mark-step/emit-event for the documented preflight steps"
+    echo ""
+    echo "Blocked before tasklist projection:"
+    echo "- rg --files .claude/scripts ..."
+    echo "- find .vg ..."
+    echo "- rg ... .claude/scripts .claude/commands/vg .vg"
+    echo ""
+    echo "## After fix"
+    echo '```bash'
+    echo "vg-orchestrator emit-event vg.block.handled \\"
+    echo "  --gate ${gate_id} \\"
+    echo "  --resolution \"stopped broad pre-tasklist scan; continuing preflight/tasklist\""
+    echo '```'
+  } > "$block_file"
+
+  printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for fix\n→ Next: continue preflight/tasklist, not broad rg/find\n" \
+    "$gate_id" "$cause" "$block_file" >&2
+
+  if [ -n "${run_id:-}" ] && [ -f ".claude/scripts/vg-orchestrator" ]; then
+    VG_RUN_ID="${run_id:-}" CLAUDE_SESSION_ID="${run_session_id:-$session_id}" python3 .claude/scripts/vg-orchestrator emit-event \
+      "vg.block.fired" \
+      --actor hook \
+      --outcome FAIL \
+      --payload "$(VG_RUN_ID="${run_id:-}" python3 -c 'import json,os; print(json.dumps({"gate":"PreToolUse-codex-pretasklist-scope","cause":"broad pre-tasklist workflow scan","run_id":os.environ.get("VG_RUN_ID","")}))')" \
+      >/dev/null 2>&1 || true
+  fi
+  exit 2
+}
+
 if [[ ! "$cmd_text" =~ vg-orchestrator[[:space:]]+step-active ]]; then
   if codex_before_first_step && is_broad_codex_prestep_scan; then
     emit_codex_prestep_scope_block
+  fi
+  if codex_before_tasklist_projection && is_broad_codex_prestep_scan; then
+    emit_codex_pretasklist_scope_block
   fi
   exit 0
 fi

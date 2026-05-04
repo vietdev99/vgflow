@@ -1,7 +1,7 @@
 ---
 name: vg:blueprint
 description: Plan + API contracts + verify + CrossAI review — 4 sub-steps before build
-argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--from=<substep>] [--override-reason=<text>] [--apply-amendments]"
+argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--from=<substep>] [--override-reason=<text>] [--apply-amendments]"
 allowed-tools:
   - Read
   - Write
@@ -56,6 +56,17 @@ runtime_contract:
       glob_min_count: 1
       required_unless_flag: "--skip-edge-cases"
       severity: "warn"
+    # Lens-walk artifact (Option B v2.50+) — produced by 2b5e_a_lens_walk
+    # before 2b5e_edge_cases. Seeds bug-class-driven variants from canonical
+    # lens-prompts library. severity=warn for legacy compat + advisory nature
+    # (edge-cases is the contract; lens-walk is upstream input).
+    - path: "${PHASE_DIR}/LENS-WALK/index.md"
+      required_unless_flag: "--skip-lens-walk"
+      severity: "warn"
+    - path: "${PHASE_DIR}/LENS-WALK/G-*.md"
+      glob_min_count: 1
+      required_unless_flag: "--skip-lens-walk"
+      severity: "warn"
     - path: "${PHASE_DIR}/crossai/result-*.xml"
       glob_min_count: 1
       required_unless_flag: "--skip-crossai"
@@ -65,12 +76,16 @@ runtime_contract:
     - "1_parse_args"
     - "create_task_tracker"
     - "2_verify_prerequisites"
-    - "2b6c_view_decomposition"
-    - "2b6_ui_spec"
     - "2a_plan"
     - "2a5_cross_system_check"
     - "2b_contracts"
     - "2b5_test_goals"
+    # 2b5e_a_lens_walk (Option B v2.50+) — per-goal × per-applicable-lens
+    # iteration. Seeds bug-class-driven variants from canonical lens-prompts.
+    # Runs BEFORE 2b5e_edge_cases (edge-cases consumes lens-walk output).
+    - name: "2b5e_a_lens_walk"
+      severity: "warn"
+      required_unless_flag: "--skip-lens-walk"
     # 2b5e_edge_cases (P1 v2.49+) — runs after test_goals, before expand.
     # severity=warn for legacy compat (phases pre-v2.49 không có step này).
     - name: "2b5e_edge_cases"
@@ -88,6 +103,10 @@ runtime_contract:
     - "3_complete"
     # Profile-gated markers (only run for specified profiles).
     - name: "2_fidelity_profile_lock"
+      profile: "web-fullstack,web-frontend-only"
+    - name: "2b6c_view_decomposition"
+      profile: "web-fullstack,web-frontend-only"
+    - name: "2b6_ui_spec"
       profile: "web-fullstack,web-frontend-only"
     - name: "2b6b_ui_map"
       profile: "web-fullstack,web-frontend-only"
@@ -114,6 +133,13 @@ runtime_contract:
     - event_type: "blueprint.edge_cases_skipped"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # Option B v2.50+ — lens-walk either generated OR skipped (mutually exclusive)
+    - event_type: "blueprint.lens_walk_generated"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "blueprint.lens_walk_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
     - event_type: "crossai.verdict"
       phase: "${PHASE_NUMBER}"
       required_unless_flag: "--skip-crossai"
@@ -123,6 +149,7 @@ runtime_contract:
     - "--skip-crossai"
     - "--skip-codex-test-goal-lane"
     - "--skip-edge-cases"
+    - "--skip-lens-walk"
     - "--override-reason"
 ---
 
@@ -155,6 +182,10 @@ You MUST call TodoWrite IMMEDIATELY after STEP 1.4 (create_task_tracker)
 runs emit-tasklist.py — DO NOT continue without it. The PreToolUse Bash
 hook will block all subsequent step-active calls until signed evidence
 exists.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
 
 For HEAVY steps (STEP 3, STEP 4), you MUST spawn the named subagent via
 the `Agent` tool (NOT `Task` — Codex confirmed correct tool name per
@@ -193,11 +224,20 @@ Read `_shared/blueprint/contracts-overview.md` AND `_shared/blueprint/contracts-
 Then call `Agent(subagent_type="vg-blueprint-contracts", prompt=<from delegation>)`.
 DO NOT generate contracts inline.
 
-After contracts subagent returns, run `2b5e_edge_cases` sub-step:
-Read `_shared/blueprint/edge-cases.md`. Either re-spawn `vg-blueprint-contracts`
-with Part 4 prompt (edge cases per goal × profile template) or skip with
-override (`--skip-edge-cases` + `--override-reason`). Output: `EDGE-CASES.md`
-(Layer 3) + `EDGE-CASES/index.md` (Layer 2) + `EDGE-CASES/G-NN.md` (Layer 1).
+After contracts subagent returns, run `2b5e_a_lens_walk` then `2b5e_edge_cases`:
+
+**`2b5e_a_lens_walk`** (Option B v2.50+) — read `_shared/blueprint/lens-walk.md`.
+Re-spawn `vg-blueprint-contracts` with Part 5 prompt (per-goal × applicable-lens
+seeds derived from canonical `_shared/lens-prompts/lens-*.md` library). Output:
+`LENS-WALK/G-NN.md` per goal + `LENS-WALK/index.md` matrix. Skip with
+`--skip-lens-walk` (paired with `--override-reason`). Auto-skip when no CRUD
+resources or `--skip-edge-cases`.
+
+**`2b5e_edge_cases`** — read `_shared/blueprint/edge-cases.md`. Re-spawn
+`vg-blueprint-contracts` with Part 4 prompt; subagent now ALSO reads
+LENS-WALK/G-NN.md (when present) and merges lens-derived seeds into the final
+EDGE-CASES table. Output: `EDGE-CASES.md` (Layer 3) + `EDGE-CASES/index.md`
+(Layer 2) + `EDGE-CASES/G-NN.md` (Layer 1).
 
 ### STEP 5 — verify (7 grep/path checks)
 Read `_shared/blueprint/verify.md` and follow it exactly.

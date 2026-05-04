@@ -36,6 +36,38 @@ Then **the AI agent MUST** (this is the part the hook enforces):
 
 After both succeed, subsequent `step-active` calls pass the PreToolUse-bash hook.
 
+## 2-layer hierarchy required (Task 44b enforcement)
+
+The TodoWrite payload MUST contain BOTH layers:
+
+1. **Group headers** — one todo per checklist group (e.g.
+   `review_preflight`, `build_execute`). Match by `id` OR `title`.
+2. **Sub-items** — at least one `↳`-prefixed child todo per group,
+   immediately following the group header.
+
+Example (5 groups → 5 group headers + ≥1 ↳ sub-item per group):
+
+```
+[ ] review_preflight
+  ↳ 0a_env_mode_gate: pick env from DEPLOY-STATE
+  ↳ create_task_tracker: emit-tasklist + tasklist-projected
+[ ] review_be
+  ↳ phase1_code_scan: ripgrep + ripple analysis
+[ ] review_discovery
+  ↳ phase2_browser_discovery: organic Playwright sweep
+  ↳ phase2_5_recursive_lens_probe: lens dispatcher
+...
+```
+
+The PostToolUse hook walks todos in order and counts ↳ sub-items per
+group. Any group with zero ↳ children → evidence is signed with
+`depth_valid=false`. The PreToolUse hook then BLOCKs every subsequent
+`step-active` with cause `tasklist depth=1 (flat); minimum required is
+2-layer (group + ↳ sub-items)`.
+
+Sub-item prefix is `↳` (Unicode U+21B3). Plain `-` / `*` / 2-space
+indent will NOT satisfy the depth check.
+
 ## Why this is mandatory
 
 - Native task UI is the user's primary signal of progress. Markdown tables

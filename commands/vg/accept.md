@@ -103,6 +103,10 @@ exists at `.vg/runs/<run_id>/.tasklist-projected.evidence.json`. The
 PostToolUse TodoWrite hook auto-writes that signed evidence. This fixes
 audit FAIL #9 (`accept.native_tasklist_projected` baseline 0 events).
 
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
+
 For HEAVY steps (STEP 3 UAT checklist build, STEP 8 cleanup), you MUST
 spawn the named subagent via the `Agent` tool (NOT `Task` — Codex
 confirmed correct tool name per Claude Code docs). DO NOT build the

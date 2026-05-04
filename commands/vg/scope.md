@@ -105,6 +105,10 @@ any `step-active` call. The PreToolUse Bash hook will block all subsequent
 step-active calls until signed evidence exists at
 `.vg/runs/<run>/.tasklist-projected.evidence.json`.
 
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
+
 For each of the 5 discussion rounds (inside STEP 2), you MUST invoke:
   (a) per-answer adversarial challenger via the Agent tool
       (subagent_type=general-purpose, model=Opus default), AND

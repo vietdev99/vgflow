@@ -84,6 +84,10 @@ DO NOT auto-merge (requires --merge-specs).
 TodoWrite IMPERATIVE after `emit-tasklist.py` projects the 8-group checklist
 for vg:roam. Skipping TodoWrite emission causes Stop hook to fail because
 `roam.native_tasklist_projected` event will not fire.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
 </HARD-GATE>
 
 ## Red Flags (you have used these before — they will not work)
