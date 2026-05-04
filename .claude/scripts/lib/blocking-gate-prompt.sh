@@ -113,9 +113,14 @@ blocking_gate_prompt_resolve() {
             "review.gate_autofix_attempted" --actor agent --outcome FAIL \
             --payload "{\"gate\":\"${gate_id}\",\"status\":\"UNRESOLVED\"}" \
             >/dev/null 2>&1 || true
+          # Codex round-4 I-5 fix: env-driven JSON build (was injectable via
+          # VG_AUTOFIX_BLOCKED_BY containing `","x":"`).
+          local unresolved_payload
+          unresolved_payload=$(VG_GATE_ID="$gate_id" VG_AB="${VG_AUTOFIX_BLOCKED_BY:-unknown}" VG_ATT="${VG_AUTOFIX_ATTEMPTS:-0}" \
+            "${PYTHON_BIN:-python3}" -c 'import json, os; print(json.dumps({"gate": os.environ["VG_GATE_ID"], "reason": os.environ["VG_AB"], "attempts": int(os.environ["VG_ATT"]) if os.environ["VG_ATT"].isdigit() else 0}))')
           "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
             "review.gate_autofix_unresolved" --actor agent --outcome FAIL \
-            --payload "{\"gate\":\"${gate_id}\",\"reason\":\"${VG_AUTOFIX_BLOCKED_BY:-unknown}\",\"attempts\":${VG_AUTOFIX_ATTEMPTS:-0}}" \
+            --payload "$unresolved_payload" \
             >/dev/null 2>&1 || true
           return 4  # re-prompt needed
           ;;
@@ -135,9 +140,16 @@ blocking_gate_prompt_resolve() {
       fi
       local debt_severity
       debt_severity=$(_map_severity_to_debt "${VG_GATE_SEVERITY:-error}")
+      # Codex round-4 I-5 fix: build payload via json.dumps from env, not
+      # bash interpolation — was injectable via `--override-reason` containing
+      # `","extra":"...` which produced malformed JSON and silently dropped
+      # the audit trail. Now safely escaped.
+      local override_payload
+      override_payload=$(VG_GATE_ID="$gate_id" VG_OVERRIDE_REASON="$override_reason" VG_DEBT_SEVERITY="$debt_severity" \
+        "${PYTHON_BIN:-python3}" -c 'import json, os; print(json.dumps({"gate": os.environ["VG_GATE_ID"], "reason": os.environ["VG_OVERRIDE_REASON"], "debt_severity": os.environ["VG_DEBT_SEVERITY"]}))')
       "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
         "review.gate_skipped_with_override" --actor user --outcome WARN \
-        --payload "{\"gate\":\"${gate_id}\",\"reason\":\"${override_reason}\",\"debt_severity\":\"${debt_severity}\"}" \
+        --payload "$override_payload" \
         >/dev/null 2>&1 || true
       # Log debt via the existing override-debt helper
       type log_override_debt >/dev/null 2>&1 && \

@@ -63,8 +63,18 @@ def _check_workflow(spec: dict, source: str) -> list[str]:
                         f"'{state_value}' not declared in state_machine.states"
                     )
 
-    # cred_switch_marker required when actor changes between consecutive steps
-    prev_actor: str | None = None
+    # cred_switch_marker required when actor changes between consecutive steps.
+    # Codex round-4 I-4 fix: initialize prev_actor from actors[0].role (when
+    # present) so step 1 is checked against the workflow's bootstrap actor —
+    # was previously skipped, letting first-step actor changes slip through
+    # without testRoleSwitch() injection.
+    actors_list = spec.get("actors") or []
+    bootstrap_actor: str | None = None
+    if actors_list and isinstance(actors_list[0], dict):
+        role = actors_list[0].get("role")
+        if isinstance(role, str):
+            bootstrap_actor = role
+    prev_actor: str | None = bootstrap_actor
     for step in spec.get("steps", []) or []:
         actor = step.get("actor")
         if prev_actor is not None and actor != prev_actor:

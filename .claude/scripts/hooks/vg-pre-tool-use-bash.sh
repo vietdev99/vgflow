@@ -584,13 +584,16 @@ try:
         dt = datetime.fromisoformat(last_handled_ts)
     handled_epoch = dt.timestamp()
 except Exception:
-    # Unparseable ts: fail open and do not block.
-    print("ok", end="")
+    # Codex round-4 I-3 fix: unparseable ts → fail CLOSED (was: fail-open
+    # downgraded V4 to no-op when emitter wrote bad timestamps).
+    print(f"unresolved|{last_handled_ts}", end="")
     sys.exit(0)
 
 ev_mtime = ev_path.stat().st_mtime
-# Allow 1s slack for filesystem timestamp resolution on coarse FS.
-if ev_mtime + 1 < handled_epoch:
+# Codex round-4 I-1 fix: drop 1s slack — was inverting safety direction
+# (created 2s bypass window when AI emitted handled then raced to write
+# evidence). Strict ev_mtime > handled_epoch instead.
+if ev_mtime <= handled_epoch:
     print(f"unresolved|{last_handled_ts}", end="")
     sys.exit(0)
 print("ok", end="")
@@ -638,5 +641,7 @@ case "$handled_check_result" in
     handled_ts="${handled_check_result#unresolved|}"
     emit_block "block.handled emitted but evidence not refreshed since (handled at ${handled_ts}, evidence older). AI must re-run TodoWrite + tasklist-projected — emitting vg.block.handled alone does NOT satisfy the gate."
     ;;
-  *) exit 0 ;;
+  # Codex round-4 I-2 fix: catch-all was `exit 0` (fail OPEN) inconsistent
+  # with V1/V2/V3 fail-CLOSED. Now mirror sibling gates — block on unknown.
+  *) emit_block "handled check failed: ${handled_check_result}" ;;
 esac
