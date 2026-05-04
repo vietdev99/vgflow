@@ -1,7 +1,7 @@
 ---
 name: vg:review
 description: Post-build review — code scan + browser discovery + lens dispatch + fix loop + goal comparison → RUNTIME-MAP
-argument-hint: "<phase> [--target-env=local|staging|sandbox|prod | --local | --sandbox | --staging | --prod] [--mode=full|delta|regression|schema-verify|link-check|infra-smoke] [--scanner=haiku-only|codex-inline|codex-supplement|gemini-supplement|council-all] [--with-deepscan] [--non-interactive] [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--re-scan-goals=G-XX,G-YY] [--dogfood] [--force] [--full-scan] [--allow-no-crud-surface] [--allow-build-crossai-deferred] [--allow-missing-build-provenance] [--skip-lens-plan-gate] [--override-reason=<text>]"
+argument-hint: "<phase> [--target-env=local|staging|sandbox|prod | --local | --sandbox | --staging | --prod] [--mode=full|delta|regression|schema-verify|link-check|infra-smoke] [--scanner=haiku-only|codex-inline|codex-supplement|gemini-supplement|council-all] [--with-deepscan] [--non-interactive] [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--re-scan-goals=G-XX,G-YY] [--dogfood] [--force] [--full-scan] [--allow-no-crud-surface] [--allow-build-crossai-deferred] [--allow-missing-build-provenance] [--skip-lens-plan-gate] [--skip-multi-actor-replay] [--override-reason=<text>]"
 allowed-tools:
   - Read
   - Write
@@ -296,6 +296,7 @@ runtime_contract:
     - "--allow-build-crossai-deferred"  # R7-A Task 1 (G5) — carry forward build CrossAI deferred findings into review backlog
     - "--allow-missing-build-provenance"  # R7-D Task 6 (G6+G8) — bypass BUILD-LOG/index + build.completed audit for legacy phases
     - "--skip-crud-coverage-universal"  # R8-B (codex 2026-05-05) — bypass universal CRUD round-trip coverage gate (qualifying mutation goal w/o run artifact)
+    - "--skip-multi-actor-replay"  # R7 Task 5 (G9) — skip multi-actor workflow runtime replay (build-side static gate still runs)
 ---
 
 
