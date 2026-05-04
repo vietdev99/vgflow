@@ -419,6 +419,34 @@ Post-codegen validator: `scripts/validators/verify-codegen-rcrurd-helper.py`
 runs after generation and BLOCKs on missing import or missing call site.
 Read-only goals (`goal_type: read_only`) do NOT need this helper.
 
+### Lifecycle round-trip (R8-A — codex audit 2026-05-05)
+
+Inspect the YAML invariant for a top-level `lifecycle:` field. Three
+values are valid (see `scripts/lib/rcrurd_invariant.py` `_VALID_LIFECYCLE`):
+
+| `lifecycle` | Helper to use | Notes |
+|---|---|---|
+| `rcrurd` (default, or unset) | `expectReadAfterWrite(...)` | Single write+read cycle. Backward-compat path. |
+| `rcrurdr` | `expectLifecycleRoundtrip(...)` | **MANDATORY.** Iterates the 7-phase `lifecycle_phases[]` (Read empty → Create → Read populated → Update → Read updated → Delete → Read empty). |
+| `partial` | `expectLifecycleRoundtrip(...)` | Iterates the goal_type-specific phase subset (e.g. `create_only` → 3 phases). |
+
+When `lifecycle: rcrurdr` is set, the simpler helper CANNOT close the
+loop on update / delete / cleanup phases — it only verifies write+1-read.
+The codegen MUST detect the flag and emit:
+
+```typescript
+import { expectLifecycleRoundtrip } from '@/test-helpers/expectReadAfterWrite';
+
+await expectLifecycleRoundtrip(page, request, invariantG04, { name: 'Test' });
+```
+
+NOT `expectReadAfterWrite(...)` — `verify-codegen-rcrurd-helper.py`
+BLOCKs on the simpler helper for any goal whose invariant declares
+`lifecycle: rcrurdr`. The lifecycle helper falls back internally to
+`expectReadAfterWrite` when `lifecycle === 'rcrurd'` so it is always
+safe to use; the simpler helper is preserved only as a stylistic
+default for legacy single-cycle goals.
+
 Why a known helper instead of regex? Generic "GET-after-mutation" regex
 yields false positives on unrelated GETs and false negatives on indirect
 verification. The helper enforces:

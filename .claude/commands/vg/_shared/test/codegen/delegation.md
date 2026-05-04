@@ -540,3 +540,17 @@ Post-codegen validation: orchestrator runs
 --goals-dir <dir> --phase <p>` after subagent returns. Missing import or
 call site BLOCKs the codegen step. The orchestrator re-spawns with the
 failing goal list so the subagent can patch the specs.
+
+### Lifecycle round-trip — R8-A (codex audit 2026-05-05)
+
+When a goal's YAML invariant has `lifecycle: rcrurdr` (full 7-phase
+RCRURDR lifecycle: Read empty → Create → Read populated → Update → Read
+updated → Delete → Read empty), the spec MUST import + call
+`expectLifecycleRoundtrip()` instead of `expectReadAfterWrite()`. The
+simpler helper only verifies write+1-read so cannot close the loop on
+update/delete/cleanup phases. See `agents/vg-test-codegen/SKILL.md`
+"Lifecycle round-trip (R8-A)" for the full helper-selection table.
+
+The validator BLOCKs when a `lifecycle: rcrurdr` goal's spec uses only
+`expectReadAfterWrite`. Goals with `lifecycle: rcrurd` (default) or
+`partial` continue to accept the simpler helper for back-compat.
