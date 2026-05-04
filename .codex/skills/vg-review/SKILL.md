@@ -208,92 +208,6 @@ Invoke this skill as `$vg-review`. Treat all user text after the skill name as a
 
 
 
-<LANGUAGE_POLICY>
-You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
-
-Mặc định trả lời bằng **tiếng Việt** (config: `language.primary` trong
-`.claude/vg.config.md`, fallback `vi` nếu chưa set). Dùng ngôn ngữ con
-người, không technical jargon. Mỗi thuật ngữ tiếng Anh xuất hiện lần đầu
-trong narration: thêm giải thích VN trong dấu ngoặc (per
-`_shared/term-glossary.md`).
-
-Ví dụ:
-- ❌ "Validator failed with 225 evidence count"
-- ✅ "Validator báo 225 trường thiếu — chi tiết ở `[path]`. Mình sẽ sửa rồi chạy lại."
-
-File paths, code identifiers (G-04, Wave 9, getUserById), commit messages,
-CLI commands stay English. AskUserQuestion title + options + question prose:
-ngôn ngữ config.
-</LANGUAGE_POLICY>
-
-### Tasklist projection (REQUIRED before any step-active)
-
-Read `_shared/lib/tasklist-projection-instruction.md` and follow it
-verbatim. The PreToolUse-bash hook will BLOCK every `step-active` call
-in this slim entry until `.vg/runs/${RUN_ID}/.tasklist-projected.evidence.json`
-exists.
-
-<TASKLIST_POLICY>
-**Native task UI projection is REQUIRED.**
-
-Source of truth:
-1. `.vg/runs/{run_id}/tasklist-contract.json` — canonical checklist for this run.
-2. `.vg/events.db` — `review.tasklist_shown`, `review.native_tasklist_projected`, `step.active`, `step.marked`.
-3. `${PHASE_DIR}/.step-markers/...` — durable completion markers.
-
-Provider adapters:
-- **Claude CLI:** use native Claude tasklist projection. Prefer `TodoWrite`
-  with one todo per checklist group from the contract; each todo `content`
-  MUST start with the contract checklist `id`. If this Claude runtime exposes
-  `TaskCreate`/`TaskUpdate`, that adapter is also acceptable. Do not create
-  ad-hoc todos outside `tasklist-contract.json`.
-- **Codex CLI:** project the same contract items to Codex's native tasklist/plan UI; preserve each contract `id` at the start of the item text. Update the active/completed item before/after each step.
-- **Fallback:** only if the runtime exposes no native task UI, use `vg-orchestrator run-status --pretty` before and after each step and record adapter `fallback`.
-
-Lifecycle:
-- `replace-on-start`: the first native projection MUST replace any stale task
-  list from a previous workflow. Never append current review items onto a
-  previous workflow's list.
-- `close-on-complete`: before reporting success, mark all review checklist
-  items completed. Then clear the native list if supported; otherwise replace
-  it with one completed sentinel item: `vg:review phase ${PHASE_NUMBER} complete`.
-
-Mandatory binding:
-1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.
-2. Project every contract item to the runtime-native task UI before phase execution continues.
-3. Immediately call:
-   ```bash
-   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected --adapter claude
-   # or: --adapter codex
-   # or: --adapter fallback
-   ```
-4. At each step start, update the native UI item to active and call `vg-orchestrator step-active <step_name>`.
-5. At each step end, write the marker, update the native UI item to completed, and call `vg-orchestrator mark-step review <step_name>`.
-
-Do not improvise a separate checklist. The native UI is a projection of `tasklist-contract.json`; the harness contract remains authoritative.
-
-Long-running work still needs visible narration: run Bash jobs over 30s in background and poll with `BashOutput`; summarize Task subagent progress before and after spawning.
-
-**Dynamic sub-task append (RULE)** — projection từ emit-tasklist là baseline,
-KHÔNG cứng. Khi AI execute group/step phức tạp (e.g. `phase2_browser_discovery`
-với nhiều view, `phase2_5_recursive_lens_probe` với nhiều lens), AI PHẢI append
-child todos vào group đó để user thấy real-time progress.
-
-Pattern (tolerant hook B11.6+):
-- Initial: 1 todo per group header
-- During execution: TodoWrite update — keep group header, append children
-  với title `  ↳ <id>: <one-line desc>` (status: pending → in_progress → completed)
-- Examples cho review:
-  - `  ↳ View /campaigns: 12 actions captured`
-  - `  ↳ Lens lens-modal-state: 3 modals probed (1 BLOCKED — focus trap)`
-  - `  ↳ phase2c G-04: enriched with success criteria`
-
-Cho operator visibility "AI sẽ làm gì tiếp / tiến độ tới đâu" mà không phải
-đọc Bash log dài.
-
-**Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `BLOCK (chặn)`, `Foundation (nền tảng) drift detected (phát hiện lệch hướng)`, `legacy-v1 (định dạng cũ v1)`, `UNREACHABLE (không tiếp cận được)`. Không áp dụng: file path, code identifier (`D-XX`, `git`, `pnpm`), config tag values, lần lặp lại trong cùng message.
-</TASKLIST_POLICY>
-
 <rules>
 1. **Phase profile drives prerequisites (P5, v1.9.2)** — `detect_phase_profile` chooses WHICH artifacts are required:
    - `feature` (default) → SPECS + CONTEXT + PLAN + API-CONTRACTS + TEST-GOALS + SUMMARY
@@ -3770,6 +3684,14 @@ User sẽ thấy banner đầy đủ BEFORE spawn + structured description trong
 
 **Purpose:** After parallel Haiku scanners (2b-2) complete, run the recursive lens probe layer to deep-dive each interesting clickable through bug-class lenses (authz-negative, csrf, idor, ssrf, ...). Manager dispatcher reads scan-*.json, classifies clickables into element classes, picks lenses per class, spawns workers in parallel (auto), generates prompt files (manual), or both (hybrid). Goals discovered by lens probes are merged single-writer into TEST-GOALS-DISCOVERED.md.
 
+**Task 36b dispatch chain (wires Task 26 infrastructure):**
+Phase 2b-2.5 now runs a 5-step chain:
+1. `emit-dispatch-plan.py` — emit LENS-DISPATCH-PLAN.json (trust anchor, declares all APPLICABLE dispatches before any spawn)
+2. `spawn_recursive_probe.py --dispatch-plan` — iterate per dispatch with `lens_tier_dispatcher.select_tier()` per-lens model selection + `plan_hash` anti-reuse stamp
+3. `verify-lens-runs-coverage.py` — assert every APPLICABLE dispatch has a matching artifact
+4. `lens-coverage-matrix.py` — render LENS-COVERAGE-MATRIX.md (always, even on failure)
+5. Coverage failure → `blocking_gate_prompt_emit` (Task 33 wrapper, NOT `exit 1`)
+
 **Eligibility (6 rules — all must pass unless `--skip-recursive-probe` is set):**
 1. `.phase-profile` declares `phase_profile ∈ {feature, feature-legacy, hotfix}`
 2. `.phase-profile` declares `surface ∈ {ui, ui-mobile}` (NOT visual-only)
@@ -3902,7 +3824,72 @@ emit_telemetry_v2 "review.recursive_probe.preflight_asked" "${PHASE_NUMBER}" \
   --tag "probe_mode=${PROBE_MODE:-default}" \
   --tag "target_env=${TARGET_ENV:-default}" 2>/dev/null || true
 
+# Task 36b — Lens dispatch enforcement (wires Task 26 infrastructure).
+
+# Skip-mode escape (existing user decision — skip probe means skip coverage gate too)
+if [ -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
+  echo "▸ Phase 2b-2.5 skipped per .recursive-probe-skipped.yaml — coverage gate bypassed"
+else
+
+  # 1. Emit dispatch plan FIRST (trust anchor — declares all APPLICABLE dispatches)
+  "${PYTHON_BIN:-python3}" .claude/scripts/lens-dispatch/emit-dispatch-plan.py \
+    --phase-dir "${PHASE_DIR}" \
+    --phase "${PHASE_NUMBER}" \
+    --profile "$(python3 -c "import yaml,sys; d=yaml.safe_load(open('${PHASE_DIR}/.phase-profile').read()); print(d.get('phase_profile','web-fullstack'))" 2>/dev/null || echo "web-fullstack")" \
+    --review-run-id "${REVIEW_RUN_ID:-$(date +%s)}" \
+    --output "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" || {
+    echo "⛔ Phase 2b-2.5: emit-dispatch-plan.py failed — cannot enforce lens coverage" >&2
+    exit 1
+  }
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.lens_dispatch_emitted" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"plan_path\":\"${PHASE_DIR}/LENS-DISPATCH-PLAN.json\"}" \
+    >/dev/null 2>&1 || true
+
+  # 2. Add --dispatch-plan flag so spawn_recursive_probe uses Task 26 tier dispatcher
+  ARGS+=( --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" )
+
+fi
+
 python scripts/spawn_recursive_probe.py "${ARGS[@]}"
+
+# Post-spawn: coverage gate + matrix (only when probe actually ran)
+if [ ! -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
+
+  # 3. Coverage gate — assert every APPLICABLE dispatch has matching artifact
+  "${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-lens-runs-coverage.py \
+    --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" \
+    --runs-dir "${PHASE_DIR}/runs" \
+    --phase "${PHASE_NUMBER}" \
+    --evidence-out "${PHASE_DIR}/.lens-coverage-evidence.json"
+  COVERAGE_RC=$?
+
+  # 4. Render coverage matrix (always — gives user the picture even on failure)
+  "${PYTHON_BIN:-python3}" .claude/scripts/aggregators/lens-coverage-matrix.py \
+    --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" \
+    --runs-dir "${PHASE_DIR}/runs" \
+    --output "${PHASE_DIR}/LENS-COVERAGE-MATRIX.md" || true
+
+  # 5. Coverage failure → Task 33 wrapper (NOT exit 1 — user gets 4 options)
+  if [ "$COVERAGE_RC" -ne 0 ]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.lens_coverage_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"evidence\":\"${PHASE_DIR}/.lens-coverage-evidence.json\"}" \
+      >/dev/null 2>&1 || true
+
+    # Task 33 wrapper: present 4 options
+    # [a] auto-fix-spawn-missing-lenses / [s] skip-with-override / [r] amend / [x] abort
+    source scripts/lib/blocking-gate-prompt.sh
+    blocking_gate_prompt_emit "lens_coverage_blocked" \
+      "${PHASE_DIR}/.lens-coverage-evidence.json" \
+      "error" \
+      "${PHASE_DIR}/LENS-COVERAGE-MATRIX.md"
+    # AI controller calls AskUserQuestion → re-invokes Leg 2
+    # Branch on Leg 2 exit code per blocking-gate-prompt-contract.md
+  fi
+
+fi
 ```
 
 **Argparse forwarding (entry point of /vg:review):**

@@ -3770,6 +3770,14 @@ User sẽ thấy banner đầy đủ BEFORE spawn + structured description trong
 
 **Purpose:** After parallel Haiku scanners (2b-2) complete, run the recursive lens probe layer to deep-dive each interesting clickable through bug-class lenses (authz-negative, csrf, idor, ssrf, ...). Manager dispatcher reads scan-*.json, classifies clickables into element classes, picks lenses per class, spawns workers in parallel (auto), generates prompt files (manual), or both (hybrid). Goals discovered by lens probes are merged single-writer into TEST-GOALS-DISCOVERED.md.
 
+**Task 36b dispatch chain (wires Task 26 infrastructure):**
+Phase 2b-2.5 now runs a 5-step chain:
+1. `emit-dispatch-plan.py` — emit LENS-DISPATCH-PLAN.json (trust anchor, declares all APPLICABLE dispatches before any spawn)
+2. `spawn_recursive_probe.py --dispatch-plan` — iterate per dispatch with `lens_tier_dispatcher.select_tier()` per-lens model selection + `plan_hash` anti-reuse stamp
+3. `verify-lens-runs-coverage.py` — assert every APPLICABLE dispatch has a matching artifact
+4. `lens-coverage-matrix.py` — render LENS-COVERAGE-MATRIX.md (always, even on failure)
+5. Coverage failure → `blocking_gate_prompt_emit` (Task 33 wrapper, NOT `exit 1`)
+
 **Eligibility (6 rules — all must pass unless `--skip-recursive-probe` is set):**
 1. `.phase-profile` declares `phase_profile ∈ {feature, feature-legacy, hotfix}`
 2. `.phase-profile` declares `surface ∈ {ui, ui-mobile}` (NOT visual-only)
@@ -3902,7 +3910,72 @@ emit_telemetry_v2 "review.recursive_probe.preflight_asked" "${PHASE_NUMBER}" \
   --tag "probe_mode=${PROBE_MODE:-default}" \
   --tag "target_env=${TARGET_ENV:-default}" 2>/dev/null || true
 
+# Task 36b — Lens dispatch enforcement (wires Task 26 infrastructure).
+
+# Skip-mode escape (existing user decision — skip probe means skip coverage gate too)
+if [ -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
+  echo "▸ Phase 2b-2.5 skipped per .recursive-probe-skipped.yaml — coverage gate bypassed"
+else
+
+  # 1. Emit dispatch plan FIRST (trust anchor — declares all APPLICABLE dispatches)
+  "${PYTHON_BIN:-python3}" .claude/scripts/lens-dispatch/emit-dispatch-plan.py \
+    --phase-dir "${PHASE_DIR}" \
+    --phase "${PHASE_NUMBER}" \
+    --profile "$(python3 -c "import yaml,sys; d=yaml.safe_load(open('${PHASE_DIR}/.phase-profile').read()); print(d.get('phase_profile','web-fullstack'))" 2>/dev/null || echo "web-fullstack")" \
+    --review-run-id "${REVIEW_RUN_ID:-$(date +%s)}" \
+    --output "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" || {
+    echo "⛔ Phase 2b-2.5: emit-dispatch-plan.py failed — cannot enforce lens coverage" >&2
+    exit 1
+  }
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.lens_dispatch_emitted" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"plan_path\":\"${PHASE_DIR}/LENS-DISPATCH-PLAN.json\"}" \
+    >/dev/null 2>&1 || true
+
+  # 2. Add --dispatch-plan flag so spawn_recursive_probe uses Task 26 tier dispatcher
+  ARGS+=( --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" )
+
+fi
+
 python scripts/spawn_recursive_probe.py "${ARGS[@]}"
+
+# Post-spawn: coverage gate + matrix (only when probe actually ran)
+if [ ! -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
+
+  # 3. Coverage gate — assert every APPLICABLE dispatch has matching artifact
+  "${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-lens-runs-coverage.py \
+    --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" \
+    --runs-dir "${PHASE_DIR}/runs" \
+    --phase "${PHASE_NUMBER}" \
+    --evidence-out "${PHASE_DIR}/.lens-coverage-evidence.json"
+  COVERAGE_RC=$?
+
+  # 4. Render coverage matrix (always — gives user the picture even on failure)
+  "${PYTHON_BIN:-python3}" .claude/scripts/aggregators/lens-coverage-matrix.py \
+    --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" \
+    --runs-dir "${PHASE_DIR}/runs" \
+    --output "${PHASE_DIR}/LENS-COVERAGE-MATRIX.md" || true
+
+  # 5. Coverage failure → Task 33 wrapper (NOT exit 1 — user gets 4 options)
+  if [ "$COVERAGE_RC" -ne 0 ]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.lens_coverage_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"evidence\":\"${PHASE_DIR}/.lens-coverage-evidence.json\"}" \
+      >/dev/null 2>&1 || true
+
+    # Task 33 wrapper: present 4 options
+    # [a] auto-fix-spawn-missing-lenses / [s] skip-with-override / [r] amend / [x] abort
+    source scripts/lib/blocking-gate-prompt.sh
+    blocking_gate_prompt_emit "lens_coverage_blocked" \
+      "${PHASE_DIR}/.lens-coverage-evidence.json" \
+      "error" \
+      "${PHASE_DIR}/LENS-COVERAGE-MATRIX.md"
+    # AI controller calls AskUserQuestion → re-invokes Leg 2
+    # Branch on Leg 2 exit code per blocking-gate-prompt-contract.md
+  fi
+
+fi
 ```
 
 **Argparse forwarding (entry point of /vg:review):**

@@ -60,6 +60,20 @@ except ImportError:
         """Fallback no-op when the telemetry helper is unavailable."""
         return None
 
+# Task 36b — Task 26 lens_tier_dispatcher integration.
+# Import from .claude/scripts/lib/ where Task 26 shipped it.
+_LENS_LIB_DIR = REPO_ROOT / ".claude" / "scripts" / "lib"
+sys.path.insert(0, str(_LENS_LIB_DIR))
+try:
+    from lens_tier_dispatcher import select_tier, DispatchTier  # type: ignore
+    _TIER_DISPATCHER_AVAILABLE = True
+except ImportError:
+    _TIER_DISPATCHER_AVAILABLE = False
+
+    def select_tier(lens_frontmatter: dict, project_cost_caps: dict | None = None):  # type: ignore[no-redef]
+        """Fallback stub when lens_tier_dispatcher is unavailable."""
+        return None
+
 ELIGIBLE_PROFILES: set[str] = {"feature", "feature-legacy", "hotfix"}
 ELIGIBLE_SURFACES: set[str] = {"ui", "ui-mobile"}
 VISUAL_ONLY_SURFACES: set[str] = {"visual", "visual-only"}
@@ -432,6 +446,166 @@ _LENS_DIRS = [
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.S)
 _VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+
+
+# ---------------------------------------------------------------------------
+# Task 36b — LENS-DISPATCH-PLAN.json integration (Task 26 wiring)
+# ---------------------------------------------------------------------------
+
+def read_frontmatter(lens_path: Path) -> dict[str, Any]:
+    """Read YAML frontmatter from a lens prompt file.
+
+    Returns {} if the file is missing or frontmatter is unparseable.
+    Used by spawn_per_dispatch to feed lens_tier_dispatcher.select_tier().
+    """
+    if not lens_path.is_file():
+        return {}
+    text = lens_path.read_text(encoding="utf-8")
+    m = re.match(r"^---\s*\n(.+?)\n---", text, re.DOTALL)
+    if not m:
+        return {}
+    try:
+        data = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def emit_dispatch_plan(phase_dir: Path, phase: str, profile: str,
+                       review_run_id: str) -> Path:
+    """Call Task 26 emitter; returns path to LENS-DISPATCH-PLAN.json.
+
+    The emitter (emit-dispatch-plan.py) iterates goals × lenses, classifies
+    applicability via frontmatter, and writes a canonical JSON manifest with
+    a plan_hash that the coverage gate later verifies. This function is the
+    pre-loop trust anchor for Phase 2.5.
+    """
+    output = phase_dir / "LENS-DISPATCH-PLAN.json"
+    emitter = REPO_ROOT / ".claude" / "scripts" / "lens-dispatch" / "emit-dispatch-plan.py"
+    if not emitter.is_file():
+        sys.stderr.write(
+            f"Task 26 emit-dispatch-plan.py not found at {emitter}; "
+            "LENS-DISPATCH-PLAN.json will not be emitted.\n"
+        )
+        return output
+    subprocess.run([
+        sys.executable, str(emitter),
+        "--phase-dir", str(phase_dir),
+        "--phase", phase,
+        "--profile", profile,
+        "--review-run-id", review_run_id,
+        "--output", str(output),
+    ], check=True, timeout=60)
+    return output
+
+
+def log_override_debt_lens(reason: str, phase: str, dispatch_id: str) -> None:
+    """Surface OVERRIDE-DEBT for lens cost-cap skips — caller pipeline aggregates."""
+    sys.stderr.write(
+        f"OVERRIDE-DEBT critical: lens-cost-cap-exceeded skipping {dispatch_id!r}; "
+        f"phase={phase!r} reason={reason!r}\n"
+    )
+
+
+def spawn_per_dispatch(plan_path: Path, project_cost_caps: dict[str, Any],
+                       phase_dir: Path, phase: str) -> list[dict[str, Any]]:
+    """Iterate LENS-DISPATCH-PLAN.json dispatches; spawn workers with tier selection.
+
+    For each APPLICABLE dispatch:
+    1. Load lens frontmatter (Task 36a 6-field schema).
+    2. Call lens_tier_dispatcher.select_tier() to pick model.
+    3. Skip with override-debt log if cost cap exceeded for high-complexity lens.
+    4. Spawn worker; write plan_hash into artifact (anti-reuse).
+
+    Returns list of result dicts (same shape as dispatch_auto results).
+    """
+    if not plan_path.is_file():
+        sys.stderr.write(
+            f"LENS-DISPATCH-PLAN.json not found at {plan_path}; "
+            "skipping dispatch-plan-driven spawn.\n"
+        )
+        return []
+
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        sys.stderr.write(f"Failed to parse LENS-DISPATCH-PLAN.json: {exc}\n")
+        return []
+
+    plan_hash = plan.get("plan_hash", "")
+    results: list[dict[str, Any]] = []
+
+    for i, dispatch in enumerate(plan.get("dispatches", [])):
+        if dispatch.get("applicability_status") != "APPLICABLE":
+            continue
+
+        lens_name = dispatch["lens"]
+        # Look up lens file for frontmatter (tier selection).
+        lens_path = None
+        for d in _LENS_DIRS:
+            candidate = d / f"{lens_name}.md"
+            if candidate.is_file():
+                lens_path = candidate
+                break
+
+        lens_fm = read_frontmatter(lens_path) if lens_path else {}
+
+        # Tier selection via Task 26 dispatcher.
+        if _TIER_DISPATCHER_AVAILABLE:
+            tier = select_tier(lens_fm, project_cost_caps)
+            complexity = int(lens_fm.get("worker_complexity_score", 1))
+            if tier.override_required and complexity >= 4:
+                # Cost cap exceeded for high-complexity lens — log debt + skip.
+                log_override_debt_lens("lens-cost-cap-exceeded", phase, dispatch["dispatch_id"])
+                continue
+            model = tier.model
+        else:
+            model = "gemini-2.5-flash"
+
+        # Build a minimal plan entry compatible with spawn_one_worker.
+        entry: dict[str, Any] = {
+            "element": {
+                "element_class": dispatch.get("element_class"),
+                "selector": dispatch.get("dispatch_id"),
+                "view": dispatch.get("view"),
+                "resource": dispatch.get("resource"),
+                "role": dispatch.get("role") or "anonymous",
+            },
+            "lens": lens_name,
+            "scope_key": (
+                dispatch.get("resource", ""),
+                dispatch.get("role") or "anonymous",
+                lens_name,
+            ),
+        }
+
+        slot = MCP_SLOTS[i % len(MCP_SLOTS)]
+        result = spawn_one_worker(entry, phase_dir, mcp_slot=slot, model=model)
+
+        # Write plan_hash into the artifact (anti-reuse — coverage gate verifies).
+        result["plan_hash"] = plan_hash
+        result["dispatch_id"] = dispatch["dispatch_id"]
+
+        # Persist plan_hash into the artifact JSON file if it exists.
+        artifact_path_str = result.get("output_path", "")
+        if artifact_path_str:
+            artifact_path = Path(artifact_path_str)
+            if artifact_path.is_file():
+                try:
+                    artifact_data = json.loads(
+                        artifact_path.read_text(encoding="utf-8")
+                    )
+                    artifact_data["plan_hash"] = plan_hash
+                    artifact_data["dispatch_id"] = dispatch["dispatch_id"]
+                    artifact_path.write_text(
+                        json.dumps(artifact_data, indent=2), encoding="utf-8"
+                    )
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+        results.append(result)
+
+    return results
 
 
 def _load_lens_prompt(lens: str) -> str:
@@ -820,6 +994,13 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help="Print the plan as JSON and exit; do not spawn.")
     ap.add_argument("--json", action="store_true",
                     help="Emit machine-readable JSON on stdout.")
+    # Task 36b — Task 26 dispatch plan wiring.
+    ap.add_argument("--dispatch-plan", default=None, metavar="PATH",
+                    help="Path to LENS-DISPATCH-PLAN.json emitted by "
+                         "emit-dispatch-plan.py (Task 26). When provided, "
+                         "the spawn loop iterates per-dispatch rather than "
+                         "per-classification, using lens_tier_dispatcher "
+                         "for per-lens model selection.")
     return ap
 
 
@@ -1231,9 +1412,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # ------------------------------------------------------------------
     # Real run — dispatch per probe-mode.
+    # Task 36b: when --dispatch-plan is provided, use spawn_per_dispatch
+    # (Task 26-aware, lens_tier_dispatcher per-lens model selection +
+    # plan_hash anti-reuse stamp). Otherwise fall back to dispatch_auto.
     # ------------------------------------------------------------------
     if args.probe_mode == "auto":
-        results = dispatch_auto(plan, phase_dir)
+        dispatch_plan_path = Path(args.dispatch_plan) if args.dispatch_plan else None
+        if dispatch_plan_path and dispatch_plan_path.is_file():
+            # Task 36b path: per-dispatch spawn with tier selection + plan_hash.
+            vg_cfg = _load_vg_config(phase_dir)
+            cost_caps = (
+                vg_cfg.get("review", {}).get("cost_caps", {})
+            )
+            results = spawn_per_dispatch(
+                dispatch_plan_path, cost_caps, phase_dir,
+                phase=phase_dir.name,
+            )
+        else:
+            results = dispatch_auto(plan, phase_dir)
         index_path = phase_dir / "runs" / "INDEX.json"
         index_path.parent.mkdir(parents=True, exist_ok=True)
         index_path.write_text(

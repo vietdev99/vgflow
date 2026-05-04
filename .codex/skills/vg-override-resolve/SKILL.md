@@ -207,6 +207,18 @@ Invoke this skill as `$vg-override-resolve`. Treat all user text after the skill
 
 
 
+---
+name: vg:override-resolve
+description: Manually resolve a single override-debt entry — clean RESOLVED or permanent WONT_FIX — for overrides without a natural re-run trigger (e.g. --skip-design-check on a scaffolding phase)
+argument-hint: <DEBT-ID> --reason='<justification>' [--wont-fix]
+allowed-tools: Read, Bash, Grep, AskUserQuestion
+mutates_repo: true
+runtime_contract:
+  must_emit_telemetry:
+    - event_type: "override_resolve.started"
+    - event_type: "override_resolve.completed"
+---
+
 # /vg:override-resolve — Manual Override Resolution (v1.9.0+)
 
 Resolves ONE entry in `${PLANNING_DIR}/OVERRIDE-DEBT.md` by DEBT-ID. Two modes:

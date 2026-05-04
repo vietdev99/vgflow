@@ -207,14 +207,6 @@ Invoke this skill as `$vg-recover`. Treat all user text after the skill name as 
 
 
 
-<NARRATION_POLICY>
-**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate.**
-
-Markdown headers for progress. Long Bash > 30s → `run_in_background: true`.
-
-**Translate English terms (RULE)** — first-occurrence English term phải có giải thích VN trong ngoặc. Ví dụ: `recovery (khôi phục)`, `corruption (hư hỏng)`, `manifest (kê khai)`, `stuck (tắc nghẽn)`, `hash mismatch (lệch băm)`, `rollback (quay lui)`, `artifact (tạo phẩm)`. Không áp dụng: file path, code ID.
-</NARRATION_POLICY>
-
 <rules>
 1. **Suggest-only by default** — prints recovery commands. Does NOT execute anything destructive unless `--apply` + second user confirm.
 2. **--apply requires AskUserQuestion confirm** — even safe helpers get a "proceed? yes/no" prompt before running.

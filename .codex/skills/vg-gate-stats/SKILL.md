@@ -207,14 +207,6 @@ Invoke this skill as `$vg-gate-stats`. Treat all user text after the skill name 
 
 
 
-<NARRATION_POLICY>
-**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate.**
-
-Markdown headers for progress. Long Bash > 30s → `run_in_background: true`.
-
-**Translate English terms (RULE)** — first-occurrence English term phải có giải thích VN trong ngoặc. Ví dụ: `gate (cổng)`, `override (bỏ qua)`, `outcome (kết quả)`, `telemetry (đo đạc)`, `milestone (mốc)`, `threshold (ngưỡng)`, `event (sự kiện)`. Không áp dụng: file path, code ID, outcome ID (PASS/FAIL/OVERRIDE).
-</NARRATION_POLICY>
-
 <rules>
 1. **Read-only** — queries telemetry JSONL only. No writes.
 2. **Delegate to `telemetry_query` + `telemetry_warn_overrides`** — no reimplementation of event parsing.
