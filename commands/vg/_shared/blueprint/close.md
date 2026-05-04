@@ -112,7 +112,8 @@ fi
 
 ```bash
 PLAN_COUNT=$(ls "${PHASE_DIR}"/PLAN*.md 2>/dev/null | wc -l | tr -d ' ')
-ENDPOINT_COUNT=$(grep -c '^## ' "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || echo 0)
+ENDPOINT_COUNT=$(grep -c '^## ' "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || true)
+ENDPOINT_COUNT="${ENDPOINT_COUNT:-0}"
 echo ""
 echo "Blueprint complete for Phase ${PHASE_NUMBER}."
 echo "  Plans: ${PLAN_COUNT} created"
@@ -212,6 +213,26 @@ if [ -f "$DGOAL_VAL" ]; then
     echo "⛔ Decisions → goals coverage gate failed."
     echo "   Every D-XX must be cited by ≥1 goal in TEST-GOALS.md (decisions: [D-XX])."
     exit 1
+  fi
+fi
+```
+
+### 6.2.5b — Task 38: verify BLOCK 5 FE consumer contracts (before blueprint.completed)
+
+```bash
+# Task 38 — run verify-fe-contract-block5.py before close. BLOCKs if BLOCK 5
+# is missing on any endpoint. Legacy phases escape via --allow-block5-missing
+# (set ALLOW_BLOCK5_MISSING_FLAG from slim-entry arg-parser when user passes flag).
+BLOCK5_VALIDATOR="${REPO_ROOT:-.}/.claude/scripts/validators/verify-fe-contract-block5.py"
+if [ -f "$BLOCK5_VALIDATOR" ] && [ -d "${PHASE_DIR}/API-CONTRACTS" ]; then
+  python3 "$BLOCK5_VALIDATOR" \
+    --contracts-dir "${PHASE_DIR}/API-CONTRACTS" \
+    ${ALLOW_BLOCK5_MISSING_FLAG:-}
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event blueprint.fe_contract_block5_blocked --phase "${PHASE_NUMBER}" 2>/dev/null || true
+    echo "BLOCK: BLOCK 5 FE contract validator failed. Use --allow-block5-missing for legacy phases." >&2
+    exit "$rc"
   fi
 fi
 ```

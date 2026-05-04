@@ -217,6 +217,26 @@ if [ -f "$DGOAL_VAL" ]; then
 fi
 ```
 
+### 6.2.5b — Task 38: verify BLOCK 5 FE consumer contracts (before blueprint.completed)
+
+```bash
+# Task 38 — run verify-fe-contract-block5.py before close. BLOCKs if BLOCK 5
+# is missing on any endpoint. Legacy phases escape via --allow-block5-missing
+# (set ALLOW_BLOCK5_MISSING_FLAG from slim-entry arg-parser when user passes flag).
+BLOCK5_VALIDATOR="${REPO_ROOT:-.}/.claude/scripts/validators/verify-fe-contract-block5.py"
+if [ -f "$BLOCK5_VALIDATOR" ] && [ -d "${PHASE_DIR}/API-CONTRACTS" ]; then
+  python3 "$BLOCK5_VALIDATOR" \
+    --contracts-dir "${PHASE_DIR}/API-CONTRACTS" \
+    ${ALLOW_BLOCK5_MISSING_FLAG:-}
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event blueprint.fe_contract_block5_blocked --phase "${PHASE_NUMBER}" 2>/dev/null || true
+    echo "BLOCK: BLOCK 5 FE contract validator failed. Use --allow-block5-missing for legacy phases." >&2
+    exit "$rc"
+  fi
+fi
+```
+
 ### 6.2.6 — terminal telemetry + run-complete
 
 ```bash

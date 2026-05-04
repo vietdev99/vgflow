@@ -273,6 +273,25 @@ Claude Code docs). DO NOT generate PLAN.md or API-CONTRACTS.md inline.
 Read `_shared/blueprint/preflight.md` and follow it exactly.
 This step includes the IMPERATIVE TodoWrite call after emit-tasklist.py.
 
+### `--only=<step>` (selective re-run, Codex round-2 Amendment D)
+
+When `--only=<step>` is passed, run ONLY that named step + its required
+prerequisites (preflight, parse_args, create_task_tracker, complete). Skip
+all other steps. Used for retroactive backfill after a new step is added.
+
+<only-step-list>
+Valid step names:
+- `fe-contracts` — re-run Pass 2 (Task 38). Prereqs: 2b_contracts, 2b5e_a_lens_walk, 2b6c_view_decomposition.
+- `rcrurdr-invariants` — re-run Task 39 RCRURDR generator.
+- `workflows` — re-run Task 40 Pass 3 workflow specs.
+- `lens-walk` — re-run 2b5e_a_lens_walk in isolation.
+- `edge-cases` — re-run 2b5e_edge_cases in isolation.
+</only-step-list>
+
+If `<step>` is unknown / invalid / not in the valid list, emit `error`
+event `blueprint.only_step_unknown` and exit 1 with message:
+`ERROR: unknown step '<step>' for --only=. Valid: fe-contracts, rcrurdr-invariants, workflows, lens-walk, edge-cases`.
+
 ### STEP 2 — design (skipped for backend-only / cli-tool / library profiles)
 Read `_shared/blueprint/design.md` and follow it exactly.
 

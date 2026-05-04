@@ -1,7 +1,7 @@
 ---
 name: vg:blueprint
 description: Plan + API contracts + verify + CrossAI review — 4 sub-steps before build
-argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--skip-rcrurdr] [--from=<substep>] [--override-reason=<text>] [--apply-amendments]"
+argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--skip-rcrurdr] [--skip-fe-contracts] [--from=<substep>] [--only=<step>] [--override-reason=<text>] [--apply-amendments]"
 allowed-tools:
   - Read
   - Write
@@ -112,6 +112,12 @@ runtime_contract:
       profile: "web-fullstack,web-frontend-only"
     - name: "2b7_flow_detect"
       profile: "web-fullstack,web-frontend-only"
+    # Task 38 (Bug F) — Pass 2 FE consumer contracts. Runs after lens-walk +
+    # edge-cases so UI-MAP + VIEW-COMPONENTS exist. Profile-gated (web only).
+    - name: "2b6d_fe_contracts"
+      profile: "web-fullstack,web-frontend-only"
+      severity: "warn"
+      required_unless_flag: "--skip-fe-contracts"
     # Task 39 (Bug G) — emit per-goal RCRURD invariants from extracted
     # ```yaml-rcrurd``` fences in TEST-GOALS/G-NN.md. Optional skip:
     # --skip-rcrurdr (with --override-reason) for phases without crud goals.
@@ -155,12 +161,20 @@ runtime_contract:
     - event_type: "blueprint.rcrurdr_invariant_emitted"
       phase: "${PHASE_NUMBER}"
       severity: "info"
+    # Task 38 — Pass 2 lifecycle (mutually exclusive with skipped event)
+    - event_type: "blueprint.fe_contracts_pass_completed"
+      phase: "${PHASE_NUMBER}"
+      severity: "info"
+    - event_type: "blueprint.fe_contract_block5_blocked"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--skip-crossai"
     - "--skip-codex-test-goal-lane"
     - "--skip-edge-cases"
     - "--skip-lens-walk"
     - "--skip-rcrurdr"
+    - "--skip-fe-contracts"
     - "--override-reason"
 ---
 
@@ -221,6 +235,25 @@ Claude Code docs). DO NOT generate PLAN.md or API-CONTRACTS.md inline.
 ### STEP 1 — preflight
 Read `_shared/blueprint/preflight.md` and follow it exactly.
 This step includes the IMPERATIVE TodoWrite call after emit-tasklist.py.
+
+### `--only=<step>` (selective re-run, Codex round-2 Amendment D)
+
+When `--only=<step>` is passed, run ONLY that named step + its required
+prerequisites (preflight, parse_args, create_task_tracker, complete). Skip
+all other steps. Used for retroactive backfill after a new step is added.
+
+<only-step-list>
+Valid step names:
+- `fe-contracts` — re-run Pass 2 (Task 38). Prereqs: 2b_contracts, 2b5e_a_lens_walk, 2b6c_view_decomposition.
+- `rcrurdr-invariants` — re-run Task 39 RCRURDR generator.
+- `workflows` — re-run Task 40 Pass 3 workflow specs.
+- `lens-walk` — re-run 2b5e_a_lens_walk in isolation.
+- `edge-cases` — re-run 2b5e_edge_cases in isolation.
+</only-step-list>
+
+If `<step>` is unknown / invalid / not in the valid list, emit `error`
+event `blueprint.only_step_unknown` and exit 1 with message:
+`ERROR: unknown step '<step>' for --only=. Valid: fe-contracts, rcrurdr-invariants, workflows, lens-walk, edge-cases`.
 
 ### STEP 2 — design (skipped for backend-only / cli-tool / library profiles)
 Read `_shared/blueprint/design.md` and follow it exactly.
