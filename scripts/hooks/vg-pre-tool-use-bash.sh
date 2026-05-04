@@ -435,7 +435,7 @@ if db_path.exists():
 }
 
 case "$run_id_check_result" in
-  ok) exit 0 ;;
+  ok) ;;
   run_id_mismatch*)
     other="${run_id_check_result#run_id_mismatch|}"
     emit_run_mismatch_telemetry "mismatch"
@@ -446,4 +446,117 @@ case "$run_id_check_result" in
     emit_block "evidence missing run_id field — re-run TodoWrite + tasklist-projected to refresh signed evidence (additive Task 44b field)."
     ;;
   *) emit_block "run_id check failed: ${run_id_check_result}" ;;
+esac
+
+# Task 44b — Rule V4: block.handled counter-check. Closes audit P1 (15+ PV3
+# bypass instances): AI emits vg.block.handled without performing TodoWrite +
+# tasklist-projected. We require evidence mtime > most recent block.handled
+# for gate=PreToolUse-tasklist on this run. Any handled-without-refresh
+# pattern HARD BLOCKS here.
+events_db_path=".vg/events.db"
+handled_check_result="ok"
+if [ -f "$events_db_path" ]; then
+  handled_check_result="$(VG_RUN_ID="${run_id}" VG_EV_PATH="$evidence_path" VG_DB_PATH="$events_db_path" python3 - <<'PY'
+import os, sqlite3, sys, json
+from pathlib import Path
+from datetime import datetime, timezone
+
+run_id = os.environ["VG_RUN_ID"]
+ev_path = Path(os.environ["VG_EV_PATH"])
+db_path = Path(os.environ["VG_DB_PATH"])
+gate_id = "PreToolUse-tasklist"
+
+if not ev_path.exists() or not db_path.exists():
+    print("ok", end="")
+    sys.exit(0)
+
+conn = sqlite3.connect(str(db_path))
+try:
+    rows = conn.execute(
+        "SELECT ts, payload_json FROM events "
+        "WHERE run_id = ? AND event_type = 'vg.block.handled' "
+        "ORDER BY id DESC LIMIT 50",
+        (run_id,),
+    ).fetchall()
+finally:
+    conn.close()
+
+# Find most recent vg.block.handled whose payload references gate PreToolUse-tasklist.
+last_handled_ts = None
+for ts, payload_json in rows:
+    try:
+        payload = json.loads(payload_json or "{}")
+    except Exception:
+        payload = {}
+    if payload.get("gate") == gate_id:
+        last_handled_ts = ts
+        break
+
+if last_handled_ts is None:
+    print("ok", end="")
+    sys.exit(0)
+
+# Parse handled ts (ISO 8601 UTC) → epoch.
+try:
+    if last_handled_ts.endswith("Z"):
+        dt = datetime.strptime(last_handled_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    else:
+        dt = datetime.fromisoformat(last_handled_ts)
+    handled_epoch = dt.timestamp()
+except Exception:
+    # Unparseable ts: fail open and do not block.
+    print("ok", end="")
+    sys.exit(0)
+
+ev_mtime = ev_path.stat().st_mtime
+# Allow 1s slack for filesystem timestamp resolution on coarse FS.
+if ev_mtime + 1 < handled_epoch:
+    print(f"unresolved|{last_handled_ts}", end="")
+    sys.exit(0)
+print("ok", end="")
+PY
+)"
+fi
+
+emit_handled_unresolved_telemetry() {
+  if [ -n "$command_from_run" ]; then
+    local event_type="${command_from_run/vg:/}.tasklist_block_handled_unresolved"
+    if ! CLAUDE_SESSION_ID="${session_id}" python3 .claude/scripts/vg-orchestrator emit-event \
+        "$event_type" --actor hook --outcome WARN \
+        --payload "{\"run_id\":\"${run_id}\",\"gate\":\"PreToolUse-tasklist\"}" \
+        >/dev/null 2>&1; then
+      VG_EVENT_TYPE="$event_type" VG_RUN_ID="$run_id" python3 -c '
+import sqlite3, json, datetime, os
+from pathlib import Path
+repo = Path(os.environ.get("VG_REPO_ROOT", ".")).resolve()
+db_path = repo / ".vg" / "events.db"
+if db_path.exists():
+    event_type = os.environ["VG_EVENT_TYPE"]
+    run_id = os.environ["VG_RUN_ID"]
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("""CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY, run_id TEXT, command TEXT, event_type TEXT,
+        ts TEXT, payload_json TEXT, actor TEXT, outcome TEXT)""")
+    conn.execute(
+        "INSERT INTO events(run_id, event_type, ts, payload_json, actor, outcome) VALUES (?,?,?,?,?,?)",
+        (run_id, event_type,
+         datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+         json.dumps({"run_id": run_id, "gate": "PreToolUse-tasklist"}),
+         "hook", "WARN"))
+    conn.commit()
+    conn.close()
+' 2>/dev/null || true
+    fi
+  fi
+}
+
+case "$handled_check_result" in
+  ok) exit 0 ;;
+  unresolved*)
+    emit_handled_unresolved_telemetry
+    handled_ts="${handled_check_result#unresolved|}"
+    emit_block "block.handled emitted but evidence not refreshed since (handled at ${handled_ts}, evidence older). AI must re-run TodoWrite + tasklist-projected — emitting vg.block.handled alone does NOT satisfy the gate."
+    ;;
+  *) exit 0 ;;
 esac
