@@ -193,7 +193,11 @@ is_bootstrap_before_tasklist() {
     vg:accept:0_gate_integrity_precheck|\
     vg:accept:0_load_config|\
     vg:review:00_gate_integrity_precheck|\
-    vg:review:00_session_lifecycle)
+    vg:review:00_session_lifecycle|\
+    vg:scope:0_parse_and_validate|\
+    vg:roam:0_parse_and_validate|\
+    vg:roam:0aa_resume_check|\
+    vg:deploy:0_parse_and_validate)
       return 0
       ;;
   esac

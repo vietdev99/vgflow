@@ -10,6 +10,7 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+  - TodoWrite
 runtime_contract:
   must_write:
     - "${PHASE_DIR}/DEPLOY-STATE.json"
@@ -24,9 +25,42 @@ runtime_contract:
       phase: "${PHASE_NUMBER}"
     - event_type: "phase.deploy_completed"
       phase: "${PHASE_NUMBER}"
+    # Task 44b — tasklist projection enforcement (Bug L)
+    - event_type: "deploy.tasklist_shown"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "deploy.native_tasklist_projected"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "deploy.tasklist_projection_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "deploy.tasklist_evidence_run_mismatch"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "deploy.tasklist_depth_invalid"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "deploy.tasklist_block_handled_unresolved"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--allow-build-incomplete"
 ---
+
+<HARD-GATE>
+You MUST follow STEP 0 through `complete` in exact order. Each step is gated
+by hooks. Skipping ANY step will be blocked by PreToolUse + Stop hooks.
+
+You MUST call TodoWrite IMMEDIATELY after STEP 0 (`0_parse_and_validate`)
+runs `emit-tasklist.py` — DO NOT continue without it. The PreToolUse Bash
+hook will block all subsequent step-active calls until signed evidence
+exists at `.vg/runs/<run_id>/.tasklist-projected.evidence.json`. The
+PostToolUse TodoWrite hook auto-writes that signed evidence.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by the PostToolUse
+depth check (Task 44b Rule V2 — `depth_valid=false` evidence triggers
+the PreToolUse depth gate).
+</HARD-GATE>
 
 <rules>
 1. **Build must be complete** — PIPELINE-STATE.steps.build.status ∈ {accepted, tested, reviewed, built-with-debt, built-complete}. Otherwise BLOCK (override: `--allow-build-incomplete` logs override-debt).
@@ -116,6 +150,21 @@ ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator run-start vg:deploy "${PH
 ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
   "phase.deploy_started" --actor "orchestrator" --outcome "INFO" \
   --payload "{\"phase\":\"${PHASE_NUMBER}\",\"args\":\"${ARGUMENTS}\"}" 2>/dev/null || true
+
+# Task 44b — tasklist projection enforcement: emit the deploy taskboard so
+# user sees planned steps and tasklist-contract.json is written for the
+# PreToolUse hook gate. AI MUST then call TodoWrite (with ↳ sub-items per
+# group) before any subsequent step-active.
+${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
+  --command "vg:deploy" \
+  --profile "${PROFILE:-web-fullstack}" \
+  --phase "${PHASE_NUMBER:-unknown}" 2>&1 | head -40 || true
+
+# See `_shared/lib/tasklist-projection-instruction.md` for the full
+# projection contract. After TodoWrite, AI MUST call:
+#   ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator tasklist-projected --adapter claude
+# (or --adapter codex / --adapter fallback). Until evidence exists, every
+# subsequent `step-active` is BLOCKED by the PreToolUse Bash hook.
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"
 ```

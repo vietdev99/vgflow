@@ -118,7 +118,8 @@ CHECKLIST_DEFS = {
         ("blueprint_plan", "Plan", ["2a_plan", "2a5_cross_system_check"]),
         ("blueprint_contracts", "Contracts And Test Goals", [
             "2b_contracts", "2b5_test_goals", "2b5a_codex_test_goal_lane",
-            "2b5e_edge_cases", "2b5d_expand_from_crud_surfaces", "2b7_flow_detect",
+            "2b5e_a_lens_walk", "2b5e_edge_cases",
+            "2b5d_expand_from_crud_surfaces", "2b7_flow_detect",
         ]),
         ("blueprint_verify", "Verification Gates", [
             "2c_verify", "2c_verify_plan_paths", "2c_utility_reuse",
@@ -223,6 +224,17 @@ CHECKLIST_DEFS = {
             "6_write_uat_md",
         ]),
         ("accept_close", "Complete", ["7_post_accept_actions"]),
+    ],
+    "vg:deploy": [
+        ("deploy_preflight", "Deploy Preflight", [
+            "0_parse_and_validate", "0a_env_select_and_confirm",
+        ]),
+        ("deploy_execute", "Deploy Per Env", [
+            "1_deploy_per_env",
+        ]),
+        ("deploy_close", "Persist Summary And Complete", [
+            "2_persist_summary", "complete",
+        ]),
     ],
     "vg:roam": [
         ("roam_preflight", "Roam Preflight", [
@@ -336,10 +348,16 @@ def _humanize_step_for_display(step: str) -> str:
       0_gate_integrity_precheck     → "0 Gate Integrity Precheck"
       2b6c_view_decomposition       → "2b6c View Decomposition"
       4_load_contracts_and_context  → "4 Load Contracts And Context"
+      2b5e_a_lens_walk              → "2b5e.a Lens Walk"   (sub-step letter)
 
     Preserves leading numeric/alphanumeric markers (0_, 2b6c_, etc) since
     they encode pipeline ordering. Replaces underscores with spaces and
     capitalizes word starts. Acronyms (CRUD, API, UI, UX, RBAC) preserved.
+
+    Sub-step disambiguation: `<prefix>_<single-letter>_<words>` renders as
+    `<prefix>.<letter> <Words>` so that `2b5e_a_lens_walk` reads as
+    "2b5e.a Lens Walk" (lens_walk is a sub-step of 2b5e), not the awkward
+    "2b5e A Lens Walk" where "A" reads like an English article.
     """
     if not step:
         return step
@@ -348,6 +366,14 @@ def _humanize_step_for_display(step: str) -> str:
     if parts[0] and (parts[0].isdigit() or any(c.isdigit() for c in parts[0])):
         prefix = parts[0]
         rest = parts[1] if len(parts) > 1 else ""
+        # Sub-step letter detection: if `rest` starts with a single letter
+        # followed by another underscore, fold that letter into the prefix
+        # via a dot (`2b5e_a_lens_walk` → prefix=`2b5e.a`, rest=`lens_walk`).
+        rest_parts = rest.split("_", 1)
+        if (len(rest_parts) == 2 and len(rest_parts[0]) == 1
+                and rest_parts[0].isalpha()):
+            prefix = f"{prefix}.{rest_parts[0]}"
+            rest = rest_parts[1]
     else:
         prefix = ""
         rest = step
