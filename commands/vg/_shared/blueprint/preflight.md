@@ -361,7 +361,17 @@ Example projection for vg:blueprint web-fullstack (32 items):
 ```bash
 vg-orchestrator step-active create_task_tracker
 
-# (TodoWrite call happens here per HARD-GATE above)
+# (TodoWrite call happens here per HARD-GATE above — PostToolUse hook signs evidence)
+
+# Bug D 2026-05-04: explicit emission — was previously instruction-text-only,
+# AI could skip the tasklist-projected call and rely on PostToolUse implicit
+# write. Now bash-enforced: blueprint.native_tasklist_projected MUST fire.
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-claude}" || {
+    echo "⛔ vg-orchestrator tasklist-projected failed — blueprint.native_tasklist_projected event will not fire." >&2
+    echo "   Check .vg/runs/<run_id>/tasklist-contract.json + adapter ∈ {claude,codex,fallback}." >&2
+    exit 1
+}
 
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/create_task_tracker.done"

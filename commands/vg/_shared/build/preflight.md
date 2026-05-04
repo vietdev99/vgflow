@@ -485,6 +485,16 @@ then set the item completed. The native tasklist is UI projection; markers and
 events remain the enforcement source of truth.
 
 ```bash
+# Bug D 2026-05-04: explicit emission — was previously instruction-text-only,
+# AI could skip the tasklist-projected call. Now bash-enforced:
+# build.native_tasklist_projected MUST fire for run-complete contract.
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-claude}" || {
+    echo "⛔ vg-orchestrator tasklist-projected failed — build.native_tasklist_projected event will not fire." >&2
+    echo "   Check .vg/runs/<run_id>/tasklist-contract.json + adapter ∈ {claude,codex,fallback}." >&2
+    exit 1
+}
+
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/create_task_tracker.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build create_task_tracker 2>/dev/null || true

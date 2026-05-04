@@ -9,6 +9,7 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+  - TodoWrite
 runtime_contract:
   # OHOK Batch 1 (2026-04-22): specs.md runtime_contract.
   # Previously zero enforcement — step 1 of pipeline was 100% performative.
@@ -27,6 +28,7 @@ runtime_contract:
       content_min_bytes: 500
   must_touch_markers:
     - "parse_args"
+    - "create_task_tracker"
     - "check_existing"
     - "choose_mode"
     # guided_questions only fires in interactive mode → warn severity
@@ -39,6 +41,11 @@ runtime_contract:
     - "commit_and_next"
   must_emit_telemetry:
     - event_type: "specs.tasklist_shown"
+      phase: "${PHASE_NUMBER}"
+    # Bug D — universal tasklist enforcement (2026-05-04). specs was the
+    # only mainline command lacking the projection event; AI could run
+    # full /vg:specs without ever calling TodoWrite.
+    - event_type: "specs.native_tasklist_projected"
       phase: "${PHASE_NUMBER}"
     - event_type: "specs.started"
       phase: "${PHASE_NUMBER}"
@@ -59,6 +66,51 @@ Generate a concise SPECS.md defining phase goal, scope, constraints, and success
 
 Output: `${PLANNING_DIR}/phases/{phase_dir}/SPECS.md`
 </objective>
+
+<HARD-GATE>
+You MUST follow STEP 1 through STEP 8 in exact order. Each step is gated
+by hooks. Skipping ANY step will be blocked by PreToolUse + Stop hooks.
+You CANNOT rationalize past these gates.
+
+You MUST call TodoWrite IMMEDIATELY after STEP 1 (`parse_args`) registers
+the run and `emit-tasklist.py` writes the contract — DO NOT continue
+without it. The PreToolUse Bash hook will block all subsequent
+step-active calls until signed evidence exists at
+`.vg/runs/<run_id>/.tasklist-projected.evidence.json`. The PostToolUse
+TodoWrite hook auto-writes that signed evidence.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
+
+This fixes Bug D (2026-05-04): specs was the last mainline command
+without TodoWrite enforcement — AI could complete /vg:specs end-to-end
+without ever projecting the tasklist, defeating the universal contract.
+</HARD-GATE>
+
+## Red Flags (do not rationalize)
+
+| Thought | Reality |
+|---|---|
+| "Specs là step nhỏ, không cần Tasklist" | Bug D 2026-05-04: every mainline cmd MUST project. specs was the last hole. |
+| "Tasklist không quan trọng, để sau" | PreToolUse Bash hook BLOCKS step-active without signed evidence |
+| "TodoWrite gọi sau cũng được" | Layer 2 diagnostic: PreToolUse blocks subsequent tool calls |
+| "User trust me, skip approval gate" | OHOK Batch 1 B3: USER_APPROVAL=approve required, silent = BLOCK |
+| "Block message bỏ qua, retry là xong" | §4.5 Layer 2: vg.block.fired must pair with vg.block.handled or Stop blocks |
+| "Spawn `Task()` như cũ" | Tool name is `Agent`, not `Task` (Codex fix #3) |
+
+## Tasklist policy (summary)
+
+`emit-tasklist.py` writes the profile-filtered
+`.vg/runs/<run_id>/tasklist-contract.json` (schema `native-tasklist.v2`).
+The process preamble below calls it; this skill IMPERATIVELY calls
+TodoWrite right after with one todo per `projection_items[]` entry
+(group headers + sub-steps with `↳` prefix). Then calls
+`vg-orchestrator tasklist-projected --adapter <claude|codex|fallback>`
+so `specs.native_tasklist_projected` event fires.
+
+Lifecycle: `replace-on-start` (first projection replaces stale list) +
+`close-on-complete` (final clear at run-complete).
 
 <process>
 
@@ -83,12 +135,69 @@ Store: `phase_goal`, `phase_success_criteria`, `project_constraints`, `prior_pha
 }
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "specs.started" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
-# v2.5.1 anti-forge: show task list at flow start so user sees planned steps
+# v2.5.1 anti-forge: show task list at flow start so user sees planned steps.
+# Bug D 2026-05-04: writes .vg/runs/<run_id>/tasklist-contract.json — the
+# create_task_tracker step below MUST project it via TodoWrite + emit
+# tasklist-projected, otherwise PreToolUse Bash hook blocks step-active.
 ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --command "vg:specs" \
   --profile "${PROFILE:-web-fullstack}" \
   --phase "${PHASE_NUMBER:-unknown}" 2>&1 | head -40 || true
 ```
+
+<step name="create_task_tracker">
+## Step 1.5: Create task tracker (create_task_tracker) — IMPERATIVE TodoWrite gate
+
+**Bind native tasklist to specs hierarchical projection.**
+
+`tasklist-contract.json` (schema `native-tasklist.v2`, written by `emit-tasklist.py`
+in the preamble above) contains:
+- `checklists[]` — coarse groups for the specs flow
+- `projection_items[]` — flat list of group headers + per-group sub-steps
+  (each sub-step prefixed with `  ↳`). This is what TodoWrite projects.
+
+<HARD-GATE>
+You MUST IMMEDIATELY call TodoWrite AFTER the bash below runs `step-active`.
+DO NOT continue without TodoWrite — the PreToolUse Bash hook will block all
+subsequent `step-active` calls until signed evidence exists at
+`.vg/runs/<run_id>/.tasklist-projected.evidence.json`.
+
+The PostToolUse TodoWrite hook auto-writes that signed evidence after your
+TodoWrite call.
+</HARD-GATE>
+
+Required behavior:
+1. Read `.vg/runs/<run_id>/tasklist-contract.json` → consume `projection_items[]`.
+2. Call `TodoWrite` with one todo per `projection_items[]` entry — full hierarchy
+   (group headers + sub-steps with `↳` prefix). Use the entry's `title` verbatim
+   as todo `content`.
+3. Call `vg-orchestrator tasklist-projected --adapter claude` (or `codex|fallback`
+   in non-Claude runtimes; Claude Code session adapter MUST be `claude` per Bug L
+   P6 hook check).
+4. Keep `.step-markers/*.done` as the durable enforcement signal.
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active create_task_tracker 2>/dev/null || true
+
+# (TodoWrite call happens HERE per HARD-GATE above — AI MUST issue it before
+# any other tool. PostToolUse TodoWrite hook signs evidence automatically.)
+
+# Bug D 2026-05-04: explicit emission — fires specs.native_tasklist_projected.
+# Must succeed for run-complete contract; surfaces failure if contract missing.
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-claude}" || {
+    echo "⛔ vg-orchestrator tasklist-projected failed — specs.native_tasklist_projected event will not fire." >&2
+    echo "   Check .vg/runs/<run_id>/tasklist-contract.json was written by emit-tasklist.py + adapter ∈ {claude,codex,fallback}." >&2
+    exit 1
+}
+
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR:-.vg/phases/${PHASE_NUMBER}}") || {
+  mkdir -p "${PHASE_DIR:-.vg/phases/${PHASE_NUMBER}}/.step-markers" 2>/dev/null
+  touch "${PHASE_DIR:-.vg/phases/${PHASE_NUMBER}}/.step-markers/create_task_tracker.done"
+}
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step specs create_task_tracker 2>/dev/null || true
+```
+</step>
 
 <step name="parse_args">
 ## Step 1: Parse Arguments
