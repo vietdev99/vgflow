@@ -89,7 +89,20 @@ The subagent returns:
 
 After return, validate:
 1. `checklist_path` exists and is non-empty
-2. `sections[]` length ≥ 5 (Sections A, B, B.1, D, E always present; A.1+C+F conditional)
+2. **Canonical 6-section enum check (ISTQB CT-AcT)** — pipe `SUBAGENT_OUTPUT`
+   into `scripts/validators/verify-uat-checklist-sections.py --stdin`. The
+   validator BLOCKs unless every canonical letter (A/B/C/D/E/F) is present.
+   Sections A.1 + B.1 are allowed sub-sections. Section F may be `status:
+   "N/A"` on non-mobile profiles, but the SECTION KEY must exist:
+   ```bash
+   echo "$SUBAGENT_OUTPUT" | "${PYTHON_BIN:-python3}" \
+     .claude/scripts/validators/verify-uat-checklist-sections.py --stdin
+   if [ $? -ne 0 ]; then
+     # subagent returned weak payload — block + surface 3-line diagnostic
+     echo "⛔ UAT checklist failed canonical 6-section enforcement"
+     exit 1
+   fi
+   ```
 3. `total_items` matches sum of sections[].items[].length
 
 If validation fails, surface a 3-line block:
@@ -118,10 +131,109 @@ UAT Checklist for Phase ${PHASE_NUMBER}:
 Proceed with interactive UAT? (y/n/abort)
 ```
 
-If user aborts → write `${PHASE_DIR}/${PHASE_NUMBER}-UAT.md` with status
-`ABORTED`, mark-step `4_build_uat_checklist`, and exit STEP 3 cleanly. The
-remaining steps then short-circuit (UAT.md present + Verdict line satisfies
-runtime_contract).
+If user aborts → execute the **abort short-circuit block** below. This
+satisfies the full `runtime_contract` (must_write + must_touch_markers +
+must_emit_telemetry) without running steps 4b/5/5_quorum/6b/6c/6/7. The
+prior "remaining steps short-circuit on their own" claim was wrong — those
+markers were never touched, and `.uat-responses.json` was never written, so
+`run-complete` BLOCKed with missing markers + missing must_write paths.
+
+```bash
+# --- Abort short-circuit block (R6 Task 6) ---------------------------------
+# Trigger: user answered `abort` to "Proceed with interactive UAT? (y/n/abort)".
+# Goal: write minimal artifacts + touch all downstream markers + emit canonical
+# events so accept run-complete sees a clean ABORTED run.
+
+mkdir -p "${PHASE_DIR}/.step-markers"
+
+# 1) Minimal `.uat-responses.json` (must_write contract)
+cat > "${PHASE_DIR}/.uat-responses.json" <<'JSON'
+{
+  "aborted": true,
+  "verdict": "ABORTED",
+  "reason": "user-abort-at-step-3",
+  "sections": {
+    "A":   { "status": "aborted" },
+    "A.1": { "status": "aborted" },
+    "B":   { "status": "aborted" },
+    "B.1": { "status": "aborted" },
+    "C":   { "status": "aborted" },
+    "D":   { "status": "aborted" },
+    "E":   { "status": "aborted" },
+    "F":   { "status": "aborted" }
+  }
+}
+JSON
+
+# 2) Minimal `${PHASE_NUMBER}-UAT.md` with `Verdict: ABORTED`
+#    (must_write contract: content_min_bytes=200 + Verdict: section)
+cat > "${PHASE_DIR}/${PHASE_NUMBER}-UAT.md" <<MD
+# UAT Acceptance — Phase ${PHASE_NUMBER}
+
+Verdict: ABORTED
+
+User aborted at STEP 3 (\`4_build_uat_checklist\`) before interactive UAT
+ran. The downstream steps (4b narrative autofire, 5 interactive UAT,
+5 quorum gate, 6b security baseline, 6c learn auto-surface,
+6 write UAT, 7 post-accept actions) were short-circuited via the
+\`accept.aborted_with_short_circuit\` telemetry event.
+
+No accept artifacts were updated beyond this stub + \`.uat-responses.json\`.
+ROADMAP / PIPELINE-STATE / CROSS-PHASE-DEPS were NOT flipped — the phase
+remains in its pre-accept state for re-entry on the next \`/vg:accept\` run.
+
+## Reason
+
+User answered \`abort\` to the "Proceed with interactive UAT?" prompt.
+
+## Re-entry
+
+Re-run \`/vg:accept ${PHASE_NUMBER}\` when ready. Existing markers from
+this aborted run will be cleared automatically by the gate-integrity
+precheck (STEP 1).
+MD
+
+# 3) Touch this step's marker
+(type -t mark_step >/dev/null 2>&1 \
+  && mark_step "${PHASE_NUMBER:-unknown}" "4_build_uat_checklist" "${PHASE_DIR}") \
+  || touch "${PHASE_DIR}/.step-markers/4_build_uat_checklist.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step \
+  accept 4_build_uat_checklist 2>/dev/null || true
+
+# 4) Touch every downstream profile-applicable marker
+#    (must_touch_markers contract: all 17 must be present at run-complete)
+for SHORT_CIRCUIT_STEP in \
+    4b_uat_narrative_autofire \
+    5_interactive_uat \
+    5_uat_quorum_gate \
+    6b_security_baseline \
+    6c_learn_auto_surface \
+    6_write_uat_md \
+    7_post_accept_actions; do
+  (type -t mark_step >/dev/null 2>&1 \
+    && mark_step "${PHASE_NUMBER:-unknown}" "${SHORT_CIRCUIT_STEP}" "${PHASE_DIR}") \
+    || touch "${PHASE_DIR}/.step-markers/${SHORT_CIRCUIT_STEP}.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step \
+    accept "${SHORT_CIRCUIT_STEP}" 2>/dev/null || true
+done
+
+# 5) Emit canonical short-circuit event for audit trail
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "accept.aborted_with_short_circuit" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"step\":\"4_build_uat_checklist\",\"reason\":\"user-abort\"}" \
+  >/dev/null 2>&1 || true
+
+# 6) Emit terminal `accept.completed` (must_emit_telemetry contract)
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "accept.completed" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"verdict\":\"ABORTED\"}" \
+  >/dev/null 2>&1 || true
+
+# 7) Close the run cleanly via run-complete (verifies contract one last time)
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
+exit 0
+# --- end abort short-circuit block ----------------------------------------
+```
 
 ## Marker
 
