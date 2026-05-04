@@ -100,6 +100,9 @@ def phase_status(phase_dir: Path) -> dict:
     """Inspect phase artifacts to infer pipeline stage reached."""
     has = lambda name: (phase_dir / name).is_file()
     summaries = list(phase_dir.glob("SUMMARY*.md"))
+    # R8-H: /vg:accept writes ${PHASE_NUMBER}-UAT.md (e.g. 4.1-UAT.md).
+    # Plain UAT.md is legacy fallback. Both shapes count as accepted.
+    accepted = has("UAT.md") or any(phase_dir.glob("*-UAT.md"))
     return {
         "specs": has("SPECS.md"),
         "scope": has("CONTEXT.md"),
@@ -107,7 +110,7 @@ def phase_status(phase_dir: Path) -> dict:
         "build": has("SUMMARY.md") or len(summaries) > 0,
         "review": has("RUNTIME-MAP.json") or has("REVIEW.md"),
         "test": has("SANDBOX-TEST.md") or has("TEST-RESULTS.md"),
-        "accepted": has("UAT.md"),
+        "accepted": accepted,
     }
 
 

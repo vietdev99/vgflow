@@ -82,10 +82,22 @@ def discover_phases(milestone: str, phase_range: str | None) -> list[Path]:
     return all_phases
 
 
+def _phase_uat_exists(phase_dir: Path) -> bool:
+    """Check whether a phase has its UAT artifact (R8-H path-mismatch fix).
+
+    /vg:accept writes ``${PHASE_DIR}/${PHASE_NUMBER}-UAT.md`` (e.g.
+    ``4.1-UAT.md``) per ``commands/vg/accept.md``. Older phases may have a
+    plain ``UAT.md``. Both shapes count as "accepted".
+    """
+    if (phase_dir / "UAT.md").is_file():
+        return True
+    return any(phase_dir.glob("*-UAT.md"))
+
+
 def check_phase_acceptance(phases: list[Path]) -> tuple[list[str], list[str]]:
     accepted, missing = [], []
     for p in phases:
-        if (p / "UAT.md").is_file():
+        if _phase_uat_exists(p):
             accepted.append(p.name)
         else:
             missing.append(p.name)
