@@ -274,6 +274,47 @@ if [[ ! "$cmd_text" =~ vg-orchestrator[[:space:]]+step-active ]]; then
   if codex_before_tasklist_projection && is_broad_codex_prestep_scan; then
     emit_codex_pretasklist_scope_block
   fi
+
+  # HOTFIX A (2026-05-05) — TodoWrite UI auto-sync reminder.
+  # When AI calls `vg-orchestrator mark-step <ns> <step>`, marker filesystem
+  # is updated automatically but TodoWrite UI doesn't auto-refresh — AI must
+  # re-call TodoWrite tool. AI dispatchers frequently forget mid-flow → UI
+  # shows stale state. Inject additionalContext reminder so model knows to
+  # update TodoWrite after the mark-step succeeds.
+  #
+  # This is non-blocking — exit 0 with hookSpecificOutput.additionalContext
+  # only. Model sees reminder in next turn but bash proceeds.
+  if [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+mark-step[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]+([A-Za-z0-9_.:-]+) ]]; then
+    mark_step_ns="${BASH_REMATCH[1]}"
+    mark_step_name="${BASH_REMATCH[2]}"
+    if [ -f "$run_file" ]; then
+      VG_MS_NS="$mark_step_ns" VG_MS_NAME="$mark_step_name" python3 -c '
+import json, os, sys
+ns = os.environ.get("VG_MS_NS", "")
+step = os.environ.get("VG_MS_NAME", "")
+addl = (
+    f"After this `mark-step` succeeds, call TodoWrite tool to sync UI:\n"
+    f"  - Find item matching id `{step}` (or namespace:{ns}/{step}) in current todos[]\n"
+    f"  - Set its status to `completed`\n"
+    f"  - Set the next pending item to `in_progress`\n"
+    f"  - Reorder todos[] so active group + in_progress sub-step appear FIRST\n"
+    f"  - Pass full updated todos[] array (TodoWrite is replacement, not append)\n\n"
+    f"Reason: VG marker filesystem is updated by mark-step but Claude Code "
+    f"TodoWrite UI does NOT auto-refresh from filesystem state. Forgetting "
+    f"this update leaves the user seeing stale tasklist (Bug observed in "
+    f"PV3 build 4.2 dogfood). HOTFIX A enforces this reminder."
+)
+sys.stdout.write(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "additionalContext": addl,
+  }
+}))
+' 2>/dev/null || true
+    fi
+    exit 0
+  fi
+
   exit 0
 fi
 
