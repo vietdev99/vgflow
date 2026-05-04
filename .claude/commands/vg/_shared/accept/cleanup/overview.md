@@ -17,6 +17,8 @@ verdicts, the cleanup short-circuits to a minimal lifecycle update (UAT.md
 already written) and exits.
 </HARD-GATE>
 
+<step name="7_post_accept_actions">
+
 ## Pre-spawn narration
 
 ```bash
@@ -168,3 +170,5 @@ fi
 The Stop hook verifies all 17 step markers are present + UAT.md
 content_min_bytes satisfied + .uat-responses.json present + Verdict line
 matches must_write contract.
+
+</step>
