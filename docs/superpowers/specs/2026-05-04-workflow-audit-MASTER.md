@@ -38,6 +38,22 @@ reviewing against role-specific standard:
 
 **R6 closing summary:** 16 tasks across 5 batches, ~5 days execution time, 135/135 R6 tests green, all mainline workflows now have hook-enforced gates (no more prompt-only luật).
 
+**R7 STATUS UPDATE (2026-05-05):** Independent codex GPT-5.5 audit found 9 semantic-enforcement gaps in blueprint→build→review pipeline. R7 plan executes 9 tasks across 6 batches; **8/9 gaps closed** in this branch.
+
+| R7 Task | Gap | Severity | Resolution commit | Verdict |
+|---|---|---|---|---|
+| 1 | G5 Build CrossAI defer → review ignore | High | `0956c3a` | ✅ Closed |
+| 2 | G7 RCRURD source-of-truth conflict | High | `c78dfa0` | ✅ Closed |
+| 3 | G1 RCRURD impl gate at build | High | `3e9f0af` | ✅ Closed |
+| 4 | G2 Workflow impl gate at build | High | `c13c827` | ✅ Closed |
+| 5 | G9 Multi-actor workflow review replay | High | — | ⏳ Deferred to R8 |
+| 6 | G6+G8 Review build provenance gate | Medium | `f057cf8` | ✅ Closed |
+| 7 | G3 Edge-case implementation coverage | Medium | `254e883` | ✅ Closed |
+
+**R7 closing summary:** 6 tasks shipped (G1, G2, G3, G5, G6, G7, G8 = 7 gaps + 1 cross-cut), 41/41 R7 tests green, build-side semantic enforcement (RCRURD impl, workflow impl, edge-case coverage) now verified at build wave-complete; review preflight cross-checks build provenance + CrossAI carryover.
+
+**Deferred to R8:** Task 5 (G9 multi-actor workflow review verdict replay) — requires Playwright MCP per-actor session infrastructure + state-machine traversal. Build-side workflow gate (R7 Task 4) already catches state literal absence statically; review replay is defense-in-depth, not first-line check.
+
 ---
 
 ## Per-workflow verdict matrix
