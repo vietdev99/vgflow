@@ -7,9 +7,55 @@ set -euo pipefail
 
 input="$(cat)"
 prompt="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true)"
+session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
 
 # Match /vg:<cmd> [<args>...]
 if [[ ! "$prompt" =~ ^/vg:([a-z][a-z0-9_-]*)([[:space:]]+(.*))?$ ]]; then
+  # Bug L mid-flow follow-up reminder (sếp dogfood discovery 2026-05-04):
+  # When user replies mid-flow (non-slash prompt) and an active VG run exists,
+  # the AI may "lose" flow context — it stops treating itself as inside the
+  # pipeline and skips TodoWrite/tasklist enforcement. Inject a system
+  # reminder so AI re-acquires context. Pattern follows superpowers'
+  # using-superpowers always-fires-on-conversation pattern, but
+  # deterministically file-based (active-run JSON) instead of skill-driven.
+  active_run_file=".vg/active-runs/${session_id}.json"
+  if [ -f "$active_run_file" ]; then
+    active_cmd="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("command","?"))' "$active_run_file" 2>/dev/null || echo "?")"
+    active_phase="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("phase","?"))' "$active_run_file" 2>/dev/null || echo "?")"
+    active_run_id="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("run_id",""))' "$active_run_file" 2>/dev/null || echo "")"
+    tasklist_projected="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("yes" if d.get("tasklist_projected") else "no")' "$active_run_file" 2>/dev/null || echo "no")"
+    adapter="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("tasklist_projected_adapter",""))' "$active_run_file" 2>/dev/null || echo "")"
+
+    # Skip injection if run is dead (stale or unhandled-block) — same logic
+    # as the slash-command branch below would handle on next /vg:<cmd>.
+    is_alive=1
+    if [ -n "$active_run_id" ] && [ -f ".vg/events.db" ]; then
+      term_count="$(sqlite3 .vg/events.db "SELECT COUNT(*) FROM events WHERE run_id='$active_run_id' AND event_type IN ('run.completed','run.aborted')" 2>/dev/null || echo 0)"
+      [ "${term_count:-0}" -gt 0 ] && is_alive=0
+    fi
+
+    if [ "$is_alive" -eq 1 ]; then
+      # Build reminder per state. Goes to stderr — Claude Code surfaces
+      # UserPromptSubmit stderr as a system-reminder block to the AI.
+      printf "<vg-flow-context>\n" >&2
+      printf "Active VG run detected: %s on phase %s (run_id %s).\n" \
+        "$active_cmd" "$active_phase" "${active_run_id:-?}" >&2
+      if [ "$tasklist_projected" = "no" ]; then
+        printf "STATE: tasklist NOT yet projected.\n" >&2
+        printf "BEFORE any tool call (Bash/etc), you MUST:\n" >&2
+        printf "  1. Read .vg/runs/%s/tasklist-contract.json\n" "$active_run_id" >&2
+        printf "  2. Call the TodoWrite tool with hierarchical 2-layer projection (group + ↳ sub-items)\n" >&2
+        printf "  3. Run: python3 .claude/scripts/vg-orchestrator tasklist-projected --adapter claude\n" >&2
+        printf "PreToolUse-bash hook will BLOCK step-active calls until evidence file exists with depth_valid=true and adapter='claude'.\n" >&2
+      elif [ "$adapter" != "claude" ] && [ -n "$adapter" ]; then
+        printf "STATE: tasklist projected with adapter='%s' — Claude Code session requires adapter='claude'. Re-call TodoWrite + tasklist-projected --adapter claude before next step-active or PreToolUse hook will BLOCK.\n" "$adapter" >&2
+      else
+        printf "STATE: tasklist projected OK (adapter=claude). Continue executing the flow per slim-entry STEP order. DO NOT ad-hoc skip steps.\n" >&2
+      fi
+      printf "Slim entry: commands/vg/%s.md\n" "${active_cmd#vg:}" >&2
+      printf "</vg-flow-context>\n" >&2
+    fi
+  fi
   exit 0
 fi
 
