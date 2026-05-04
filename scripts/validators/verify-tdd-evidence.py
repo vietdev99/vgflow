@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -50,6 +51,31 @@ def _load_evidence(evidence_path: Path) -> dict | None:
     try:
         return json.loads(evidence_path.read_text(encoding="utf-8"))
     except Exception:
+        return None
+
+
+def _parse_iso_utc(s) -> datetime | None:
+    """Parse ISO 8601 string to UTC datetime. Returns None on parse failure.
+
+    Handles `Z` suffix, fractional seconds, and timezone offsets.
+    Naive datetimes are treated as UTC (matches the captured_at contract,
+    which executor procedure 7a/7c always emits as UTC).
+    Normalizes to UTC for safe comparison — fixes review finding I2:
+      Bug A (false-PASS): '2026-05-05T12:00:00.000Z' < '2026-05-05T12:00:00Z'
+        lexically (because '.' < 'Z'), but they are the SAME instant.
+      Bug B (false-BLOCK): '2026-05-05T12:05:00+07:00' (= 05:05Z) is genuinely
+        BEFORE '2026-05-05T05:10:00Z', but lex compare says '+' > '0' → red>green.
+    """
+    if not isinstance(s, str):
+        return None
+    try:
+        # Python 3.11+ handles trailing 'Z' natively; for 3.10 compat replace it.
+        normalized = s.replace("Z", "+00:00") if s.endswith("Z") else s
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
         return None
 
 
@@ -200,7 +226,11 @@ def _audit_task(out: Output, phase_dir: Path, capsule_path: Path) -> None:
         ))
 
     # Check temporal order — red MUST come before green.
-    # ISO 8601 UTC string compare works lexicographically when both end in 'Z'.
+    # I2 fix: parse ISO-8601 → UTC-normalized datetime instead of lexicographic
+    # string compare. String compare false-PASSes mixed precision (12:00:00.000Z
+    # vs 12:00:00Z lex'd as red < green even though same instant) and
+    # false-BLOCKs cross-timezone evidence (red +07:00 vs green Z compared
+    # lexically rather than after UTC normalization).
     red_at = red.get("captured_at")
     green_at = green.get("captured_at")
 
@@ -214,23 +244,48 @@ def _audit_task(out: Output, phase_dir: Path, capsule_path: Path) -> None:
             file=str(capsule_path),
             expected="captured_at: ISO-8601 UTC timestamp on both red + green",
         ))
-    elif not (red_at < green_at):
-        out.add(Evidence(
-            type="tdd_evidence_wrong_order",
-            message=(
-                f"Task {task_id}: green.captured_at ({green_at}) is not strictly "
-                f"after red.captured_at ({red_at}). TDD discipline requires red "
-                f"capture BEFORE src change BEFORE green capture."
-            ),
-            file=str(capsule_path),
-            expected="red.captured_at < green.captured_at",
-            actual=f"red={red_at}, green={green_at}",
-            fix_hint=(
-                "Re-run executor — the green run must be temporally after the "
-                "red run. Possible cause: file timestamps swapped or evidence "
-                "files written out of order."
-            ),
-        ))
+    else:
+        red_dt = _parse_iso_utc(red_at)
+        green_dt = _parse_iso_utc(green_at)
+        if red_dt is None or green_dt is None:
+            out.add(Evidence(
+                type="tdd_evidence_bad_timestamp_format",
+                message=(
+                    f"Task {task_id}: captured_at not parseable as ISO-8601 "
+                    f"(red={red_at!r}, green={green_at!r})"
+                ),
+                file=str(capsule_path),
+                expected="ISO-8601 UTC timestamp like '2026-05-05T12:34:56Z' "
+                         "(fractional seconds + tz offsets accepted)",
+                actual=f"red={red_at!r}, green={green_at!r}",
+                fix_hint=(
+                    "Evidence files MUST emit captured_at in ISO-8601 format. "
+                    "Re-run executor procedure step 7a → src change → 7c so "
+                    "both red.json and green.json carry valid timestamps."
+                ),
+            ))
+        elif not (red_dt < green_dt):
+            out.add(Evidence(
+                type="tdd_evidence_wrong_order",
+                message=(
+                    f"Task {task_id}: green.captured_at ({green_at}) is not "
+                    f"strictly after red.captured_at ({red_at}) when normalized "
+                    f"to UTC (red={red_dt.isoformat()}, "
+                    f"green={green_dt.isoformat()}). TDD discipline requires "
+                    f"red capture BEFORE src change BEFORE green capture."
+                ),
+                file=str(capsule_path),
+                expected="red.captured_at < green.captured_at (UTC-normalized)",
+                actual=(
+                    f"red={red_at} (UTC {red_dt.isoformat()}), "
+                    f"green={green_at} (UTC {green_dt.isoformat()})"
+                ),
+                fix_hint=(
+                    "Re-run executor — the green run must be temporally after "
+                    "the red run. Possible cause: file timestamps swapped or "
+                    "evidence files written out of order."
+                ),
+            ))
 
 
 def main() -> None:

@@ -155,8 +155,9 @@ runtime_contract:
     # override-debt entry. --allow-coverage-regression is informational and
     # logged via close.md PR-D path (NOT listed here).
     - "--skip-design-pixel-gate"
-    - "--skip-uimap-injection-audit"
     - "--skip-task-fidelity-audit"
+    - "--skip-tdd-evidence"
+    - "--skip-uimap-injection-audit"
     - "--allow-verify-divergence"
     # Task 18 (pre-test gate) — escape hatch for STEP 6.5 (T1+T2+deploy+smoke)
     - "--skip-pre-test"

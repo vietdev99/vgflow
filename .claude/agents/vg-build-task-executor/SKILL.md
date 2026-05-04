@@ -341,7 +341,7 @@ design ref).
 | TDD test path unresolved (R6 Task 9) | step 7a — `task.test_path` absent + slug-derive yields no file | return `{"error": "tdd_test_path_unresolved", "task_id": "<id>"}`; DO NOT commit |
 | TDD evidence missing in commit (R6 Task 9) | post-spawn `verify-tdd-evidence.py` — capsule `tdd_required=true` + missing `.red.json` or `.green.json`, or wrong exit codes / temporal order | wave-complete BLOCKed; override via `--skip-tdd-evidence --override-reason=<ticket>` |
 | commit-msg hook rejection (binding cite missing) | `git commit` exit code 1, hook stderr contains "binding" | return error JSON; orchestrator routes to gap-recovery |
-| BUILD-LOG write failure | step 13 `Write` returns I/O error or path not writable | return `{"error": "build_log_write_failed", "path": "<phase_dir>/BUILD-LOG/task-<id>.md", "task_id": "<id>", "details": "<errno>"}`; DO NOT commit (reverse step 10 if already committed) |
+| BUILD-LOG write failure | step 15 `Write` returns I/O error or path not writable | return `{"error": "build_log_write_failed", "path": "<phase_dir>/BUILD-LOG/task-<id>.md", "task_id": "<id>", "details": "<errno>"}`; DO NOT commit (reverse step 12 if already committed) |
 | `subagent_type` typo in spawn | spawn-guard PreToolUse hook denies | (orchestrator sees deny; re-spawn with correct `vg-build-task-executor`) |
 | `task_id` not in `remaining[]` | spawn-guard PreToolUse hook denies (Task 1, commit `6135701`) | (orchestrator sees deny; either typo or already spawned) |
 

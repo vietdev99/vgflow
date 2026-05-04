@@ -15,6 +15,11 @@ Coverage:
     - test_validator_blocks_on_wrong_order              (BLOCK)
     - test_validator_skips_task_with_tdd_required_false (PASS skip)
 
+  Timestamp robustness (R6 Task 9 follow-up I2):
+    - test_validator_handles_mixed_iso_precision        (BLOCK on equal instant)
+    - test_validator_handles_timezone_offsets           (PASS — UTC-normalized)
+    - test_validator_blocks_on_malformed_timestamp      (BLOCK + new Evidence type)
+
 Validator emit_and_exit semantics (per scripts/validators/_common.py):
   - rc 0 → PASS or WARN
   - rc 1 → BLOCK
@@ -275,3 +280,98 @@ def test_validator_skips_task_with_tdd_required_false(tmp_path):
     )
     out = _parse_output(proc)
     assert out["verdict"] in ("PASS", "WARN"), out
+
+
+# ─── Timestamp robustness tests (R6 Task 9 follow-up I2) ──────────────
+#
+# These tests guard against ISO-8601 string compare bugs:
+#   Bug A (false-PASS): red '2026-05-05T12:00:00.000Z' vs green
+#     '2026-05-05T12:00:00Z' lex'd '.' < 'Z' → red < green → PASS but
+#     timestamps are equal as instants. Validator must BLOCK.
+#   Bug B (false-BLOCK): red '2026-05-05T12:05:00+07:00' (= 05:05Z) vs
+#     green '2026-05-05T05:10:00Z' lex'd '+' > '0' → red > green → false
+#     BLOCK even though red is genuinely 5min before green. Validator
+#     must PASS after UTC normalization.
+#   Bug C (silent-wrong-verdict): garbage timestamps must produce an
+#     explicit Evidence row, not be coerced into < or >.
+
+
+def test_validator_handles_mixed_iso_precision(tmp_path):
+    """Red 12:00:00.000Z and green 12:00:00Z are SAME instant — must BLOCK.
+
+    Pre-fix: lex compare ('.' < 'Z') reported red < green → PASS
+    (false-PASS — TDD discipline broken because red is not strictly
+    earlier). Post-fix: UTC-normalized parsing recognizes equal instants
+    and BLOCKs because temporal order requires strict <.
+    """
+    eq_red = dict(_VALID_RED)
+    eq_green = dict(_VALID_GREEN)
+    eq_red["captured_at"] = "2026-05-05T12:00:00.000Z"
+    eq_green["captured_at"] = "2026-05-05T12:00:00Z"
+    phase_dir = _stage_phase(
+        tmp_path, tdd_required=True,
+        red=eq_red, green=eq_green,
+    )
+    proc = _run_validator(phase_dir)
+    assert proc.returncode == 1, (
+        f"Expected BLOCK rc=1 (equal instants violate strict <), got "
+        f"rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    out = _parse_output(proc)
+    assert out["verdict"] == "BLOCK"
+    types = {e.get("type") for e in out["evidence"]}
+    assert "tdd_evidence_wrong_order" in types, types
+
+
+def test_validator_handles_timezone_offsets(tmp_path):
+    """Red 12:05:00+07:00 (= 05:05Z) is BEFORE green 05:10:00Z by 5 min — must PASS.
+
+    Pre-fix: lex compare on raw strings '2026-05-05T12:05:00+07:00' vs
+    '2026-05-05T05:10:00Z' said red > green ('+'/'1' > '0') → false
+    BLOCK. Post-fix: UTC-normalize both → red=05:05Z < green=05:10Z →
+    PASS.
+    """
+    tz_red = dict(_VALID_RED)
+    tz_green = dict(_VALID_GREEN)
+    tz_red["captured_at"] = "2026-05-05T12:05:00+07:00"  # = 05:05:00Z
+    tz_green["captured_at"] = "2026-05-05T05:10:00Z"
+    phase_dir = _stage_phase(
+        tmp_path, tdd_required=True,
+        red=tz_red, green=tz_green,
+    )
+    proc = _run_validator(phase_dir)
+    assert proc.returncode == 0, (
+        f"Expected PASS rc=0 (red genuinely earlier after UTC normalization), "
+        f"got rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    out = _parse_output(proc)
+    assert out["verdict"] in ("PASS", "WARN"), out
+
+
+def test_validator_blocks_on_malformed_timestamp(tmp_path):
+    """Garbage captured_at must produce explicit Evidence, not silent verdict.
+
+    Pre-fix: any string compared lexically — `not-a-real-date` < or >
+    a real ISO string would be evaluated and accepted, possibly
+    producing a wrong PASS/BLOCK depending on the compare. Post-fix:
+    parse failure → tdd_evidence_bad_timestamp_format Evidence + BLOCK.
+    """
+    bad_red = dict(_VALID_RED)
+    bad_green = dict(_VALID_GREEN)
+    bad_red["captured_at"] = "not-a-real-date"
+    bad_green["captured_at"] = "2026-05-05T05:10:00Z"
+    phase_dir = _stage_phase(
+        tmp_path, tdd_required=True,
+        red=bad_red, green=bad_green,
+    )
+    proc = _run_validator(phase_dir)
+    assert proc.returncode == 1, (
+        f"Expected BLOCK rc=1 on unparseable timestamp, got "
+        f"rc={proc.returncode}\nstdout={proc.stdout}"
+    )
+    out = _parse_output(proc)
+    assert out["verdict"] == "BLOCK"
+    types = {e.get("type") for e in out["evidence"]}
+    assert "tdd_evidence_bad_timestamp_format" in types, (
+        f"Expected new Evidence type for unparseable timestamp; saw {types}"
+    )
