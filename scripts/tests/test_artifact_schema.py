@@ -144,6 +144,15 @@ participants:
   - ai
 ---
 
+## Goals
+
+### In-scope
+- Lock the structural shape of 6 core VG artifacts.
+- Provide a post-write validator.
+
+### Out-of-scope (deferred / not this phase)
+- API-CONTRACTS schema.
+
 ## Decisions
 
 ### D-01: Use draft-07 JSON Schema

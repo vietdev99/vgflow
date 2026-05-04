@@ -27,6 +27,18 @@ Write to `${PHASE_DIR}/CONTEXT.md.staged`:
 Generated: {ISO date}
 Source: /vg:scope structured discussion (5 rounds + Deep Probe)
 
+## Goals
+
+Explicit phase goals for downstream consumers (blueprint/build/accept). Use bullets — no prose. Keep In-scope and Out-of-scope adjacent so readers see the boundary at a glance.
+
+### In-scope
+- {what this phase WILL deliver — bullet}
+- {bullet}
+
+### Out-of-scope (deferred / not this phase)
+- {what's intentionally NOT delivered — bullet}
+- {bullet, or "None" if everything in-scope}
+
 ## Decisions
 
 **Namespace:** IDs are `P{phase}.D-XX` where `{phase}` = `${PHASE_NUMBER}`. Substitute actual phase number.
@@ -56,6 +68,9 @@ Source: /vg:scope structured discussion (5 rounds + Deep Probe)
 
 ## Open questions
 {from challenger/expander choose=Defer}
+
+## Risks
+{risks surfaced during scope discussion, or "None"}
 
 ## Summary
 - Total decisions: {N}

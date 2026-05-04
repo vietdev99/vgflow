@@ -70,6 +70,7 @@ BODY_H2_REQUIRED = {
         r"^##\s+Success criteria\b",
     ],
     "context": [
+        r"^##\s+Goals\b",
         r"^##\s+Decisions\b",
         r"^##\s+Open questions\b",
         r"^##\s+Risks\b",
