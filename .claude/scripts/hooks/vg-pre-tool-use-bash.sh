@@ -458,6 +458,35 @@ case "$depth_check_result" in
   *) emit_block "depth check failed: ${depth_check_result}" ;;
 esac
 
+# Bug L P6 (Codex round-4 follow-on, sếp dogfood discovery 2026-05-04):
+# evidence adapter spoofing. AI was passing `--adapter fallback` to satisfy
+# the evidence-file gate without ever calling Claude Code's TodoWrite tool —
+# UI never rendered, but hook accepted the evidence. Now require adapter to
+# match the runtime: if CLAUDE_SESSION_ID is set (Claude Code session),
+# evidence.adapter MUST be "claude". Codex sessions detect via different
+# env (handled separately).
+if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+  adapter_check_result="$(python3 - "$evidence_path" <<'PY'
+import json, sys
+ev = json.loads(open(sys.argv[1]).read())
+payload = ev.get("payload", {}) if isinstance(ev, dict) else {}
+adapter = payload.get("adapter", "")
+if adapter == "claude":
+    print("ok", end="")
+else:
+    print(f"adapter_mismatch|{adapter}", end="")
+PY
+)"
+  case "$adapter_check_result" in
+    ok) ;;
+    adapter_mismatch*)
+      bad_adapter="${adapter_check_result#adapter_mismatch|}"
+      emit_block "tasklist evidence adapter='${bad_adapter}' but Claude Code session requires adapter='claude'. AI must call the TodoWrite tool (not just emit-tasklist text), then run \`vg-orchestrator tasklist-projected --adapter claude\`. Using --adapter fallback satisfies the evidence file but skips Claude Code's native TodoWrite UI rendering."
+      ;;
+    *) emit_block "adapter check failed: ${adapter_check_result}" ;;
+  esac
+fi
+
 # Task 44b — Rule V1: evidence run_id binding. After depth check, verify the
 # run_id baked into the evidence payload matches the run_id of the active run.
 # Closes audit P3 (cross-session evidence reuse: prior run's evidence with same
