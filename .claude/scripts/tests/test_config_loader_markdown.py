@@ -16,6 +16,13 @@ def _config_loader_shell() -> str:
     assert match, "config-loader vg_config_get block not found"
     return match.group(1)
 
+def _blueprint_design_autotrigger_shell() -> str:
+    text = (BLUEPRINT_DIR / "preflight.md").read_text(encoding="utf-8")
+    section = text.split("Design-extract auto-trigger", 1)[1]
+    match = re.search(r"```bash\n(.*?)\n```", section, re.S)
+    assert match, "blueprint design-extract auto-trigger block not found"
+    return match.group(1)
+
 
 def test_vg_config_get_strips_inline_comments(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
@@ -65,3 +72,63 @@ def test_blueprint_preflight_avoids_empty_array_expansion_under_nounset() -> Non
     text = (BLUEPRINT_DIR / "preflight.md").read_text(encoding="utf-8")
     assert '"${DETECT_FLAGS[@]}"' not in text
     assert '"${PREFLIGHT_EXTRA[@]}"' not in text
+
+def test_blueprint_design_autotrigger_skips_non_ui_profiles(tmp_path: Path) -> None:
+    phase = tmp_path / ".vg" / "phases" / "1-cli"
+    phase.mkdir(parents=True)
+    script = (
+        "set -euo pipefail\n"
+        "vg_config_get_array() { printf '%s\\n' \"$VG_TEST_DESIGN_PATHS\"; }\n"
+        + _blueprint_design_autotrigger_shell()
+    )
+    for profile in ("cli-tool", "library", "infra", "docs"):
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "REPO_ROOT": str(tmp_path),
+                "PHASE_DIR": str(phase),
+                "PHASE_PROFILE": profile,
+                "PYTHON_BIN": "python3",
+                "VG_TEST_DESIGN_PATHS": "missing-designs/**/*.png",
+            },
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"PHASE_PROFILE={profile}" in result.stdout
+        assert "Design assets detected" not in result.stdout
+
+def test_blueprint_design_autotrigger_skips_empty_globs(tmp_path: Path) -> None:
+    phase = tmp_path / ".vg" / "phases" / "1-feature"
+    phase.mkdir(parents=True)
+    script = (
+        "set -euo pipefail\n"
+        "vg_config_get_array() { printf '%s\\n' \"$VG_TEST_DESIGN_PATHS\"; }\n"
+        + _blueprint_design_autotrigger_shell()
+    )
+    result = subprocess.run(
+        ["bash", "-lc", script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "REPO_ROOT": str(tmp_path),
+            "PHASE_DIR": str(phase),
+            "PHASE_PROFILE": "feature",
+            "PYTHON_BIN": "python3",
+            "VG_TEST_DESIGN_PATHS": "missing-designs/**/*.png\nalso-missing.fig",
+        },
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "design_assets.paths matched no files" in result.stdout
+    assert "Design assets detected" not in result.stdout
+
+def test_blueprint_design_autotrigger_uses_resolved_paths_not_raw_find_patterns() -> None:
+    text = (BLUEPRINT_DIR / "preflight.md").read_text(encoding="utf-8")
+    assert "DESIGN_MATCHED_PATHS" in text
+    assert "find $pattern" not in text

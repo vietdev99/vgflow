@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -326,6 +334,10 @@ You CANNOT rationalize past these gates.
 You MUST call TodoWrite IMMEDIATELY after `create_task_tracker` runs
 emit-tasklist.py — DO NOT continue without it. The PreToolUse Bash hook will
 block all subsequent step-active calls until signed evidence exists.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
 
 Codegen MUST spawn vg-test-codegen (NOT inline). Goal verification MUST
 spawn vg-test-goal-verifier. Console monitoring MUST run after every

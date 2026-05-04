@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "vg-verify-claim.py"
 
 
@@ -68,6 +68,7 @@ def _setup_fake_repo(tmp_path: Path, *, current_run: dict | None = None) -> Path
     vg_dir = tmp_path / ".vg"
     vg_dir.mkdir(parents=True)
     if current_run is not None:
+        current_run.setdefault("session_id", "test-session")
         (vg_dir / "current-run.json").write_text(
             json.dumps(current_run), encoding="utf-8"
         )
@@ -91,6 +92,10 @@ def _fresh_started_at() -> str:
     ts = datetime.now(timezone.utc) - timedelta(minutes=1)
     return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+def _started_at_minutes_ago(minutes: int) -> str:
+    ts = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -106,6 +111,56 @@ def test_no_active_run_approves(tmp_path, capsys, monkeypatch):
     assert decision["decision"] == "approve"
     assert decision["reason"] == "no-active-run"
 
+def test_codex_cross_session_context_owned_stale_run_does_not_auto_abort(
+    tmp_path, capsys, monkeypatch
+):
+    """Codex internal Stop sessions must not abort the parent active run."""
+    run = {
+        "command": "vg:blueprint",
+        "phase": "1",
+        "run_id": "run-codex-context-owned",
+        "session_id": "019df162-8e9f-parent",
+        "started_at": _started_at_minutes_ago(45),
+    }
+    repo = _setup_fake_repo(tmp_path, current_run=run)
+    (repo / ".vg" / ".session-context.json").write_text(
+        json.dumps({
+            "run_id": run["run_id"],
+            "session_id": run["session_id"],
+            "command": run["command"],
+            "phase": run["phase"],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VG_RUNTIME", "codex")
+    mod = _load_hook_module(repo)
+
+    abort_calls = []
+    complete_calls = []
+    monkeypatch.setattr(
+        mod,
+        "auto_abort_run",
+        lambda reason, session_id=None: abort_calls.append((reason, session_id)),
+    )
+    monkeypatch.setattr(
+        mod,
+        "run_orchestrator_complete",
+        lambda session_id=None: complete_calls.append(session_id) or (2, "", ""),
+    )
+
+    rc, out, err = _drive_main(
+        mod,
+        capsys,
+        {"session_id": "019df17f-6e2-internal"},
+    )
+
+    assert rc == 0
+    decision = json.loads(out.strip().splitlines()[-1])
+    assert decision["decision"] == "approve"
+    assert decision["reason"] == "cross-session-codex-context-owned-no-action"
+    assert abort_calls == []
+    assert complete_calls == []
+
 
 def test_orchestrator_pass_approves(tmp_path, capsys, monkeypatch):
     run = {
@@ -117,7 +172,7 @@ def test_orchestrator_pass_approves(tmp_path, capsys, monkeypatch):
     repo = _setup_fake_repo(tmp_path, current_run=run)
     mod = _load_hook_module(repo)
     monkeypatch.setattr(mod, "run_orchestrator_complete",
-                        lambda: (0, "", ""))
+                        lambda session_id=None: (0, "", ""))
     rc, out, err = _drive_main(mod, capsys)
     assert rc == 0
     decision = json.loads(out.strip().splitlines()[-1])
@@ -143,10 +198,10 @@ def test_marker_drift_first_blocks_with_hint(tmp_path, capsys, monkeypatch):
         "    - 9_post_execution\n"
     )
     monkeypatch.setattr(mod, "run_orchestrator_complete",
-                        lambda: (2, "", stderr_block))
+                        lambda session_id=None: (2, "", stderr_block))
     auto_fire_called = []
     monkeypatch.setattr(mod, "_auto_fire_markers",
-                        lambda phase: (auto_fire_called.append(phase) or (0, "", "")))
+                        lambda phase, session_id=None: (auto_fire_called.append(phase) or (0, "", "")))
 
     rc, out, err = _drive_main(mod, capsys)
     assert rc == 2
@@ -181,7 +236,7 @@ def test_marker_drift_second_auto_recovers(tmp_path, capsys, monkeypatch):
 
     # First call: BLOCK marker-only. Second call (retry): PASS.
     call_count = {"n": 0}
-    def fake_run():
+    def fake_run(session_id=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return (2, "", "Missing evidence:\n  [must_touch_markers]\n    - 8_execute_waves\n")
@@ -190,11 +245,11 @@ def test_marker_drift_second_auto_recovers(tmp_path, capsys, monkeypatch):
 
     auto_fire_calls = []
     monkeypatch.setattr(mod, "_auto_fire_markers",
-                        lambda phase: (auto_fire_calls.append(phase) or
-                                       (0, "Backfilled 8 marker(s) in 7.14.3", "")))
+                        lambda phase, session_id=None: (auto_fire_calls.append(phase) or
+                                                        (0, "Backfilled 8 marker(s) in 7.14.3", "")))
     telemetry_calls = []
     monkeypatch.setattr(mod, "_emit_telemetry",
-                        lambda evt, payload: telemetry_calls.append((evt, payload)))
+                        lambda evt, payload, session_id=None: telemetry_calls.append((evt, payload)))
 
     rc, out, err = _drive_main(mod, capsys)
 
@@ -241,10 +296,10 @@ def test_mixed_violations_never_auto_fires(tmp_path, capsys, monkeypatch):
         "    - wave_started\n"
     )
     monkeypatch.setattr(mod, "run_orchestrator_complete",
-                        lambda: (2, "", mixed_stderr))
+                        lambda session_id=None: (2, "", mixed_stderr))
     auto_fire_calls = []
     monkeypatch.setattr(mod, "_auto_fire_markers",
-                        lambda p: (auto_fire_calls.append(p) or (0, "", "")))
+                        lambda p, session_id=None: (auto_fire_calls.append(p) or (0, "", "")))
 
     rc, out, err = _drive_main(mod, capsys)
 
@@ -275,9 +330,9 @@ def test_auto_fire_failure_blocks(tmp_path, capsys, monkeypatch):
 
     mod = _load_hook_module(repo)
     monkeypatch.setattr(mod, "run_orchestrator_complete",
-                        lambda: (2, "", "Missing evidence:\n  [must_touch_markers]\n    - x\n"))
+                        lambda session_id=None: (2, "", "Missing evidence:\n  [must_touch_markers]\n    - x\n"))
     monkeypatch.setattr(mod, "_auto_fire_markers",
-                        lambda p: (2, "", "migrate-state crashed: bug X"))
+                        lambda p, session_id=None: (2, "", "migrate-state crashed: bug X"))
 
     rc, out, err = _drive_main(mod, capsys)
     assert rc == 2
@@ -307,12 +362,12 @@ def test_retry_after_autofire_still_blocks(tmp_path, capsys, monkeypatch):
     mod = _load_hook_module(repo)
 
     call_count = {"n": 0}
-    def fake_run():
+    def fake_run(session_id=None):
         call_count["n"] += 1
         return (2, "", "Missing evidence:\n  [must_touch_markers]\n    - x\n")
     monkeypatch.setattr(mod, "run_orchestrator_complete", fake_run)
     monkeypatch.setattr(mod, "_auto_fire_markers",
-                        lambda p: (0, "no drift", ""))
+                        lambda p, session_id=None: (0, "no drift", ""))
 
     rc, out, err = _drive_main(mod, capsys)
     assert rc == 2

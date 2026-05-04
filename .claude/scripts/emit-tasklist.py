@@ -225,6 +225,17 @@ CHECKLIST_DEFS = {
         ]),
         ("accept_close", "Complete", ["7_post_accept_actions"]),
     ],
+    "vg:deploy": [
+        ("deploy_preflight", "Deploy Preflight", [
+            "0_parse_and_validate", "0a_env_select_and_confirm",
+        ]),
+        ("deploy_execute", "Deploy Per Env", [
+            "1_deploy_per_env",
+        ]),
+        ("deploy_close", "Persist Summary And Complete", [
+            "2_persist_summary", "complete",
+        ]),
+    ],
     "vg:roam": [
         ("roam_preflight", "Roam Preflight", [
             "0_parse_and_validate", "0aa_resume_check",

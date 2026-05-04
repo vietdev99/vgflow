@@ -1,7 +1,7 @@
 ---
 name: vg:blueprint
 description: Plan + API contracts + verify + CrossAI review — 4 sub-steps before build
-argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--from=<substep>] [--override-reason=<text>] [--apply-amendments]"
+argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--skip-rcrurdr] [--from=<substep>] [--override-reason=<text>] [--apply-amendments]"
 allowed-tools:
   - Read
   - Write
@@ -112,6 +112,12 @@ runtime_contract:
       profile: "web-fullstack,web-frontend-only"
     - name: "2b7_flow_detect"
       profile: "web-fullstack,web-frontend-only"
+    # Task 39 (Bug G) — emit per-goal RCRURD invariants from extracted
+    # ```yaml-rcrurd``` fences in TEST-GOALS/G-NN.md. Optional skip:
+    # --skip-rcrurdr (with --override-reason) for phases without crud goals.
+    - name: "2b8_rcrurdr_invariants"
+      severity: "warn"
+      required_unless_flag: "--skip-rcrurdr"
     # Flag-gated markers (skip via override flag with debt entry)
     - name: "2b5a_codex_test_goal_lane"
       required_unless_flag: "--skip-codex-test-goal-lane"
@@ -145,11 +151,16 @@ runtime_contract:
       required_unless_flag: "--skip-crossai"
     - event_type: "blueprint.completed"
       phase: "${PHASE_NUMBER}"
+    # Task 39 — RCRURDR per-goal invariant emission (Bug G)
+    - event_type: "blueprint.rcrurdr_invariant_emitted"
+      phase: "${PHASE_NUMBER}"
+      severity: "info"
   forbidden_without_override:
     - "--skip-crossai"
     - "--skip-codex-test-goal-lane"
     - "--skip-edge-cases"
     - "--skip-lens-walk"
+    - "--skip-rcrurdr"
     - "--override-reason"
 ---
 
@@ -182,6 +193,10 @@ You MUST call TodoWrite IMMEDIATELY after STEP 1.4 (create_task_tracker)
 runs emit-tasklist.py — DO NOT continue without it. The PreToolUse Bash
 hook will block all subsequent step-active calls until signed evidence
 exists.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
 
 For HEAVY steps (STEP 3, STEP 4), you MUST spawn the named subagent via
 the `Agent` tool (NOT `Task` — Codex confirmed correct tool name per

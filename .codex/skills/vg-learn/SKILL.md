@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -206,19 +214,6 @@ Invoke this skill as `$vg-learn`. Treat all user text after the skill name as ar
 </codex_skill_adapter>
 
 
-
----
-description: Review, promote, reject, or retract bootstrap candidates — user-gate for AI-proposed learnings
-argument-hint: "[--auto-surface|--review [id]|--review --all|--promote <id> --reason '...'|--reject <id> --reason '...'|--retract <id> --reason '...']"
-mutates_repo: true
-runtime_contract:
-  must_emit_telemetry:
-    - event_type: "learn.started"
-    - event_type: "learn.completed"
-    - event_type: "learn.promoted"  # on successful promote
-    - event_type: "learn.rejected"  # on successful reject
-    - event_type: "learn.promote_attempt_unauthenticated"  # blocked attempt
----
 
 # /vg:learn
 

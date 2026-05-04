@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -208,82 +216,6 @@ Invoke this skill as `$vg-scope`. Treat all user text after the skill name as ar
 
 
 
----
-name: vg:scope
-description: Deep phase discussion — 5 structured rounds producing enriched CONTEXT.md + DISCUSSION-LOG.md
-argument-hint: "<phase> [--skip-crossai] [--skip-crossai-output] [--auto] [--update] [--deepen=D-XX] [--override-reason=<text>] [--skip-env-preference] [--reset-env-preference] [--env-preference=<mode>] [--allow-decisions-untraced] [--force] [--non-interactive]"
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - AskUserQuestion
-  - Agent
-  - TodoWrite
-runtime_contract:
-  must_write:
-    # Layer 3: flat concat (legacy compat for grep validators + blueprint consumer)
-    - path: "${PHASE_DIR}/CONTEXT.md"
-      content_min_bytes: 500
-      content_required_sections: ["D-"]
-    # Layer 2: index TOC of decisions
-    - "${PHASE_DIR}/CONTEXT/index.md"
-    # Layer 1: per-decision split (small files for partial vg-load)
-    - path: "${PHASE_DIR}/CONTEXT/D-*.md"
-      glob_min_count: 1
-    # Append-only Q&A trail (single file, no split)
-    - "${PHASE_DIR}/DISCUSSION-LOG.md"
-  must_touch_markers:
-    - "0_parse_and_validate"
-    - "1_deep_discussion"
-    # Step 3 (env preference) — single declared marker for the env-preference ref.
-    # Naming kept as `1b_env_preference` for compat with scripts/emit-tasklist.py
-    # CHECKLIST_DEFS["vg:scope"] (S2-owned). Nit #2 (round-1) and Nit #1
-    # (review-v2 round-2) both flagged this as cross-flow naming drift but
-    # accepted the deferral; rename requires coordinated update of
-    # emit-tasklist.py CHECKLIST_DEFS + any consumers reading the marker name.
-    # Tracked in .vg/codex-review/scope-review-v2.md §Nits #1.
-    - "1b_env_preference"
-    - "2_artifact_generation"
-    - "3_completeness_validation"
-    - "5_commit_and_next"
-    # Flag-gated markers — CrossAI step + its sub-markers all skip together
-    # when the user passes --skip-crossai (with --override-reason debt entry).
-    - name: "4_crossai_review"
-      required_unless_flag: "--skip-crossai"
-    - name: "4_5_bootstrap_reflection"
-      required_unless_flag: "--skip-crossai"
-    - name: "4_6_test_strategy"
-      required_unless_flag: "--skip-crossai"
-  must_emit_telemetry:
-    - event_type: "scope.tasklist_shown"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "scope.native_tasklist_projected"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "scope.started"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "scope.completed"
-      phase: "${PHASE_NUMBER}"
-    # Task 12 (build-fix-loop) — forward-dep disposition gate.
-    # Emitted by preflight Step 1.5 when .vg/FORWARD-DEPS.md has unresolved
-    # entries from prior phases. severity=warn so a clean phase (no carry-over)
-    # doesn't fail telemetry contract; --no-forward-deps escape hatch listed below.
-    - event_type: "scope.forward_deps_dispositioned"
-      phase: "${PHASE_NUMBER}"
-      severity: "warn"
-      required_unless_flag: "--no-forward-deps"
-  forbidden_without_override:
-    - "--skip-crossai"
-    - "--skip-crossai-output"
-    - "--skip-env-preference"
-    - "--allow-decisions-untraced"
-    - "--override-reason"
-    - "--no-forward-deps"
----
-
-
 <LANGUAGE_POLICY>
 You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
 
@@ -314,6 +246,10 @@ Codex runs `tasklist-projected --adapter codex` as a separate command before
 any `step-active` call. The PreToolUse Bash hook will block all subsequent
 step-active calls until signed evidence exists at
 `.vg/runs/<run>/.tasklist-projected.evidence.json`.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
 
 For each of the 5 discussion rounds (inside STEP 2), you MUST invoke:
   (a) per-answer adversarial challenger via the Agent tool

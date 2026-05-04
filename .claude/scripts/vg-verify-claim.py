@@ -52,6 +52,7 @@ from pathlib import Path
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 CURRENT_RUN = REPO_ROOT / ".vg" / "current-run.json"
 ACTIVE_RUNS_DIR = REPO_ROOT / ".vg" / "active-runs"  # v2.28.0 per-session
+SESSION_CONTEXT = REPO_ROOT / ".vg" / ".session-context.json"
 HOOK_LOG = REPO_ROOT / ".vg" / "hook-verifier.log"
 ORCHESTRATOR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
 SESSION_DRIFT = REPO_ROOT / ".vg" / ".session-drift.json"
@@ -188,6 +189,41 @@ def get_run_session_id(run: dict) -> str | None:
         return None
 
 
+def _read_json_file(path: Path) -> dict | None:
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+def _codex_session_context_owns_run(run: dict) -> bool:
+    """True when Codex hook session differs but session-context still owns run."""
+    if os.environ.get("VG_RUNTIME") != "codex":
+        return False
+
+    ctx = _read_json_file(SESSION_CONTEXT)
+    if not ctx:
+        return False
+
+    run_id = run.get("run_id")
+    if not run_id or ctx.get("run_id") != run_id:
+        return False
+
+    run_session = get_run_session_id(run)
+    ctx_session = ctx.get("session_id")
+    if run_session and ctx_session and run_session != ctx_session:
+        return False
+
+    for key in ("command", "phase"):
+        ctx_value = ctx.get(key)
+        run_value = run.get(key)
+        if ctx_value and run_value and str(ctx_value) != str(run_value):
+            return False
+
+    return True
+
 def auto_abort_run(reason: str, session_id: str | None = None) -> None:
     """Best-effort run-abort via orchestrator. Never raises.
 
@@ -280,7 +316,11 @@ def _read_drift_state() -> dict:
     for run_id, entry in data.items():
         last = entry.get("last_drift_at", "")
         try:
-            ts = datetime.datetime.fromisoformat(last.rstrip("Z"))
+            if last.endswith("Z"):
+                last = last[:-1] + "+00:00"
+            ts = datetime.datetime.fromisoformat(last)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
             if (now - ts).total_seconds() / 60 < DRIFT_STATE_TTL_MINUTES:
                 cleaned[run_id] = entry
         except Exception:
@@ -527,6 +567,15 @@ def main() -> int:
         run_id = current.get("run_id", "?")
         kind = "cross-session" if cross_session else "orphan-null-session"
         owner_label = (run_session[:12] if run_session else "<null>")
+        if _codex_session_context_owns_run(current):
+            log(f"{kind} Codex context-owned run {command} phase={phase} "
+                f"owner={owner_label}; approve without touching")
+            print(json.dumps({
+                "decision": "approve",
+                "reason": f"{kind}-codex-context-owned-no-action",
+                "other_session_run": run_id[:12] if run_id else "?",
+            }))
+            return 0
         if is_stale(current):
             log(f"{kind} stale {command} phase={phase} "
                 f"owner={owner_label}; auto-abort + approve")

@@ -23,7 +23,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
-from rcrurd_invariant import extract_from_test_goal_md, Assertion  # type: ignore  # noqa: E402
+from rcrurd_invariant import extract_from_test_goal_md, Assertion, LifecyclePhase  # type: ignore  # noqa: E402
 
 
 def _eval_jsonpath(body: object, path: str) -> list[object]:
@@ -200,6 +200,11 @@ def main() -> int:
         k, v = args.auth_header.split(":", 1)
         extra_headers[k.strip()] = v.strip()
 
+    # Task 39: dispatch based on lifecycle discriminator
+    if inv.lifecycle in ("rcrurdr", "partial"):
+        return _run_lifecycle_phases(args, goal_path, inv, payload, extra_headers)
+
+    # Legacy single-cycle path (lifecycle == "rcrurd")
     pre_results: list[dict] = []
     if inv.preconditions:
         pre_status, pre_body = _http_request(
@@ -245,6 +250,65 @@ def main() -> int:
                f"{len(side_results)} side_effect(s) verified, settle attempts={attempts}")
     _emit_evidence(args, goal_path, "ADVISORY", summary,
         write_status, write_body, assert_results, pre_results, read_status, read_body, side_results)
+    print(f"✓ {summary}")
+    return 0
+
+
+def _run_lifecycle_phases(args, goal_path, inv, payload: dict, extra_headers: dict) -> int:
+    """Task 39: run write+read+assert per lifecycle phase for rcrurdr / partial."""
+    phase_results: list[dict] = []
+    for lp in inv.lifecycle_phases:
+        write_status = 0
+        write_body: dict = {}
+        if lp.write is not None:
+            write_status, write_body = _http_request(
+                lp.write.method, lp.write.endpoint, payload, extra_headers,
+            )
+            if write_status >= 400:
+                summary = (
+                    f"R1 silent_state_mismatch — phase={lp.phase} write "
+                    f"returned {write_status}"
+                )
+                _emit_evidence(
+                    args, goal_path, "BLOCK", summary,
+                    write_status, write_body, [], [], None, None,
+                )
+                return 1
+
+        read_headers = {**_cache_headers(lp.read.cache_policy), **extra_headers}
+        read_status, read_body, attempts = _settle_loop(
+            lp.read.endpoint, read_headers, lp.read.settle
+        )
+        assert_results = _eval_assertions(read_body, lp.assertions, payload)
+        failed = [r for r in assert_results if not r["passed"]]
+        phase_results.append({
+            "phase": lp.phase,
+            "write_status": write_status,
+            "read_status": read_status,
+            "assertions": assert_results,
+            "passed": len(failed) == 0,
+        })
+        if failed:
+            summary = (
+                f"R8 update_did_not_apply — phase={lp.phase} write {write_status} but "
+                f"read shows {len(failed)} assertion(s) failed: "
+                + "; ".join(r["detail"] for r in failed[:3])
+            )
+            _emit_evidence(
+                args, goal_path, "BLOCK", summary,
+                write_status, write_body, assert_results, [], read_status, read_body,
+            )
+            return 1
+
+    total_assertions = sum(len(pr["assertions"]) for pr in phase_results)
+    summary = (
+        f"RCRURDR PASS for {goal_path.stem} ({inv.lifecycle}): "
+        f"{len(phase_results)} phases, {total_assertions} assertion(s) verified"
+    )
+    _emit_evidence(
+        args, goal_path, "ADVISORY", summary,
+        0, {}, [], [], None, None,
+    )
     print(f"✓ {summary}")
     return 0
 

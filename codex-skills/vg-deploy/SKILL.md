@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -207,6 +215,22 @@ Invoke this skill as `$vg-deploy`. Treat all user text after the skill name as a
 
 
 
+<HARD-GATE>
+You MUST follow STEP 0 through `complete` in exact order. Each step is gated
+by hooks. Skipping ANY step will be blocked by PreToolUse + Stop hooks.
+
+You MUST call TodoWrite IMMEDIATELY after STEP 0 (`0_parse_and_validate`)
+runs `emit-tasklist.py` — DO NOT continue without it. The PreToolUse Bash
+hook will block all subsequent step-active calls until signed evidence
+exists at `.vg/runs/<run_id>/.tasklist-projected.evidence.json`. The
+PostToolUse TodoWrite hook auto-writes that signed evidence.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by the PostToolUse
+depth check (Task 44b Rule V2 — `depth_valid=false` evidence triggers
+the PreToolUse depth gate).
+</HARD-GATE>
+
 <rules>
 1. **Build must be complete** — PIPELINE-STATE.steps.build.status ∈ {accepted, tested, reviewed, built-with-debt, built-complete}. Otherwise BLOCK (override: `--allow-build-incomplete` logs override-debt).
 2. **Multi-env supported, sequential execution** — each env runs after the previous completes. Parallel would risk infrastructure contention (shared SSH connection, same DB seed, etc).
@@ -295,6 +319,21 @@ ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator run-start vg:deploy "${PH
 ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
   "phase.deploy_started" --actor "orchestrator" --outcome "INFO" \
   --payload "{\"phase\":\"${PHASE_NUMBER}\",\"args\":\"${ARGUMENTS}\"}" 2>/dev/null || true
+
+# Task 44b — tasklist projection enforcement: emit the deploy taskboard so
+# user sees planned steps and tasklist-contract.json is written for the
+# PreToolUse hook gate. AI MUST then call TodoWrite (with ↳ sub-items per
+# group) before any subsequent step-active.
+${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
+  --command "vg:deploy" \
+  --profile "${PROFILE:-web-fullstack}" \
+  --phase "${PHASE_NUMBER:-unknown}" 2>&1 | head -40 || true
+
+# See `_shared/lib/tasklist-projection-instruction.md` for the full
+# projection contract. After TodoWrite, AI MUST call:
+#   ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator tasklist-projected --adapter claude
+# (or --adapter codex / --adapter fallback). Until evidence exists, every
+# subsequent `step-active` is BLOCKED by the PreToolUse Bash hook.
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"
 ```

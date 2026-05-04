@@ -22,6 +22,23 @@ _VALID_CACHE = {"no_store", "cache_ok", "bypass_cdn"}
 _VALID_SETTLE_MODE = {"immediate", "poll", "wait_event"}
 _VALID_WRITE_METHOD = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Task 39 — RCRURDR lifecycle constants
+_VALID_LIFECYCLE = {"rcrurd", "rcrurdr", "partial"}
+_VALID_PHASE_NAMES = {
+    "read_empty", "create", "read_populated", "update",
+    "read_updated", "delete", "read_after_delete",
+}
+_RCRURDR_REQUIRED_PHASES = (
+    "read_empty", "create", "read_populated", "update",
+    "read_updated", "delete", "read_after_delete",
+)
+_GOAL_TYPE_REQUIRED_PHASES: dict[str, tuple[str, ...]] = {
+    "create_only": ("read_empty", "create", "read_populated"),
+    "update_only": ("read_populated", "update", "read_updated"),
+    "delete_only": ("read_populated", "delete", "read_after_delete"),
+    "crud_full": _RCRURDR_REQUIRED_PHASES,
+}
+
 _VALID_UI_OPS = {
     "count_matches_response_array",
     "text_contains_all",
@@ -93,21 +110,42 @@ class UIAssertOp:
 class UIAssertBlock:
     settle: UISettleSpec
     ops: tuple[UIAssertOp, ...]
+    # Task 39 (R9): pins DOM assertions to a specific lifecycle phase.
+    # Backward-compat: None when lifecycle=rcrurd (single read).
+    apply_to_phase: str | None = None
+
+
+@dataclass(frozen=True)
+class LifecyclePhase:
+    """Task 39 — one phase in an RCRURDR or partial lifecycle."""
+    phase: str  # one of _VALID_PHASE_NAMES
+    write: WriteSpec | None  # None for read-only phases (read_empty, read_populated, etc.)
+    read: ReadSpec
+    assertions: tuple[Assertion, ...]
 
 
 @dataclass(frozen=True)
 class RCRURDInvariant:
-    write: WriteSpec
-    read: ReadSpec
+    write: WriteSpec | None
+    read: ReadSpec | None
     assertions: tuple[Assertion, ...]
     preconditions: tuple[Assertion, ...] = field(default=())
     side_effects: tuple[Assertion, ...] = field(default=())
     ui_assert: UIAssertBlock | None = None
+    # Task 39 fields:
+    lifecycle: str = "rcrurd"
+    lifecycle_phases: tuple[LifecyclePhase, ...] = field(default=())
 
 
 def parse_yaml(yaml_text: str) -> RCRURDInvariant:
     """Parse a YAML invariant doc → typed RCRURDInvariant. Raises
-    RCRURDInvariantError on any schema violation (clearer than jsonschema)."""
+    RCRURDInvariantError on any schema violation (clearer than jsonschema).
+
+    Supports three lifecycle discriminators (Task 39):
+      - rcrurd  (default) — single write+read cycle, backward compat
+      - rcrurdr — full 7-phase lifecycle via lifecycle_phases[]
+      - partial  — goal_type-specific subset (3 phases)
+    """
     try:
         doc = yaml.safe_load(yaml_text)
     except yaml.YAMLError as e:
@@ -115,23 +153,47 @@ def parse_yaml(yaml_text: str) -> RCRURDInvariant:
 
     if not isinstance(doc, dict):
         raise RCRURDInvariantError("top-level must be a mapping")
-    if doc.get("goal_type") != "mutation":
-        raise RCRURDInvariantError("goal_type must be 'mutation'")
-    raw = doc.get("read_after_write_invariant")
-    if not isinstance(raw, dict):
-        raise RCRURDInvariantError("read_after_write_invariant must be a mapping")
 
-    write = _parse_write(raw.get("write"))
-    read = _parse_read(raw.get("read"))
-    assertions = _parse_assert_list(raw.get("assert"), "assert", min_items=1)
-    preconditions = _parse_assert_list(raw.get("precondition"), "precondition", min_items=0)
-    side_effects = _parse_side_effects(raw.get("side_effects"))
-    ui_assert = _parse_ui_assert(raw.get("ui_assert"))
+    lifecycle = doc.get("lifecycle", "rcrurd")
+    if lifecycle not in _VALID_LIFECYCLE:
+        raise RCRURDInvariantError(
+            f"lifecycle must be one of {sorted(_VALID_LIFECYCLE)}, got {lifecycle!r}"
+        )
 
+    if lifecycle == "rcrurd":
+        # Legacy single-cycle path: requires goal_type=mutation + read_after_write_invariant
+        if doc.get("goal_type") != "mutation":
+            raise RCRURDInvariantError("goal_type must be 'mutation'")
+        raw = doc.get("read_after_write_invariant")
+        if not isinstance(raw, dict):
+            raise RCRURDInvariantError("read_after_write_invariant must be a mapping")
+
+        write = _parse_write(raw.get("write"))
+        read = _parse_read(raw.get("read"))
+        assertions = _parse_assert_list(raw.get("assert"), "assert", min_items=1)
+        preconditions = _parse_assert_list(raw.get("precondition"), "precondition", min_items=0)
+        side_effects = _parse_side_effects(raw.get("side_effects"))
+        ui_assert = _parse_ui_assert(raw.get("ui_assert"))
+
+        return RCRURDInvariant(
+            write=write, read=read, assertions=tuple(assertions),
+            preconditions=tuple(preconditions), side_effects=tuple(side_effects),
+            ui_assert=ui_assert,
+            lifecycle="rcrurd", lifecycle_phases=(),
+        )
+
+    # New paths: rcrurdr or partial
+    goal_type = doc.get("goal_type", "mutation")
+    ui_assert = _parse_ui_assert(doc.get("ui_assert"))
+    lifecycle_phases = _parse_lifecycle_phases(
+        doc.get("lifecycle_phases"), lifecycle, goal_type,
+    )
     return RCRURDInvariant(
-        write=write, read=read, assertions=tuple(assertions),
-        preconditions=tuple(preconditions), side_effects=tuple(side_effects),
+        write=None, read=None, assertions=(),
+        preconditions=(), side_effects=(),
         ui_assert=ui_assert,
+        lifecycle=lifecycle,
+        lifecycle_phases=tuple(lifecycle_phases),
     )
 
 
@@ -142,7 +204,10 @@ def _is_endpoint(s: object) -> bool:
     return isinstance(s, str) and (s.startswith("/") or s.startswith("http://") or s.startswith("https://"))
 
 
-def _parse_write(d: Any) -> WriteSpec:
+def _parse_write(d: Any, optional: bool = False) -> WriteSpec | None:
+    """Parse write spec. When optional=True, returns None if d is None (read-only phases)."""
+    if d is None and optional:
+        return None
     if not isinstance(d, dict):
         raise RCRURDInvariantError("write must be a mapping")
     method = d.get("method")
@@ -279,7 +344,67 @@ def _parse_ui_assert(d: Any) -> UIAssertBlock | None:
     if not isinstance(ops_raw, list) or not ops_raw:
         raise RCRURDInvariantError("ui_assert.ops must be a non-empty list")
     ops = tuple(_parse_ui_op(o, f"ui_assert.ops[{i}]") for i, o in enumerate(ops_raw))
-    return UIAssertBlock(settle=settle, ops=ops)
+    # Task 39: apply_to_phase pins DOM assertions to a specific lifecycle phase
+    apply_to_phase = d.get("apply_to_phase")
+    if apply_to_phase is not None and apply_to_phase not in _VALID_PHASE_NAMES:
+        raise RCRURDInvariantError(
+            f"ui_assert.apply_to_phase must be one of {sorted(_VALID_PHASE_NAMES)}, got {apply_to_phase!r}"
+        )
+    return UIAssertBlock(settle=settle, ops=ops, apply_to_phase=apply_to_phase)
+
+
+def _parse_lifecycle_phases(
+    items: Any, lifecycle: str, goal_type: str
+) -> list[LifecyclePhase]:
+    """Parse lifecycle_phases list for rcrurdr / partial lifecycles."""
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        raise RCRURDInvariantError("lifecycle_phases must be a list")
+
+    phases: list[LifecyclePhase] = []
+    seen_names: set[str] = set()
+    for i, d in enumerate(items):
+        ctx = f"lifecycle_phases[{i}]"
+        if not isinstance(d, dict):
+            raise RCRURDInvariantError(f"{ctx} must be a mapping")
+        phase = d.get("phase")
+        if phase not in _VALID_PHASE_NAMES:
+            raise RCRURDInvariantError(
+                f"{ctx}.phase must be one of {sorted(_VALID_PHASE_NAMES)}, got {phase!r}"
+            )
+        if phase in seen_names:
+            raise RCRURDInvariantError(f"{ctx}.phase {phase!r} duplicated")
+        seen_names.add(phase)
+
+        # Read-only phases (starting with "read_") have no write spec
+        is_read_only_phase = phase.startswith("read_")
+        write = _parse_write(d.get("write"), optional=is_read_only_phase)
+        read = _parse_read(d.get("read"))
+        assertions = _parse_assert_list(d.get("assert"), f"{ctx}.assert", min_items=1)
+        phases.append(LifecyclePhase(
+            phase=phase, write=write, read=read, assertions=tuple(assertions),
+        ))
+
+    # Validate completeness per lifecycle/goal_type
+    if lifecycle == "rcrurdr":
+        required = set(_RCRURDR_REQUIRED_PHASES)
+        if seen_names != required:
+            missing = required - seen_names
+            raise RCRURDInvariantError(
+                f"lifecycle: rcrurdr requires all 7 phases; "
+                f"missing: {sorted(missing)}"
+            )
+    elif lifecycle == "partial":
+        required_tuple = _GOAL_TYPE_REQUIRED_PHASES.get(goal_type)
+        if required_tuple is not None and seen_names != set(required_tuple):
+            missing = set(required_tuple) - seen_names
+            raise RCRURDInvariantError(
+                f"goal_type: {goal_type} (lifecycle: partial) requires phases "
+                f"{required_tuple}; missing: {sorted(missing)}"
+            )
+
+    return phases
 
 
 def _parse_side_effects(items: Any) -> list[Assertion]:

@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -206,6 +214,14 @@ Invoke this skill as `$vg-project`. Treat all user text after the skill name as 
 </codex_skill_adapter>
 
 
+
+<NARRATION_POLICY>
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate.**
+
+Use markdown headers in your text output between tool calls (e.g. `## ━━━ Round 3: Tech ambiguities ━━━`). Long Bash > 30s → `run_in_background: true` + `BashOutput` polls.
+
+**Translate English terms (RULE)** — output có thuật ngữ tiếng Anh PHẢI thêm giải thích VN trong dấu ngoặc tại lần đầu xuất hiện. Tham khảo `_shared/term-glossary.md`. Ví dụ: `Foundation (nền tảng)`, `migrate (chuyển đổi)`, `merge (gộp) NOT overwrite (ghi đè)`, `legacy-v1 (định dạng cũ v1)`, `greenfield (dự án mới)`, `brownfield (dự án có codebase)`. Không áp dụng: file path (`PROJECT.md`), code identifier (`D-XX`, `pnpm`), config tag values (`web-saas`), lần lặp lại trong cùng message.
+</NARRATION_POLICY>
 
 <rules>
 1. **Single entry point** — replaces `/vg:init`. `/vg:init` is now a soft alias for `/vg:project --init-only`.

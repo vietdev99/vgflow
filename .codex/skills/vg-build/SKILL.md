@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -208,159 +216,6 @@ Invoke this skill as `$vg-build`. Treat all user text after the skill name as ar
 
 
 
----
-name: vg:build
-description: Execute phase plans with contract-aware wave-based parallel execution
-argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck] [--skip-pre-test]"
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - Agent
-  - TodoWrite
-  - TaskCreate
-  - TaskUpdate
-  - AskUserQuestion
-  - BashOutput
-argument-instructions: |
-  Parse the argument as a phase number plus optional flags.
-  Example: /vg:build 7.1
-  Example: /vg:build 7.1 --gaps-only
-  Example: /vg:build 7.1 --wave 2
-runtime_contract:
-  # Hook checks these at Stop. Missing evidence = exit 2, force Claude to continue.
-  # Phase 13 failure mode (24 commits, 0 telemetry, 2/16 markers) is precisely
-  # what this contract catches. See .claude/scripts/vg-verify-claim.py.
-  must_write:
-    - "${PHASE_DIR}/SUMMARY.md"
-    - path: "${PHASE_DIR}/INTERFACE-STANDARDS.md"
-      content_min_bytes: 500
-    - path: "${PHASE_DIR}/INTERFACE-STANDARDS.json"
-      content_min_bytes: 500
-    - path: "${PHASE_DIR}/API-DOCS.md"
-      content_min_bytes: 120
-    # v2.5.1 anti-forge: build progress file proves wave actually ran.
-    # Phase F v2.5 extended schema stores per-task commit_sha + typecheck +
-    # wave_verify fields. Missing = AI forged summary without real commits.
-    - path: "${PHASE_DIR}/.build-progress.json"
-      content_min_bytes: 50
-    # NEW per R1a UX baseline Req 1 — 3-layer BUILD-LOG split
-    # Layer 1: per-task split (primary, for downstream context budget)
-    - path: "${PHASE_DIR}/BUILD-LOG/task-*.md"
-      glob_min_count: 1
-    # Layer 2: index file (table of contents)
-    - "${PHASE_DIR}/BUILD-LOG/index.md"
-    # Layer 3: flat concat (legacy compat for grep validators)
-    - "${PHASE_DIR}/BUILD-LOG.md"
-    # Task 18 (pre-test gate) — PRE-TEST-REPORT.md (renderer at scripts/validators/write-pre-test-report.py)
-    - path: "${PHASE_DIR}/PRE-TEST-REPORT.md"
-      required_unless_flag: "--skip-pre-test"
-      content_min_bytes: 80
-  must_touch_markers:
-    # OHOK Batch 4 C3 (2026-04-22): contract 8 → 15 markers.
-    # Previously 8 steps (1/4/7/8/9/10/11/12) were validated — 11 other
-    # steps could silent-skip without orchestrator detection. Now all
-    # 18 steps declared; optional ones use severity=warn.
-    # ─── Hard gates (block) — foundational enforcement ───
-    - "0_gate_integrity_precheck"
-    - "1_parse_args"
-    - "1a_build_queue_preflight"
-    - "1b_recon_gate"
-    - "3_validate_blueprint"
-    - "4_load_contracts_and_context"
-    - "5_handle_branching"
-    - "7_discover_plans"
-    - "8_execute_waves"
-    # ─── Post-execution markers (skipped for partial-wave; required for final wave) ───
-    # When `--wave N` is set AND N is NOT the final wave, vg-detect-final-wave
-    # writes `.is-final-wave=false` and the orchestrator's is_partial_wave logic
-    # exempts these markers (PARTIAL_EXEMPT_MARKERS in
-    # scripts/vg-orchestrator/__main__.py). When run-all-waves OR final wave,
-    # all four are required by contract validator.
-    - "9_post_execution"
-    - "10_postmortem_sanity"
-    - "11_crossai_build_verify_loop"
-    - "12_run_complete"
-    # ─── Advisory (warn) — missing ≠ block ───
-    - name: "0_session_lifecycle"
-      severity: "warn"
-    - name: "create_task_tracker"
-      severity: "warn"
-    - name: "2_initialize"
-      severity: "warn"
-    - name: "6_validate_phase"
-      severity: "warn"
-    - name: "8_5_bootstrap_reflection_per_wave"
-      severity: "warn"
-    # Task 10 (build-fix-loop) — L3 in-scope auto-fix loop runs only when
-    # STEP 5 emits l4a_violations_detected OR /vg:review left evidence files.
-    # severity=warn so a clean build (no evidence) doesn't fail contract check.
-    - name: "8_5_in_scope_fix_loop"
-      severity: "warn"
-    # Task 18 (pre-test gate) — STEP 6.5 between CrossAI loop and close.
-    # Hard contract per Codex round 2 fix #9: NOT severity=warn — required
-    # unless --skip-pre-test override is logged via override-use.
-    - name: "12_5_pre_test_gate"
-      required_unless_flag: "--skip-pre-test"
-  must_emit_telemetry:
-    # v1.15.2 — names match vg_run_start/vg_run_complete auto-emits.
-    # Previously declared build.phase_start/build.phase_end but 0 emit calls
-    # existed anywhere in body → hook always failed this check.
-    # v2.5.1 anti-forge: tasklist visibility at flow start
-    - event_type: "build.tasklist_shown"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "build.native_tasklist_projected"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "build.started"
-      phase: "${PHASE_NUMBER}"
-    # v2.5.1 anti-forge: wave execution evidence — at least 1 wave.started
-    # event proves executor subagents actually spawned. Missing = AI claimed
-    # build complete without wave work. Partial-wave runs exempt via is_partial_wave.
-    - event_type: "wave.started"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "build.completed"
-      phase: "${PHASE_NUMBER}"
-    # Task 6 (build-fix-loop) — L4a deterministic phase-level gates
-    # (verify-fe-be-call-graph + verify-contract-shape + verify-spec-drift)
-    # run in STEP 5 post-execution. severity=warn (informational signal
-    # to STEP 5.5 fix-loop, not a hard contract block).
-    - event_type: "build.l4a_violations_detected"
-      phase: "${PHASE_NUMBER}"
-      severity: "warn"
-    - event_type: "build.l4a_gates_passed"
-      phase: "${PHASE_NUMBER}"
-      severity: "warn"
-    # Task 18 (pre-test gate) — STEP 6.5 telemetry. complete = full T1+T2
-    # ran (with optional deploy); skipped = --skip-pre-test override path.
-    - event_type: "build.pre_test_complete"
-      phase: "${PHASE_NUMBER}"
-      required_unless_flag: "--skip-pre-test"
-    - event_type: "build.pre_test_skipped"
-      phase: "${PHASE_NUMBER}"
-      severity: "warn"
-  forbidden_without_override:
-    # Every escape hatch must leave a debt-register trail.
-    - "--override-reason"
-    - "--allow-missing-commits"
-    - "--allow-r5-violation"
-    - "--force"
-    - "--skip-truthcheck"
-    # v2.41 R2 build pilot — hard-gate-skip flags surfaced by waves-overview
-    # gates 8/8d.4/8d.5/8d.9. Each requires --override-reason=<text> + emits
-    # override-debt entry. --allow-coverage-regression is informational and
-    # logged via close.md PR-D path (NOT listed here).
-    - "--skip-design-pixel-gate"
-    - "--skip-uimap-injection-audit"
-    - "--skip-task-fidelity-audit"
-    - "--allow-verify-divergence"
-    # Task 18 (pre-test gate) — escape hatch for STEP 6.5 (T1+T2+deploy+smoke)
-    - "--skip-pre-test"
----
-
-
 <LANGUAGE_POLICY>
 You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
 
@@ -387,6 +242,10 @@ by hooks (PreToolUse Bash + Stop). Skipping ANY step will be blocked.
 You MUST call TodoWrite IMMEDIATELY after STEP 1.6 (create_task_tracker)
 runs emit-tasklist.py. The PreToolUse Bash hook will block all subsequent
 step-active calls until signed evidence exists.
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
 
 For HEAVY steps (STEP 4 waves, STEP 5 post-execution), you MUST spawn the
 named subagent via the `Agent` tool. DO NOT execute waves or

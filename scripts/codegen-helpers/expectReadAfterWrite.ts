@@ -47,6 +47,29 @@ export interface UIAssertBlock {
   ops: UIAssertOp[];
 }
 
+export type LifecycleName = 'rcrurd' | 'rcrurdr' | 'partial';
+
+export type PhaseName =
+  | 'read_empty'
+  | 'create'
+  | 'read_populated'
+  | 'update'
+  | 'read_updated'
+  | 'delete'
+  | 'read_after_delete';
+
+export interface LifecyclePhase {
+  phase: PhaseName;
+  write?: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; endpoint: string };
+  read: {
+    method: 'GET';
+    endpoint: string;
+    cache_policy: 'no_store' | 'cache_ok' | 'bypass_cdn';
+    settle: { mode: 'immediate' | 'poll' | 'wait_event'; timeout_ms?: number; interval_ms?: number };
+  };
+  assert: Assertion[];
+}
+
 export interface RCRURDInvariant {
   goal_id: string;
   write: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; endpoint: string };
@@ -60,6 +83,9 @@ export interface RCRURDInvariant {
   precondition?: Assertion[];
   side_effects?: Assertion[];
   ui_assert?: UIAssertBlock;
+  // Task 39 fields:
+  lifecycle?: LifecycleName;
+  lifecycle_phases?: LifecyclePhase[];
 }
 
 function evalJsonPath(body: unknown, path: string): unknown[] {
@@ -204,6 +230,99 @@ export async function expectReadAfterWrite(
       await expect(async () => {
         await evalUIOp(page, uop, responseBodyForUI, actionPayload, invariant.goal_id);
       }).toPass({ timeout: settle.timeout_ms, intervals: [settle.poll_ms ?? 100] });
+    }
+  }
+}
+
+
+/**
+ * Task 39: expectLifecycleRoundtrip — iterate lifecycle_phases for rcrurdr /
+ * partial invariants, running write+read+assert per phase in sequence.
+ *
+ * When lifecycle is 'rcrurd' (or absent), delegates to expectReadAfterWrite.
+ * Phases without a write spec (e.g. read_empty, read_populated) skip the write.
+ */
+export async function expectLifecycleRoundtrip(
+  page: Page | null,
+  request: APIRequestContext,
+  invariant: RCRURDInvariant,
+  actionPayload: Record<string, unknown>,
+): Promise<void> {
+  if (!invariant.lifecycle || invariant.lifecycle === 'rcrurd' || !invariant.lifecycle_phases?.length) {
+    // Fall back to single-cycle helper for backward compat
+    return expectReadAfterWrite(page, request, invariant, actionPayload);
+  }
+
+  for (const lp of invariant.lifecycle_phases) {
+    const headers = cacheHeaders(lp.read.cache_policy);
+
+    // Write step (skipped for read-only phases like read_empty, read_populated)
+    if (lp.write) {
+      const writeResp = await request[lp.write.method.toLowerCase() as 'post' | 'put' | 'patch' | 'delete'](
+        lp.write.endpoint, { data: actionPayload },
+      );
+      expect(
+        writeResp.ok(),
+        `[${invariant.goal_id}] phase=${lp.phase} write returned ${writeResp.status()} — R1 silent_state_mismatch suspected`,
+      ).toBeTruthy();
+    }
+
+    // Read + assert step
+    const readWithPhaseAssert = async (): Promise<{ allPassed: boolean; failures: string[] }> => {
+      const readResp = await request.get(lp.read.endpoint, { headers });
+      const readBody = await readResp.json().catch(() => ({}));
+      const failures: string[] = [];
+      for (const a of lp.assert) {
+        const observed = evalJsonPath(readBody, a.path);
+        const expected = resolveValue(a.value_from, actionPayload);
+        if (!applyOp(observed, a.op, expected)) {
+          failures.push(
+            `phase=${lp.phase}: ${a.path} ${a.op} ${JSON.stringify(expected)} ` +
+            `(observed=${JSON.stringify(observed).slice(0, 100)})`
+          );
+        }
+      }
+      return { allPassed: failures.length === 0, failures };
+    };
+
+    if (lp.read.settle.mode === 'immediate') {
+      const r = await readWithPhaseAssert();
+      expect(
+        r.allPassed,
+        `[${invariant.goal_id}] R8 update_did_not_apply: ${r.failures.join('; ')}`,
+      ).toBeTruthy();
+    } else {
+      const timeoutMs = lp.read.settle.timeout_ms ?? 5000;
+      const intervalMs = lp.read.settle.interval_ms ?? 500;
+      const deadline = Date.now() + timeoutMs;
+      let last: { allPassed: boolean; failures: string[] } = { allPassed: false, failures: [] };
+      while (Date.now() < deadline) {
+        last = await readWithPhaseAssert();
+        if (last.allPassed) break;
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+      expect(
+        last.allPassed,
+        `[${invariant.goal_id}] R8 update_did_not_apply (after settle ${timeoutMs}ms): ${last.failures.join('; ')}`,
+      ).toBeTruthy();
+    }
+
+    // ui_assert keyed by apply_to_phase (Task 25 R9)
+    if (invariant.ui_assert) {
+      const uiBlock = invariant.ui_assert as UIAssertBlock & { apply_to_phase?: string };
+      if (!uiBlock.apply_to_phase || uiBlock.apply_to_phase === lp.phase) {
+        if (page === null) {
+          throw new Error(
+            `[${invariant.goal_id}] R9_NO_PAGE: invariant has ui_assert but expectLifecycleRoundtrip was called with page=null`,
+          );
+        }
+        const responseBodyForUI = await (await request.get(lp.read.endpoint, { headers })).json().catch(() => ({}));
+        for (const uop of uiBlock.ops) {
+          await expect(async () => {
+            await evalUIOp(page, uop, responseBodyForUI, actionPayload, invariant.goal_id);
+          }).toPass({ timeout: uiBlock.settle.timeout_ms, intervals: [uiBlock.settle.poll_ms ?? 100] });
+        }
+      }
     }
   }
 }

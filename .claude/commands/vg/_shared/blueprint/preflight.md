@@ -465,41 +465,88 @@ Design-extract auto-trigger (fixes G1):
 
 ```bash
 DESIGN_PATHS=$(vg_config_get_array design_assets.paths)
-if [ -n "$DESIGN_PATHS" ]; then
-  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/design-path-resolver.sh"
-  DESIGN_PHASE_DIR="$(vg_design_phase_dir "$PHASE_DIR")"
-  DESIGN_SHARED_DIR="$(vg_design_shared_dir)"
-  DESIGN_LEGACY_DIR="$(vg_design_legacy_dir)"
+DESIGN_AUTOTRIGGER_SKIPPED=false
+case "${PHASE_PROFILE:-feature}" in
+  cli-tool|library|infra|docs)
+    DESIGN_AUTOTRIGGER_SKIPPED=true
+    echo "ℹ Design-extract auto-trigger skipped for PHASE_PROFILE=${PHASE_PROFILE:-feature}."
+    ;;
+esac
 
-  if [ -f "${DESIGN_PHASE_DIR}/manifest.json" ]; then
-    DESIGN_OUT="$DESIGN_PHASE_DIR"
-  elif [ -f "${DESIGN_SHARED_DIR}/manifest.json" ]; then
-    DESIGN_OUT="$DESIGN_SHARED_DIR"
-  elif [ -n "$DESIGN_LEGACY_DIR" ] && [ -f "${DESIGN_LEGACY_DIR}/manifest.json" ]; then
-    DESIGN_OUT="$DESIGN_LEGACY_DIR"
-    echo "⚠ Using legacy design dir ${DESIGN_LEGACY_DIR}/ — soft-deprecated since v2.30." >&2
+if [ "$DESIGN_AUTOTRIGGER_SKIPPED" != true ] && [ -n "$DESIGN_PATHS" ]; then
+  DESIGN_MATCHED_PATHS="$(
+    DESIGN_PATHS="$DESIGN_PATHS" REPO_ROOT="${REPO_ROOT:-.}" "${PYTHON_BIN:-python3}" - <<'PY'
+import glob
+import os
+from pathlib import Path
+
+repo = Path(os.environ.get("REPO_ROOT") or ".").resolve()
+seen = set()
+for raw in os.environ.get("DESIGN_PATHS", "").splitlines():
+    pattern = raw.strip()
+    if not pattern or pattern.startswith("#"):
+        continue
+    path = Path(pattern).expanduser()
+    glob_pattern = str(path if path.is_absolute() else repo / path)
+    matches = glob.glob(glob_pattern, recursive=True)
+    if not matches and not any(ch in pattern for ch in "*?["):
+        candidate = Path(glob_pattern)
+        if candidate.exists():
+            matches = [str(candidate)]
+    for match in matches:
+        candidate = Path(match)
+        if not candidate.exists():
+            continue
+        key = str(candidate.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        print(key)
+PY
+  )"
+
+  if [ -z "$DESIGN_MATCHED_PATHS" ]; then
+    echo "ℹ Design-extract auto-trigger skipped: design_assets.paths matched no files."
   else
-    DESIGN_OUT="$DESIGN_PHASE_DIR"
-  fi
-  DESIGN_MANIFEST="${DESIGN_OUT}/manifest.json"
-  DESIGN_OUTPUT_DIR="$DESIGN_OUT"
-  export DESIGN_OUTPUT_DIR DESIGN_MANIFEST
+    source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/design-path-resolver.sh"
+    DESIGN_PHASE_DIR="$(vg_design_phase_dir "$PHASE_DIR")"
+    DESIGN_SHARED_DIR="$(vg_design_shared_dir)"
+    DESIGN_LEGACY_DIR="$(vg_design_legacy_dir)"
 
-  NEEDS_EXTRACT=false
-  if [ ! -f "$DESIGN_MANIFEST" ]; then
-    NEEDS_EXTRACT=true; REASON="manifest missing"
-  else
-    while read -r pattern; do
-      [ -z "$pattern" ] && continue
-      if find $pattern -newer "$DESIGN_MANIFEST" 2>/dev/null | grep -q .; then
-        NEEDS_EXTRACT=true; REASON="assets changed since last extract"; break
-      fi
-    done <<< "$DESIGN_PATHS"
-  fi
+    if [ -f "${DESIGN_PHASE_DIR}/manifest.json" ]; then
+      DESIGN_OUT="$DESIGN_PHASE_DIR"
+    elif [ -f "${DESIGN_SHARED_DIR}/manifest.json" ]; then
+      DESIGN_OUT="$DESIGN_SHARED_DIR"
+    elif [ -n "$DESIGN_LEGACY_DIR" ] && [ -f "${DESIGN_LEGACY_DIR}/manifest.json" ]; then
+      DESIGN_OUT="$DESIGN_LEGACY_DIR"
+      echo "⚠ Using legacy design dir ${DESIGN_LEGACY_DIR}/ — soft-deprecated since v2.30." >&2
+    else
+      DESIGN_OUT="$DESIGN_PHASE_DIR"
+    fi
+    DESIGN_MANIFEST="${DESIGN_OUT}/manifest.json"
+    DESIGN_OUTPUT_DIR="$DESIGN_OUT"
+    export DESIGN_OUTPUT_DIR DESIGN_MANIFEST
 
-  if [ "$NEEDS_EXTRACT" = true ]; then
-    echo "Design assets detected, manifest $REASON. Auto-running /vg:design-extract --auto..."
-    SlashCommand: /vg:design-extract --auto
+    NEEDS_EXTRACT=false
+    if [ ! -f "$DESIGN_MANIFEST" ]; then
+      NEEDS_EXTRACT=true; REASON="missing"
+    else
+      while IFS= read -r asset_path; do
+        [ -z "$asset_path" ] && continue
+        if [ -d "$asset_path" ]; then
+          if find "$asset_path" -type f -newer "$DESIGN_MANIFEST" 2>/dev/null | grep -q .; then
+            NEEDS_EXTRACT=true; REASON="assets changed since last extract"; break
+          fi
+        elif [ -f "$asset_path" ] && [ "$asset_path" -newer "$DESIGN_MANIFEST" ]; then
+          NEEDS_EXTRACT=true; REASON="assets changed since last extract"; break
+        fi
+      done <<< "$DESIGN_MATCHED_PATHS"
+    fi
+
+    if [ "$NEEDS_EXTRACT" = true ]; then
+      echo "Design assets detected, manifest $REASON. Auto-running /vg:design-extract --auto..."
+      SlashCommand: /vg:design-extract --auto
+    fi
   fi
 fi
 

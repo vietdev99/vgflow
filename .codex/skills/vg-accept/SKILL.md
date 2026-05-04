@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -208,80 +216,6 @@ Invoke this skill as `$vg-accept`. Treat all user text after the skill name as a
 
 
 
----
-name: vg:accept
-description: Human UAT acceptance — structured checklist driven by VG artifacts (SPECS, CONTEXT, TEST-GOALS, RIPPLE-ANALYSIS)
-argument-hint: "<phase> [--allow-uat-skips] [--allow-empty-uat] [--allow-unreachable] [--override-reason=<text>]"
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - AskUserQuestion
-  - Agent
-  - TodoWrite
-runtime_contract:
-  # OHOK Batch 3 (2026-04-22): full-coverage contract + UAT quorum gate.
-  # R4 Accept Pilot (2026-05-03): refactor to slim entry + 10 refs + 2 subagents.
-  # Step IDs unchanged — markers + telemetry preserved verbatim.
-  must_write:
-    # v2.5.1 anti-forge: UAT.md must have Verdict: line — prevents
-    # empty/stub UAT without human decision recorded.
-    - path: "${PHASE_DIR}/${PHASE_NUMBER}-UAT.md"
-      content_min_bytes: 200
-      content_required_sections: ["Verdict:"]
-    - "${PHASE_DIR}/.uat-responses.json"
-  must_touch_markers:
-    # Hard gates — foundational + verdict enforcement
-    - "0_gate_integrity_precheck"
-    - "0_load_config"
-    - "create_task_tracker"
-    - "0c_telemetry_suggestions"
-    - "1_artifact_precheck"
-    - "2_marker_precheck"
-    - "3_sandbox_verdict_gate"
-    - "3b_unreachable_triage_gate"
-    - "3c_override_resolution_gate"
-    - "4_build_uat_checklist"
-    - "4b_uat_narrative_autofire"
-    - "5_interactive_uat"
-    - "5_uat_quorum_gate"
-    - "6b_security_baseline"
-    - "6c_learn_auto_surface"
-    - "6_write_uat_md"
-    # Advisory / post-accept
-    - "7_post_accept_actions"
-  must_emit_telemetry:
-    # v2.5.1 anti-forge: tasklist visibility at flow start
-    - event_type: "accept.tasklist_shown"
-      phase: "${PHASE_NUMBER}"
-    # AUDIT FAIL #9 (R4 fix inherited from R1a blueprint pilot): baseline 0 events.
-    # Slim entry's STEP 1 IMPERATIVE TodoWrite + PostToolUse hook auto-projects.
-    - event_type: "accept.native_tasklist_projected"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "accept.started"
-      phase: "${PHASE_NUMBER}"
-    - event_type: "accept.completed"
-      phase: "${PHASE_NUMBER}"
-  # forbidden flags (each MUST be paired with --override-reason="<text>" — the
-  # override mechanism itself, NOT listed because it IS what makes the others
-  # acceptable). Each accepted bypass MUST also call:
-  #   vg-orchestrator override --flag <flag> --reason "<text>"
-  # so override.used fires for run-complete contract + OVERRIDE-DEBT.md entry.
-  # --allow-uat-skips:    Batch 3 B4 — log when UAT quorum breached
-  # --allow-empty-uat:    Batch 3 B4 — log when .uat-responses.json absent
-  # --allow-unreachable:  existing (3b gate)
-  # --allow-deferred:     belongs to /vg:next (DEFERRED bypass), NOT accept —
-  #                        removed from this contract (was undeclared bypass surface).
-  forbidden_without_override:
-    - "--allow-uat-skips"
-    - "--allow-empty-uat"
-    - "--allow-unreachable"
----
-
-
 <LANGUAGE_POLICY>
 You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
 
@@ -312,6 +246,10 @@ hook will block all subsequent step-active calls until signed evidence
 exists at `.vg/runs/<run_id>/.tasklist-projected.evidence.json`. The
 PostToolUse TodoWrite hook auto-writes that signed evidence. This fixes
 audit FAIL #9 (`accept.native_tasklist_projected` baseline 0 events).
+
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
 
 For HEAVY steps (STEP 3 UAT checklist build, STEP 8 cleanup), you MUST
 spawn the named subagent via the `Agent` tool (NOT `Task` — Codex

@@ -851,6 +851,18 @@ def _write_tasklist_projection_evidence(
 
     contract_bytes = contract_path.read_bytes()
     projection_items = contract.get("projection_items") or []
+    # Task 44b — additive depth metadata. Codex/fallback adapters project the
+    # full hierarchy via projection_items (groups + ↳ sub-steps), so
+    # depth_valid is True by construction unless a checklist has zero items.
+    checklists_in_contract = contract.get("checklists") or []
+    flat_groups = sorted([
+        c["id"] for c in checklists_in_contract
+        if not (c.get("items") or [])
+    ])
+    groups_with_subs_count = sum(
+        1 for c in checklists_in_contract if (c.get("items") or [])
+    )
+    depth_valid = (len(checklists_in_contract) > 0) and (len(flat_groups) == 0)
     payload = {
         "run_id": run_id,
         "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -860,6 +872,9 @@ def _write_tasklist_projection_evidence(
         "contract_ids": sorted(checklist_ids),
         "match": True,
         "adapter": adapter,
+        "depth_valid": depth_valid,
+        "groups_with_subs_count": groups_with_subs_count,
+        "flat_groups": flat_groups,
     }
     key = _ensure_evidence_key()
     canonical = json.dumps(payload, sort_keys=True).encode()

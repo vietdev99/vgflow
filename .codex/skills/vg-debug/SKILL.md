@@ -76,6 +76,14 @@ Run fenced command-body shell snippets with Bash explicitly, for example
 commands use Bash semantics such as `[[ ... ]]`, arrays, `BASH_SOURCE`, and
 `set -u`; zsh can misinterpret those snippets and create false failures.
 
+Do not manually retype long command-body heredocs into nested shell strings.
+Prefer deterministic Codex helpers shipped in `.claude/scripts/`. For
+`/vg:blueprint` STEP 3.1, run `codex-vg-env.py` and
+`codex-blueprint-plan-prep.py` exactly as documented in
+`_shared/blueprint/plan-overview.md`; then spawn the planner from the prepared
+prompt. This avoids zsh glob/quote expansion corrupting Python heredocs before
+Bash executes them.
+
 Before running any command-body snippet that calls validators, orchestrator
 helpers, or `${PYTHON_BIN:-python3}`, execute the Python detection block from
 `.claude/commands/vg/_shared/config-loader.md` in that same Bash shell and
@@ -206,6 +214,25 @@ Invoke this skill as `$vg-debug`. Treat all user text after the skill name as ar
 </codex_skill_adapter>
 
 
+
+
+<LANGUAGE_POLICY>
+You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
+
+Mặc định trả lời bằng **tiếng Việt** (config: `language.primary` trong
+`.claude/vg.config.md`, fallback `vi` nếu chưa set). Dùng ngôn ngữ con
+người, không technical jargon. Mỗi thuật ngữ tiếng Anh xuất hiện lần đầu
+trong narration: thêm giải thích VN trong dấu ngoặc (per
+`_shared/term-glossary.md`).
+
+Ví dụ:
+- ❌ "Validator failed with 225 evidence count"
+- ✅ "Validator báo 225 trường thiếu — chi tiết ở `[path]`. Mình sẽ sửa rồi chạy lại."
+
+File paths, code identifiers (G-04, Wave 9, getUserById), commit messages,
+CLI commands stay English. AskUserQuestion title + options + question prose:
+ngôn ngữ config.
+</LANGUAGE_POLICY>
 
 
 <rules>

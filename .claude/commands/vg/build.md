@@ -178,6 +178,10 @@ You MUST call TodoWrite IMMEDIATELY after STEP 1.6 (create_task_tracker)
 runs emit-tasklist.py. The PreToolUse Bash hook will block all subsequent
 step-active calls until signed evidence exists.
 
+TodoWrite MUST include sub-items (`↳` prefix) for each group header;
+flat projection (group-headers only) is rejected by PostToolUse depth
+check (Task 44b Rule V2).
+
 For HEAVY steps (STEP 4 waves, STEP 5 post-execution), you MUST spawn the
 named subagent via the `Agent` tool. DO NOT execute waves or
 post-execution gates inline. The PreToolUse Agent hook
