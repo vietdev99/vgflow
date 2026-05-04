@@ -937,6 +937,29 @@ scope:
   dimension_expand_model: "opus"        # Opus for reasoning depth (dimensions require senior-engineer breadth)
   dimension_expand_max: 6               # loop guard: max expansions per phase (5 rounds + 1 deep probe)
 
+  # ─── R6 Task 7 Bounded Retry Caps ──────────────────────────────────
+  # Hard cap on the deep-probe loop in scope STEP 2. Heuristic termination
+  # ("AI can't find more gray areas") is AI-judgment driven and unbounded —
+  # stubborn AI can burn 200K+ tokens. This cap forces an exit + override
+  # debt entry that blocks /vg:accept until resolved.
+  deep_probe_max: 10                    # hard cap on deep_probe iterations after Round 5
+
+# ─── Blueprint Loop Caps (R6 Task 7) ───────────────────────────────────
+# Hard cap on the CrossAI remediation loop in /vg:blueprint STEP 5. Legacy
+# flow looped "until PASS/FLAG" with no iteration tracking. After cap:
+# emit blueprint.crossai_remediation_max_iter_reached + log_override_debt
+# blueprint-crossai-remediation-max-iter. User can then --skip-crossai
+# with --override-reason to proceed.
+blueprint:
+  crossai_remediation_max: 3            # hard cap on CrossAI BLOCK→fix→re-invoke remediation rounds
+
+# ─── Build Loop Caps (R6 Task 7) ───────────────────────────────────────
+# Hard cap on the build CrossAI verification loop. Existing iter 5 user
+# prompt allows "continue 6-10" — this cap refuses iter 11 onwards even
+# with user consent, forcing user to defer or skip+HARD debt.
+build:
+  crossai_global_max: 10                # hard cap on total build CrossAI iterations (user "continue" cannot exceed)
+
 # ─── F7 Telemetry (2026-04-17) ──────────────────────────────────────
 telemetry:
   enabled: true

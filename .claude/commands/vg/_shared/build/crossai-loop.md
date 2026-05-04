@@ -172,6 +172,7 @@ ${PHASE_DIR}/crossai-build-verify/findings-iter5.json.
 
 Pick one:
   (a) continue — spawn another Sonnet fix round + run iterations 6-10
+      (HARD CAP: build.crossai_global_max=10 — refuses iter 11)
   (b) defer — record exhausted + proceed to /vg:review with remaining
       findings as known issues. Runs:
       python .claude/scripts/vg-orchestrator emit-crossai-terminal exhausted \
@@ -184,6 +185,44 @@ Pick one:
 
 Opus presents options, user picks, Opus invokes the chosen command. Run-
 complete (step 12) BLOCKs until ONE of the three terminal events lands.
+
+### R6 Task 7 — bounded global iteration cap (build.crossai_global_max)
+
+When user picks `(a) continue` after iter 5, the legacy flow had no upper
+bound on iter 6-10. With stubborn BLOCK findings, AI could rationalize
+"just one more" indefinitely. Hard cap from config: `build.crossai_global_max`
+(default 10). Even with user "continue" consent, total iterations cannot
+exceed this cap.
+
+**Before invoking `vg-build-crossai-loop.py` for ANY iteration ≥ 6, check:**
+
+```bash
+CROSSAI_GLOBAL_MAX=$(vg_config_get build.crossai_global_max 10 2>/dev/null || echo 10)
+
+# CURRENT_ITER is the iteration about to run (e.g. 11 if user wants to continue past 10)
+if [ "${CURRENT_ITER:-0}" -gt "${CROSSAI_GLOBAL_MAX:-10}" ]; then
+  echo "⛔ CrossAI build loop hit GLOBAL hard cap: ${CURRENT_ITER}>${CROSSAI_GLOBAL_MAX}"
+  echo "   Config key: build.crossai_global_max (default 10)"
+  echo "   Refusing iteration — user must defer (option b) OR skip+HARD debt (option c)."
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "build.crossai_global_max_iter_reached" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"requested_iter\":${CURRENT_ITER},\"max\":${CROSSAI_GLOBAL_MAX}}" \
+    >/dev/null 2>&1 || true
+
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "build-crossai-global-max-iter" "${PHASE_NUMBER}" \
+      "build.11_crossai_build_verify_loop" \
+      "Build CrossAI loop hit global cap ${CURRENT_ITER}>${CROSSAI_GLOBAL_MAX} — user must defer or skip+HARD" \
+      "$PHASE_DIR" 2>/dev/null || true
+
+  exit 1
+fi
+```
+
+This cap fires only when `(a) continue` would push the cumulative iteration
+count past `build.crossai_global_max`. The existing 3-option prompt at iter
+5 still handles 5→10 normally; this cap only refuses iter 11 onwards.
 
 **Why no bash while-loop**: the fix between iterations needs an Agent
 spawn (Sonnet with isolated context reading findings-iterN.json), which

@@ -18,7 +18,7 @@ REFS = {
     "plan-delegation.md":      500,
     "contracts-overview.md":   650,  # 2b + 2b5 + 2b5a + 2b5d + 2b7 exception
     "contracts-delegation.md": 500,
-    "verify.md":               800,  # 2d_validation_gate exception
+    "verify.md":               850,  # 2d_validation_gate exception + R6 Task 7 crossai_remediation_max cap (~45 lines)
     "close.md":                500,
 }
 

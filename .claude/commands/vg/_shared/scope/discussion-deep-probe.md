@@ -72,6 +72,68 @@ When exhausted, AI states: *"I've analyzed all {N} decisions for conflicts, edge
 
 → Proceed to STEP 3 (env preference) — no confirmation question; AI decides scope is thorough enough.
 
+### R6 Task 7 — hard iteration cap (scope.deep_probe_max)
+
+Heuristic above is AI-judgment driven. To prevent unbounded loops where a
+stubborn AI keeps generating "one more probe" and burns 200K+ tokens, the
+loop has a HARD cap read from config: `scope.deep_probe_max` (default 10).
+
+Counter persists at `${PHASE_DIR}/.deep-probe-iter.json` across `--resume`
+runs (write at each probe ⇢ count survives crash/resume).
+
+**On each probe iteration, BEFORE generating the next probe:**
+
+```bash
+DEEP_PROBE_COUNTER="${PHASE_DIR}/.deep-probe-iter.json"
+DEEP_PROBE_MAX=$(vg_config_get scope.deep_probe_max 10 2>/dev/null || echo 10)
+
+# Read counter (or 0 if not yet started)
+DEEP_PROBE_ITER=0
+if [ -f "$DEEP_PROBE_COUNTER" ]; then
+  DEEP_PROBE_ITER=$(${PYTHON_BIN:-python3} -c "
+import json
+try:
+  print(json.load(open('${DEEP_PROBE_COUNTER}', encoding='utf-8')).get('iter', 0))
+except Exception:
+  print(0)
+" 2>/dev/null || echo 0)
+fi
+
+# Hard cap check — refuse loop continuation past max
+if [ "${DEEP_PROBE_ITER:-0}" -ge "${DEEP_PROBE_MAX:-10}" ]; then
+  echo "⛔ Deep-probe hard cap reached: ${DEEP_PROBE_ITER}/${DEEP_PROBE_MAX} iterations." >&2
+  echo "   Config key: scope.deep_probe_max (default 10)" >&2
+  echo "   Stopping deep_probe loop → proceeding to STEP 3." >&2
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "scope.deep_probe_max_iter_reached" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"iterations\":${DEEP_PROBE_ITER},\"max\":${DEEP_PROBE_MAX}}" \
+    >/dev/null 2>&1 || true
+
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "scope-deep-probe-max-iter" "${PHASE_NUMBER}" \
+      "scope.deep_probe" \
+      "Deep-probe loop hit hard cap ${DEEP_PROBE_ITER}/${DEEP_PROBE_MAX} — AI could not naturally exhaust gray areas" \
+      "$PHASE_DIR" 2>/dev/null || true
+
+  # Skip further probes — fall through to STEP 3
+  DEEP_PROBE_EXHAUSTED=true
+else
+  # Increment + persist counter for next iter
+  DEEP_PROBE_ITER=$((DEEP_PROBE_ITER + 1))
+  ${PYTHON_BIN:-python3} - <<PY > "$DEEP_PROBE_COUNTER"
+import json, sys
+print(json.dumps({"iter": ${DEEP_PROBE_ITER}, "max": ${DEEP_PROBE_MAX}}))
+PY
+fi
+```
+
+When `DEEP_PROBE_EXHAUSTED=true`: skip remaining probe generation, proceed
+to STEP 3 (env preference). The override-debt entry blocks `/vg:accept`
+until either:
+- Resolved by clean re-run (`/vg:scope` completes without hitting the cap), OR
+- Manually marked `WONT_FIX` via `/vg:override-resolve scope-deep-probe-max-iter --wont-fix`
+
 ## Mark step (END of STEP 2)
 
 ```bash

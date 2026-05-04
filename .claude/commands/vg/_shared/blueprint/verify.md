@@ -605,12 +605,55 @@ else
       # Auto-fix path: apply Minor fixes inline, proceed
       ;;
     block)
-      echo "⛔ CrossAI: BLOCK — major/critical concerns"
+      # R6 Task 7 — bounded remediation cap (blueprint.crossai_remediation_max)
+      # Counter file persists across --resume runs at ${PHASE_DIR}/.crossai-iter.json
+      CROSSAI_ITER_FILE="${PHASE_DIR}/.crossai-iter.json"
+      CROSSAI_REMEDIATION_MAX=$(vg_config_get blueprint.crossai_remediation_max 3 2>/dev/null || echo 3)
+
+      CROSSAI_ITER=0
+      if [ -f "$CROSSAI_ITER_FILE" ]; then
+        CROSSAI_ITER=$(${PYTHON_BIN:-python3} -c "
+import json
+try:
+  print(json.load(open('${CROSSAI_ITER_FILE}', encoding='utf-8')).get('iter', 0))
+except Exception:
+  print(0)
+" 2>/dev/null || echo 0)
+      fi
+
+      if [ "${CROSSAI_ITER:-0}" -ge "${CROSSAI_REMEDIATION_MAX:-3}" ]; then
+        echo "⛔ CrossAI: BLOCK — remediation cap reached (${CROSSAI_ITER}/${CROSSAI_REMEDIATION_MAX})"
+        echo "   Config key: blueprint.crossai_remediation_max (default 3)"
+        echo "   Loop refused — apply fix manually OR override:"
+        echo "     /vg:blueprint ${PHASE_NUMBER} --skip-crossai --override-reason='<≥50ch ticket+context>'"
+
+        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+          "blueprint.crossai_remediation_max_iter_reached" \
+          --payload "{\"phase\":\"${PHASE_NUMBER}\",\"iterations\":${CROSSAI_ITER},\"max\":${CROSSAI_REMEDIATION_MAX}}" \
+          >/dev/null 2>&1 || true
+
+        type -t log_override_debt >/dev/null 2>&1 && \
+          log_override_debt "blueprint-crossai-remediation-max-iter" "${PHASE_NUMBER}" \
+            "blueprint.2d_crossai_review" \
+            "CrossAI remediation hit hard cap ${CROSSAI_ITER}/${CROSSAI_REMEDIATION_MAX} — manual fix or --skip-crossai required" \
+            "$PHASE_DIR" 2>/dev/null || true
+
+        exit 2
+      fi
+
+      # Increment + persist counter for next iter
+      CROSSAI_ITER=$((CROSSAI_ITER + 1))
+      ${PYTHON_BIN:-python3} - <<PY > "$CROSSAI_ITER_FILE"
+import json
+print(json.dumps({"iter": ${CROSSAI_ITER}, "max": ${CROSSAI_REMEDIATION_MAX}}))
+PY
+
+      echo "⛔ CrossAI: BLOCK — major/critical concerns (remediation ${CROSSAI_ITER}/${CROSSAI_REMEDIATION_MAX})"
       echo "   ${PHASE_DIR}/crossai/result-*.xml chứa findings cần resolve"
       echo ""
       echo "Orchestrator MUST:"
       echo "  1. Parse findings → AskUserQuestion (recommended option FIRST per global guidance)"
-      echo "  2. User accept fix → apply, re-invoke crossai until PASS/FLAG"
+      echo "  2. User accept fix → apply, re-invoke crossai (cap ${CROSSAI_REMEDIATION_MAX} remediations)"
       echo "  3. User reject → block_resolve_l4_stuck + exit"
       exit 2
       ;;
