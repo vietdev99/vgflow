@@ -7,14 +7,14 @@ Both steps run for ALL profiles (web-fullstack, web-backend-only, web-frontend-o
 mobile-*). Each finishes with a marker touch + `vg-orchestrator mark-step test <step>`.
 Skipping ANY step = Stop hook block.
 
-If all goals PASSED after 5c_goal → skip BOTH steps; proceed to 5d.
+If all goals PASSED after 5c_goal → skip BOTH steps; proceed to STEP 7 (regression+security).
 </HARD-GATE>
 
 ---
 
 ## STEP 6.1 — minor fix only (5c_fix) [profile: all]
 
-**If all goals PASSED → skip to 5d.**
+**If all goals PASSED → skip to STEP 7 (regression+security).**
 
 ### Pre-flight: emit fix-plans.json BEFORE editing code
 
@@ -273,7 +273,7 @@ After 5c_fix completes, classify remaining failures and route:
 remaining_failures = goals still NOT READY after MINOR fixes
 
 IF remaining_failures == 0:
-  -> skip to 5d (codegen)
+  -> proceed to STEP 7 (regression+security)
 
 IF TOTAL_ITER >= 3:
   -> STOP auto-loop. Write SANDBOX-TEST.md verdict=GAPS_FOUND.
@@ -308,7 +308,7 @@ ELSE classify remaining_failures and auto-invoke:
 
 **Termination conditions (hard stops):**
 ```
-1. All goals READY -> PASSED -> proceed to 5d
+1. All goals READY -> PASSED -> proceed to STEP 7 (regression+security)
 2. TOTAL_ITER == 3 -> STOP with GAPS_FOUND + REVIEW-FEEDBACK.md
 3. Pre-flight fail (service crashed mid-loop) -> STOP, user fixes infra
 4. User interrupts (Ctrl+C / cancel) -> STOP, save state for resume
@@ -392,4 +392,4 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 ---
 
-After both step markers touched, return to entry SKILL.md -> STEP 7 (5d codegen).
+After both step markers touched, return to entry SKILL.md -> STEP 7 (regression + security).
