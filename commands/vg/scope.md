@@ -109,6 +109,12 @@ TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
 
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort by status. On every TodoWrite
+call REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, then remaining pending, completed LAST. Hierarchy preserved
+(group header still precedes its own sub-steps).
+
 For each of the 5 discussion rounds (inside STEP 2), you MUST invoke:
   (a) per-answer adversarial challenger via the Agent tool
       (subagent_type=general-purpose, model=Opus default), AND

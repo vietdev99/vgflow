@@ -131,6 +131,11 @@ Lifecycle:
 - `close-on-complete`: before reporting success, mark all test checklist items
   completed. Then clear the native list if supported; otherwise replace it with
   one completed sentinel item: `vg:test phase ${PHASE_NUMBER} complete`.
+- `payload-ordering` (Bug D2 2026-05-04): Claude Code TodoWrite UI renders
+  in payload-array order, NOT auto-sorted by status. On every TodoWrite
+  call REORDER `todos[]` so the active group header + its `in_progress`
+  sub-step appear FIRST, remaining pending next, completed items LAST.
+  Hierarchy preserved (group header before its own sub-steps).
 
 Every profile-applicable step MUST call `vg-orchestrator step-active` when it
 starts and `vg-orchestrator mark-step test {step}` when it finishes. The
@@ -212,6 +217,12 @@ block all subsequent step-active calls until signed evidence exists.
 TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
+
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort. On every TodoWrite call
+REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, remaining pending next, completed items LAST. Hierarchy
+preserved (group header still precedes its own sub-steps).
 
 Codegen MUST spawn vg-test-codegen (NOT inline). Goal verification MUST
 spawn vg-test-goal-verifier. Console monitoring MUST run after every

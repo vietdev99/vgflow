@@ -229,6 +229,12 @@ TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
 
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort. On every TodoWrite call
+REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, remaining pending next, completed items LAST. Hierarchy
+preserved (group header still precedes its own sub-steps).
+
 For HEAVY steps (STEP 3, STEP 4), you MUST spawn the named subagent via
 the `Agent` tool (NOT `Task` — Codex confirmed correct tool name per
 Claude Code docs). DO NOT generate PLAN.md or API-CONTRACTS.md inline.

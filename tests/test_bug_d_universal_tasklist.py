@@ -189,3 +189,29 @@ def test_orchestrator_source_copy_has_universal_tasklist_projection_gate() -> No
         "Universal Bug D gate missing from scripts/vg-orchestrator/__main__.py "
         "(source copy diverged from .claude/ canonical)"
     )
+
+
+# ── Bug D2: payload ordering rule ────────────────────────────────────────
+
+
+@pytest.mark.parametrize("cmd", MAINLINE_CMDS)
+def test_slim_entry_has_payload_ordering_rule(cmd: str) -> None:
+    """Bug D2 (sếp dogfood 2026-05-04): Claude Code TodoWrite UI renders in
+    payload-array order — does NOT auto-sort by status. Without explicit
+    REORDER instruction, AI emits payload with completed items first +
+    in_progress buried mid-list, so sếp loses sight of 'what's running now'.
+
+    Pin: every mainline slim entry must instruct AI to reorder todos[] so
+    in_progress + active group header appear at the top of the payload."""
+    entry = COMMANDS_DIR / f"{cmd}.md"
+    text = entry.read_text(encoding="utf-8")
+    assert (
+        "Payload ordering" in text
+        or "payload-ordering" in text
+        or "REORDER" in text
+    ), (
+        f"{cmd}.md missing payload-ordering instruction. AI will emit "
+        f"completed-first payload and bury in_progress mid-list — sếp UX "
+        f"regression. Add the canonical 'REORDER `todos[]` so in_progress "
+        f"appears FIRST' rule near the TodoWrite sub-items rule."
+    )

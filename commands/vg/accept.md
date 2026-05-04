@@ -151,6 +151,12 @@ right after with one todo per `projection_items[]` entry (5 group headers
 Lifecycle: `replace-on-start` (first projection replaces stale list) +
 `close-on-complete` (final clear or completed sentinel).
 
+**Payload ordering rule (Bug D2 2026-05-04):** Claude Code TodoWrite UI
+renders in payload-array order — does NOT auto-sort. On every TodoWrite
+call REORDER `todos[]` so active group header + its `in_progress`
+sub-step appear FIRST, then remaining pending, completed LAST. Hierarchy
+preserved: each group header still precedes its own sub-steps.
+
 ## Steps (5 checklist groups → 8 STEP sections)
 
 ### STEP 1 — preflight (4 light steps)

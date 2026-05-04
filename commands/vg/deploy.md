@@ -60,6 +60,12 @@ TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by the PostToolUse
 depth check (Task 44b Rule V2 — `depth_valid=false` evidence triggers
 the PreToolUse depth gate).
+
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort. On every TodoWrite call
+REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, remaining pending next, completed items LAST. Hierarchy
+preserved (group header still precedes its own sub-steps).
 </HARD-GATE>
 
 <rules>

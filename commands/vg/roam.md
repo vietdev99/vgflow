@@ -88,6 +88,11 @@ for vg:roam. Skipping TodoWrite emission causes Stop hook to fail because
 TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
+
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort. On every TodoWrite call
+REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, remaining pending next, completed items LAST.
 </HARD-GATE>
 
 ## Red Flags (you have used these before — they will not work)

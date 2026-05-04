@@ -349,6 +349,14 @@ Per sub-step lifecycle:
 - When ALL sub-steps in a group are `completed`: set group header todo `completed`.
 - On run-complete: clear projected tasklist per `close-on-complete`.
 
+**Payload ordering rule (Bug D2 2026-05-04):** Claude Code's TodoWrite UI
+renders todos in payload-array order — it does NOT auto-sort by status.
+On every TodoWrite call, REORDER the `todos[]` array so the active group
+header + its `in_progress` sub-step appear FIRST, followed by remaining
+pending items, with completed items LAST. Otherwise sếp loses sight of
+"what's running now" because it's buried mid-list. Hierarchy stays
+intact: each group header still precedes its own sub-steps.
+
 Example projection for vg:build web-fullstack (5 groups, 18 sub-steps):
 ```
 [ ] 📋 Build Preflight (6 steps)

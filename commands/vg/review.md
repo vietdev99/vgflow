@@ -340,6 +340,11 @@ Lifecycle:
 - `close-on-complete`: before reporting success, mark all review checklist
   items completed. Then clear the native list if supported; otherwise replace
   it with one completed sentinel item: `vg:review phase ${PHASE_NUMBER} complete`.
+- `payload-ordering` (Bug D2 2026-05-04): Claude Code TodoWrite UI renders
+  in payload-array order, NOT auto-sorted by status. On every TodoWrite
+  call REORDER `todos[]` so the active group header + its `in_progress`
+  sub-step appear FIRST, remaining pending next, completed items LAST.
+  Hierarchy preserved (group header before its own sub-steps).
 
 Mandatory binding:
 1. After `emit-tasklist.py` prints the taskboard and `Tasklist contract: ...`, read that contract.

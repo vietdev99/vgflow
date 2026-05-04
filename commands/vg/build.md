@@ -194,6 +194,12 @@ TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
 
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort. On every TodoWrite call
+REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, remaining pending next, completed items LAST. Hierarchy
+preserved (group header still precedes its own sub-steps).
+
 For HEAVY steps (STEP 4 waves, STEP 5 post-execution), you MUST spawn the
 named subagent via the `Agent` tool. DO NOT execute waves or
 post-execution gates inline. The PreToolUse Agent hook
