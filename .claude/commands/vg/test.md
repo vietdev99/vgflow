@@ -47,8 +47,13 @@ runtime_contract:
       severity: "warn"
     - name: "5c_flow"
       severity: "warn"
-    - name: "5c_mobile_flow"
-      severity: "warn"
+    # R6 Task 14 (2026-05-05): 5d_mobile_codegen MUST be declared BEFORE
+    # 5c_mobile_flow. Stop hook walks markers in declaration order. Without
+    # this swap, first /vg:test run triggers 5c_mobile_flow against an empty
+    # Maestro directory (codegen hasn't produced .maestro.yaml yet), prints
+    # "No Maestro flows found, run codegen first" warning, but STILL touches
+    # the marker as done — false-positive completion. Swap mirrors the web
+    # pattern (codegen produces .spec.ts BEFORE 5e regression).
     - name: "5d_codegen"
       severity: "warn"
     # 5d_binding_gate is subagent-internal (vg-test-codegen handles L1/L2
@@ -60,6 +65,8 @@ runtime_contract:
     - name: "5d_deep_probe"
       severity: "warn"
     - name: "5d_mobile_codegen"
+      severity: "warn"
+    - name: "5c_mobile_flow"
       severity: "warn"
     - name: "5f_mobile_security_audit"
       severity: "warn"
@@ -86,6 +93,7 @@ runtime_contract:
     - "--override-reason"
     - "--skip-deploy"
     - "--skip-flow"
+    - "--skip-mobile-flow"
     - "--allow-missing-console-check"
 ---
 
@@ -131,6 +139,11 @@ Lifecycle:
 - `close-on-complete`: before reporting success, mark all test checklist items
   completed. Then clear the native list if supported; otherwise replace it with
   one completed sentinel item: `vg:test phase ${PHASE_NUMBER} complete`.
+- `payload-ordering` (Bug D2 2026-05-04): Claude Code TodoWrite UI renders
+  in payload-array order, NOT auto-sorted by status. On every TodoWrite
+  call REORDER `todos[]` so the active group header + its `in_progress`
+  sub-step appear FIRST, remaining pending next, completed items LAST.
+  Hierarchy preserved (group header before its own sub-steps).
 
 Every profile-applicable step MUST call `vg-orchestrator step-active` when it
 starts and `vg-orchestrator mark-step test {step}` when it finishes. The
@@ -212,6 +225,12 @@ block all subsequent step-active calls until signed evidence exists.
 TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
+
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort. On every TodoWrite call
+REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, remaining pending next, completed items LAST. Hierarchy
+preserved (group header still precedes its own sub-steps).
 
 Codegen MUST spawn vg-test-codegen (NOT inline). Goal verification MUST
 spawn vg-test-goal-verifier. Console monitoring MUST run after every

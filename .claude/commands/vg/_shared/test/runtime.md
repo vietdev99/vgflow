@@ -278,10 +278,43 @@ FLOWS_DIR="${FLOWS_DIR:-${GENERATED_TESTS_DIR}/mobile}"
 
 FLOW_FILES=$(find "${REPO_ROOT}/${FLOWS_DIR}" -type f \( -name "*.maestro.yaml" -o -name "*.maestro.yml" \) 2>/dev/null | sort)
 if [ -z "$FLOW_FILES" ]; then
-  echo "⚠ No Maestro flows found under ${FLOWS_DIR}. Run 5d_mobile_codegen first."
-  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_mobile_flow" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_mobile_flow.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_mobile_flow 2>/dev/null || true
-  exit 0  # Don't fail — goals may all be UNREACHABLE
+  # R6 Task 14 (2026-05-05): fail-loud. After Task 14, 5d_mobile_codegen runs
+  # BEFORE 5c_mobile_flow (must_touch_markers order swap in test.md). This
+  # branch is now UNREACHABLE in normal flow — codegen produces .maestro.yaml
+  # files first. If we still hit it, codegen actually failed silently or
+  # flows_dir is misconfigured — both are real errors worth blocking.
+  echo "⛔ 5c_mobile_flow ran with NO Maestro flows under ${FLOWS_DIR}." >&2
+  echo "   Expected: 5d_mobile_codegen runs FIRST and produces .maestro.yaml files." >&2
+  echo "   Actual: codegen marker present (you got here) but flows_dir empty." >&2
+  echo "   Likely causes:" >&2
+  echo "     1. Codegen subagent failed silently — re-run /vg:test --only=5d_mobile_codegen" >&2
+  echo "     2. flows_dir misconfigured in .claude/vg.config.md (mobile.e2e.flows_dir)" >&2
+  echo "     3. Dry-run / --skip-codegen flag bypassed codegen — re-run without skip" >&2
+  echo "" >&2
+  echo "   To proceed without flows (record UNREACHABLE goals): use --skip-mobile-flow --override-reason" >&2
+
+  # Allow override path — paired --skip-mobile-flow + --override-reason
+  if [[ "$ARGUMENTS" =~ --skip-mobile-flow ]]; then
+    if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+      echo "⛔ --skip-mobile-flow requires --override-reason=<text>" >&2
+      exit 1
+    fi
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "--skip-mobile-flow" \
+      --reason "Empty mobile flows after codegen (phase ${PHASE_NUMBER})" \
+      >/dev/null 2>&1 || true
+    type -t log_override_debt >/dev/null 2>&1 && \
+      log_override_debt "--skip-mobile-flow" "${PHASE_NUMBER}" "test.5c_mobile_flow" \
+        "Empty Maestro flows after codegen; goals marked UNREACHABLE" "test-mobile-flow-empty"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "test.mobile_flow_empty_after_codegen" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"flows_dir\":\"${FLOWS_DIR}\"}" \
+      2>/dev/null || true
+    (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_mobile_flow" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_mobile_flow.done"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_mobile_flow 2>/dev/null || true
+    exit 0
+  fi
+  exit 1
 fi
 
 FAILED=0; TOTAL=0

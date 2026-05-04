@@ -47,8 +47,13 @@ runtime_contract:
       severity: "warn"
     - name: "5c_flow"
       severity: "warn"
-    - name: "5c_mobile_flow"
-      severity: "warn"
+    # R6 Task 14 (2026-05-05): 5d_mobile_codegen MUST be declared BEFORE
+    # 5c_mobile_flow. Stop hook walks markers in declaration order. Without
+    # this swap, first /vg:test run triggers 5c_mobile_flow against an empty
+    # Maestro directory (codegen hasn't produced .maestro.yaml yet), prints
+    # "No Maestro flows found, run codegen first" warning, but STILL touches
+    # the marker as done — false-positive completion. Swap mirrors the web
+    # pattern (codegen produces .spec.ts BEFORE 5e regression).
     - name: "5d_codegen"
       severity: "warn"
     # 5d_binding_gate is subagent-internal (vg-test-codegen handles L1/L2
@@ -60,6 +65,8 @@ runtime_contract:
     - name: "5d_deep_probe"
       severity: "warn"
     - name: "5d_mobile_codegen"
+      severity: "warn"
+    - name: "5c_mobile_flow"
       severity: "warn"
     - name: "5f_mobile_security_audit"
       severity: "warn"
@@ -86,6 +93,7 @@ runtime_contract:
     - "--override-reason"
     - "--skip-deploy"
     - "--skip-flow"
+    - "--skip-mobile-flow"
     - "--allow-missing-console-check"
 ---
 

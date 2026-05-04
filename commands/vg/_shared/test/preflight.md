@@ -112,8 +112,8 @@ fi
 ## STEP 1.3 — parse args (0_parse_and_validate)
 
 Parse `$ARGUMENTS`: phase_number, flags (--skip-deploy, --regression-only,
---smoke-only, --fix-only, --skip-flow, --allow-missing-console-check,
---override-reason).
+--smoke-only, --fix-only, --skip-flow, --skip-mobile-flow,
+--allow-missing-console-check, --override-reason).
 
 Validate:
 - `${PHASE_DIR}/RUNTIME-MAP.json` exists
@@ -137,7 +137,7 @@ called out in review-v2 A5 can never silently swallow a justification.
 # Detect any forbidden skip/allow flags present in $ARGUMENTS.
 # --override-reason itself is also in forbidden_without_override (test.md)
 # but is handled separately below so we can attribute the override event.
-FORBIDDEN_FLAGS=(--skip-deploy --skip-flow --allow-missing-console-check)
+FORBIDDEN_FLAGS=(--skip-deploy --skip-flow --skip-mobile-flow --allow-missing-console-check)
 USED_FORBIDDEN=()
 for FF in "${FORBIDDEN_FLAGS[@]}"; do
   if [[ " ${ARGUMENTS} " =~ [[:space:]]${FF}([[:space:]=]|$) ]]; then
