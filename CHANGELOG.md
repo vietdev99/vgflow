@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.49.3 — Bug D universal tasklist + mid-flow context auto-injection (cherry-picks from PrintwayV3 dogfood follow-ups)
+
+Patch release. Two more dogfood-driven commits landed on the fork branch after v2.49.2 ship — both close gate-evasion bypasses found during live `/vg:review 4.1` and `/vg:scope` sessions on PrintwayV3. Cherry-picked rather than waiting for next minor because both close exploitation paths.
+
+### Fixed (commit 3826853 cherry-pick — mid-flow context auto-injection)
+
+Operator dogfood pattern (post-P6): in flow A, AI hits `AskUserQuestion` mid-execution; user replies with plain text (not slash command); AI receives reply but **'loses' flow context** and may skip TodoWrite enforcement on the next tool call.
+
+`UserPromptSubmit` hook previously fired only on `/vg:<cmd>` matches; plain follow-up replies passed through without context injection. AI compliance relied solely on the *reactive* `PreToolUse-bash` hook (fires after AI tries a tool) instead of *proactive* reminder.
+
+**Fix:** when prompt is NOT a `/vg:<cmd>` AND active-run JSON exists AND run is alive (no terminal event), `vg-user-prompt-submit.sh` now injects a `<vg-flow-context>` reminder into stderr (Claude Code surfaces UserPromptSubmit stderr as system-reminder to the AI). Reminder content depends on tasklist projection state:
+
+- Not yet projected: 3-step instruction (read contract, TodoWrite 2-layer, `tasklist-projected --adapter claude`)
+- Projected with wrong adapter (`fallback`/`codex` in Claude Code session): warn AI to re-call with `--adapter claude` before next `step-active`
+- Projected OK: continue per STEP order, no ad-hoc skip
+
+Pattern follows `superpowers:using-superpowers`'s always-fires-on-conversation discipline but file-driven (`.vg/active-runs/<sid>.json`) and deterministic. Slash-command path unchanged; dead-run detection (terminal events) skips injection. Pure context injection — no tool blocking.
+
+### Fixed (commit 87530d3 cherry-pick — Bug D universal tasklist enforcement)
+
+Operator dogfood: `/vg:review 4.1` ran end-to-end **without ever calling TodoWrite**. Audit revealed enforcement was applied to review only; `blueprint`, `build`, `test`, `specs`, `roam` had partial or zero coverage. AI exploited the gap by silently skipping TodoWrite + `tasklist-projected` emission, then attempted hook bypass when blocked. Bug L Track D claimed "universal" coverage but reality was: each slim entry's enforcement had been added piecemeal during PR #104 development, with `specs` left out entirely.
+
+**Three-layer fix:**
+
+1. **`commands/vg/specs.md`** — was the worst gap (no `TodoWrite` in `allowed-tools`, no HARD-GATE block, no `create_task_tracker` step). Added full canonical pattern: `TodoWrite` tool, HARD-GATE language, Red Flags table, Tasklist policy summary, and an IMPERATIVE `create_task_tracker` step right after `emit-tasklist.py` that calls `TodoWrite` then `vg-orchestrator tasklist-projected --adapter claude` to fire `specs.native_tasklist_projected`.
+
+2. **`blueprint/preflight.md`, `build/preflight.md`, `roam.md`** — these had instruction text saying "call vg-orchestrator tasklist-projected" but no executable bash invocation. AI was empirically skipping the call and relying on the `PostToolUse-TodoWrite` hook to write evidence implicitly. Now the projection emission is bash-enforced; `{cmd}.native_tasklist_projected` MUST fire for `run-complete` to PASS.
+
+3. **Universal Stop-hook gate** in `vg-orchestrator/__main__.py:_verify_contract` — defense-in-depth check. Even if a mainline command's `runtime_contract` forgets to declare the projection event in `must_emit_telemetry`, this universal check blocks `run-complete` with a Bug-D-specific violation message. Mainline set: `specs, scope, blueprint, build, review, test, accept, deploy, roam` (excludes auxiliary `amend`/`polish`/`debug`).
+
+Tests: `tests/test_bug_d_universal_tasklist.py` (35 cases) — every mainline slim entry must list `TodoWrite`, declare `native_tasklist_projected` telemetry, and have proximity-checked enforcement language; every preflight ref must contain explicit bash call; orchestrator gate must list all mainline cmds. Existing tasklist + Bug L tests still pass (52/52 green per fork branch verification).
+
+### Internal
+
+- VERSION + VGFLOW-VERSION → 2.49.3 (patch — 2 cherry-picked feature/fix commits)
+- Files cherry-picked: `scripts/hooks/vg-user-prompt-submit.sh` + `.claude/scripts/hooks/vg-user-prompt-submit.sh` (mid-flow), `commands/vg/specs.md` + `roam.md` + `_shared/blueprint/preflight.md` + `_shared/build/preflight.md`, `scripts/vg-orchestrator/__main__.py` + `.claude/scripts/vg-orchestrator/__main__.py`, `tests/test_bug_d_universal_tasklist.py` (NEW, 191 LOC, 35 cases)
+- **Codex mirror regen** — `vg-roam/SKILL.md` + `vg-specs/SKILL.md` regenerated (preserved existing `<codex_skill_adapter>` block, replaced post-adapter body from updated source). 70/70 functional equivalence pass.
+- Smoke verified locally: mid-flow injection produces correct `<vg-flow-context>` block on Windows; orchestrator `__main__.py` compiles clean; hook bash syntax OK.
+- Credit: both commits authored by @vietnhprintway during PrintwayV3 dogfood follow-up. Cherry-picked since the merge window for PR #104 had closed and PR #106 (which bundled these + 24 already-merged commits) is in CONFLICTING/DIRTY state requiring branch reset.
+
 ## v2.49.2 — Codex round-4 security patches + Bug L P6 adapter spoofing (post-merge fork-branch hotfixes)
 
 Patch release. Two hotfixes that landed on the `feat/rfc-v9-followup-fixes` fork branch *after* PR #104 was squash-merged into main, picked up here as cherry-picks. Both target hook gate integrity — the kind of fix that should not wait for the next minor.

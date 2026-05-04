@@ -215,6 +215,8 @@ Invoke this skill as `$vg-roam`. Treat all user text after the skill name as arg
 
 
 
+
+
 <HARD-GATE>
 Roam is post-confirmation (runs AFTER /vg:review + /vg:test PASS).
 You MUST verify both passes BEFORE any roam step.
@@ -274,6 +276,16 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --command vg:roam \
   --phase "${PHASE_NUMBER}"
 # AI: now invoke TodoWrite with the items printed above.
+
+# Bug D 2026-05-04: explicit emission — was previously instruction-text-only,
+# AI could complete /vg:roam without ever firing roam.native_tasklist_projected.
+# Now bash-enforced; PreToolUse Bash hook validates evidence on next step-active.
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-claude}" || {
+    echo "⛔ vg-orchestrator tasklist-projected failed — roam.native_tasklist_projected event will not fire." >&2
+    echo "   Check .vg/runs/<run_id>/tasklist-contract.json + adapter ∈ {claude,codex,fallback}." >&2
+    exit 1
+}
 ```
 
 ## Steps
