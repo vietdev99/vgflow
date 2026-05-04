@@ -15,6 +15,29 @@ reviewing against role-specific standard:
 
 **Verdict count:** 7 production-ready with fixes, 0 no-go, 0 ready-as-is.
 
+**R6 STATUS UPDATE (2026-05-05):** All 16 R6 plan tasks ✓ COMPLETE. 7 mainline workflows now **production-ready** (all "with fixes" findings resolved).
+
+| R6 Task | Workflow | Resolution commit | Closed finding |
+|---|---|---|---|
+| 1 | blueprint | `31de9c3` + `81dc4b6` | 3 markers wired (`2b6d_fe_contracts`, `2b8_rcrurdr_invariants`, `2b9_workflows`) |
+| 2 | specs | `7261cb5` + `db073ab` | Template aligned with schema (`created_at`, H2 sections, lowercase) |
+| 3 | build | `e812cd7` + `0377189` | Post-executor single-spawn hook-enforced (was prompt-only) |
+| 4 | accept | `2d5c263` | XML wrappers added for 2 markers |
+| 5 | test | `eda5367` + `4398758` | Fix-loop / codegen order resolved (option b — unidirectional) |
+| 6 | accept | `52642e1` + `6894970` | Abort short-circuit + canonical 6-section UAT enforcement |
+| 7 | scope+blueprint+build | `4f4659d` | Bounded retry caps (deep_probe=10, crossai_remediation=3, crossai_global=10) |
+| 8 | scope | `df41ade` | Adversarial fail-closed (challenger/expander crash → BLOCK + override) |
+| 9 | build | `cba1aed` + `27bf02b` | TDD red/green evidence in executor return schema |
+| 10 | review | `9b137f1` | Per-lens dispatch/completed/crashed telemetry |
+| 11 | specs+scope | `c45a3ae` | Tests parse refs after slim entry split (5 previously-failing tests now pass) |
+| 12 | scope | `333df04` | CONTEXT template `## Goals` H2 + validator enforce |
+| 13 | test | `7df81d5` | Trust-review replay enforcement (goal_fingerprint baseline) |
+| 14 | test | `69b32c2` | Mobile codegen MUST run before mobile flow + fail-loud on empty |
+| 15 | build | `4ab56fa` | Cross-task DAG enforcement (`depends_on` field + spawn-guard) |
+| 16 | specs+accept | `01a50d9` | Wording cleanup (specs hard-gate accuracy + accept debt file pointer) |
+
+**R6 closing summary:** 16 tasks across 5 batches, ~5 days execution time, 135/135 R6 tests green, all mainline workflows now have hook-enforced gates (no more prompt-only luật).
+
 ---
 
 ## Per-workflow verdict matrix
@@ -194,8 +217,8 @@ multi-agent pipeline implementations on:
 - Audit traceability (events.db hash chain, override-debt register)
 - Subagent specialization (8-11 focused subagents per role)
 
-**Areas needing investment to match industry-leading:**
-- TDD-first executor contract (red test → green test → commit)
-- Per-component telemetry (per-lens dispatch events, per-validator timing)
-- Schema source-of-truth (eliminate template/validator drift)
-- Bounded retry with override-debt fallback (vs unbounded re-invoke)
+**Areas needing investment to match industry-leading:** **[ALL 4 RESOLVED IN R6]**
+- ✅ TDD-first executor contract (red test → green test → commit) — R6 Task 9 (`cba1aed`)
+- ✅ Per-component telemetry (per-lens dispatch events, per-validator timing) — R6 Task 10 (`9b137f1`)
+- ✅ Schema source-of-truth (eliminate template/validator drift) — R6 Tasks 2, 12 (`7261cb5`, `333df04`)
+- ✅ Bounded retry with override-debt fallback (vs unbounded re-invoke) — R6 Task 7 (`4f4659d`)
