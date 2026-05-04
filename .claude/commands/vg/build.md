@@ -139,6 +139,10 @@ runtime_contract:
     - event_type: "build.cross_wave_workflow_cited"
       phase: "${PHASE_NUMBER}"
       severity: "info"
+    # Task 43 (M3) — workflow state drift detection (post-execution validator)
+    - event_type: "build.workflow_state_drift_detected"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     # Every escape hatch must leave a debt-register trail.
     - "--override-reason"

@@ -256,6 +256,28 @@ if [ -f "$WORKFLOW_VALIDATOR" ] && [ -d "${PHASE_DIR}/WORKFLOW-SPECS" ]; then
 fi
 ```
 
+### 6.2.5d — Task 43: verify per-slice ≤5K-token size (before blueprint.completed)
+
+```bash
+# Task 43 (Bug K, M3) — run verify-artifact-slice-size.py before close.
+# BLOCKs if any per-unit slice (PLAN/task-NN.md, API-CONTRACTS/*.md,
+# TEST-GOALS/G-NN.md, CRUD-SURFACES/*.md, WORKFLOW-SPECS/WF-NN.md) exceeds
+# 5K tokens, or any index.md exceeds 1K tokens. Tiktoken MANDATORY.
+# Escape via --allow-oversized-slice --override-reason="..." for legacy phases.
+SLICE_VALIDATOR="${REPO_ROOT:-.}/scripts/validators/verify-artifact-slice-size.py"
+if [ -f "$SLICE_VALIDATOR" ]; then
+  python3 "$SLICE_VALIDATOR" \
+    --phase-dir "${PHASE_DIR}" \
+    ${ALLOW_OVERSIZED_SLICE_FLAG:-}
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    vg-orchestrator emit-event blueprint.slice_size_blocked --phase "${PHASE_NUMBER}" 2>/dev/null || true
+    echo "BLOCK: artifact slice size validator failed. Use --allow-oversized-slice for legacy phases." >&2
+    exit "$rc"
+  fi
+fi
+```
+
 ### 6.2.6 — terminal telemetry + run-complete
 
 ```bash

@@ -290,6 +290,31 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 ---
 
+## STEP 1.5b — Task 43: slice-size defense-in-depth gate (before waves)
+
+**Defense-in-depth: re-run slice-size validator at build time.** A phase
+that skipped blueprint close (or ran close without the validator) MUST be
+caught before executor subagents are spawned with oversized context slices.
+
+```bash
+# Task 43 (Bug K, M3) — artifact slice size BLOCK (defense-in-depth).
+# Runs BEFORE wave-executor spawn to catch phases that bypassed blueprint close.
+# Tiktoken MANDATORY — no fallback heuristic.
+SLICE_VALIDATOR="${REPO_ROOT:-.}/scripts/validators/verify-artifact-slice-size.py"
+if [ -f "$SLICE_VALIDATOR" ] && [ -d "${PHASE_DIR}" ]; then
+  python3 "$SLICE_VALIDATOR" \
+    --phase-dir "${PHASE_DIR}" \
+    ${ALLOW_OVERSIZED_SLICE_FLAG:-}
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    vg-orchestrator emit-event build.slice_size_blocked --phase "${PHASE_NUMBER}" 2>/dev/null || true
+    exit "$rc"
+  fi
+fi
+```
+
+---
+
 ## STEP 1.6 — create task tracker (create_task_tracker) — IMPERATIVE TodoWrite gate
 
 **Bind native tasklist to build hierarchical projection — with profile-filter enforcement.**

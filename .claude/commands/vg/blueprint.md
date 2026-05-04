@@ -180,6 +180,10 @@ runtime_contract:
     - event_type: "blueprint.workflows_pass_skipped"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # Task 43 (M3) — slice-size validator
+    - event_type: "blueprint.slice_size_blocked"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--skip-crossai"
     - "--skip-codex-test-goal-lane"

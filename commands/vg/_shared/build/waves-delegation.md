@@ -76,7 +76,8 @@ files (capsule, plan slice, contract slices, design ref).
        rules; ADVISORY are informational. Replaces the legacy "dump every memory
        rule into capsule" behavior — only rules whose scope_match matches the
        task's files are injected. */
-  ]
+  ],
+  "workflow_slice_path": "${PHASE_DIR}/WORKFLOW-SPECS/WF-001.md"
 }
 ```
 
@@ -102,6 +103,7 @@ files (capsule, plan slice, contract slices, design ref).
 | `lens_walk_slice_path` | maybe | Pre-resolved LENS-WALK slice for goals this task implements. NULL when task touches no goals OR phase has no `LENS-WALK/`. Subagent loads to understand bug-class probe variants. |
 | `rcrurd_invariants_paths` | maybe | List of per-goal RCRURD-INVARIANTS yaml paths (Task 22 schema, Task 39 RCRURDR extension). One entry per goal. Empty list = no invariants apply. Subagent MUST honor `lifecycle: rcrurd \| rcrurdr \| partial` when emitting test code or handler ordering. |
 | `bootstrap_rules` | maybe | Scope-matched rule cards from `.vg/BOOTSTRAP-RULES.yaml` resolved by `rule_resolver.resolve_rules()`. Empty list = no rules apply to this task's files. Subagent reads `severity` field — BLOCK/TRIAGE_REQUIRED rules MUST be honored before commit; ADVISORY are informational. |
+| `workflow_slice_path` | maybe | `${PHASE_DIR}/WORKFLOW-SPECS/${capsule.workflow_id}.md` when capsule.workflow_id present, else NULL. Orchestrator pre-resolves before spawn. Subagent reads via `cat $workflow_slice_path` or via `vg-load --artifact workflow --workflow ${capsule.workflow_id}`. |
 
 ---
 
@@ -192,6 +194,29 @@ ${LENS_WALK_BLOCK}       # @${lens_walk_slice_path} when present, else "NONE —
 ${RCRURD_INVARIANTS_BLOCK}    # Concatenation of @${rcrurd_invariants_paths[N]} entries; "NONE" when list empty.
 </rcrurd_invariants_context>
 
+<workflow_context>
+# Task 43 (Bug K, M3) — multi-actor workflow awareness.
+# When capsule.workflow_id is present, the orchestrator substitutes
+# ${WORKFLOW_SLICE_BLOCK} with @${workflow_slice_path} (the per-workflow
+# WF-NN.md file produced by Pass 3 in Task 40). When workflow_id is null,
+# the substitution is the literal string "NONE — non-workflow task" and
+# subagent skips workflow verification.
+#
+# When loaded, you MUST:
+# 1. Read the workflow spec to identify your step's expected `state_after`
+#    value (under steps[step_id == capsule.workflow_step].state_after).
+# 2. Verify your code matches that exact state value when implementing
+#    a write (status fields, enum values, transition labels). DO NOT
+#    invent a new state name — use the literal string from the spec.
+# 3. Cred-switch boundaries are FE codegen concerns (handled by Playwright
+#    testRoleSwitch() in tests). YOUR backend/frontend code MUST set the
+#    state field to the value declared at this step's state_after.
+# 4. Cross-actor siblings (other waves) read or write related states.
+#    The wave-context.md `Cross-WORKFLOW constraint:` section (Task 42)
+#    enumerates them. Honor those constraints in your design choices.
+${WORKFLOW_SLICE_BLOCK}
+</workflow_context>
+
 <binding_requirements>
 ${BINDING_REQUIREMENTS_LIST}
 # Each requirement MUST be satisfied via a `// vg-binding: <id>` comment
@@ -260,6 +285,10 @@ ${BINDING_REQUIREMENTS_LIST}
   literal string `NONE — non-UI task`.
 - `${BINDING_REQUIREMENTS_LIST}` is a markdown bullet list of the
   `binding_requirements` array.
+- `${WORKFLOW_SLICE_BLOCK}` is `@${workflow_slice_path}` when `capsule.workflow_id` is
+  present (workflow_id != null), else the literal string `NONE — non-workflow task`.
+  The orchestrator pre-resolves `workflow_slice_path` to
+  `${PHASE_DIR}/WORKFLOW-SPECS/${capsule.workflow_id}.md` before spawn.
 
 The full rendered prompt is also persisted to
 `${PHASE_DIR}/.build/wave-${wave_id}/executor-prompts/${task_id}.prompt.md`
