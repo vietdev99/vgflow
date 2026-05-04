@@ -110,22 +110,31 @@ def test_pass_when_evidence_exists(tmp_path: Path) -> None:
 
 
 def test_review_md_instruction_block_present_at_top(tmp_path: Path) -> None:
-    """review.md slim entry MUST have the projection instruction block BEFORE
-    any `vg-orchestrator step-active` invocation in the same file."""
+    """review.md slim entry MUST reference _shared/lib/tasklist-projection-instruction.md.
+
+    R3 pilot 2026-05-04: review.md is now a slim entry (~500 lines). Step-active
+    invocations moved to refs in commands/vg/_shared/review/. The slim entry
+    references the projection-instruction ref BEFORE delegating to STEP refs.
+    Test now validates: (1) reference exists, (2) it's positioned BEFORE the
+    'Steps' section (which routes to step-active-bearing refs)."""
     review_md = (REPO_ROOT / "commands/vg/review.md").read_text(encoding="utf-8")
 
-    # The shared instruction reference
     instruction_marker = "_shared/lib/tasklist-projection-instruction.md"
-    first_step_active = review_md.find("vg-orchestrator step-active")
     instruction_pos = review_md.find(instruction_marker)
-
     assert instruction_pos != -1, (
         "review.md must reference _shared/lib/tasklist-projection-instruction.md"
     )
-    assert first_step_active != -1, "review.md must invoke step-active somewhere"
-    assert instruction_pos < first_step_active, (
+
+    # In slim-entry pattern, step-active fires inside refs (e.g. preflight.md).
+    # The instruction reference must come BEFORE the slim entry's 'Steps' section
+    # which is where ref delegations begin (## Steps or ### STEP 1).
+    steps_section = review_md.find("## Steps")
+    if steps_section == -1:
+        steps_section = review_md.find("### STEP 1")
+    assert steps_section != -1, "review.md slim entry must have a 'Steps' section"
+    assert instruction_pos < steps_section, (
         f"projection instruction at byte {instruction_pos} must come BEFORE "
-        f"first step-active at byte {first_step_active}"
+        f"the Steps section at byte {steps_section}"
     )
 
 
