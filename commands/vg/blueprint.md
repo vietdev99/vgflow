@@ -306,6 +306,34 @@ LENS-WALK/G-NN.md (when present) and merges lens-derived seeds into the final
 EDGE-CASES table. Output: `EDGE-CASES.md` (Layer 3) + `EDGE-CASES/index.md`
 (Layer 2) + `EDGE-CASES/G-NN.md` (Layer 1).
 
+After `2b5e_edge_cases` returns, run the 3 designer-level sub-steps in order
+(R6 Task 1 — wired missing markers `2b6d_fe_contracts`, `2b8_rcrurdr_invariants`,
+`2b9_workflows`). Each sub-step honors its own skip-flag + profile-gate.
+
+**`2b6d_fe_contracts`** (Pass 2, Task 38, Bug F — web profiles only) — read
+`_shared/blueprint/fe-contracts-overview.md` AND `_shared/blueprint/fe-contracts-delegation.md`.
+Spawn `Agent(subagent_type="vg-blueprint-fe-contracts", prompt=<delegation>)`;
+parse `endpoints[]` JSON and append BLOCK 5 (FE consumer contract) to each
+`${PHASE_DIR}/API-CONTRACTS/<slug>.md`. Validator: `verify-fe-contract-block5.py`.
+Skip with `--skip-fe-contracts` (paired `--override-reason`). Auto-skip on
+non-web profiles.
+
+**`2b8_rcrurdr_invariants`** (Task 39, Bug G — all profiles) — read
+`_shared/blueprint/rcrurdr-overview.md`. Deterministic generator (NO subagent):
+iterate `${PHASE_DIR}/TEST-GOALS/G-*.md`, call
+`scripts/lib/rcrurd_invariant.py::extract_from_test_goal_md` per goal, emit
+`blueprint.rcrurdr_invariant_emitted` event for each goal that has a parseable
+yaml-rcrurd fence. Read-only goals without fence are skipped (informational).
+Skip with `--skip-rcrurdr` (paired `--override-reason`).
+
+**`2b9_workflows`** (Pass 3, Task 40, Bug H — multi-actor profiles only) — read
+`_shared/blueprint/workflows-overview.md` AND `_shared/blueprint/workflows-delegation.md`.
+Spawn `Agent(subagent_type="vg-blueprint-workflows", prompt=<delegation>)`;
+parse `workflows[]` JSON and write per-WF yaml files + `index.md` +
+flat-concat `WORKFLOW-SPECS.md`. Validator: `verify-workflow-specs.py`. Skip
+with `--skip-workflows` (paired `--override-reason`). Auto-skip on profiles
+without multi-actor patterns.
+
 ### STEP 5 — verify (7 grep/path checks)
 Read `_shared/blueprint/verify.md` and follow it exactly.
 

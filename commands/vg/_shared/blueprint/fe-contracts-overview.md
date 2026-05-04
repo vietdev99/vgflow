@@ -31,3 +31,67 @@ FE structure rather than guessing.
 - Phases predating this step (e.g., PV3 4.1) lack BLOCK 5. Validator BLOCKs unless
   `--allow-block5-missing --override-reason="<text>"` is passed.
 - Backfill via `/vg:blueprint <phase> --only=fe-contracts`.
+
+<step name="2b6d_fe_contracts">
+
+## Lifecycle wrapper (R6 Task 1 — wire missing marker)
+
+```bash
+# Skip-flag check (forbidden_without_override paired)
+if [[ "$ARGUMENTS" =~ --skip-fe-contracts ]]; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.fe_contracts_pass_skipped" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"--skip-fe-contracts\"}" 2>/dev/null || true
+  exit 0
+fi
+
+# Profile-gate (web-fullstack, web-frontend-only only)
+case "${PHASE_PROFILE:-feature}" in
+  web-fullstack|web-frontend-only) ;;
+  *)
+    echo "ℹ Profile ${PHASE_PROFILE} — skipping 2b6d_fe_contracts (web-only step)"
+    exit 0
+    ;;
+esac
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 2b6d_fe_contracts
+
+# Spawn vg-blueprint-fe-contracts subagent (narrate per UX baseline R2)
+bash .claude/scripts/vg-narrate-spawn.sh vg-blueprint-fe-contracts spawning \
+  "phase ${PHASE_NUMBER} FE BLOCK 5 generation"
+# AI: now spawn:
+#   Agent(subagent_type="vg-blueprint-fe-contracts",
+#         prompt=<from fe-contracts-delegation.md>)
+# AI: parse return JSON; for each endpoints[] entry, append BLOCK 5 to
+#     ${PHASE_DIR}/API-CONTRACTS/<slug>.md under heading
+#     `## BLOCK 5: FE consumer contract` (REPLACE if exists, regex match
+#     on `## BLOCK 5:`).
+# AI: post-spawn narration:
+#   bash .claude/scripts/vg-narrate-spawn.sh vg-blueprint-fe-contracts returned \
+#     "<count> endpoints"
+
+# Run validator
+"${PYTHON_BIN:-python3}" scripts/validators/verify-fe-contract-block5.py \
+  --contracts-dir "${PHASE_DIR}/API-CONTRACTS"
+VAL_RC=$?
+if [ "$VAL_RC" -eq 0 ]; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.fe_contracts_pass_completed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+else
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.fe_contract_block5_blocked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"validator_rc\":${VAL_RC}}" 2>/dev/null || true
+  echo "⛔ FE BLOCK 5 validator failed (rc=${VAL_RC})" >&2
+  exit 1
+fi
+
+# Lifecycle close
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && \
+  mark_step "${PHASE_NUMBER}" "2b6d_fe_contracts" "${PHASE_DIR}") || \
+  touch "${PHASE_DIR}/.step-markers/2b6d_fe_contracts.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b6d_fe_contracts 2>/dev/null || true
+```
+
+</step>

@@ -28,3 +28,67 @@ real goal_ids, real endpoint paths, real component names from FE artifacts.
 
 - Phases without multi-actor workflows: subagent returns `no_workflows_detected: true`. Orchestrator writes empty `index.md` with `flows: []`. Validator passes.
 - `--skip-workflows --override-reason="..."` available for legacy phases.
+
+<step name="2b9_workflows">
+
+## Lifecycle wrapper (R6 Task 1 — wire missing marker)
+
+```bash
+# Skip-flag check (forbidden_without_override paired)
+if [[ "$ARGUMENTS" =~ --skip-workflows ]]; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.workflows_pass_skipped" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"--skip-workflows\"}" 2>/dev/null || true
+  exit 0
+fi
+
+# Profile-gate (web-fullstack, web-frontend-only, backend-multi-actor)
+case "${PHASE_PROFILE:-feature}" in
+  web-fullstack|web-frontend-only|backend-multi-actor) ;;
+  *)
+    echo "ℹ Profile ${PHASE_PROFILE} — skipping 2b9_workflows (multi-actor profiles only)"
+    exit 0
+    ;;
+esac
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 2b9_workflows
+
+# Spawn vg-blueprint-workflows subagent (narrate per UX baseline R2)
+bash .claude/scripts/vg-narrate-spawn.sh vg-blueprint-workflows spawning \
+  "phase ${PHASE_NUMBER} multi-actor workflow specs"
+# AI: now spawn:
+#   Agent(subagent_type="vg-blueprint-workflows",
+#         prompt=<from workflows-delegation.md>)
+# AI: parse return JSON `workflows[]`. For each entry write
+#     ${PHASE_DIR}/WORKFLOW-SPECS/<filename> with ```yaml<body>``` body.
+# AI: write ${PHASE_DIR}/WORKFLOW-SPECS/index.md (or `flows: []` when none).
+# AI: concat bodies into ${PHASE_DIR}/WORKFLOW-SPECS.md (Layer 3 legacy).
+# AI: post-spawn narration:
+#   bash .claude/scripts/vg-narrate-spawn.sh vg-blueprint-workflows returned \
+#     "<count> workflows"
+
+# Run validator
+"${PYTHON_BIN:-python3}" scripts/validators/verify-workflow-specs.py \
+  --workflows-dir "${PHASE_DIR}/WORKFLOW-SPECS"
+VAL_RC=$?
+if [ "$VAL_RC" -eq 0 ]; then
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.workflows_pass_completed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+else
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.workflows_pass_blocked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"validator_rc\":${VAL_RC}}" 2>/dev/null || true
+  echo "⛔ workflow-specs validator failed (rc=${VAL_RC})" >&2
+  exit 1
+fi
+
+# Lifecycle close
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && \
+  mark_step "${PHASE_NUMBER}" "2b9_workflows" "${PHASE_DIR}") || \
+  touch "${PHASE_DIR}/.step-markers/2b9_workflows.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b9_workflows 2>/dev/null || true
+```
+
+</step>
