@@ -86,12 +86,47 @@ bash scripts/vg-narrate-spawn.sh scope-challenger returned "<verdict>"
 challenger_dispatch "$subagent_json" "round-${ROUND}" "phase-scope" "${PHASE_NUMBER}"
 ```
 
-On Agent error (subagent crash / timeout / non-JSON output) — Nit #1 fix:
+On Agent error (subagent crash / timeout / non-JSON output) — R6 Task 8 fail-closed:
 
 ```bash
 bash scripts/vg-narrate-spawn.sh scope-challenger failed "round-${ROUND} answer-${ANSWER_N} — <error one-liner>"
-# Treat as no-issue (don't block round) — log to DISCUSSION-LOG.md as
-# "challenger crashed: <reason>"; continue to next answer.
+
+# Emit telemetry — challenger crash is a real signal, not noise
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "scope.challenger_crashed" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"round\":\"${ROUND}\",\"answer_n\":\"${ANSWER_N}\",\"reason\":\"<error>\"}" \
+  >/dev/null 2>&1 || true
+
+# Append to DISCUSSION-LOG.md for audit trail
+echo "challenger crashed: <reason>" >> "${PHASE_DIR}/DISCUSSION-LOG.md"
+
+# Fail-closed: BLOCK unless --skip-challenger-crash override + reason provided.
+# Anti-rationalization purpose: silent skip means a real adversarial-check
+# gap goes undetected. If challenger crashed BECAUSE of a real issue with
+# the answer, treating it as no-issue defeats the guard's reason for being.
+if [[ "$ARGUMENTS" =~ --skip-challenger-crash ]]; then
+  if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+    echo "⛔ --skip-challenger-crash requires --override-reason=<text>" >&2
+    exit 1
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    "--flag=--skip-challenger-crash" \
+    "--reason=Scope challenger crashed at round ${ROUND} answer ${ANSWER_N} (phase ${PHASE_NUMBER})" \
+    >/dev/null 2>&1 || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "--skip-challenger-crash" "${PHASE_NUMBER}" "scope.discussion" \
+      "Challenger crash skipped at round ${ROUND}" "scope-challenger-crashed"
+  echo "⚠ --skip-challenger-crash set — proceeding, debt logged"
+  # Continue to next answer (skip the challenger result for this answer)
+else
+  echo "⛔ Challenger crashed at round ${ROUND} answer ${ANSWER_N}." >&2
+  echo "   Anti-rationalization guard requires explicit acknowledgment." >&2
+  echo "   Fix options:" >&2
+  echo "     1. Investigate crash cause (check logs in .vg/blocks/)" >&2
+  echo "     2. Re-run /vg:scope to retry" >&2
+  echo "     3. Skip with: --skip-challenger-crash --override-reason=\"<ticket>\"" >&2
+  exit 1
+fi
 ```
 
 If `has_issue=true` → AskUserQuestion (3 options):
@@ -128,12 +163,47 @@ bash scripts/vg-narrate-spawn.sh scope-expander returned "<critical:N nice:M>"
 expander_dispatch "$subagent_json" "round-${ROUND}" "phase-scope" "${PHASE_NUMBER}"
 ```
 
-On Agent error (subagent crash / timeout / non-JSON output) — Nit #1 fix:
+On Agent error (subagent crash / timeout / non-JSON output) — R6 Task 8 fail-closed:
 
 ```bash
 bash scripts/vg-narrate-spawn.sh scope-expander failed "round-${ROUND} — <error one-liner>"
-# Treat as no critical_missing (don't block round); log to DISCUSSION-LOG.md
-# under round summary as "expander crashed: <reason>"; advance to next round.
+
+# Emit telemetry — expander crash is a real signal, not noise
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "scope.expander_crashed" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"round\":\"${ROUND}\",\"reason\":\"<error>\"}" \
+  >/dev/null 2>&1 || true
+
+# Append to DISCUSSION-LOG.md for audit trail
+echo "expander crashed: <reason>" >> "${PHASE_DIR}/DISCUSSION-LOG.md"
+
+# Fail-closed: BLOCK unless --skip-expander-crash override + reason provided.
+# Anti-rationalization purpose: silent "no critical_missing" assumption on
+# crash defeats the dimension-expansion guard. If expander crashed because
+# the round is structurally incomplete, advancing silently buries the gap.
+if [[ "$ARGUMENTS" =~ --skip-expander-crash ]]; then
+  if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+    echo "⛔ --skip-expander-crash requires --override-reason=<text>" >&2
+    exit 1
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    "--flag=--skip-expander-crash" \
+    "--reason=Scope expander crashed at round ${ROUND} (phase ${PHASE_NUMBER})" \
+    >/dev/null 2>&1 || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "--skip-expander-crash" "${PHASE_NUMBER}" "scope.discussion" \
+      "Expander crash skipped at round ${ROUND}" "scope-expander-crashed"
+  echo "⚠ --skip-expander-crash set — proceeding, debt logged"
+  # Advance to next round (skip the expander result for this round)
+else
+  echo "⛔ Expander crashed at round ${ROUND}." >&2
+  echo "   Anti-rationalization guard requires explicit acknowledgment." >&2
+  echo "   Fix options:" >&2
+  echo "     1. Investigate crash cause (check logs in .vg/blocks/)" >&2
+  echo "     2. Re-run /vg:scope to retry" >&2
+  echo "     3. Skip with: --skip-expander-crash --override-reason=\"<ticket>\"" >&2
+  exit 1
+fi
 ```
 
 If `critical_missing[]` non-empty → AskUserQuestion (3 options):

@@ -68,6 +68,8 @@ for arg in $ARGUMENTS; do
     --reset-env-preference)      RESET_ENV_PREF=true ;;
     --env-preference=*)          ENV_PREF_INLINE="${arg#*=}" ;;
     --allow-decisions-untraced)  ALLOW_DECISIONS_UNTRACED=true ;;
+    --skip-challenger-crash)     ;;  # R6 Task 8 — fail-closed override (handled in discussion-overview.md per-answer)
+    --skip-expander-crash)       ;;  # R6 Task 8 — fail-closed override (handled in discussion-overview.md per-round)
     --force)                     FORCE_TEST_STRATEGY=true ;;
     --redetect-ui-scope)         ;;  # blueprint-style flag, ignored here
     --skip-design-discovery)     ;;  # blueprint-style flag, ignored here

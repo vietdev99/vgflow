@@ -1,7 +1,7 @@
 ---
 name: vg:scope
 description: Deep phase discussion — 5 structured rounds producing enriched CONTEXT.md + DISCUSSION-LOG.md
-argument-hint: "<phase> [--skip-crossai] [--skip-crossai-output] [--auto] [--update] [--deepen=D-XX] [--override-reason=<text>] [--skip-env-preference] [--reset-env-preference] [--env-preference=<mode>] [--allow-decisions-untraced] [--force] [--non-interactive]"
+argument-hint: "<phase> [--skip-crossai] [--skip-crossai-output] [--auto] [--update] [--deepen=D-XX] [--override-reason=<text>] [--skip-env-preference] [--reset-env-preference] [--env-preference=<mode>] [--allow-decisions-untraced] [--skip-challenger-crash] [--skip-expander-crash] [--force] [--non-interactive]"
 allowed-tools:
   - Read
   - Write
@@ -71,6 +71,8 @@ runtime_contract:
     - "--allow-decisions-untraced"
     - "--override-reason"
     - "--no-forward-deps"
+    - "--skip-challenger-crash"
+    - "--skip-expander-crash"
 ---
 
 
