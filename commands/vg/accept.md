@@ -1,7 +1,7 @@
 ---
 name: vg:accept
 description: Human UAT acceptance — structured checklist driven by VG artifacts (SPECS, CONTEXT, TEST-GOALS, RIPPLE-ANALYSIS)
-argument-hint: "<phase> [--allow-uat-skips] [--allow-empty-uat] [--allow-unreachable] [--override-reason=<text>]"
+argument-hint: "<phase> [--allow-uat-skips] [--allow-empty-uat] [--allow-unreachable] [--allow-failed-rcrurdr-attestation] [--override-reason=<text>]"
 allowed-tools:
   - Read
   - Write
@@ -60,15 +60,18 @@ runtime_contract:
   # acceptable). Each accepted bypass MUST also call:
   #   vg-orchestrator override --flag <flag> --reason "<text>"
   # so override.used fires for run-complete contract + OVERRIDE-DEBT.md entry.
-  # --allow-uat-skips:    Batch 3 B4 — log when UAT quorum breached
-  # --allow-empty-uat:    Batch 3 B4 — log when .uat-responses.json absent
-  # --allow-unreachable:  existing (3b gate)
+  # --allow-uat-skips:                       Batch 3 B4 — log when UAT quorum breached
+  # --allow-empty-uat:                       Batch 3 B4 — log when .uat-responses.json absent
+  # --allow-unreachable:                     existing (3b gate)
+  # --allow-failed-rcrurdr-attestation:      R8-D — defer mutation lifecycle attestation
+  #                                          (admin-only delete, staging-only test). Forces DEFER.
   # --allow-deferred:     belongs to /vg:next (DEFERRED bypass), NOT accept —
-  #                        removed from this contract (was undeclared bypass surface).
+  #                                          removed from this contract (was undeclared bypass surface).
   forbidden_without_override:
     - "--allow-uat-skips"
     - "--allow-empty-uat"
     - "--allow-unreachable"
+    - "--allow-failed-rcrurdr-attestation"
 ---
 
 

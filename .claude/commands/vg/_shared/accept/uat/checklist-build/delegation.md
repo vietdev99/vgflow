@@ -37,6 +37,7 @@ Artifact sources (delegated subagent reads):
 | B    | `vg-load --phase ${PHASE_NUMBER} --artifact goals --list` + per-goal expand | **vg-load split** | Phase F Task 30 absorption — NOT flat TEST-GOALS.md |
 | B    | `${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md`            | KEEP-FLAT | Lookup per-goal status (READY/BLOCKED/UNREACHABLE/PARTIAL) |
 | B.1  | `${PHASE_DIR}/CRUD-SURFACES.md`                   | KEEP-FLAT | Single doc, JSON inside fenced block |
+| B.1  | `${PHASE_DIR}/RCRURD-INVARIANTS/G-*.yaml` + `${PHASE_DIR}/TEST-GOALS/G-*.md` (`yaml-rcrurd` fence) | filesystem + parser | **R8-D** RCRURDR attestation rows. For each goal where `lifecycle: rcrurdr`, emit `RCRURD-<goal_id>` item with `critical: true`, `kind: rcrurdr-attestation`. Detection via `scripts/lib/rcrurd_invariant.py parse_yaml + extract_from_test_goal_md`. |
 | C    | `${PHASE_DIR}/.ripple.json` (preferred)           | KEEP-FLAT | Or `RIPPLE-ANALYSIS.md` fallback |
 | D    | `vg-load --phase ${PHASE_NUMBER} --artifact plan --list` + per-task expand | **vg-load split** | Extract `<design-ref>` from Layer-1 task files |
 | D    | `${PHASE_DIR}/discover/*.png` (mobile-* profile)  | filesystem | Simulator screenshots from `phase2_mobile_discovery` |

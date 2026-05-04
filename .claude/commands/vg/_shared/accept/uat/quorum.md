@@ -10,8 +10,13 @@ You MUST run this AFTER STEP 5 (interactive UAT) and BEFORE STEP 7
 decisions, Section B READY goals); blocks unless `--allow-uat-skips`
 is set AND rationalization-guard passes.
 
-Override-debt entry is logged for every `--allow-uat-skips` invocation —
-it is NOT free.
+R8-D RCRURDR gate: any `rcrurdr.items[].verdict == "f"` (mutation
+lifecycle attestation FAILED) BLOCKs the verdict regardless of other
+sections passing. Override = `--allow-failed-rcrurdr-attestation`
++ `--override-reason="<text>"` + rationalization-guard. Forces DEFER.
+
+Override-debt entry is logged for every `--allow-uat-skips` and
+`--allow-failed-rcrurdr-attestation` invocation — they are NOT free.
 </HARD-GATE>
 
 ---
@@ -264,8 +269,89 @@ p.write_text(json.dumps(d, indent=2))
 PY
 fi
 
+# Gate 3 (R8-D): RCRURDR attestation gate — failed mutation lifecycle
+# attestation BLOCKs the verdict regardless of other passes. This is the
+# closed-loop accept layer (codex audit 2026-05-05): generic "Verified
+# working in runtime?" is NOT enough for `lifecycle: rcrurdr` goals;
+# user must attest the full Read→Create→Read→Update→Read→Delete→Read
+# cycle. A failed attestation = potential data-integrity bug shipping.
+RCRURD_FAILED=$(${PYTHON_BIN:-python3} - "$RESP_JSON" 2>/dev/null <<'PY' || echo 0
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.exists():
+    print(0); sys.exit()
+try:
+    data = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    print(0); sys.exit()
+section = data.get("rcrurdr") or {}
+items = section.get("items") or []
+failed_ids = [it.get("id") for it in items if it.get("verdict") == "f"]
+# Print "<count>:<comma-separated-ids>" so caller can surface them.
+print(f"{len(failed_ids)}:{','.join(filter(None, failed_ids))}")
+PY
+)
+RCRURD_FAILED_COUNT="${RCRURD_FAILED%%:*}"
+RCRURD_FAILED_IDS="${RCRURD_FAILED#*:}"
+
+if [ "${RCRURD_FAILED_COUNT:-0}" -gt 0 ]; then
+  echo "⛔ UAT RCRURDR gate FAILED: ${RCRURD_FAILED_COUNT} mutation lifecycle attestation(s) failed." >&2
+  echo "   Failed items: ${RCRURD_FAILED_IDS}" >&2
+  echo "" >&2
+  echo "RCRURDR attestation = full Read→Create→Read→Update→Read→Delete→Read cycle." >&2
+  echo "A failed attestation means the deployed code likely has a data-integrity bug:" >&2
+  echo "  read-after-write coherence broken, update not persisting, delete not visible," >&2
+  echo "  or a phase of the lifecycle silently mismatching UI/network/DB state." >&2
+  echo "" >&2
+  echo "Options:" >&2
+  echo "  (a) Re-run /vg:build --gaps-only to fix the mutation cycle, then re-accept" >&2
+  echo "  (b) --allow-failed-rcrurdr-attestation override (logs to debt; DEFERRED" >&2
+  echo "      verdict forced; for genuine cases like admin-only delete or staging-only" >&2
+  echo "      tests). Requires --override-reason=\"<text>\"." >&2
+
+  if [[ ! "${ARGUMENTS}" =~ --allow-failed-rcrurdr-attestation ]]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.uat_rcrurdr_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"failed_count\":${RCRURD_FAILED_COUNT},\"failed_ids\":\"${RCRURD_FAILED_IDS}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+
+  RCRURD_REASON=$(_uat_extract_reason)
+  if [ -z "$RCRURD_REASON" ]; then
+    echo "⛔ --allow-failed-rcrurdr-attestation requires --override-reason=\"<why deferring mutation lifecycle attestation>\"" >&2
+    exit 1
+  fi
+  if type -t rationalization_guard_check >/dev/null 2>&1; then
+    RATGUARD_RESULT=$(rationalization_guard_check "uat-rcrurdr-failed" \
+      "${RCRURD_FAILED_COUNT} RCRURDR mutation-lifecycle attestation(s) failed (${RCRURD_FAILED_IDS}). Bypass ships unverified data-integrity contract." \
+      "phase=${PHASE_NUMBER} failed=${RCRURD_FAILED_COUNT} ids=${RCRURD_FAILED_IDS} reason=${RCRURD_REASON}")
+    if ! rationalization_guard_dispatch "$RATGUARD_RESULT" "uat-rcrurdr-failed" "--allow-failed-rcrurdr-attestation" "$PHASE_NUMBER" "accept.uat_quorum_gate" "$RCRURD_REASON"; then
+      exit 1
+    fi
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--allow-failed-rcrurdr-attestation" --reason "$RCRURD_REASON" 2>/dev/null || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "accept-uat-rcrurdr-failed" "${PHASE_NUMBER}" \
+    "${RCRURD_FAILED_COUNT} failed RCRURDR attestations (${RCRURD_FAILED_IDS}) — ${RCRURD_REASON}" "${PHASE_DIR}"
+
+  echo "⚠ --allow-failed-rcrurdr-attestation — proceeding, forced DEFERRED verdict (not ACCEPTED)" >&2
+  ${PYTHON_BIN:-python3} - "$RESP_JSON" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+p = Path(sys.argv[1])
+d = json.loads(p.read_text(encoding="utf-8"))
+d.setdefault("final", {})
+d["final"]["verdict"] = "DEFER"
+d["final"]["forced_by"] = "uat_rcrurdr_override"
+d["final"]["ts"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+p.write_text(json.dumps(d, indent=2))
+PY
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.uat_quorum_passed" \
-  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"critical_skips\":${CRITICAL_SKIPS},\"total_skips\":${TOTAL_SKIPS}}" >/dev/null 2>&1 || true
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"critical_skips\":${CRITICAL_SKIPS},\"total_skips\":${TOTAL_SKIPS},\"rcrurdr_failed\":${RCRURD_FAILED_COUNT:-0}}" >/dev/null 2>&1 || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5_uat_quorum_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5_uat_quorum_gate.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_uat_quorum_gate 2>/dev/null || true

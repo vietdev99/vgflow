@@ -76,7 +76,12 @@ The subagent returns:
     { "name": "A", "title": "Decisions", "items": [{ "id": "...", "summary": "...", "source_file": "CONTEXT.md", "source_line": 42 }] },
     { "name": "A.1", "title": "Foundation cites", "items": [...] },
     { "name": "B", "title": "Goals", "items": [...] },
-    { "name": "B.1", "title": "CRUD surfaces", "items": [...] },
+    { "name": "B.1", "title": "CRUD surfaces", "items": [
+      { "id": "users", "summary": "...", "source_file": "CRUD-SURFACES.md" },
+      { "id": "RCRURD-G-04", "summary": "Goal G-04 — Full RCRURDR lifecycle attestation",
+        "source_file": "RCRURD-INVARIANTS/G-04.yaml", "kind": "rcrurdr-attestation",
+        "critical": true, "goal_id": "G-04" }
+    ] },
     { "name": "C", "title": "Ripple HIGH", "items": [...] },
     { "name": "D", "title": "Design refs", "items": [...] },
     { "name": "E", "title": "Deliverables", "items": [...] },
@@ -86,6 +91,13 @@ The subagent returns:
   "verdict_inputs": { "test_verdict": "...", "ripple_skipped": false }
 }
 ```
+
+**R8-D RCRURDR attestation items (Section B.1):** items with `id` matching
+`^RCRURD-G-\d+$` are mutation-lifecycle attestation rows (one per
+TEST-GOAL with `lifecycle: rcrurdr`). They MUST carry `critical: true` +
+`kind: "rcrurdr-attestation"` so STEP 5 (interactive) renders the full
+7-phase question, and STEP 6 (quorum gate) blocks the verdict on a failed
+attestation regardless of other section passes.
 
 After return, validate:
 1. `checklist_path` exists and is non-empty

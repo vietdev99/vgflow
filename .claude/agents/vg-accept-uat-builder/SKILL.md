@@ -136,7 +136,7 @@ while IFS= read -r gid; do
 done <<< "$GOALS_LIST"
 ```
 
-### Section B.1 — CRUD surfaces (CRUD-SURFACES.md, KEEP-FLAT)
+### Section B.1 — CRUD surfaces (CRUD-SURFACES.md, KEEP-FLAT) + RCRURDR lifecycle items (R8-D)
 
 Parse JSON inside fenced block. Each resource → row with operations,
 platforms, checkpoints.
@@ -171,6 +171,104 @@ for r in data.get("resources", []):
     print(f"{name}\t{ops}\t{overlays}\t{', '.join(dict.fromkeys(cp))}")
 PY
 ```
+
+#### R8-D — RCRURDR lifecycle attestation items (closed-loop accept layer)
+
+Codex audit (2026-05-05) found accept layer MISSING on RCRURDR closed-loop:
+generic "Verified working in runtime?" question per goal does NOT attest the
+specific Read→Create→Read→Update→Read→Delete→Read mutation cycle.
+
+For each TEST-GOAL with `lifecycle: rcrurdr` (or `goal_class: crud-roundtrip`),
+emit a `RCRURD-<goal_id>` item into Section B.1 with the full 7-phase question.
+These items are CRITICAL — failed attestation BLOCKs quorum gate (STEP 6).
+
+Detection sources (in priority order):
+1. Per-phase RCRURD-INVARIANTS/G-NN.yaml (Task 37 split — preferred)
+2. Inline ```yaml-rcrurd fence in TEST-GOALS/G-NN.md (Task 39 — fallback,
+   uses `scripts/lib/rcrurd_invariant.py extract_from_test_goal_md`)
+
+```bash
+${PYTHON_BIN} - <<'PY' > "${VG_TMP}/uat-rcrurd-items.txt"
+import os, re, sys
+from pathlib import Path
+
+# Add scripts/ to path so we can import rcrurd_invariant
+repo_root = Path(os.environ.get("REPO_ROOT", "."))
+sys.path.insert(0, str(repo_root / "scripts"))
+try:
+    from lib.rcrurd_invariant import parse_yaml, extract_from_test_goal_md, RCRURDInvariantError
+except Exception:
+    # Helper unavailable — emit no rcrurd items (back-compat: harness silent,
+    # no items generated, no theatre).
+    sys.exit(0)
+
+phase_dir = Path(os.environ["PHASE_DIR"])
+
+# Source 1 — per-phase RCRURD-INVARIANTS/G-NN.yaml (Task 37 split)
+inv_dir = phase_dir / "RCRURD-INVARIANTS"
+seen: dict[str, str] = {}  # gid -> lifecycle
+if inv_dir.is_dir():
+    for yf in sorted(inv_dir.glob("G-*.yaml")):
+        gid = yf.stem  # "G-04"
+        try:
+            inv = parse_yaml(yf.read_text(encoding="utf-8"))
+        except RCRURDInvariantError:
+            continue
+        if inv.lifecycle == "rcrurdr":
+            seen[gid] = "rcrurdr"
+
+# Source 2 — inline yaml-rcrurd fence in TEST-GOALS/G-NN.md (Task 39 fallback)
+goals_dir = phase_dir / "TEST-GOALS"
+if goals_dir.is_dir():
+    for gf in sorted(goals_dir.glob("G-*.md")):
+        gid = gf.stem
+        if gid in seen:
+            continue
+        try:
+            inv = extract_from_test_goal_md(gf.read_text(encoding="utf-8"))
+        except RCRURDInvariantError:
+            continue
+        if inv is not None and inv.lifecycle == "rcrurdr":
+            seen[gid] = "rcrurdr"
+
+# Look up goal title from existing uat-goals.txt (Section B output) so we
+# can write a human-readable question prompt.
+goals_txt = Path(os.environ["VG_TMP"], "uat-goals.txt")
+title_by_id: dict[str, str] = {}
+if goals_txt.exists():
+    for line in goals_txt.read_text(encoding="utf-8", errors="ignore").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0].startswith("G-"):
+            title_by_id[parts[0]] = parts[2]
+
+for gid in sorted(seen):
+    title = title_by_id.get(gid, "(no title)")
+    # tab-separated: rcrurd_item_id, source_goal, title, source_file
+    print(f"RCRURD-{gid}\t{gid}\t{title}\tRCRURD-INVARIANTS/{gid}.yaml or TEST-GOALS/{gid}.md")
+PY
+```
+
+The per-item question rendered by STEP 5 (interactive UAT) for each row:
+
+```
+Goal {goal_id} ({title}): Did you verify the FULL Read→Create→Read→Update→
+Read→Delete→Read cycle?
+  - Read empty (initial state)?
+  - Create succeeds?
+  - Read shows new entity?
+  - Update mutates entity?
+  - Read confirms update?
+  - Delete succeeds?
+  - Read empty after delete?
+
+[p] Pass — full 7-phase cycle verified end-to-end
+[f] Fail — at least one phase broken (BLOCKs quorum)
+[s] Skip — cannot test in UAT (e.g. admin-only delete; logs override-debt)
+```
+
+Items emit into the JSON `sections[]` array under `name: "B.1"`, with a
+distinguishing prefix `RCRURD-` on `id` so the quorum gate (STEP 6) can
+locate them via `id.startswith("RCRURD-")`.
 
 ### Section C — Ripple HIGH callers (.ripple.json or RIPPLE-ANALYSIS.md, KEEP-FLAT)
 
@@ -282,9 +380,17 @@ Render markdown with one `## Section X — Title (count)` heading per
 non-empty section, followed by a 3-column table (`| ID | Summary |
 Source |`). Suppress Section F entirely when PROFILE not mobile-*.
 
+Section B.1 must merge BOTH artefact streams:
+1. CRUD-SURFACES rows from `${VG_TMP}/uat-crud-surfaces.txt`
+2. R8-D RCRURDR attestation rows from `${VG_TMP}/uat-rcrurd-items.txt`
+   — IDs prefixed `RCRURD-G-NN`, marked `critical: true` so quorum gate
+   blocks failed attestation regardless of other passes.
+
 Then read each `${VG_TMP}/uat-*.txt`, build the JSON `sections[]` array
 with proper `{id, summary, source_file, source_line}` items, and emit
-the JSON return to stdout.
+the JSON return to stdout. RCRURD-* items in B.1 carry an extra
+`critical: true` field + `kind: "rcrurdr-attestation"` so STEP 5
+interactive prompt and STEP 6 quorum gate know to special-case them.
 
 ## Failure modes (return error JSON, no partial files)
 

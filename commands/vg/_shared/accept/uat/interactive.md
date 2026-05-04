@@ -61,6 +61,46 @@ For BLOCKED/UNREACHABLE goals: show info block, no question asked:
       Known gap — not gated here. Address in next phase or /vg:build --gaps-only.
 ```
 
+### B.1. RCRURDR lifecycle attestation (R8-D — closed-loop accept layer)
+
+For each item in Section B.1 of `${PHASE_DIR}/uat-checklist.md` whose `id`
+starts with `RCRURD-` (i.e. `RCRURD-G-04`, `kind: rcrurdr-attestation`,
+`critical: true`), present the FULL 7-phase question (NOT the generic
+"working in runtime?"):
+
+```
+AskUserQuestion:
+  "Goal {goal_id} ({title}): Did you verify the FULL Read→Create→Read→
+   Update→Read→Delete→Read cycle?
+
+     1. Read empty (initial state — no entity exists)?
+     2. Create succeeds (new entity persisted)?
+     3. Read shows new entity (read-after-write coherence)?
+     4. Update mutates the entity (PUT/PATCH applied)?
+     5. Read confirms update (DB read-back matches PUT payload)?
+     6. Delete succeeds (soft- or hard-delete persisted)?
+     7. Read empty after delete (entity no longer visible)?
+
+   Failure on ANY phase = potential data-integrity bug. Critical item;
+   failed attestation BLOCKs quorum gate (STEP 6) regardless of other
+   passes.
+
+   [p] Pass — full 7-phase cycle verified end-to-end
+   [f] Fail — at least one phase broken (BLOCKs verdict)
+   [s] Skip — cannot test in UAT (admin-only delete, staging-only, etc.;
+              logs override-debt; requires --allow-failed-rcrurdr-attestation
+              + --override-reason at retry)"
+```
+
+Persist answers to `${PHASE_DIR}/.uat-responses.json` under `rcrurdr` key
+(see Response persistence below). For 1.0 keep simple: overall pass/fail/
+skip — per-phase sub-checklist (`rcrurdr_phases: {empty_read, create,
+read_populated, update, read_updated, delete, read_empty}`) is logged as
+TODO future enhancement when the user chooses [p].
+
+If no `RCRURD-*` items exist (no `lifecycle: rcrurdr` goals this phase):
+the section is silently skipped — no question, no JSON entry required.
+
 ### C. Ripple acknowledgment (MANDATORY if any HIGH callers)
 
 **If `uat-ripples.txt` contains `RIPPLE_SKIPPED=true`** (graphify was unavailable):
@@ -197,11 +237,12 @@ If `n` → abort UAT, set phase verdict = REJECTED with reason `mobile-gate-revi
 After all sections, present totals:
 ```
 UAT Progress:
-  Decisions (A):     {N} passed / {N} failed / {N} skipped
-  Goals (B):         {N} passed / {N} failed / {N} skipped (+ {N} known gaps)
-  Ripples (C):       {acknowledged | abort | accepted-risk}
-  Designs (D):       {N} passed / {N} failed / {N} skipped  ({Nmob} mobile screenshots)
-  Mobile gates (F):  {acknowledged | rejected | risk-accepted}  [only for mobile-*]
+  Decisions (A):       {N} passed / {N} failed / {N} skipped
+  Goals (B):           {N} passed / {N} failed / {N} skipped (+ {N} known gaps)
+  RCRURDR (B.1):       {N} passed / {N} failed / {N} skipped   [R8-D — empty when no rcrurdr goals]
+  Ripples (C):         {acknowledged | abort | accepted-risk}
+  Designs (D):         {N} passed / {N} failed / {N} skipped  ({Nmob} mobile screenshots)
+  Mobile gates (F):    {acknowledged | rejected | risk-accepted}  [only for mobile-*]
 ```
 
 ### Final verdict question
@@ -223,12 +264,22 @@ Format:
 {
   "decisions": {"pass": 0, "fail": 0, "skip": 0, "items": [{"id": "P7.D-01", "verdict": "p|f|s", "ts": "..."}]},
   "goals": {"pass": 0, "fail": 0, "skip": 0, "items": [{"id": "G-01", "status_before": "READY", "verdict": "p|f|s", "ts": "..."}]},
+  "rcrurdr": {"pass": 0, "fail": 0, "skip": 0, "items": [{"id": "RCRURD-G-04", "goal_id": "G-04", "verdict": "p|f|s", "ts": "...", "rcrurdr_phases": null}]},
   "ripples": {"verdict": "y|n|s|acknowledged|risk-accepted", "ts": "..."},
   "designs": {"pass": 0, "fail": 0, "skip": 0, "items": [{"ref": "sites-list.default", "verdict": "p|f|s", "ts": "..."}]},
   "mobile_gates": {"verdict": "y|n|s", "ts": "..."},
   "final": {"verdict": "ACCEPT|REJECT|DEFER", "ts": "..."}
 }
 ```
+
+The `rcrurdr` section is OMITTED entirely when no `lifecycle: rcrurdr`
+goals exist in the phase (no items to attest = no key). If items exist,
+EVERY one MUST have a verdict — `rcrurdr.items[].verdict == "f"` BLOCKs
+the quorum gate (STEP 6) regardless of other passes (R8-D contract).
+Per-phase sub-checklist (`rcrurdr_phases: {empty_read: p|f, create: p|f,
+read_populated: p|f, update: p|f, read_updated: p|f, delete: p|f,
+read_empty: p|f}`) is OPTIONAL for 1.0 — `null` when overall verdict
+captured in single Pass/Fail/Skip answer.
 
 AI can write/update this JSON via Bash heredoc after each section completes. Missing sections that are N/A for this profile (e.g. mobile_gates for web) should be omitted or set to `{"verdict": "n/a"}`.
 
