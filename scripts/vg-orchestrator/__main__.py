@@ -2937,6 +2937,353 @@ def _candidate_block(candidates_path: Path, cid: str) -> tuple[str, int, int] | 
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# R9-C — atomic learn promote: emit canonical artifacts (rules/overlay/patches)
+# from the lesson YAML block at promote time, so bootstrap-loader.py sees the
+# new rule on the very next /vg:* invocation. Before R9-C the orchestrator
+# only moved CANDIDATES → ACCEPTED, leaving rules/ + overlay.yml + patches/
+# disconnected → loader saw no new state → injection was a no-op.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _slugify(s: str, fallback: str = "rule") -> str:
+    """Lower-case ascii slug — safe for filenames. Stdlib-only."""
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = s.strip("-")
+    return s or fallback
+
+
+def _parse_lesson_yaml(block_text: str) -> dict:
+    """Best-effort parse of a fenced ```yaml lesson block to dict.
+
+    Falls back to a simple line-based parser when PyYAML is missing — same
+    minimal subset that bootstrap-loader._simple_yaml handles. Returns {} on
+    any error (caller must tolerate sparse data — heuristics fill the rest).
+    """
+    m = re.search(r"```yaml\s*\n(.*?)```", block_text, re.DOTALL)
+    if not m:
+        return {}
+    body = m.group(1)
+    try:
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(body)
+        return data if isinstance(data, dict) else {}
+    except ImportError:
+        pass
+    except Exception:
+        return {}
+    # Fallback: minimal top-level scalars (id/title/type/...). Nested
+    # structures (scope, evidence, overlay) are NOT recoverable here —
+    # the caller's heuristics handle the missing-PyYAML environment by
+    # parsing structured sections from the raw body text directly.
+    out: dict = {}
+    for line in body.splitlines():
+        m2 = re.match(r"^([a-zA-Z_][\w-]*)\s*:\s*(.+?)\s*$", line)
+        if not m2:
+            continue
+        key, val = m2.group(1), m2.group(2)
+        # Strip surrounding quotes
+        if (val.startswith('"') and val.endswith('"')) or \
+           (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1]
+        out[key] = val
+    return out
+
+
+def _extract_overlay_section(lesson: dict, block_text: str) -> dict:
+    """Extract overlay key/value pairs the lesson wants merged into overlay.yml.
+
+    Two source patterns supported (lesson.md schema — ACCEPTED.md is freeform):
+      1. structured: top-level `overlay:` mapping in YAML block
+      2. type=config_override: `target` + `value` keys (legacy reflector format)
+    Returns {} when no overlay payload detected (lesson is pure rule/patch).
+    """
+    if isinstance(lesson, dict):
+        ov = lesson.get("overlay")
+        if isinstance(ov, dict) and ov:
+            return ov
+        if lesson.get("type") == "config_override":
+            tgt = lesson.get("target")
+            val = lesson.get("value", lesson.get("proposed_value"))
+            if isinstance(tgt, str) and tgt and val is not None:
+                return {tgt: val}
+    # Fallback heuristic: ## Overlay markdown section with embedded yaml.
+    m = re.search(
+        r"^##\s+Overlay\s*\n+```ya?ml\s*\n(.*?)```",
+        block_text, re.MULTILINE | re.DOTALL,
+    )
+    if m:
+        try:
+            import yaml  # type: ignore
+
+            data = yaml.safe_load(m.group(1))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _extract_patch_section(lesson: dict, block_text: str) -> str:
+    """Extract patch body (markdown/diff) for patches/<id>.md.
+
+    Lessons with type=patch carry the prose either in `prose:` field or in a
+    "## Patch" markdown section. Returns "" when no patch payload present.
+    """
+    if isinstance(lesson, dict):
+        if lesson.get("type") == "patch":
+            prose = lesson.get("prose") or lesson.get("body") or ""
+            if isinstance(prose, str) and prose.strip():
+                return prose.strip()
+    # Markdown section fallback — capture everything after "## Patch" to next
+    # `## ` header or end of block.
+    m = re.search(
+        r"^##\s+Patch\s*\n+(.*?)(?=^##\s+|\Z)",
+        block_text, re.MULTILINE | re.DOTALL,
+    )
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_rule_body(lesson: dict, block_text: str) -> str:
+    """Build markdown body for rules/<id>.md. Falls back to full block text."""
+    if isinstance(lesson, dict):
+        for k in ("prose", "rule", "body", "description"):
+            v = lesson.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    m = re.search(
+        r"^##\s+Rule\s*\n+(.*?)(?=^##\s+|\Z)",
+        block_text, re.MULTILINE | re.DOTALL,
+    )
+    if m:
+        return m.group(1).strip()
+    # Last resort: keep the entire YAML block as opaque prose so the loader
+    # still sees something deterministic. Loader treats prose as free text.
+    return block_text.strip()
+
+
+def _format_rule_md(lesson_id: str, lesson: dict, body: str) -> str:
+    """Render rules/<lesson_id>.md with YAML frontmatter + prose body.
+
+    Frontmatter mirrors what `bootstrap-loader._parse_rule_file` expects:
+    `id`, `title`, `scope`, `action`, `target_step`, `status`. Defaults are
+    permissive (status=active, scope=any/all phases) so a freshly promoted
+    rule fires for the next phase by default — operator can later restrict
+    via /vg:learn --retract + redraft.
+    """
+    title = (lesson.get("title") or lesson_id) if isinstance(lesson, dict) else lesson_id
+    action = (lesson.get("action") or "") if isinstance(lesson, dict) else ""
+    target_step = (lesson.get("target_step") or "") if isinstance(lesson, dict) else ""
+    scope = lesson.get("scope") if isinstance(lesson, dict) else None
+    status = "active"
+    fm_lines = [
+        "---",
+        f"id: {lesson_id}",
+        f"title: \"{str(title).replace(chr(34), chr(39))}\"",
+        f"status: {status}",
+    ]
+    if action:
+        fm_lines.append(f"action: {action}")
+    if target_step:
+        fm_lines.append(f"target_step: {target_step}")
+    if isinstance(scope, dict) and scope:
+        # Emit scope as a nested YAML mapping. We do best-effort 1-level
+        # rendering (loader's simple parser handles 1-2 levels).
+        fm_lines.append("scope:")
+        for k, v in scope.items():
+            if isinstance(v, list):
+                fm_lines.append(f"  {k}:")
+                for item in v:
+                    fm_lines.append(f"    - {item}")
+            else:
+                fm_lines.append(f"  {k}: {v}")
+    fm_lines.append("---")
+    fm_lines.append("")
+    fm_lines.append(body.strip())
+    fm_lines.append("")
+    return "\n".join(fm_lines)
+
+
+def _format_patch_md(lesson_id: str, lesson: dict, body: str) -> str:
+    """Render patches/<lesson_id>.md — frontmatter required by loader."""
+    title = (lesson.get("title") or lesson_id) if isinstance(lesson, dict) else lesson_id
+    anchor = (lesson.get("anchor") or lesson_id) if isinstance(lesson, dict) else lesson_id
+    return (
+        "---\n"
+        f"id: {lesson_id}\n"
+        f"title: \"{str(title).replace(chr(34), chr(39))}\"\n"
+        f"anchor: {anchor}\n"
+        "status: active\n"
+        "---\n\n"
+        f"{body.strip()}\n"
+    )
+
+
+def _merge_overlay(overlay_path: Path, lesson_id: str, updates: dict) -> None:
+    """Deep-merge `updates` into overlay.yml. Stdlib-only (PyYAML preferred).
+
+    Idempotent — re-merging the same updates yields byte-identical output
+    (modulo PyYAML key ordering when present). Stamps each new top-level key
+    with a `# from <lesson_id>` provenance comment when overlay.yml absent —
+    on subsequent merges the comment is left alone.
+    """
+    overlay_path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict = {}
+    if overlay_path.exists():
+        try:
+            import yaml  # type: ignore
+
+            raw = yaml.safe_load(overlay_path.read_text(encoding="utf-8")) or {}
+            if isinstance(raw, dict):
+                existing = raw
+        except ImportError:
+            # Without PyYAML the safe path is to keep existing file intact and
+            # APPEND a YAML block with the new updates — loader's simple
+            # parser handles top-level mappings fine. We can't reliably parse
+            # the existing file so we leave it untouched and just append.
+            existing = None  # type: ignore[assignment]
+        except Exception:
+            existing = {}
+
+    def _deep_merge(dst: dict, src: dict) -> dict:
+        for k, v in src.items():
+            if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                _deep_merge(dst[k], v)
+            else:
+                dst[k] = v
+        return dst
+
+    if existing is None:
+        # Append-only fallback (no PyYAML) — preserves existing content.
+        with overlay_path.open("a", encoding="utf-8") as f:
+            f.write(f"\n# from {lesson_id} ({datetime.now(timezone.utc).isoformat()})\n")
+            for k, v in updates.items():
+                f.write(f"{k}: {v}\n")
+        return
+
+    merged = _deep_merge(dict(existing), updates)
+    try:
+        import yaml  # type: ignore
+
+        out = yaml.safe_dump(merged, sort_keys=True, allow_unicode=True)
+    except ImportError:
+        # Should not hit — we already loaded with yaml. Defensive fallback.
+        lines = ["# bootstrap overlay (R9-C minimal serializer)\n"]
+        for k, v in sorted(merged.items()):
+            lines.append(f"{k}: {v}\n")
+        out = "".join(lines)
+    overlay_path.write_text(out, encoding="utf-8")
+
+
+def _generate_canonical_artifacts_from_accepted(
+    block_text: str, lesson_id: str, bootstrap_dir: Path,
+) -> dict:
+    """R9-C — atomic promote helper.
+
+    Parse the fenced YAML lesson block + emit the canonical files declared by
+    `commands/vg/learn.md` schema:
+      * rules/<lesson_id>.md      (always)
+      * overlay.yml               (if lesson has overlay payload)
+      * patches/<lesson_id>.md    (if lesson has patch payload)
+
+    Returns {"rule_path": str, "overlay_keys": [str, ...], "patches": [str, ...]}.
+    Idempotent: re-promoting overwrites the canonical files in place, leaves
+    overlay.yml byte-stable when updates haven't changed.
+    """
+    lesson = _parse_lesson_yaml(block_text) or {}
+
+    # rules/<id>.md — always emitted
+    rules_dir = bootstrap_dir / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    rule_body = _extract_rule_body(lesson, block_text)
+    rule_path = rules_dir / f"{lesson_id}.md"
+    rule_path.write_text(
+        _format_rule_md(lesson_id, lesson, rule_body), encoding="utf-8",
+    )
+
+    # overlay.yml — only when lesson has overlay payload
+    overlay_keys: list[str] = []
+    overlay_updates = _extract_overlay_section(lesson, block_text)
+    if overlay_updates:
+        overlay_path = bootstrap_dir / "overlay.yml"
+        _merge_overlay(overlay_path, lesson_id, overlay_updates)
+        overlay_keys = sorted(overlay_updates.keys())
+
+    # patches/<id>.md — only when lesson has patch payload
+    patches: list[str] = []
+    patch_body = _extract_patch_section(lesson, block_text)
+    if patch_body:
+        patches_dir = bootstrap_dir / "patches"
+        patches_dir.mkdir(parents=True, exist_ok=True)
+        patch_path = patches_dir / f"{lesson_id}.md"
+        patch_path.write_text(
+            _format_patch_md(lesson_id, lesson, patch_body), encoding="utf-8",
+        )
+        patches.append(str(patch_path))
+
+    return {
+        "rule_path": str(rule_path),
+        "overlay_keys": overlay_keys,
+        "patches": patches,
+    }
+
+
+def _iter_accepted_blocks(accepted_path: Path):
+    """Yield (lesson_id, block_text) for every fenced ```yaml lesson in
+    ACCEPTED.md. Used by migrate-accepted-canonical.
+    """
+    if not accepted_path.exists():
+        return
+    text = accepted_path.read_text(encoding="utf-8", errors="replace")
+    fence_re = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
+    for m in fence_re.finditer(text):
+        body = m.group(1)
+        m_id = re.search(r"^\s*id\s*:\s*(L-\S+)", body, re.MULTILINE)
+        if m_id:
+            yield (m_id.group(1).strip(), m.group(0))
+
+
+def cmd_migrate_accepted_canonical(args) -> int:
+    """R9-C migration: backfill canonical rules/overlay/patches for every
+    lesson already in ACCEPTED.md (pre-R9-C promotes only moved
+    CANDIDATES→ACCEPTED, never wrote canonical files).
+
+    Idempotent — re-running overwrites in place. Use --dry-run to preview.
+    """
+    bootstrap_dir = _REPO_ROOT / ".vg" / "bootstrap"
+    accepted_path = bootstrap_dir / "ACCEPTED.md"
+    if not accepted_path.exists():
+        print(f"ACCEPTED.md not found at {accepted_path}; nothing to migrate.")
+        return 0
+
+    dry_run = bool(getattr(args, "dry_run", False))
+    generated = []
+    skipped = []
+    for lesson_id, block_text in _iter_accepted_blocks(accepted_path):
+        rule_path = bootstrap_dir / "rules" / f"{lesson_id}.md"
+        if rule_path.exists() and not getattr(args, "force", False):
+            skipped.append(lesson_id)
+            continue
+        if dry_run:
+            generated.append({"lesson_id": lesson_id, "rule_path": str(rule_path)})
+            continue
+        artifacts = _generate_canonical_artifacts_from_accepted(
+            block_text, lesson_id, bootstrap_dir,
+        )
+        generated.append({"lesson_id": lesson_id, **artifacts})
+
+    print(f"migrate-accepted-canonical: generated={len(generated)} skipped={len(skipped)}"
+          f"{' (dry-run)' if dry_run else ''}")
+    for g in generated:
+        print(f"  + {g['lesson_id']} → {g.get('rule_path', '')}")
+    for s in skipped:
+        print(f"  = {s} (canonical file exists; pass --force to overwrite)")
+    return 0
+
+
 def cmd_learn(args) -> int:
     """Harness v2.6 Phase G (2026-04-26): /vg:learn TTY/HMAC parity gate.
 
@@ -3124,6 +3471,29 @@ def cmd_learn(args) -> int:
     # both populated rather than block lost (operator can dedupe by id).
     candidates_path.write_text(new_src, encoding="utf-8")
 
+    # R9-C — atomic promote: emit canonical bootstrap artifacts so loader
+    # picks up the new rule on next /vg:* invocation. Pre-R9-C the
+    # orchestrator only moved CANDIDATES→ACCEPTED, leaving rules/ +
+    # overlay.yml + patches/ untouched → loader saw no new state →
+    # injection silently unchanged. Reject path skipped — only promotes
+    # produce canonical files.
+    canonical_artifacts: dict | None = None
+    if args.action == "promote":
+        try:
+            canonical_artifacts = _generate_canonical_artifacts_from_accepted(
+                block_text, cid, bootstrap_dir,
+            )
+        except Exception as e:
+            # Non-fatal — ACCEPTED.md is already written; operator can re-run
+            # `vg-orchestrator migrate-accepted-canonical --force` to backfill.
+            print(
+                f"\033[33mWARN: canonical artifact generation failed for "
+                f"{cid}: {e}. ACCEPTED.md updated; run "
+                f"`vg-orchestrator migrate-accepted-canonical --force` to "
+                f"retry.\033[0m",
+                file=sys.stderr,
+            )
+
     # Audit event emission — success path
     try:
         db.append_event(
@@ -3144,8 +3514,42 @@ def cmd_learn(args) -> int:
     except Exception:
         pass
 
+    # R9-C telemetry — emit AFTER promote audit so query order matches
+    # operator intuition ("promoted" → "canonical_artifacts_generated").
+    if canonical_artifacts is not None:
+        try:
+            db.append_event(
+                run_id=f"learn-{args.action}",
+                event_type="learn.canonical_artifacts_generated",
+                phase="",
+                command="learn",
+                actor="orchestrator",
+                outcome="INFO",
+                payload={
+                    "lesson_id": cid,
+                    "rule_path": canonical_artifacts["rule_path"],
+                    "overlay_keys": canonical_artifacts["overlay_keys"],
+                    "patches": canonical_artifacts["patches"],
+                },
+            )
+        except Exception:
+            pass
+
     verb = "Promoted" if args.action == "promote" else "Rejected"
-    print(f"✓ {verb} {cid} → {dest_path.relative_to(_REPO_ROOT)}")
+    if canonical_artifacts is not None:
+        rel_rule = Path(canonical_artifacts["rule_path"]).relative_to(_REPO_ROOT) \
+            if canonical_artifacts["rule_path"].startswith(str(_REPO_ROOT)) \
+            else canonical_artifacts["rule_path"]
+        n_patches = len(canonical_artifacts["patches"])
+        n_overlay = len(canonical_artifacts["overlay_keys"])
+        print(
+            f"✓ {verb} {cid} → {dest_path.relative_to(_REPO_ROOT)} "
+            f"+ rules/{cid}.md"
+            + (f" + overlay({n_overlay} keys)" if n_overlay else "")
+            + (f" + {n_patches} patch(es)" if n_patches else "")
+        )
+    else:
+        print(f"✓ {verb} {cid} → {dest_path.relative_to(_REPO_ROOT)}")
     return 0
 
 
@@ -4753,6 +5157,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="list: include RETIRED candidates in output",
     )
     s.set_defaults(func=cmd_learn)
+
+    # R9-C — migration: backfill canonical rules/overlay/patches for any
+    # ACCEPTED.md lessons predating R9-C atomic-promote.
+    s = sub.add_parser(
+        "migrate-accepted-canonical",
+        help=("R9-C migration: read ACCEPTED.md and emit canonical "
+              "rules/overlay/patches for any lesson missing canonical files. "
+              "Idempotent. Use --force to overwrite existing rules."),
+        allow_abbrev=False,
+    )
+    s.add_argument("--dry-run", action="store_true",
+                   help="Print plan without writing any files")
+    s.add_argument("--force", action="store_true",
+                   help="Overwrite existing rules/<lesson_id>.md instead of skipping")
+    s.set_defaults(func=cmd_migrate_accepted_canonical)
 
     # Harness v2.7 Phase D (2026-04-26): orphan validator triage
     s = sub.add_parser(

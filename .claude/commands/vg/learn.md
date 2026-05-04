@@ -163,12 +163,29 @@ audit event. AI subagents cannot self-promote.
 4. Dedupe check vs ACCEPTED (semantic equivalence) → block if duplicate
 5. Dry-run REQUIRED (shows impact preview)
 
-**If all pass:**
-1. For `config_override` → update `.vg/bootstrap/overlay.yml` (deep-merge)
-2. For `rule` → write `.vg/bootstrap/rules/{slug-from-title}.md` with full frontmatter
-3. For `patch` → write `.vg/bootstrap/patches/{command}.{anchor}.md`, validate anchor in `anchors.yml`
-4. Remove candidate from `CANDIDATES.md`
-5. Append to `ACCEPTED.md` with git_sha placeholder
+**If all pass — atomic promote pipeline (R9-C, 2026-05-05):**
+
+The orchestrator `learn promote` subcommand performs the move + canonical
+artifact generation in one shot so the bootstrap-loader sees the new rule
+on the very next /vg:* invocation. Pre-R9-C the move and the canonical
+files were split across two phases — operator had to remember a follow-up
+write step → in practice the canonical files were never written and
+loader saw zero new state. R9-C wires both halves together.
+
+1. Move candidate block from `CANDIDATES.md` → `ACCEPTED.md` (with audit
+   metadata: `<!-- promote L-id=<id> approver=<user> auth=tty|hmac
+   at=<iso8601> -->` + reason footer)
+2. **Always** write `.vg/bootstrap/rules/<lesson_id>.md` with YAML
+   frontmatter (`id`, `title`, `status: active`, optional `scope`,
+   `action`, `target_step`) + prose body extracted from the lesson block
+3. **If lesson has overlay payload** (top-level `overlay:` mapping OR
+   `type: config_override` with `target` + `value`) → deep-merge into
+   `.vg/bootstrap/overlay.yml`
+4. **If lesson has patch payload** (`type: patch` with prose, OR `## Patch`
+   markdown section) → write `.vg/bootstrap/patches/<lesson_id>.md` with
+   frontmatter (`id`, `title`, `anchor`, `status: active`)
+5. Emit `learn.canonical_artifacts_generated` telemetry with
+   `{lesson_id, rule_path, overlay_keys, patches}` payload
 6. **Git commit atomic:**
    ```
    chore(bootstrap): promote L-XXX — {reason}
@@ -184,6 +201,23 @@ audit event. AI subagents cannot self-promote.
    emit_telemetry "bootstrap.candidate_promoted" PASS \
      "{\"id\":\"L-XXX\",\"type\":\"...\",\"target\":\"...\"}"
    ```
+
+### Backward-compat: migrate pre-R9-C ACCEPTED.md
+
+If the project has lessons in `ACCEPTED.md` that were promoted before R9-C
+(no canonical files in `rules/`, `overlay.yml`, `patches/`), backfill them
+in one shot:
+
+```bash
+python3 .claude/scripts/vg-orchestrator/__main__.py \
+  migrate-accepted-canonical [--dry-run] [--force]
+```
+
+- `--dry-run` — print plan, write nothing
+- `--force` — overwrite existing `rules/<lesson_id>.md` (default: skip)
+
+Idempotent; safe to re-run. Lessons missing from `ACCEPTED.md` are not
+synthesized — only existing accepted lessons are processed.
 
 ### `/vg:learn --reject <id> --reason "..."`
 
