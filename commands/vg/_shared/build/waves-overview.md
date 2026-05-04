@@ -140,6 +140,45 @@ no project hardcode). The `Contract ref: API-CONTRACTS.md line X-Y` is a
 locator pointer string (KEEP-FLAT per audit doc) — the executor receives
 it for traceability; no flat read happens.
 
+### Step 2.1 — Cross-WORKFLOW block (Task 42, M2)
+
+When any task in the wave has `capsule.workflow_id != null` AND
+`${PHASE_DIR}/WORKFLOW-SPECS/<workflow_id>.md` exists, the orchestrator
+appends a `Cross-WORKFLOW constraint:` block per such task. This block
+cites siblings in other waves + the exact `state_after` value the workflow
+declares for the current task's step.
+
+Use the canonical helper:
+
+```bash
+python3 scripts/generate-wave-context.py \
+  --phase-dir "${PHASE_DIR}" \
+  --wave "${WAVE_ID}" \
+  --tasks "$(IFS=,; echo "${WAVE_TASK_NUMS[*]}")" \
+  --capsules-dir "${PHASE_DIR}/.task-capsules" \
+  > "${PHASE_DIR}/wave-${WAVE_ID}-context.md"
+```
+
+The script:
+- Reads each task's capsule (Task 41 schema) for `workflow_id` / `workflow_step` / `actor_role`
+- Reads `WORKFLOW-SPECS/<workflow_id>.md` to resolve the `state_after` value for the task's step
+- Indexes capsules across ALL waves to find siblings
+- Emits HTML comment sentinel `<!-- vg-telemetry: build.cross_wave_workflow_cited -->` when the block was added — orchestrator greps this and emits the telemetry event
+
+Backward-compat: phases without WORKFLOW-SPECS or all-null workflow_ids
+skip the block silently. The script never errors on missing artifacts.
+
+Example output:
+
+```markdown
+## Task 6 — tx_groups enum extension
+  Workflow: WF-001 step 2 (USER)
+  Cross-WORKFLOW constraint:
+    - Task 12 (wave 5, ADMIN, step 4 of WF-001) writes state established by your step
+    - Task 18 (wave 7, USER, step 5 of WF-001) reads state established by your step
+    - Your `state_after` MUST be exactly `pending_admin_review` (per WORKFLOW-SPECS/WF-001.md state_machine.states)
+```
+
 ### Step 3 — Initialize SUMMARY.md (first wave only) (8a.5)
 
 ```bash
@@ -504,6 +543,27 @@ bash scripts/vg-narrate-spawn.sh vg-build-task-executor failed "task-${N}: <one-
 
 Read `waves-delegation.md` for the EXACT input envelope, prompt
 template, and output JSON contract.
+
+### Codex runtime spawn path
+
+If the runtime is Codex, apply
+`commands/vg/_shared/codex-spawn-contract.md` instead of calling the
+Claude-only `Agent(...)` syntax. For every task in `parallel[]` or
+`sequential_groups[][]`:
+
+1. Render the `waves-delegation.md` prompt into
+   `${VG_TMP:-${PHASE_DIR}/.vg-tmp}/codex-spawns/wave-${W}/task-${N}.prompt.md`.
+2. Run `codex-spawn.sh --tier executor --sandbox workspace-write
+   --spawn-role vg-build-task-executor --task-id task-${N} --wave ${W}` with
+   `--out ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/codex-spawns/wave-${W}/task-${N}.json`.
+3. Keep the same pre/post `vg-narrate-spawn.sh` calls.
+4. Treat non-zero exit, empty output, malformed JSON, or missing task
+   commit evidence as a HARD BLOCK.
+
+For `parallel[]`, Codex may start independent `codex-spawn.sh` processes in
+the background and `wait` for all. For `sequential_groups[][]`, Codex MUST
+wait for each task before starting the next. Do NOT execute wave tasks inline
+on Codex.
 
 For `sequential_groups[][]`, repeat the narrate→spawn→narrate cycle one
 task at a time, waiting for each return before the next spawn.
@@ -1248,5 +1308,57 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 ---
 
-After step 8 + 8.5 markers touched for ALL waves, return to entry
-`build.md` → STEP 5 (post-execution: `9_post_execution`).
+## Final-wave detection (post-step 8 / 8.5)
+
+After the wave's 8 + 8.5 markers complete, the orchestrator decides whether to
+**continue to STEP 5 post-execution** (when this is the *final* wave of the
+phase, or `WAVE_FILTER` is unset = run-all-waves mode), or **exit gracefully**
+(when this is a mid-wave run via `--wave N` and N < max).
+
+```bash
+# When --wave N is set, query the helper to discover whether this is the
+# terminal wave. The helper parses PLAN/index.md to count total waves.
+IS_FINAL_WAVE="true"     # default for run-all-waves mode (no --wave flag)
+if [ -n "${WAVE_FILTER:-}" ]; then
+  detect_json=$(bash .claude/scripts/vg-detect-final-wave.sh \
+                  --phase "${PHASE_NUMBER}" --wave "${WAVE_FILTER}" \
+                  --phases-dir "${PHASES_DIR:-.vg/phases}" 2>/dev/null) || {
+    echo "⚠ vg-detect-final-wave failed for phase=${PHASE_NUMBER} wave=${WAVE_FILTER} — assuming partial wave" >&2
+    IS_FINAL_WAVE="false"
+  }
+  if [ -n "$detect_json" ]; then
+    IS_FINAL_WAVE=$(echo "$detect_json" \
+                    | "${PYTHON_BIN:-python3}" -c "import json,sys;d=json.load(sys.stdin);print('true' if d.get('is_final') else 'false')")
+  fi
+
+  if [ "$IS_FINAL_WAVE" = "true" ]; then
+    echo "▸ wave ${WAVE_FILTER} is the FINAL wave — proceeding to STEP 5 post-execution"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.final_wave_detected" \
+      --phase "${PHASE_NUMBER}" \
+      --payload "{\"wave\":${WAVE_FILTER},\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+  else
+    echo "▸ wave ${WAVE_FILTER} is NOT the final wave (max_wave=$(echo "$detect_json" | "${PYTHON_BIN:-python3}" -c 'import json,sys;print(json.load(sys.stdin).get("max_wave"))')) — partial-wave run, skipping STEP 5/6/7"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.partial_wave_complete" \
+      --phase "${PHASE_NUMBER}" \
+      --payload "{\"wave\":${WAVE_FILTER},\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+  fi
+fi
+
+# Persist for subsequent steps (slim entry STEP 5 reads this)
+mkdir -p ".vg/runs/${RUN_ID}" 2>/dev/null
+echo "$IS_FINAL_WAVE" > ".vg/runs/${RUN_ID}/.is-final-wave"
+```
+
+After step 8 + 8.5 markers touched for ALL waves (or for the FINAL wave when
+`WAVE_FILTER` is set):
+
+- **`IS_FINAL_WAVE=true`** → return to entry `build.md` → STEP 5
+  (`9_post_execution` → `10_postmortem_sanity` → `11_crossai_build_verify_loop`
+  → `12_run_complete`). Contract validator expects all post-execution markers.
+- **`IS_FINAL_WAVE=false`** (mid-wave) → emit `build.partial_wave_complete`
+  and `run-complete` with `--partial-wave` flag. Contract validator's
+  `is_partial_wave` exemption (in `vg-orchestrator/__main__.py` line ~4071+)
+  waives the post-execution markers + `build.completed` event.
+
+Slim entry `build.md` STEP 5 opener checks `.vg/runs/${RUN_ID}/.is-final-wave`
+and skips STEP 5/6/7 when value is `false`.

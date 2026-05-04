@@ -140,6 +140,45 @@ no project hardcode). The `Contract ref: API-CONTRACTS.md line X-Y` is a
 locator pointer string (KEEP-FLAT per audit doc) — the executor receives
 it for traceability; no flat read happens.
 
+### Step 2.1 — Cross-WORKFLOW block (Task 42, M2)
+
+When any task in the wave has `capsule.workflow_id != null` AND
+`${PHASE_DIR}/WORKFLOW-SPECS/<workflow_id>.md` exists, the orchestrator
+appends a `Cross-WORKFLOW constraint:` block per such task. This block
+cites siblings in other waves + the exact `state_after` value the workflow
+declares for the current task's step.
+
+Use the canonical helper:
+
+```bash
+python3 scripts/generate-wave-context.py \
+  --phase-dir "${PHASE_DIR}" \
+  --wave "${WAVE_ID}" \
+  --tasks "$(IFS=,; echo "${WAVE_TASK_NUMS[*]}")" \
+  --capsules-dir "${PHASE_DIR}/.task-capsules" \
+  > "${PHASE_DIR}/wave-${WAVE_ID}-context.md"
+```
+
+The script:
+- Reads each task's capsule (Task 41 schema) for `workflow_id` / `workflow_step` / `actor_role`
+- Reads `WORKFLOW-SPECS/<workflow_id>.md` to resolve the `state_after` value for the task's step
+- Indexes capsules across ALL waves to find siblings
+- Emits HTML comment sentinel `<!-- vg-telemetry: build.cross_wave_workflow_cited -->` when the block was added — orchestrator greps this and emits the telemetry event
+
+Backward-compat: phases without WORKFLOW-SPECS or all-null workflow_ids
+skip the block silently. The script never errors on missing artifacts.
+
+Example output:
+
+```markdown
+## Task 6 — tx_groups enum extension
+  Workflow: WF-001 step 2 (USER)
+  Cross-WORKFLOW constraint:
+    - Task 12 (wave 5, ADMIN, step 4 of WF-001) writes state established by your step
+    - Task 18 (wave 7, USER, step 5 of WF-001) reads state established by your step
+    - Your `state_after` MUST be exactly `pending_admin_review` (per WORKFLOW-SPECS/WF-001.md state_machine.states)
+```
+
 ### Step 3 — Initialize SUMMARY.md (first wave only) (8a.5)
 
 ```bash

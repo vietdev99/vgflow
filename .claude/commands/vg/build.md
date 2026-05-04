@@ -135,6 +135,10 @@ runtime_contract:
     - event_type: "build.envelope_slice_resolved"
       phase: "${PHASE_NUMBER}"
       severity: "info"
+    # Task 42 — cross-wave workflow citation (M2)
+    - event_type: "build.cross_wave_workflow_cited"
+      phase: "${PHASE_NUMBER}"
+      severity: "info"
   forbidden_without_override:
     # Every escape hatch must leave a debt-register trail.
     - "--override-reason"
