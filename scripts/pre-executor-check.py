@@ -630,11 +630,37 @@ def build_per_task_slices(
             f"WARN: LENS-WALK/ missing for task-{task_num} — context degraded.\n"
         )
 
-    # RCRURD-INVARIANTS: list of per-goal yaml paths (no concat — yaml parsed by subagent)
-    ri_dir = phase_dir / "RCRURD-INVARIANTS"
+    # RCRURD-INVARIANTS: per-goal yaml paths (R7 Task 2 — G7 source unification)
+    # Modern source (v2.49+): inline ```yaml-rcrurd``` fences inside TEST-GOALS/G-NN.md
+    # Legacy fallback: ${PHASE_DIR}/RCRURD-INVARIANTS/G-NN.yaml dir
+    #
+    # Extract raw fence text (no parse/reserialize — preserve verbatim author intent).
+    # Schema validation is downstream's job (executor + review). pre-executor-check
+    # only locates the source.
     rcrurd_paths: list[str] = []
-    if ri_dir.exists():
-        for g in goals:
+    tg_dir = phase_dir / "TEST-GOALS"
+    ri_dir = phase_dir / "RCRURD-INVARIANTS"
+    extracted_dir = cache_dir / "rcrurd-extracted"
+    fence_re = re.compile(r"```yaml-rcrurd\s*\n(.+?)\n```", re.DOTALL)
+
+    for g in goals:
+        # Try inline fence (modern v2.49+)
+        if tg_dir.exists():
+            goal_md = tg_dir / f"{g}.md"
+            if goal_md.exists():
+                try:
+                    body = goal_md.read_text(encoding="utf-8")
+                except OSError:
+                    body = ""
+                m = fence_re.search(body)
+                if m:
+                    extracted_dir.mkdir(parents=True, exist_ok=True)
+                    out_file = extracted_dir / f"{g}.yaml"
+                    out_file.write_text(m.group(1) + "\n", encoding="utf-8")
+                    rcrurd_paths.append(str(out_file))
+                    continue
+        # Legacy fallback (pre-v2.49 phases)
+        if ri_dir.exists():
             f = ri_dir / f"{g}.yaml"
             if f.exists():
                 rcrurd_paths.append(str(f))
