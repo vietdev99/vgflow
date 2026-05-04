@@ -135,12 +135,28 @@ def test_preflight_has_explicit_tasklist_projected_bash_call(cmd: str) -> None:
 
 def test_specs_md_has_create_task_tracker_step() -> None:
     """specs.md was the worst Bug D gap: no TodoWrite, no create_task_tracker
-    step. Pin: specs.md MUST contain the create_task_tracker step block."""
-    text = (COMMANDS_DIR / "specs.md").read_text(encoding="utf-8")
-    assert '<step name="create_task_tracker">' in text, (
-        "specs.md missing create_task_tracker step — Bug D regression risk."
-    )
-    assert "tasklist-projected" in text, (
+    step. Pin: create_task_tracker MUST exist as a step block somewhere in
+    specs context (slim entry OR ref). After R5 specs slim pilot
+    (2026-05-04), the step body moved to _shared/specs/preflight.md.
+    """
+    slim_text = (COMMANDS_DIR / "specs.md").read_text(encoding="utf-8")
+    # Either slim entry has the step (legacy monolithic) or a ref does (R5+)
+    if '<step name="create_task_tracker">' in slim_text:
+        text = slim_text
+    else:
+        # R5 slim: step body should be in _shared/specs/preflight.md
+        ref = COMMANDS_DIR / "_shared" / "specs" / "preflight.md"
+        assert ref.exists(), (
+            "specs.md is slim but _shared/specs/preflight.md missing — "
+            "Bug D regression risk."
+        )
+        text = ref.read_text(encoding="utf-8")
+        assert '<step name="create_task_tracker">' in text, (
+            f"create_task_tracker step block missing from both specs.md and "
+            f"{ref.relative_to(REPO_ROOT)} — Bug D regression risk."
+        )
+    # tasklist-projected reference must be in slim entry OR preflight ref
+    assert "tasklist-projected" in slim_text or "tasklist-projected" in text, (
         "specs.md missing tasklist-projected reference — Bug D regression risk."
     )
 

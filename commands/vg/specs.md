@@ -12,8 +12,8 @@ allowed-tools:
   - TodoWrite
 runtime_contract:
   # OHOK Batch 1 (2026-04-22): specs.md runtime_contract.
-  # Previously zero enforcement — step 1 of pipeline was 100% performative.
-  # Now orchestrator validates markers + artifact + approval at run-complete.
+  # R5 specs slim pilot (2026-05-04): refactor to slim entry + 3 refs.
+  # Step IDs unchanged — markers + telemetry preserved verbatim.
   must_write:
     - path: "${PHASE_DIR}/SPECS.md"
       content_min_bytes: 300
@@ -62,21 +62,22 @@ runtime_contract:
 ---
 
 <objective>
-Generate a concise SPECS.md defining phase goal, scope, constraints, and success criteria. This is the FIRST step of the VG pipeline — specs must be locked before scope, blueprint, or build can proceed.
+Generate a concise SPECS.md defining phase goal, scope, constraints, and
+success criteria. This is the FIRST step of the VG pipeline — specs must be
+locked before scope, blueprint, or build can proceed.
 
 Output: `${PLANNING_DIR}/phases/{phase_dir}/SPECS.md`
 </objective>
 
 <HARD-GATE>
-You MUST follow STEP 1 through STEP 8 in exact order. Each step is gated
+You MUST follow STEP 1 through STEP 3 in exact order. Each step is gated
 by hooks. Skipping ANY step will be blocked by PreToolUse + Stop hooks.
 You CANNOT rationalize past these gates.
 
-You MUST call TodoWrite IMMEDIATELY after STEP 1 (`parse_args`) registers
-the run and `emit-tasklist.py` writes the contract — DO NOT continue
-without it. The PreToolUse Bash hook will block all subsequent
-step-active calls until signed evidence exists at
-`.vg/runs/<run_id>/.tasklist-projected.evidence.json`. The PostToolUse
+You MUST call TodoWrite IMMEDIATELY after STEP 1 (`parse_args` + preamble
+emit-tasklist.py) — DO NOT continue without it. The PreToolUse Bash hook
+will block all subsequent step-active calls until signed evidence exists
+at `.vg/runs/<run_id>/.tasklist-projected.evidence.json`. The PostToolUse
 TodoWrite hook auto-writes that signed evidence.
 
 TodoWrite MUST include sub-items (`↳` prefix) for each group header;
@@ -99,9 +100,14 @@ without ever projecting the tasklist, defeating the universal contract.
 | "Block message bỏ qua, retry là xong" | §4.5 Layer 2: vg.block.fired must pair with vg.block.handled or Stop blocks |
 | "Spawn `Task()` như cũ" | Tool name is `Agent`, not `Task` (Codex fix #3) |
 
-## Tasklist policy (summary)
+## Tasklist policy
 
-`emit-tasklist.py` writes the profile-filtered
+Read `_shared/lib/tasklist-projection-instruction.md` and follow it
+exactly for the canonical 2-layer projection contract (group headers
++ ↳ sub-items, adapter='claude' for Claude Code sessions, signed
+evidence at `.vg/runs/<run_id>/.tasklist-projected.evidence.json`).
+
+Summary: `emit-tasklist.py` writes the profile-filtered
 `.vg/runs/<run_id>/tasklist-contract.json` (schema `native-tasklist.v2`).
 The process preamble below calls it; this skill IMPERATIVELY calls
 TodoWrite right after with one todo per `projection_items[]` entry
@@ -151,446 +157,89 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
   --phase "${PHASE_NUMBER:-unknown}" 2>&1 | head -40 || true
 ```
 
-<step name="create_task_tracker">
-## Step 1.5: Create task tracker (create_task_tracker) — IMPERATIVE TodoWrite gate
+## Steps (3 STEP sections)
 
-**Bind native tasklist to specs hierarchical projection.**
+### STEP 1 — preflight (5 light steps)
 
-`tasklist-contract.json` (schema `native-tasklist.v2`, written by `emit-tasklist.py`
-in the preamble above) contains:
-- `checklists[]` — coarse groups for the specs flow
-- `projection_items[]` — flat list of group headers + per-group sub-steps
-  (each sub-step prefixed with `  ↳`). This is what TodoWrite projects.
+Read `_shared/specs/preflight.md` and follow it exactly.
 
-<HARD-GATE>
-You MUST IMMEDIATELY call TodoWrite AFTER the bash below runs `step-active`.
-DO NOT continue without TodoWrite — the PreToolUse Bash hook will block all
-subsequent `step-active` calls until signed evidence exists at
-`.vg/runs/<run_id>/.tasklist-projected.evidence.json`.
+This step covers:
+- `parse_args` — extract phase + --auto flag, validate ROADMAP entry
+- `create_task_tracker` — IMPERATIVE TodoWrite + tasklist-projected (Bug D fix)
+- `check_existing` — handle existing SPECS.md (View / Edit / Overwrite)
+- `choose_mode` — AI Draft vs Guided
+- `guided_questions` — 5 questions (Goal / Scope-IN / Scope-OUT /
+  Constraints / Success Criteria), only in --guided mode
 
-The PostToolUse TodoWrite hook auto-writes that signed evidence after your
-TodoWrite call.
-</HARD-GATE>
+After STEP 1.create_task_tracker bash runs, you MUST call TodoWrite
+IMMEDIATELY with the projection items from
+`.vg/runs/<run_id>/tasklist-contract.json`.
 
-Required behavior:
-1. Read `.vg/runs/<run_id>/tasklist-contract.json` → consume `projection_items[]`.
-2. Call `TodoWrite` with one todo per `projection_items[]` entry — full hierarchy
-   (group headers + sub-steps with `↳` prefix). Use the entry's `title` verbatim
-   as todo `content`.
-3. Call `vg-orchestrator tasklist-projected --adapter claude` (or `codex|fallback`
-   in non-Claude runtimes; Claude Code session adapter MUST be `claude` per Bug L
-   P6 hook check).
-4. Keep `.step-markers/*.done` as the durable enforcement signal.
+### STEP 2 — authoring (3 sub-steps)
 
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active create_task_tracker 2>/dev/null || true
+Read `_shared/specs/authoring.md` and follow it exactly.
 
-# (TodoWrite call happens HERE per HARD-GATE above — AI MUST issue it before
-# any other tool. PostToolUse TodoWrite hook signs evidence automatically.)
+This step covers:
+- `generate_draft` — render preview + `AskUserQuestion` BLOCKING APPROVAL GATE.
+  USER_APPROVAL ∈ {approve, edit, discard}; silent / unset = BLOCK.
+- `write_specs` — write SPECS.md with frontmatter + sections; runs
+  `verify-artifact-schema.py` post-write to catch frontmatter drift.
+- `write_interface_standards` — generate INTERFACE-STANDARDS.{md,json}
+  via `generate-interface-standards.py` + validate.
 
-# Bug D 2026-05-04: explicit emission — fires specs.native_tasklist_projected.
-# Must succeed for run-complete contract; surfaces failure if contract missing.
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
-  --adapter "${VG_TASKLIST_ADAPTER:-claude}" || {
-    echo "⛔ vg-orchestrator tasklist-projected failed — specs.native_tasklist_projected event will not fire." >&2
-    echo "   Check .vg/runs/<run_id>/tasklist-contract.json was written by emit-tasklist.py + adapter ∈ {claude,codex,fallback}." >&2
-    exit 1
-}
+### STEP 3 — close (1 sub-step)
 
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR:-.vg/phases/${PHASE_NUMBER}}") || {
-  mkdir -p "${PHASE_DIR:-.vg/phases/${PHASE_NUMBER}}/.step-markers" 2>/dev/null
-  touch "${PHASE_DIR:-.vg/phases/${PHASE_NUMBER}}/.step-markers/create_task_tracker.done"
-}
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step specs create_task_tracker 2>/dev/null || true
-```
-</step>
+Read `_shared/specs/close.md` and follow it exactly.
 
-<step name="parse_args">
-## Step 1: Parse Arguments
-
-Extract from `$ARGUMENTS`:
-- **phase_number** — Required. e.g., "7.4", "8", "3.1"
-- **--auto flag** — Optional. If present, skip interactive questions and AI-draft directly.
-
-**Validate:**
-
-```bash
-# Harness v2.6.1 (2026-04-26): inject rule cards at skill entry — gives AI
-# a 5-30 line digest of skill rules instead of skimming 1500-line body.
-# Cards generated by extract-rule-cards.py. Per AUDIT.md D4 finding
-# (inject_rule_cards 0/44 invocation = memory mechanism dead).
-[ -f "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/inject-rule-cards.sh" ] && \
-  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/inject-rule-cards.sh" && \
-  inject_rule_cards "vg-specs" "parse_args" 2>&1 || true
-
-# OHOK Batch 1 B2: phase existence gate (previously prose "fail fast", no enforcement).
-# Accepts both "Phase X" and bare "X" at line start in ROADMAP.md.
-if [ -z "${PHASE_NUMBER:-}" ]; then
-  echo "⛔ PHASE_NUMBER not set — argument required" >&2
-  exit 1
-fi
-
-ROADMAP="${PLANNING_DIR:-.vg}/ROADMAP.md"
-if [ ! -f "$ROADMAP" ]; then
-  echo "⛔ ROADMAP.md not found at ${ROADMAP}" >&2
-  echo "   Run /vg:roadmap first to derive phases from PROJECT.md." >&2
-  exit 1
-fi
-
-if ! grep -qE "(^##?\s+(Phase\s+)?${PHASE_NUMBER}[\s:|.-])|(^\|\s*${PHASE_NUMBER}[\s:|.-])|(^- \[.\]\s+\*\*Phase\s+${PHASE_NUMBER}[\s:.-])" "$ROADMAP" 2>/dev/null; then
-  echo "⛔ Phase ${PHASE_NUMBER} not found in ${ROADMAP}" >&2
-  echo "   Check phase number or add via /vg:add-phase." >&2
-  echo "   Accepted ROADMAP formats:" >&2
-  echo "     '## Phase N: ...'  |  '| N | ... |'  |  '- [x] **Phase N: ...**'" >&2
-  exit 1
-fi
-
-# Resolve phase dir (create if missing)
-source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/phase-resolver.sh" 2>/dev/null || true
-if type -t resolve_phase_dir >/dev/null 2>&1; then
-  PHASE_DIR=$(resolve_phase_dir "$PHASE_NUMBER" 2>/dev/null || echo "")
-fi
-if [ -z "${PHASE_DIR:-}" ]; then
-  # Bootstrap phase dir if totally new (extract slug from ROADMAP heading if possible)
-  PHASE_SLUG=$(grep -E "^##?\s+(Phase\s+)?${PHASE_NUMBER}\b" "$ROADMAP" \
-               | head -1 | sed -E 's/^##?\s+(Phase\s+)?[0-9.]+[\s:.-]+//; s/[[:space:]]+/-/g; s/[^a-zA-Z0-9-]//g' \
-               | tr '[:upper:]' '[:lower:]' | head -c 60)
-  [ -z "$PHASE_SLUG" ] && PHASE_SLUG="phase-${PHASE_NUMBER}"
-  PHASE_DIR="${PLANNING_DIR:-.vg}/phases/${PHASE_NUMBER}-${PHASE_SLUG}"
-  mkdir -p "$PHASE_DIR"
-fi
-
-export PHASE_DIR
-mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "parse_args" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/parse_args.done"
-```
-</step>
-
-<step name="check_existing">
-## Step 2: Check Existing SPECS.md
-
-If `${PHASE_DIR}/SPECS.md` already exists:
-
-Ask user via `AskUserQuestion`:
-- header: "SPECS.md exists — what next?"
-- question: "SPECS.md đã tồn tại cho Phase ${PHASE_NUMBER}. Chọn: View (xem), Edit (giữ + sửa từng section), Overwrite (ghi đè từ đầu)."
-- options:
-  - "View — hiển thị nội dung rồi hỏi lại"
-  - "Edit — giữ nguyên, sửa section cụ thể"
-  - "Overwrite — start fresh"
-
-Act on the response. If "View", show contents then re-ask. If "Edit", proceed to guided editing of specific sections. If "Overwrite", continue to next step.
-
-If SPECS.md does not exist, continue.
-
-```bash
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "check_existing" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/check_existing.done"
-```
-</step>
-
-<step name="choose_mode">
-## Step 3: Choose Mode
-
-```bash
-AUTO_MODE=false
-if [[ "${ARGUMENTS:-}" =~ --auto ]]; then
-  AUTO_MODE=true
-fi
-```
-
-If `$AUTO_MODE=true`, skip to step 5 (generate_draft).
-
-Otherwise, invoke `AskUserQuestion`:
-- header: "SPECS mode"
-- question: "Phase ${PHASE_NUMBER}: ${phase_goal}. Bạn muốn tạo SPECS theo cách nào?"
-- options:
-  - "AI Draft — tôi tự draft dựa trên ROADMAP + PROJECT"
-  - "Guided — tôi hỏi 4-5 câu để bạn mô tả"
-
-- If "AI Draft" → go to step 5 (generate_draft)
-- If "Guided" → go to step 4 (guided_questions)
-
-```bash
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "choose_mode" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/choose_mode.done"
-```
-</step>
-
-<step name="guided_questions">
-## Step 4: Guided Questions (User-Guided Mode only — skipped in --auto)
-
-Ask questions ONE AT A TIME via `AskUserQuestion`. After each answer, save it immediately to avoid context loss.
-
-**Q1: Goal** — "Mục tiêu chính của phase này là gì? (1-2 câu). ROADMAP nói: ${phase_goal}"
-
-**Q2: Scope IN** — "Những gì NẰM TRONG scope? (liệt kê features/tasks)"
-
-**Q3: Scope OUT** — "Những gì KHÔNG làm trong phase này? (exclusions rõ ràng)"
-
-**Q4: Constraints** — "Ràng buộc kỹ thuật hoặc business nào cần lưu ý? (VD: latency, compatibility, dependencies)"
-
-**Q5: Success Criteria** — "Làm sao biết phase này DONE? (tiêu chí đo lường được)"
-
-```bash
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "guided_questions" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/guided_questions.done"
-```
-</step>
-
-<step name="generate_draft">
-## Step 5: Generate Draft + Approval Gate
-
-**If AI Draft mode (`$AUTO_MODE=true` or user chose option 1):**
-- Generate SPECS.md content from ROADMAP phase goal + PROJECT.md constraints
-- Infer scope, constraints, success criteria from available context
-- Match style of prior SPECS.md files if present
-
-**If Guided mode:**
-- Use user's answers from step 4 as primary content
-- Supplement with ROADMAP + PROJECT where answers sparse
-- Do NOT override explicit user answers with AI inference
-
-**⛔ BLOCKING APPROVAL GATE — user MUST approve before write (OHOK Batch 1 B3).**
-
-Render preview to user, then invoke `AskUserQuestion`:
-- header: "Approve SPECS.md draft?"
-- question: "Preview bên trên. Chọn Approve để ghi file, Edit để yêu cầu sửa, Discard để huỷ."
-- options:
-  - "Approve — write SPECS.md và tiếp tục"
-  - "Edit — nói cần sửa gì, tôi regenerate rồi hỏi lại"
-  - "Discard — dừng command, không tạo SPECS.md"
-
-```bash
-# OHOK Batch 1 B3: enforce explicit approval via $USER_APPROVAL env.
-# AI MUST set USER_APPROVAL based on AskUserQuestion response:
-#   "approve" → proceed to step 6
-#   "edit" → loop back (regenerate + re-gate)
-#   "discard" → exit 2 (clean halt, telemetry records decision)
-# Silence / ambiguous / empty = treat as unapproved.
-
-case "${USER_APPROVAL:-}" in
-  approve)
-    MODE_STR=$([ "${AUTO_MODE:-false}" = "true" ] && echo "auto" || echo "guided")
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "specs.approved" \
-      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mode\":\"${MODE_STR}\"}" >/dev/null 2>&1 || true
-    ;;
-  edit)
-    echo "User requested edit — regenerate draft + re-gate" >&2
-    # AI loops back to regenerate; marker NOT touched until approve/discard terminal
-    exit 2
-    ;;
-  discard)
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "specs.rejected" \
-      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"user_discarded\"}" >/dev/null 2>&1 || true
-    echo "⛔ User discarded SPECS draft — halting /vg:specs (no file written)" >&2
-    # Log to override-debt so audit trail captures the reject
-    source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
-    if type -t log_override_debt >/dev/null 2>&1; then
-      log_override_debt "specs-user-discard" "${PHASE_NUMBER}" "user discarded draft at approval gate" "${PHASE_DIR}"
-    fi
-    exit 2
-    ;;
-  *)
-    echo "⛔ Approval gate not passed — USER_APPROVAL='${USER_APPROVAL:-<unset>}'" >&2
-    echo "   AI must invoke AskUserQuestion and set USER_APPROVAL ∈ {approve, edit, discard}." >&2
-    echo "   Silence / ambiguous answer = unapproved. No SPECS.md written." >&2
-    exit 2
-    ;;
-esac
-
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "generate_draft" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/generate_draft.done"
-```
-
-**Rationale:** previous wording "AI MUST stop, render preview, wait" was prose-only — AI could silent-skip and proceed to write. Now gate is bash-enforced: no write without `USER_APPROVAL=approve` env set by AI based on AskUserQuestion result.
-</step>
-
-<step name="write_specs">
-## Step 6: Write SPECS.md
-
-Write to `${PHASE_DIR}/SPECS.md` with this format:
-
-```markdown
----
-
-<LANGUAGE_POLICY>
-You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
-
-Mặc định trả lời bằng **tiếng Việt** (config: `language.primary` trong
-`.claude/vg.config.md`, fallback `vi` nếu chưa set). Dùng ngôn ngữ con
-người, không technical jargon. Mỗi thuật ngữ tiếng Anh xuất hiện lần đầu
-trong narration: thêm giải thích VN trong dấu ngoặc (per
-`_shared/term-glossary.md`).
-
-Ví dụ:
-- ❌ "Validator failed with 225 evidence count"
-- ✅ "Validator báo 225 trường thiếu — chi tiết ở `[path]`. Mình sẽ sửa rồi chạy lại."
-
-File paths, code identifiers (G-04, Wave 9, getUserById), commit messages,
-CLI commands stay English. AskUserQuestion title + options + question prose:
-ngôn ngữ config.
-</LANGUAGE_POLICY>
-phase: {X}
-status: approved
-created: {YYYY-MM-DD}
-source: ai-draft|user-guided
----
-
-## Goal
-
-{1-2 sentence phase objective}
-
-## Scope
-
-### In Scope
-- {feature/task 1}
-- {feature/task 2}
-
-### Out of Scope
-- {exclusion 1}
-- {exclusion 2}
-
-## Constraints
-- {constraint 1}
-
-## Success Criteria
-- [ ] {measurable criterion 1}
-- [ ] {measurable criterion 2}
-
-## Dependencies
-- {dependency on prior phase or external system}
-```
-
-- **source**: `ai-draft` if --auto or user chose option 1, else `user-guided`
-- **created**: today's date YYYY-MM-DD
-
-```bash
-# Verify file actually written (catches silent write fail)
-if [ ! -s "${PHASE_DIR}/SPECS.md" ]; then
-  echo "⛔ SPECS.md write failed — file missing or empty at ${PHASE_DIR}/SPECS.md" >&2
-  exit 1
-fi
-
-# v2.7 Phase E — schema validation post-write (BLOCK on frontmatter drift).
-mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-"${PYTHON_BIN}" .claude/scripts/validators/verify-artifact-schema.py \
-  --phase "${PHASE_NUMBER}" --artifact specs \
-  > "${PHASE_DIR}/.tmp/artifact-schema-specs.json" 2>&1
-SCHEMA_RC=$?
-if [ "${SCHEMA_RC}" != "0" ]; then
-  echo "⛔ SPECS.md schema violation — see ${PHASE_DIR}/.tmp/artifact-schema-specs.json"
-  cat "${PHASE_DIR}/.tmp/artifact-schema-specs.json"
-  exit 2
-fi
-
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "write_specs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/write_specs.done"
-```
-</step>
-
-<step name="write_interface_standards">
-## Step 7: Write Interface Standards
-
-After SPECS.md exists, generate the phase-local API/FE/CLI/mobile interface
-contract. This artifact is mandatory context for blueprint, build, review,
-and test. It standardizes API response envelopes, FE toast/form error
-priority, CLI stdout/stderr/JSON output, and harness enforcement.
-
-```bash
-INTERFACE_GEN="${REPO_ROOT:-.}/.claude/scripts/generate-interface-standards.py"
-INTERFACE_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-interface-standards.py"
-[ -f "$INTERFACE_GEN" ] || INTERFACE_GEN="${REPO_ROOT:-.}/scripts/generate-interface-standards.py"
-[ -f "$INTERFACE_VAL" ] || INTERFACE_VAL="${REPO_ROOT:-.}/scripts/validators/verify-interface-standards.py"
-
-if [ ! -f "$INTERFACE_GEN" ] || [ ! -f "$INTERFACE_VAL" ]; then
-  echo "⛔ Interface standards helpers missing — cannot continue specs." >&2
-  exit 1
-fi
-
-"${PYTHON_BIN:-python3}" "$INTERFACE_GEN" \
-  --phase-dir "$PHASE_DIR" \
-  --profile "${PROFILE:-web-fullstack}" \
-  --force
-
-mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
-"${PYTHON_BIN:-python3}" "$INTERFACE_VAL" \
-  --phase-dir "$PHASE_DIR" \
-  --profile "${PROFILE:-web-fullstack}" \
-  --no-scan-source \
-  > "${PHASE_DIR}/.tmp/interface-standards-specs.json" 2>&1
-INTERFACE_RC=$?
-if [ "$INTERFACE_RC" -ne 0 ]; then
-  echo "⛔ INTERFACE-STANDARDS validation failed — see ${PHASE_DIR}/.tmp/interface-standards-specs.json" >&2
-  cat "${PHASE_DIR}/.tmp/interface-standards-specs.json"
-  exit 1
-fi
-
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "write_interface_standards" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/write_interface_standards.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step specs write_interface_standards 2>/dev/null || true
-```
-</step>
-
-<step name="commit_and_next">
-## Step 8: Commit and Next Step
-
-```bash
-git add "${PHASE_DIR}/SPECS.md" \
-        "${PHASE_DIR}/INTERFACE-STANDARDS.md" \
-        "${PHASE_DIR}/INTERFACE-STANDARDS.json" || {
-  echo "⛔ git add failed — check permissions" >&2
-  exit 1
-}
-git commit -m "specs(${PHASE_NUMBER}): create SPECS and interface standards for phase ${PHASE_NUMBER}" || {
-  echo "⛔ git commit failed — check pre-commit hooks" >&2
-  exit 1
-}
-
-# ─── P20 D-05: greenfield design discovery suggestion ──────────────────────
-# After SPECS committed, surface design state proactively. Soft suggestion
-# (doesn't block). Hard gate fires later in /vg:blueprint D-12.
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/scaffold-discovery.sh" 2>/dev/null || true
-if type -t scaffold_detect_fe_work >/dev/null 2>&1 && scaffold_detect_fe_work "$PHASE_DIR"; then
-  DESIGN_DIR=$(vg_config_get design_assets.paths "" 2>/dev/null | head -1)
-  DESIGN_DIR="${DESIGN_DIR:-designs}"
-  if ! scaffold_design_md_present "$PHASE_DIR"; then
-    echo ""
-    echo "ℹ Phase ${PHASE_NUMBER} có FE work nhưng chưa có DESIGN.md (tokens). Khuyến nghị:"
-    echo "    /vg:design-system --browse   (chọn brand từ 58 variants)"
-    echo "    /vg:design-system --create   (tạo custom)"
-  fi
-  MOCKUP_COUNT=$(scaffold_count_existing_mockups "$DESIGN_DIR")
-  if [ "$MOCKUP_COUNT" = "0" ]; then
-    echo ""
-    echo "ℹ Chưa có mockup nào ở ${DESIGN_DIR}/. Khuyến nghị trước /vg:blueprint:"
-    echo "    /vg:design-scaffold       (interactive tool selector)"
-    echo "    /vg:design-scaffold --tool=pencil-mcp   (auto-generate)"
-    echo ""
-    echo "  /vg:blueprint D-12 sẽ HARD-BLOCK nếu vẫn thiếu mockup."
-  fi
-fi
-
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "commit_and_next" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/commit_and_next.done"
-
-# Orchestrator run-complete — validates runtime_contract + emits specs.completed
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
-RUN_RC=$?
-if [ "$RUN_RC" -ne 0 ]; then
-  echo "⛔ specs run-complete BLOCK (rc=$RUN_RC) — see orchestrator output" >&2
-  exit $RUN_RC
-fi
-
-echo ""
-echo "✓ SPECS.md + INTERFACE-STANDARDS created for Phase ${PHASE_NUMBER}."
-echo "  Next: /vg:scope ${PHASE_NUMBER}"
-```
-</step>
+This step covers `commit_and_next`:
+- git add + commit SPECS.md + INTERFACE-STANDARDS.{md,json}
+- Soft-suggest design discovery if FE work detected (P20 D-05)
+- run-complete (orchestrator validates runtime_contract)
 
 </process>
 
+## Diagnostic flow (5 layers — see vg-meta-skill.md)
+
+If any tool call is blocked by a hook:
+1. Read the stderr DIAGNOSTIC REQUIRED prompt (Layer 1 format).
+2. Tell the user using the narrative template inside the message (Layer 5).
+3. Bash: `vg-orchestrator emit-event vg.block.handled --gate <gate_id> --resolution "<summary>"`.
+4. Apply the REQUIRED FIX described in the prompt.
+5. Retry the original tool call.
+
+After ≥3 blocks on the same gate, you MUST call AskUserQuestion (Layer 3
+escalation). After context compaction, SessionStart hook re-injects
+open diagnostics (Layer 4).
+
+## Architectural rationale (R5 specs pilot)
+
+This slim entry replaces a 596-line specs.md monolith. The 9 step markers
++ must_emit_telemetry events are unchanged — only on-disk layout changed.
+Heavy steps stay inline (no subagent — specs is small enough for main
+agent context budget). Light steps moved to flat refs in `_shared/specs/`.
+
+Token impact: ~300 lines saved from main agent's specs.md context load.
+Combined with Bug D + D3 + R3 review slim, total session savings: 80-150K
+tokens depending on workflow mix.
+
+Companion artifacts:
+- Backup: `commands/vg/.specs.md.r5-backup` (full 596-line pre-refactor)
+- Refs:
+  - `_shared/specs/preflight.md` (parse_args, create_task_tracker,
+    check_existing, choose_mode, guided_questions — 183 lines)
+  - `_shared/specs/authoring.md` (generate_draft, write_specs,
+    write_interface_standards — 191 lines)
+  - `_shared/specs/close.md` (commit_and_next — 54 lines)
+
 <success_criteria>
-- SPECS.md written to `${PHASE_DIR}/SPECS.md`
-- INTERFACE-STANDARDS.md/json written to `${PHASE_DIR}/INTERFACE-STANDARDS.*`
-- Contains ALL sections: Goal, Scope (In/Out), Constraints, Success Criteria, Dependencies
-- Frontmatter includes phase, status, created, source fields
-- User explicitly approved (`USER_APPROVAL=approve`) before writing — silent / unset = BLOCK
-- All 8 step markers present under `.step-markers/` (guided_questions waived in --auto mode)
-- `specs.started` + `specs.approved` telemetry events emitted
+- SPECS.md written to `${PHASE_DIR}/SPECS.md` (≥300 bytes, contains
+  ## Goal + ## Scope sections)
+- INTERFACE-STANDARDS.{md,json} written to `${PHASE_DIR}/`
+- All 8 step markers present under `.step-markers/` (guided_questions
+  waived in --auto mode)
+- `specs.tasklist_shown` + `specs.native_tasklist_projected` (Bug D) +
+  `specs.started` + `specs.approved` telemetry events emitted
+- User explicitly approved (`USER_APPROVAL=approve`) before writing —
+  silent / unset = BLOCK
 - Git committed + `run-complete` returned 0
 </success_criteria>
