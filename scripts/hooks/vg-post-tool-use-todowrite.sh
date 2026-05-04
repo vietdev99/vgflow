@@ -28,20 +28,51 @@ todos = hook_input.get("tool_input", {}).get("todos", [])
 contract = json.loads(open(contract_path).read())
 checklists = contract.get("checklists", [])
 
-# Tolerant match: each contract checklist matched if any todo content contains
-# its id or its title. Sub-step todos (prefixed "↳") are ignored when matching
-# group-level coverage. Allows AI to format content as "id", "title", or
-# "id: title (N steps)" without breaking verification.
+# Tolerant match: each contract checklist matched if any group-header todo
+# content contains its id or its title. Allows AI to format group content
+# as "id", "title", or "id: title (N steps)" without breaking verification.
 todo_contents = [t.get("content", "").strip() for t in todos if t.get("content")]
-group_contents = [c for c in todo_contents if not c.lstrip().startswith("↳")]
-matched_ids = set()
-for content in group_contents:
+
+# Task 44b — Rule V2 (depth check): scan all raw todos in order and count, per
+# group_header, the number of immediately-following items prefixed with "↳".
+# A group with 0 children is "flat" → depth_valid=false. The previous
+# implementation FILTERED OUT ↳ rows before matching (audit P4 smoking gun);
+# that REWARDED flat tasklists. We now keep raw order and walk it linearly.
+
+def _is_sub(content: str) -> bool:
+    return content.lstrip().startswith("↳")
+
+# Walk todos in order. For each group-header (non-↳), count the number of ↳
+# items that immediately follow before the next group-header.
+groups_seen = []        # ordered list of (matched_id, header_text)
+sub_counts = {}         # matched_id -> int
+current_id = None
+for content in todo_contents:
+    if _is_sub(content):
+        if current_id is not None:
+            sub_counts[current_id] = sub_counts.get(current_id, 0) + 1
+        # else: orphan sub before any group — ignored
+        continue
+    # group-header row: try to match against contract checklists by id or title.
+    matched = None
     for c in checklists:
         if c["id"] in content or c["title"] in content:
-            matched_ids.add(c["id"])
+            matched = c["id"]
             break
+    current_id = matched
+    if matched is not None and matched not in sub_counts:
+        sub_counts[matched] = 0
+        groups_seen.append((matched, content))
+
+matched_ids = set(sub_counts.keys())
 contract_ids = sorted([c["id"] for c in checklists])
 match = matched_ids == set(contract_ids)
+
+# depth_valid: every matched group must have ≥1 ↳ child.
+flat_groups = [gid for gid, n in sub_counts.items() if n == 0]
+groups_with_subs_count = sum(1 for n in sub_counts.values() if n >= 1)
+depth_valid = (len(matched_ids) > 0) and (len(flat_groups) == 0)
+
 payload = {
     "run_id": run_id,
     "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -50,6 +81,9 @@ payload = {
     "todo_ids": sorted(matched_ids),
     "contract_ids": contract_ids,
     "match": match,
+    "depth_valid": depth_valid,
+    "groups_with_subs_count": groups_with_subs_count,
+    "flat_groups": sorted(flat_groups),
 }
 print(json.dumps(payload))
 PY
