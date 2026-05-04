@@ -28,10 +28,28 @@ SPECS_MD = (Path(__file__).resolve().parents[2]
             / "commands" / "vg" / "specs.md")
 
 
+def _read_specs_full() -> str:
+    """Read slim entry + all refs concatenated.
+
+    R6 Task 11: VG harness moved to slim entry pattern — `commands/vg/specs.md`
+    is short routing-only, and step bodies live in `commands/vg/_shared/specs/*.md`.
+    Tests that parse only the slim entry miss step bodies in refs (false-pass).
+    Same pattern as test_review_tasklist_projection.py fixed in R3.
+    """
+    repo = Path(__file__).resolve().parents[2]
+    body = (repo / "commands/vg/specs.md").read_text(encoding="utf-8")
+    refs_dir = repo / "commands/vg/_shared/specs"
+    if refs_dir.is_dir():
+        for ref_path in sorted(refs_dir.glob("**/*.md")):
+            body += "\n\n# === REF: " + str(ref_path.relative_to(repo)) + " ===\n\n"
+            body += ref_path.read_text(encoding="utf-8")
+    return body
+
+
 @pytest.fixture(scope="module")
 def specs_text() -> str:
     assert SPECS_MD.exists(), f"specs.md missing at {SPECS_MD}"
-    return SPECS_MD.read_text(encoding="utf-8")
+    return _read_specs_full()
 
 
 # ═══════════════════════════ Contract frontmatter ═══════════════════════════
