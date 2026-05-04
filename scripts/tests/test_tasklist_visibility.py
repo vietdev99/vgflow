@@ -49,8 +49,15 @@ class TestEmitTasklistHelper:
     def test_helper_exists(self):
         assert HELPER.exists(), f"Missing {HELPER}"
 
-    def test_helper_no_emit_mode_prints_steps(self):
-        """--no-emit prints step list without touching orchestrator."""
+    def test_helper_no_emit_mode_prints_summary(self):
+        """--no-emit prints compact summary line.
+
+        Bug F (2026-05-04 token-audit Priority 3): emit-tasklist.py stdout
+        was reduced from 95 lines to 1 line. Items live in tasklist-
+        contract.json on disk; AI projects via TodoWrite (not from stdout).
+        Test asserts the new compact summary contract: command + phase +
+        profile + step/group/item counts.
+        """
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         r = subprocess.run(
@@ -63,49 +70,58 @@ class TestEmitTasklistHelper:
             cwd=str(REPO_ROOT), env=env, encoding="utf-8", errors="replace",
         )
         assert r.returncode == 0, r.stderr
-        # Must show step list header + at least one numbered step
+        # Summary line must contain command + phase + profile + counts
         assert "vg:blueprint" in r.stdout
         assert "Phase 7.14" in r.stdout
-        assert "Checklists:" in r.stdout
-        assert "blueprint_plan" in r.stdout
-        assert "steps to execute" in r.stdout
-        assert re.search(r"^\s+\d+\.\s+\w", r.stdout, re.MULTILINE)
+        assert "web-fullstack" in r.stdout
+        # Must report step count + group count + projection items count
+        assert re.search(r"\d+\s*step", r.stdout)
+        assert re.search(r"\d+\s*group", r.stdout)
+        assert re.search(r"\d+\s*projection", r.stdout)
 
-    def test_helper_lists_authoritative_steps(self):
-        """Steps must come from filter-steps.py, not AI improv."""
+    def test_helper_writes_authoritative_contract(self):
+        """Steps must come from filter-steps.py, not AI improv. After Bug F
+        compact-stdout fix, step names live in tasklist-contract.json
+        (not stdout). Test verifies the contract file format independently."""
+        # Note: contract file is written when --no-emit is omitted AND there's
+        # an active run; in standalone tests, _write_contract returns None.
+        # Instead validate filter-steps.py directly emits the expected step
+        # names (this is the same source emit-tasklist.py uses).
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        filter_steps = REPO_ROOT / ".claude" / "scripts" / "filter-steps.py"
+        cmd_file = REPO_ROOT / ".claude" / "commands" / "vg" / "blueprint.md"
         r = subprocess.run(
-            [sys.executable, str(HELPER),
-             "--command", "vg:blueprint",
+            [sys.executable, str(filter_steps),
+             "--command", str(cmd_file),
              "--profile", "web-fullstack",
-             "--phase", "7.14",
-             "--no-emit"],
+             "--output-ids"],
             capture_output=True, text=True, timeout=10,
             cwd=str(REPO_ROOT), env=env, encoding="utf-8", errors="replace",
         )
-        # Known blueprint steps that filter-steps.py should emit (step names
-        # come from <step name=...> in skill file, not our assertion guesses)
+        assert r.returncode == 0, r.stderr
+        # Known blueprint steps from <step name=...> in skill file
         assert "1_parse_args" in r.stdout
         assert "2a_plan" in r.stdout
         assert "2b_contracts" in r.stdout
 
     def test_helper_groups_build_steps_into_checklists(self):
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
-        r = subprocess.run(
-            [sys.executable, str(HELPER),
-             "--command", "vg:build",
-             "--profile", "web-fullstack",
-             "--phase", "7.14",
-             "--no-emit"],
-            capture_output=True, text=True, timeout=10,
-            cwd=str(REPO_ROOT), env=env, encoding="utf-8", errors="replace",
-        )
-        assert r.returncode == 0, r.stderr
-        assert "build_preflight" in r.stdout
-        assert "build_execute" in r.stdout
-        assert "8_execute_waves" in r.stdout
+        """Build command must produce checklists matching CHECKLIST_DEFS.
+        After Bug F compact-stdout fix, group names live in tasklist-
+        contract.json (not stdout). Test reads CHECKLIST_DEFS directly."""
+        # Import emit-tasklist module to verify CHECKLIST_DEFS content
+        import importlib.util
+        helper_path = REPO_ROOT / "scripts" / "emit-tasklist.py"
+        spec = importlib.util.spec_from_file_location("emit_tasklist", helper_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        defs = mod.CHECKLIST_DEFS["vg:build"]
+        group_ids = {g[0] for g in defs}
+        assert "build_preflight" in group_ids
+        assert "build_execute" in group_ids
+        # 8_execute_waves must be a member of build_execute checklist
+        execute_steps = [g[2] for g in defs if g[0] == "build_execute"][0]
+        assert "8_execute_waves" in execute_steps
 
     def test_helper_fails_gracefully_on_unknown_command(self):
         r = subprocess.run(
@@ -220,9 +236,25 @@ def test_tasklist_shown_event_not_in_reserved_prefixes():
     assert "tasklist_shown" not in reserved
 
 
-def test_emit_tasklist_prints_lifecycle_contract():
-    out = _emit_tasklist("vg:blueprint", "web-fullstack")
-    assert "Tasklist lifecycle: replace-on-start; close-on-complete." in out
+def test_lifecycle_contract_in_slim_entry_or_shared_ref():
+    """Bug F (2026-05-04 token-audit Priority 3): emit-tasklist.py stdout
+    was reduced from 95 lines to 1-line summary. Lifecycle prose moved to
+    canonical _shared/lib/tasklist-projection-instruction.md (referenced
+    from every slim entry's Tasklist policy). Test asserts the lifecycle
+    contract still exists somewhere AI/operator can read it — either in
+    slim entry directly OR in the shared instruction ref."""
+    blueprint_md = (CMDS_DIR / "blueprint.md").read_text(encoding="utf-8")
+    instruction_ref = REPO_ROOT / "commands" / "vg" / "_shared" / "lib" / "tasklist-projection-instruction.md"
+
+    text_to_search = blueprint_md
+    if instruction_ref.exists():
+        text_to_search += "\n" + instruction_ref.read_text(encoding="utf-8")
+
+    assert "replace-on-start" in text_to_search and "close-on-complete" in text_to_search, (
+        "Lifecycle contract (replace-on-start + close-on-complete) must appear "
+        "in either slim entry blueprint.md or _shared/lib/tasklist-projection-"
+        "instruction.md per Anthropic skill standard (progressive disclosure)."
+    )
 
 
 def _emit_tasklist(command: str, profile: str = "web-fullstack", mode: str | None = None) -> str:

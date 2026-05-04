@@ -540,29 +540,22 @@ def _print_tasklist(
     steps: list[str],
     checklists: list[dict],
 ) -> None:
+    # Bug F (2026-05-04 token-audit Priority 3) — compact stdout summary.
+    # Previous output was 95 lines (75 projection items + 9 prose lines + 5
+    # separators) ≈ 280 tokens per emit-tasklist invocation, returned to AI
+    # via Bash tool result. AI receives this once per /vg:<cmd> session start
+    # but never uses it for actual projection — TodoWrite projection reads
+    # tasklist-contract.json from disk (per slim-entry HARD-GATE block).
+    # Drop projection-item enumeration + lifecycle prose; keep summary line.
+    # Marker semantics live in commands/vg/_shared/lib/tasklist-projection-
+    # instruction.md (referenced from every slim entry's Tasklist policy).
     projection_items = _build_hierarchical_projection(checklists)
-    print("")
-    print("━" * 78)
     mode_label = f" — Mode {mode}" if mode else ""
-    print(f"  {command} — Phase {phase} — Profile {profile}{mode_label}")
-    print(f"  Taskboard: {len(steps)} step(s)")
-    print(f"  Checklists: {len(checklists)} group(s) → {len(projection_items)} projection items")
-    print("━" * 78)
-    print(f"  TodoWrite hierarchical projection ({len(projection_items)} items):")
-    print("━" * 78)
-    for item in projection_items:
-        print(f"  [ ] {item['title']}")
-    print("━" * 78)
-    print("  Markers required: .step-markers/{name}.done (per sub-step, NOT group)")
-    print("  Native task UI projection REQUIRED before execution.")
-    print("  Claude adapter: TodoWrite — one item per projection_items entry")
-    print("  (6 group headers + N sub-steps with ↳ prefix). Mark sub-steps")
-    print("  in_progress/completed individually. Group header marks completed")
-    print("  ONLY when all its sub-steps are completed.")
-    print("  Tasklist lifecycle: replace-on-start; close-on-complete.")
-    print("  Missing marker at run end = runtime contract violation.")
-    print("━" * 78)
-    print("")
+    print(
+        f"{command} — Phase {phase} — Profile {profile}{mode_label}: "
+        f"{len(steps)} step(s), {len(checklists)} group(s), "
+        f"{len(projection_items)} projection items"
+    )
 
 
 def main() -> int:
