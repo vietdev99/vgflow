@@ -801,9 +801,37 @@ def spawn_one_worker(entry: dict[str, Any], phase_dir: Path,
         "--approval-mode", "yolo",
         "--allowed-mcp-server-names", mcp_slot,
     ]
+    # R6 Task 10 — per-lens dispatch telemetry. Emits one event BEFORE spawn so
+    # silent skips ("plan listed lens-idor but worker never spawned") are
+    # detectable by Stop hook even when the subprocess never returns. Mirrored
+    # by .completed (success) or .crashed (timeout/missing-binary) below.
+    phase_number = phase_dir.name
+    emit_event(
+        f"review.lens.{lens}.dispatched",
+        payload={
+            "phase": phase_number,
+            "lens": lens,
+            "selector": elem.get("selector"),
+            "mcp_slot": mcp_slot,
+            "model": model,
+        },
+        phase_dir=phase_dir,
+    )
     started = time.time()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        emit_event(
+            f"review.lens.{lens}.completed",
+            payload={
+                "phase": phase_number,
+                "lens": lens,
+                "selector": elem.get("selector"),
+                "exit_code": result.returncode,
+                "duration_seconds": round(time.time() - started, 1),
+                "output_path": str(output_path),
+            },
+            phase_dir=phase_dir,
+        )
         return {
             "exit_code": result.returncode,
             "duration_seconds": round(time.time() - started, 1),
@@ -813,6 +841,17 @@ def spawn_one_worker(entry: dict[str, Any], phase_dir: Path,
             "selector": elem.get("selector"),
         }
     except subprocess.TimeoutExpired:
+        emit_event(
+            f"review.lens.{lens}.crashed",
+            payload={
+                "phase": phase_number,
+                "lens": lens,
+                "selector": elem.get("selector"),
+                "reason": "timeout",
+                "duration_seconds": timeout,
+            },
+            phase_dir=phase_dir,
+        )
         return {
             "exit_code": -1,
             "duration_seconds": timeout,
@@ -823,6 +862,17 @@ def spawn_one_worker(entry: dict[str, Any], phase_dir: Path,
             "error": "timeout",
         }
     except FileNotFoundError:
+        emit_event(
+            f"review.lens.{lens}.crashed",
+            payload={
+                "phase": phase_number,
+                "lens": lens,
+                "selector": elem.get("selector"),
+                "reason": "gemini binary not on PATH",
+                "duration_seconds": round(time.time() - started, 1),
+            },
+            phase_dir=phase_dir,
+        )
         return {
             "exit_code": -2,
             "duration_seconds": round(time.time() - started, 1),

@@ -244,6 +244,44 @@ runtime_contract:
     - event_type: "review.lens_coverage_blocked"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # R6 Task 10 — per-lens dispatch telemetry (silent-skip detector).
+    # Plan-level review.lens_plan_generated proves a plan was BUILT, but not
+    # that each individual lens was actually DISPATCHED. spawn_recursive_probe.py
+    # now emits review.lens.<name>.{dispatched,completed,crashed} per worker so
+    # Stop hook can detect "plan listed lens-idor but worker never spawned"
+    # silent-skip bugs. Severity=warn — surface the skip without hard-blocking
+    # (the lens might be legitimately filtered by env_policy/budget cap).
+    # Three representative critical lenses enumerated here; remaining 16 lenses
+    # follow the same review.lens.<name>.{dispatched,completed,crashed} pattern
+    # at runtime (see LENS_MAP in scripts/spawn_recursive_probe.py for the
+    # complete list).
+    - event_type: "review.lens.lens-idor.dispatched"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-idor.completed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-idor.crashed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-business-coherence.dispatched"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-business-coherence.completed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-business-coherence.crashed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-form-lifecycle.dispatched"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-form-lifecycle.completed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "review.lens.lens-form-lifecycle.crashed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--override-reason"
     - "--skip-scan"
