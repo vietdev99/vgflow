@@ -1,7 +1,7 @@
 ---
 name: vg:blueprint
 description: Plan + API contracts + verify + CrossAI review — 4 sub-steps before build
-argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--skip-rcrurdr] [--skip-fe-contracts] [--skip-workflows] [--from=<substep>] [--only=<step>] [--override-reason=<text>] [--apply-amendments]"
+argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--skip-rcrurdr] [--skip-fe-contracts] [--skip-workflows] [--allow-contract-context-mismatch] [--from=<substep>] [--only=<step>] [--override-reason=<text>] [--apply-amendments]"
 allowed-tools:
   - Read
   - Write
@@ -193,6 +193,10 @@ runtime_contract:
     - event_type: "blueprint.slice_size_blocked"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # R8-E (2026-05-05) — zero-tolerance CONTEXT/API-CONTRACTS mismatch override
+    - event_type: "blueprint.contract_context_mismatch_accepted"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--skip-crossai"
     - "--skip-codex-test-goal-lane"
@@ -201,6 +205,7 @@ runtime_contract:
     - "--skip-rcrurdr"
     - "--skip-fe-contracts"
     - "--skip-workflows"
+    - "--allow-contract-context-mismatch"
     - "--override-reason"
 ---
 

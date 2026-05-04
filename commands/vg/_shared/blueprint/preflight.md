@@ -219,6 +219,7 @@ Extract from `$ARGUMENTS`: phase_number (required), plus optional flags:
 - `--allow-missing-org` — bypass Rule 6 ORG 6-dim gate. Log debt.
 - `--allow-crossai-inconclusive` — treat CrossAI timeout as non-blocking. Log debt.
 - `--skip-codex-test-goal-lane` — skip independent Codex TEST-GOALS lane. Log debt.
+- `--allow-contract-context-mismatch` — accept ANY CONTEXT/API-CONTRACTS endpoint mismatch in 2c_verify (R8-E zero-tolerance, paired with `--override-reason`). Log debt.
 
 Validate: phase exists. Determine `$PHASE_DIR`.
 

@@ -98,30 +98,38 @@ echo "Verify 1 (grep): ${ENDPOINT_COUNT} contract eps, ${CONTEXT_COUNT} context 
 
 if [ "$MISMATCHES" -eq 0 ]; then
   echo "✓ PASS"
-elif [ "$MISMATCHES" -le 3 ]; then
-  echo "⚠ WARNING — ${MISMATCHES} mismatches (auto-fix threshold)"
+else
+  # R8-E (codex audit 2026-05-05) — zero tolerance for ANY mismatch between
+  # CONTEXT.md decisions (source of truth) and API-CONTRACTS.md endpoints.
+  # Even 1 mismatch means blueprint is internally inconsistent → downstream
+  # build/review consumers may load wrong contract.
   [ -n "$MISSING_ENDPOINTS" ] && printf "Missing in contracts:%b\n" "$MISSING_ENDPOINTS"
   [ -n "$MISSING_HANDLERS" ] && printf "Missing handlers (may land in build):%b\n" "$MISSING_HANDLERS"
-else
-  echo "⛔ BLOCK — ${MISMATCHES} mismatches (>3)"
-  [ -n "$MISSING_ENDPOINTS" ] && printf "Missing in contracts:%b\n" "$MISSING_ENDPOINTS"
-  [ -n "$MISSING_HANDLERS" ] && printf "Missing handlers:%b\n" "$MISSING_HANDLERS"
-  echo ""
-  echo "Fix: re-run step 2b để regenerate contracts hoặc update CONTEXT.md"
-  if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
-    exit 1
-  else
+
+  if [[ "$ARGUMENTS" =~ --allow-contract-context-mismatch ]]; then
+    if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+      echo "⛔ --allow-contract-context-mismatch requires --override-reason=<text>" >&2
+      exit 1
+    fi
     # Canonical override.used emit — runtime_contract.forbidden_without_override
-    # requires an exact override.used.flag match for --override-reason.
+    # requires an exact override.used.flag match for --allow-contract-context-mismatch.
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
-      --flag "--override-reason" \
-      --reason "blueprint 2c grep verify: ${MISMATCHES} endpoint mismatches" \
+      --flag "--allow-contract-context-mismatch" \
+      --reason "Blueprint accept ${MISMATCHES} endpoint mismatches CONTEXT vs API-CONTRACTS (phase ${PHASE_NUMBER})" \
       >/dev/null 2>&1 || true
-    type -t emit_telemetry_v2 >/dev/null 2>&1 && \
-      emit_telemetry_v2 "blueprint_2c_mismatches" "${PHASE_NUMBER}" "blueprint.2c" "blueprint_2c_mismatches" "FAIL" "{}"
     type -t log_override_debt >/dev/null 2>&1 && \
-      log_override_debt "blueprint-2c-mismatches" "${PHASE_NUMBER}" "${MISMATCHES} endpoint mismatches" "$PHASE_DIR"
-    echo "⚠ --override-reason set — proceeding, debt logged"
+      log_override_debt "blueprint-contract-context-mismatch" "${PHASE_NUMBER}" \
+        "${MISMATCHES} endpoint mismatches accepted" "$PHASE_DIR"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "blueprint.contract_context_mismatch_accepted" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mismatch_count\":${MISMATCHES}}" \
+      >/dev/null 2>&1 || true
+    echo "⚠ ${MISMATCHES} CONTEXT/contracts mismatch accepted via override"
+  else
+    echo "⛔ ${MISMATCHES} endpoint mismatch(es) between CONTEXT decisions and API-CONTRACTS" >&2
+    echo "   CONTEXT.md is source of truth. Update API-CONTRACTS to match OR amend CONTEXT decisions." >&2
+    echo "   Override (with reason): --allow-contract-context-mismatch --override-reason=\"<text>\"" >&2
+    exit 1
   fi
 fi
 
