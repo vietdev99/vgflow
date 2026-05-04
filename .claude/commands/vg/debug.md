@@ -192,6 +192,55 @@ echo "Bug classified: ${BUG_TYPE} (confidence ${CONFIDENCE}%)"
 
 **If confidence < 80% → AskUserQuestion** with options matching detected types + "other".
 
+### Lesson lookup (R9-A — failure-time learn loop)
+
+Before generating hypotheses (Step 2), surface prior lessons from
+`.vg/bootstrap/ACCEPTED.md` matching this bug's classification + signature.
+Closes the "fail → learn → never fail again" loop: bug classes seen before
+get their lesson re-injected automatically rather than relying on user memory.
+
+```bash
+ERROR_SIG="${BUG_DESC}"
+"${PYTHON_BIN:-python3}" - <<PY > "${DEBUG_DIR}/.lessons.md" 2>/dev/null || true
+import sys
+sys.path.insert(0, ".claude/scripts/vg-orchestrator")
+try:
+    from lesson_lookup import query_relevant_lessons, format_lessons_for_recovery
+    lessons = query_relevant_lessons(
+        violation_type="${BUG_TYPE}",
+        error_signature=${ERROR_SIG@Q} if False else """${ERROR_SIG}""",
+        phase="${PHASE_NUMBER:-standalone}",
+        limit=3,
+    )
+    print(format_lessons_for_recovery(lessons))
+    if lessons:
+        # Emit telemetry — operator/AI can see lessons influenced this debug.
+        import json, subprocess
+        ids = [l.get("lesson_id") for l in lessons if l.get("lesson_id")]
+        subprocess.run(
+            [sys.executable, ".claude/scripts/vg-orchestrator", "emit-event",
+             "recovery.lessons_consulted",
+             "--payload", json.dumps({"count": len(ids), "lesson_ids": ids,
+                                      "context": "vg:debug",
+                                      "bug_type": "${BUG_TYPE}"}),
+             "--actor", "orchestrator", "--outcome", "INFO"],
+            capture_output=True, timeout=5,
+        )
+except Exception as e:
+    print(f"(lesson lookup unavailable: {e})")
+PY
+
+if [ -s "${DEBUG_DIR}/.lessons.md" ]; then
+  echo
+  echo "📚 Prior lessons matching this bug class:"
+  cat "${DEBUG_DIR}/.lessons.md"
+  echo
+  # Append to DEBUG-LOG so iteration-2 hypotheses inherit the context.
+  printf '\n## Prior lessons consulted\n\n' >> "${DEBUG_DIR}/DEBUG-LOG.md"
+  cat "${DEBUG_DIR}/.lessons.md" >> "${DEBUG_DIR}/DEBUG-LOG.md"
+fi
+```
+
 ```bash
 # Emit classified event
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event debug.classified \
@@ -332,10 +381,23 @@ in isolated 200k context, return result to main. Skip if neither condition:
 ```bash
 DISCOVERY_SIZE=$(du -sb "${DEBUG_DIR}/discovery" 2>/dev/null | awk '{print $1}')
 if [ "$ISOLATE" = "true" ] || [ "${DISCOVERY_SIZE:-0}" -gt 51200 ]; then
+  # Bootstrap rule injection (R9-B coverage 2026-05-05) — debug subagent
+  # sees promoted rules tagged for `debug` (or `fix` / `global`) target_step.
+  # Without this, isolated debug context repeats past fix mistakes the
+  # harness already learned in prior phases.
+  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+  BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "debug")
+  vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "debug" "${PHASE_NUMBER:-debug-${DEBUG_ID}}"
+
   bash scripts/vg-narrate-spawn.sh general-purpose spawning "debug-${DEBUG_ID} hypothesize+fix"
   # Agent(subagent_type="general-purpose"):
   #   prompt: |
   #     Continue debug session ${DEBUG_ID}.
+  #
+  #     <bootstrap_rules>
+  #     ${BOOTSTRAP_RULES_BLOCK}
+  #     </bootstrap_rules>
+  #
   #     Read ${DEBUG_DIR}/DEBUG-LOG.md + ${DEBUG_DIR}/discovery/* for context.
   #     Generate 3-5 ranked hypotheses, pick top, apply fix via Edit tool,
   #     commit atomic with prefix `fix(debug-${DEBUG_ID}): iter ${ITER}`,

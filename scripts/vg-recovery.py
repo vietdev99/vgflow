@@ -22,13 +22,82 @@ REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 EVENTS_DB = REPO_ROOT / ".vg" / "events.db"
 ACTIVE_RUNS_DIR = REPO_ROOT / ".vg" / "active-runs"
 
-# Add orchestrator dir to path so we can import recovery_paths
+# Add orchestrator dir to path so we can import recovery_paths +
+# lesson_lookup. R9-A: lesson_lookup closes the failure-time learn loop —
+# prior lessons matching the current violation are surfaced before any
+# recovery path is auto-picked or rendered to the user.
 sys.path.insert(0, str(REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"))
 try:
     from recovery_paths import get_recovery_paths
 except ImportError:
     print("\033[38;5;208mrecovery_paths.py not found. Re-sync vgflow.\033[0m", file=sys.stderr)
     sys.exit(1)
+
+try:
+    from lesson_lookup import (  # type: ignore
+        query_relevant_lessons,
+        format_lessons_for_recovery,
+    )
+except ImportError:
+    # Soft fallback — lesson lookup is best-effort, never block recovery.
+    def query_relevant_lessons(*_a, **_kw):  # type: ignore
+        return []
+
+    def format_lessons_for_recovery(_lessons):  # type: ignore
+        return ""
+
+
+def _emit_lessons_consulted(violations: list[str], lesson_ids: list[str]) -> None:
+    """Best-effort telemetry — never raise, never block recovery."""
+    if not lesson_ids:
+        return
+    import json as _json
+    import subprocess as _sp
+    payload = _json.dumps({
+        "count": len(lesson_ids),
+        "lesson_ids": lesson_ids,
+        "violations": violations,
+    })
+    orchestrator = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
+    try:
+        _sp.run(
+            [
+                sys.executable, str(orchestrator),
+                "emit-event", "recovery.lessons_consulted",
+                "--payload", payload,
+                "--actor", "orchestrator",
+                "--outcome", "INFO",
+            ],
+            timeout=5, capture_output=True, text=True, cwd=str(REPO_ROOT),
+        )
+    except Exception:
+        pass
+
+
+def _consult_lessons_for_violations(
+    violations: list[str], phase: str
+) -> tuple[list[dict], list[str]]:
+    """Aggregate-up-to-5 lessons across all current violations."""
+    seen: set[str] = set()
+    aggregated: list[dict] = []
+    for v in violations:
+        for lesson in query_relevant_lessons(
+            violation_type=v, gate_id=v, phase=phase, limit=3
+        ):
+            lid = lesson.get("lesson_id")
+            if lid and lid not in seen:
+                seen.add(lid)
+                aggregated.append(lesson)
+    aggregated.sort(
+        key=lambda r: (
+            r.get("score", 0),
+            r.get("success_rate") if r.get("success_rate") is not None else -1,
+            r.get("hits", 0),
+        ),
+        reverse=True,
+    )
+    aggregated = aggregated[:5]
+    return aggregated, [l["lesson_id"] for l in aggregated if l.get("lesson_id")]
 
 
 def find_latest_run(phase: str | None = None) -> dict | None:
@@ -97,10 +166,23 @@ def detect_violations_for_run(run_id: str) -> list[str]:
 
 
 def render_menu(violations: list[str], command: str, phase: str) -> None:
-    """Print human-readable recovery menu for each violation."""
+    """Print human-readable recovery menu for each violation.
+
+    R9-A: prepend matching prior lessons (from `.vg/bootstrap/ACCEPTED.md`)
+    so the user / AI sees what was learned about this failure class before
+    picking a recovery path.
+    """
     if not violations:
         print("ℹ No active violations detected. Run /vg:doctor stack for general health check.")
         return
+
+    lessons, lesson_ids = _consult_lessons_for_violations(violations, phase)
+    if lessons:
+        print()
+        print("📚 Relevant prior lessons:")
+        print()
+        print(format_lessons_for_recovery(lessons))
+        _emit_lessons_consulted(violations, lesson_ids)
 
     print()
     print("━━━ Recovery paths for current BLOCK ━━━")
@@ -144,8 +226,18 @@ def execute_auto_recovery(
     NEVER auto-runs token-expensive --retry-failed or destructive edits.
 
     Returns (overall_success, action_log).
+
+    R9-A: consult prior lessons BEFORE picking the auto-executable path
+    so the lesson surfaces in stdout (the AI orchestrator sees it) and
+    so we emit the `recovery.lessons_consulted` telemetry event.
     """
     import subprocess
+
+    lessons, lesson_ids = _consult_lessons_for_violations(violations, phase)
+    if lessons:
+        print("\n📚 Relevant prior lessons (consulted before auto-recovery):\n")
+        print(format_lessons_for_recovery(lessons))
+        _emit_lessons_consulted(violations, lesson_ids)
 
     actions: list[dict] = []
     for v_type in violations:
@@ -265,6 +357,9 @@ def main() -> int:
         return 0 if success else 2
 
     if args.json:
+        lessons, lesson_ids = _consult_lessons_for_violations(violations, phase)
+        if lesson_ids:
+            _emit_lessons_consulted(violations, lesson_ids)
         result = {
             "run_id": run_id,
             "command": command,
@@ -273,6 +368,7 @@ def main() -> int:
             "recovery_paths": {
                 v: get_recovery_paths(v, command, phase) for v in violations
             },
+            "prior_lessons": lessons,
         }
         print(json.dumps(result, indent=2))
         return 0

@@ -347,11 +347,53 @@ def render_recovery_block(
     phase: str,
     extra: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Render recovery paths as message lines for BLOCK output."""
+    """Render recovery paths as message lines for BLOCK output.
+
+    R9-A: prepend matching prior lessons (from `.vg/bootstrap/ACCEPTED.md`)
+    above the recovery paths so the failure-time learn loop surfaces in
+    every BLOCK message — not just in `vg-recovery.py` interactive picker.
+    Lookup is best-effort and never raises.
+    """
     paths = get_recovery_paths(violation_type, command, phase, extra)
     if not paths:
         return []
-    lines = [f"  ↳ Recovery paths for [{violation_type}]:"]
+
+    lines: list[str] = []
+    try:
+        from lesson_lookup import (  # type: ignore
+            query_relevant_lessons,
+            format_lessons_for_recovery,
+        )
+
+        lessons = query_relevant_lessons(
+            violation_type=violation_type,
+            gate_id=violation_type,
+            phase=phase,
+            limit=3,
+        )
+        if lessons:
+            lines.append(f"  📚 Prior lessons matching [{violation_type}]:")
+            for l in lessons:
+                lid = l.get("lesson_id") or "?"
+                title = l.get("title") or "(untitled)"
+                sr = l.get("success_rate")
+                sr_str = f"{sr}%" if sr is not None else "n/a"
+                lines.append(
+                    f"      - {lid} — {title} "
+                    f"(hits={l.get('hits', 0)}, success={sr_str})"
+                )
+                if l.get("rule_path"):
+                    lines.append(f"        rule: .vg/bootstrap/{l['rule_path']}")
+            lines.append("")
+            # Emit telemetry — never block on failure.
+            _emit_lessons_consulted_event(
+                violation_type, [l.get("lesson_id") for l in lessons if l.get("lesson_id")]
+            )
+    except Exception:
+        # Lesson lookup must never break recovery rendering.
+        pass
+
+    lines.append(f"  ↳ Recovery paths for [{violation_type}]:")
     for i, p in enumerate(paths, 1):
         marker = " ★" if i == 1 else "  "
         lines.append(f"    {marker} [{i}] {p.get('label', p.get('id', '?'))}")
@@ -361,3 +403,36 @@ def render_recovery_block(
         if cost or when:
             lines.append(f"         cost={cost} | when={when}")
     return lines
+
+
+def _emit_lessons_consulted_event(violation_type: str, lesson_ids: list[str]) -> None:
+    """Best-effort telemetry — fire-and-forget, never block."""
+    if not lesson_ids:
+        return
+    try:
+        import json as _json
+        import os as _os
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path as _P
+        repo_root = _P(_os.environ.get("VG_REPO_ROOT") or _os.getcwd()).resolve()
+        orchestrator = repo_root / ".claude" / "scripts" / "vg-orchestrator"
+        if not orchestrator.exists():
+            return
+        payload = _json.dumps({
+            "violation_type": violation_type,
+            "count": len(lesson_ids),
+            "lesson_ids": lesson_ids,
+        })
+        _sp.run(
+            [
+                _sys.executable, str(orchestrator),
+                "emit-event", "recovery.lessons_consulted",
+                "--payload", payload,
+                "--actor", "orchestrator",
+                "--outcome", "INFO",
+            ],
+            timeout=5, capture_output=True, text=True, cwd=str(repo_root),
+        )
+    except Exception:
+        pass
