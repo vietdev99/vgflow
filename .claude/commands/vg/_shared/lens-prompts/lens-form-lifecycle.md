@@ -15,6 +15,14 @@ severity_default: warn
 estimated_action_budget: 60
 output_schema_version: 3
 runtime: roam
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: sonnet
+worker_complexity_score: 4
+fallback_on_inconclusive: opus
+min_actions_floor: 10
+min_evidence_steps: 8
+required_probe_kinds: [create_then_read, update_then_read, delete_then_read]
 ---
 
 # Lens: Form Lifecycle (RCRURD)

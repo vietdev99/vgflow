@@ -14,6 +14,14 @@ strix_reference: strix/skills/vulnerabilities/information_disclosure.md
 severity_default: warn
 estimated_action_budget: 35
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: haiku
+worker_complexity_score: 2
+fallback_on_inconclusive: sonnet
+min_actions_floor: 5
+min_evidence_steps: 3
+required_probe_kinds: [stack_trace, dotfile_probe, debug_route]
 ---
 
 # Lens: Information Disclosure

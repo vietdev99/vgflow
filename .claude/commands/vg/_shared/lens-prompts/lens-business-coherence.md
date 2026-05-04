@@ -15,6 +15,14 @@ severity_default: warn
 estimated_action_budget: 50
 output_schema_version: 3
 runtime: roam
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: sonnet
+worker_complexity_score: 4
+fallback_on_inconclusive: opus
+min_actions_floor: 8
+min_evidence_steps: 6
+required_probe_kinds: [ui_vs_network, network_vs_db, console_vs_state]
 ---
 
 # Lens: Business Coherence

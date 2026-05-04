@@ -13,6 +13,14 @@ strix_reference: strix/skills/vulnerabilities/mass_assignment.md
 severity_default: warn
 estimated_action_budget: 30
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: sonnet
+worker_complexity_score: 3
+fallback_on_inconclusive: opus
+min_actions_floor: 6
+min_evidence_steps: 5
+required_probe_kinds: [is_admin_append, tenant_id_append, role_field_probe]
 ---
 
 # Lens: Mass Assignment (Over-Posting)

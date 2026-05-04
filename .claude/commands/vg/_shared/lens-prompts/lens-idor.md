@@ -14,6 +14,14 @@ strix_reference: strix/skills/vulnerabilities/idor.md
 severity_default: warn
 estimated_action_budget: 40
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: sonnet
+worker_complexity_score: 3
+fallback_on_inconclusive: opus
+min_actions_floor: 8
+min_evidence_steps: 6
+required_probe_kinds: [horizontal_id_swap, vertical_role_swap, peer_tenant_replay]
 ---
 
 # Lens: IDOR (Object-Level Authorization)

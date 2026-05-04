@@ -15,6 +15,14 @@ strix_reference: strix/skills/vulnerabilities/authentication_jwt.md
 severity_default: warn
 estimated_action_budget: 40
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: sonnet
+worker_complexity_score: 3
+fallback_on_inconclusive: opus
+min_actions_floor: 6
+min_evidence_steps: 5
+required_probe_kinds: [alg_confusion, alg_none, kid_injection]
 ---
 
 # Lens: JWT / Token Authentication

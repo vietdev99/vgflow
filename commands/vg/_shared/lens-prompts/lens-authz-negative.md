@@ -15,6 +15,14 @@ strix_reference: strix/skills/vulnerabilities/broken_function_level_authorizatio
 severity_default: warn
 estimated_action_budget: 35
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: sonnet
+worker_complexity_score: 3
+fallback_on_inconclusive: opus
+min_actions_floor: 8
+min_evidence_steps: 6
+required_probe_kinds: [wrong_role, unauth, peer_tenant_attempt]
 ---
 
 # Lens: Authorization Negative Paths

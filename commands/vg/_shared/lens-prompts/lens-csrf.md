@@ -15,6 +15,14 @@ strix_reference: strix/skills/vulnerabilities/csrf.md
 severity_default: warn
 estimated_action_budget: 30
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: haiku
+worker_complexity_score: 2
+fallback_on_inconclusive: sonnet
+min_actions_floor: 4
+min_evidence_steps: 3
+required_probe_kinds: [token_missing, samesite_probe, cors_credentialed]
 ---
 
 # Lens: CSRF (Cross-Site Request Forgery)

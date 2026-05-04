@@ -243,7 +243,7 @@ if [ "$EXIT_CODE" -ne 0 ]; then
   exit "$EXIT_CODE"
 fi
 
-if [ ! -s "$TMP_OUT" ]; then
+if [ ! -s "$TMP_OUT" ] || ! LC_ALL=C tr -d '[:space:]' < "$TMP_OUT" | grep -q .; then
   rm -f "$TMP_OUT"
   echo "ERROR: codex child produced empty final message" >&2
   echo "stderr: $STDERR_LOG" >&2

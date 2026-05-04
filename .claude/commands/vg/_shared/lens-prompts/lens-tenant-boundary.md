@@ -14,6 +14,14 @@ strix_reference: strix/skills/vulnerabilities/idor.md
 severity_default: warn
 estimated_action_budget: 30
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: sonnet
+worker_complexity_score: 4
+fallback_on_inconclusive: opus
+min_actions_floor: 10
+min_evidence_steps: 8
+required_probe_kinds: [cross_tenant_id_swap, audit_log_leak, expand_param]
 ---
 
 # Lens: Tenant Boundary

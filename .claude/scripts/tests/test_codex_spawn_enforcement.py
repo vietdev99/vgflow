@@ -179,6 +179,65 @@ def test_codex_bash_guard_blocks_heavy_step_marker_without_spawn_evidence(tmp_pa
     assert result.returncode == 2
     assert "vg-test-codegen" in result.stderr
 
+def test_codex_spawn_rejects_whitespace_only_final_message(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    prompt = root / "prompt.md"
+    prompt.write_text("return JSON\n", encoding="utf-8")
+    out = root / "out.json"
+
+    (bin_dir / "timeout").write_text(
+        "#!/usr/bin/env bash\n"
+        "shift\n"
+        "exec \"$@\"\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "codex").write_text(
+        "#!/usr/bin/env bash\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--output-last-message' ]; then out=\"$2\"; shift 2; continue; fi\n"
+        "  shift\n"
+        "done\n"
+        "printf '\\n' > \"$out\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "timeout").chmod(0o755)
+    (bin_dir / "codex").chmod(0o755)
+
+    helper = REPO_ROOT / "commands" / "vg" / "_shared" / "lib" / "codex-spawn.sh"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "VG_TIMEOUT_BIN": str(bin_dir / "timeout"),
+    }
+    result = subprocess.run(
+        [
+            "bash",
+            str(helper),
+            "--prompt-file",
+            str(prompt),
+            "--out",
+            str(out),
+            "--timeout",
+            "5",
+            "--cd",
+            str(root),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "empty final message" in result.stderr
+    assert not out.exists()
+
 
 def test_codex_bash_guard_allows_heavy_step_marker_with_spawn_evidence(tmp_path):
     root = tmp_path / "project"

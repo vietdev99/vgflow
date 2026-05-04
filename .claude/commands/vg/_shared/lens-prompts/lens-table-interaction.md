@@ -15,6 +15,14 @@ severity_default: warn
 estimated_action_budget: 40
 output_schema_version: 3
 runtime: roam
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: haiku
+worker_complexity_score: 2
+fallback_on_inconclusive: sonnet
+min_actions_floor: 6
+min_evidence_steps: 4
+required_probe_kinds: [filter_pre_post, sort_pre_post, paginate_pre_post]
 ---
 
 # Lens: Table Interaction

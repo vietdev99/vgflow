@@ -14,6 +14,14 @@ strix_reference: strix/skills/vulnerabilities/ssrf.md
 severity_default: warn
 estimated_action_budget: 40
 output_schema_version: 3
+
+# Task 26 / Task 36a additions:
+recommended_worker_tier: haiku
+worker_complexity_score: 2
+fallback_on_inconclusive: sonnet
+min_actions_floor: 5
+min_evidence_steps: 4
+required_probe_kinds: [internal_url, cloud_metadata, dns_rebinding]
 ---
 
 # Lens: SSRF (Server-Side Request Forgery)
