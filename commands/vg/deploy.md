@@ -433,76 +433,26 @@ done
 
 Merge per-env results into `${PHASE_DIR}/DEPLOY-STATE.json` `deployed.{env}`
 block. Preserves `preferred_env_for` / `preferred_env_for_skipped` and any
-unrelated future keys. Print summary table + emit telemetry.
+unrelated future keys. Print summary table + emit telemetry. Merge logic
+lives in `scripts/vg-deploy-merge-summary.py` (extracted from this slim
+entry per shared-build pattern).
 
 ```bash
-${PYTHON_BIN:-python3} -c "
-import json, sys
-from pathlib import Path
-
-results = json.load(open('${DEPLOY_RESULTS_JSON}'))['results']
-
-state_path = Path('${PHASE_DIR}/DEPLOY-STATE.json')
-if state_path.exists():
-  state = json.loads(state_path.read_text(encoding='utf-8'))
-else:
-  state = {'phase': '${PHASE_NUMBER}'}
-
-state.setdefault('deployed', {})
-ok_envs, fail_envs = [], []
-for r in results:
-  env = r['env']
-  state['deployed'][env] = {
-    'sha': r['sha'],
-    'deployed_at': r['deployed_at'],
-    'health': r['health'],
-    'deploy_log': r['deploy_log'],
-    'previous_sha': r.get('previous_sha', ''),
-    'dry_run': r.get('dry_run', False),
-  }
-  if r['health'] == 'ok' or r['health'] == 'dry-run':
-    ok_envs.append(env)
-  else:
-    fail_envs.append(env)
-
-state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-
-print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-print(f'  Deploy summary — phase ${PHASE_NUMBER}')
-print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-for r in results:
-  icon = '✓' if r['health'] in ('ok', 'dry-run') else '⛔'
-  prev = f' (prev: {r[\"previous_sha\"]})' if r.get('previous_sha') else ''
-  dry = ' [DRY-RUN]' if r.get('dry_run') else ''
-  print(f'  {icon} {r[\"env\"]:10} sha={r[\"sha\"]} health={r[\"health\"]}{prev}{dry}')
-print(f'  → DEPLOY-STATE.json updated ({len(ok_envs)} ok, {len(fail_envs)} failed)')
-print()
-if ok_envs:
-  print('  Next: review/test/roam will see these envs as Recommended option')
-  print(f'    /vg:review ${PHASE_NUMBER}    (env gate auto-suggests one of: {ok_envs})')
-"
-
-# Emit completion telemetry
-RESULT_PAYLOAD=$(${PYTHON_BIN:-python3} -c "
-import json
-r = json.load(open('${DEPLOY_RESULTS_JSON}'))['results']
-ok = [x['env'] for x in r if x['health'] in ('ok','dry-run')]
-fail = [x['env'] for x in r if x['health'] not in ('ok','dry-run')]
-print(json.dumps({'phase': '${PHASE_NUMBER}', 'ok_envs': ok, 'failed_envs': fail, 'total': len(r)}))")
+MERGE_OUT=$(${PYTHON_BIN:-python3} .claude/scripts/vg-deploy-merge-summary.py \
+  --phase "${PHASE_NUMBER}" --phase-dir "${PHASE_DIR}" \
+  --results-json "${DEPLOY_RESULTS_JSON}")
+echo "$MERGE_OUT" | grep -v '^RESULT_PAYLOAD='
+RESULT_PAYLOAD=$(echo "$MERGE_OUT" | grep '^RESULT_PAYLOAD=' | head -1 | sed 's/^RESULT_PAYLOAD=//')
 
 if echo "$RESULT_PAYLOAD" | grep -q '"failed_envs": \[\]'; then
-  EVENT_TYPE="phase.deploy_completed"
-  OUTCOME="PASS"
+  EVENT_TYPE="phase.deploy_completed"; OUTCOME="PASS"
 else
-  EVENT_TYPE="phase.deploy_failed"
-  OUTCOME="WARN"
+  EVENT_TYPE="phase.deploy_failed"; OUTCOME="WARN"
 fi
 
 ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
   "$EVENT_TYPE" --actor "orchestrator" --outcome "$OUTCOME" \
   --payload "$RESULT_PAYLOAD" 2>/dev/null || true
-
-# Also emit phase.deploy_completed always (gate requires it)
 [ "$EVENT_TYPE" != "phase.deploy_completed" ] && ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
   "phase.deploy_completed" --actor "orchestrator" --outcome "INFO" \
   --payload "$RESULT_PAYLOAD" 2>/dev/null || true
