@@ -560,6 +560,92 @@ def _extract_file_paths(task_text: str) -> list[str]:
     return sorted(set(p.strip() for p in paths if p.strip()))
 
 
+def _resource_from_endpoint(endpoint: str) -> str | None:
+    """Extract resource name from `POST /api/sites` → `sites`. Returns None if path lacks /api/<resource>."""
+    parts = endpoint.split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    path = parts[1]
+    m = re.search(r"/api/([a-z][a-z0-9-]*)", path)
+    return m.group(1) if m else None
+
+
+def build_per_task_slices(
+    phase_dir: Path,
+    task_num: int,
+    endpoints: list[str],
+    goals: list[str],
+    cache_dir: Path,
+) -> dict:
+    """Task 37 — orchestrator pre-resolves per-task artifact slices.
+
+    Returns a dict with 3 keys:
+      - crud_surfaces_slice_path: str | None — concatenated per-resource slices
+      - lens_walk_slice_path:     str | None — concatenated per-goal lens-walk slices
+      - rcrurd_invariants_paths:  list[str] — list of per-goal yaml paths
+
+    Stale phases (missing CRUD-SURFACES or LENS-WALK directory) get None
+    + a warning logged to stderr — NOT an exception (Codex finding #36
+    graceful-degradation).
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # CRUD-SURFACES: union of resources extracted from endpoints
+    cs_dir = phase_dir / "CRUD-SURFACES"
+    crud_path: str | None = None
+    if cs_dir.exists() and endpoints:
+        resources = sorted({r for r in (_resource_from_endpoint(e) for e in endpoints) if r})
+        chunks = []
+        for r in resources:
+            f = cs_dir / f"{r}.md"
+            if f.exists():
+                chunks.append(f"# Resource: {r}\n" + f.read_text(encoding="utf-8"))
+        if chunks:
+            resource_tag = "-".join(resources) if len(resources) <= 3 else f"{len(resources)}resources"
+            slice_file = cache_dir / f"task-{task_num:02d}.crud-surfaces.{resource_tag}.md"
+            slice_file.write_text("\n\n".join(chunks), encoding="utf-8")
+            crud_path = str(slice_file.relative_to(phase_dir.parent.parent.parent)) \
+                if str(slice_file).startswith(str(phase_dir.parent.parent.parent)) else str(slice_file)
+    elif endpoints and not cs_dir.exists():
+        sys.stderr.write(
+            f"WARN: CRUD-SURFACES/ missing for task-{task_num} — context degraded.\n"
+        )
+
+    # LENS-WALK: union of per-goal slices
+    lw_dir = phase_dir / "LENS-WALK"
+    lw_path: str | None = None
+    if lw_dir.exists() and goals:
+        chunks = []
+        for g in goals:
+            f = lw_dir / f"{g}.md"
+            if f.exists():
+                chunks.append(f.read_text(encoding="utf-8"))
+        if chunks:
+            goal_tag = "-".join(goals) if len(goals) <= 3 else f"{len(goals)}goals"
+            slice_file = cache_dir / f"task-{task_num:02d}.lens-walk.{goal_tag}.md"
+            slice_file.write_text("\n\n".join(chunks), encoding="utf-8")
+            lw_path = str(slice_file)
+    elif goals and not lw_dir.exists():
+        sys.stderr.write(
+            f"WARN: LENS-WALK/ missing for task-{task_num} — context degraded.\n"
+        )
+
+    # RCRURD-INVARIANTS: list of per-goal yaml paths (no concat — yaml parsed by subagent)
+    ri_dir = phase_dir / "RCRURD-INVARIANTS"
+    rcrurd_paths: list[str] = []
+    if ri_dir.exists():
+        for g in goals:
+            f = ri_dir / f"{g}.yaml"
+            if f.exists():
+                rcrurd_paths.append(str(f))
+
+    return {
+        "crud_surfaces_slice_path": crud_path,
+        "lens_walk_slice_path": lw_path,
+        "rcrurd_invariants_paths": rcrurd_paths,
+    }
+
+
 def _context_status(value: str, missing_markers: tuple[str, ...] = ("not found",)) -> str:
     lowered = (value or "").lower()
     if not value.strip():
@@ -602,7 +688,18 @@ def build_task_context_capsule(
         re.search(r"\.(tsx|jsx|vue|svelte)\b|<design-ref>|list|table|form|modal", task_context, re.I)
     )
 
+    # Task 37 — pre-resolve per-task slices for build envelope
+    slices = build_per_task_slices(
+        phase_dir=phase_dir,
+        task_num=task_num,
+        endpoints=endpoints,
+        goals=_extract_goal_ids(task_context, goals_context),
+        cache_dir=phase_dir.parent.parent.parent / ".task-capsules",
+    )
+
     capsule = {
+        # PRESERVE existing capsule_version verbatim — Task 41 bumps it to "2";
+        # if Task 41 already merged, leave the existing "2". Do NOT downgrade.
         "capsule_version": "1",
         "phase": build_config.get("phase"),
         "task_num": task_num,
@@ -644,6 +741,11 @@ def build_task_context_capsule(
             "Do not ignore goals/endpoints/crud_surface_context when present.",
             "If a required_context value is missing, stop and report the missing artifact instead of guessing.",
         ],
+        # Task 37 (Bug E) — per-task artifact slice paths for build envelope.
+        # Non-required: null/empty when phase predates Task 37 or task has no endpoints/goals.
+        "crud_surfaces_slice_path": slices["crud_surfaces_slice_path"],
+        "lens_walk_slice_path": slices["lens_walk_slice_path"],
+        "rcrurd_invariants_paths": slices["rcrurd_invariants_paths"],
     }
     return capsule
 

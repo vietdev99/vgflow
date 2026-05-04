@@ -6,7 +6,7 @@
 # partial loading instead of reading the full flat file — saves context budget.
 #
 # USAGE
-#   vg-load --phase <N> --artifact <plan|contracts|goals|edge-cases> [<filter-flags>]
+#   vg-load --phase <N> --artifact <plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant> [<filter-flags>]
 #
 # ARTIFACTS + FILTERS
 #   --artifact plan
@@ -37,6 +37,18 @@
 #     --full            flat EDGE-CASES.md
 #     --list            print per-goal edge-case filenames only
 #     --index           print EDGE-CASES/index.md only
+#
+#   --artifact crud-surfaces (Task 37 — Bug E)
+#       --resource <name>    → CRUD-SURFACES/<name>.md (per-resource slice)
+#       --full | --index | --list
+#
+#   --artifact lens-walk (Task 37 — Bug E)
+#       --goal G-NN          → LENS-WALK/G-NN.md (per-goal lens seeds)
+#       --full | --index | --list
+#
+#   --artifact rcrurd-invariant (Task 37 — Bug E)
+#       --goal G-NN          → RCRURD-INVARIANTS/G-NN.yaml (per-goal invariant)
+#       --index | --list
 #
 # OPTIONAL
 #   --phases-dir DIR    override default .vg/phases (or $PHASES_DIR env)
@@ -80,6 +92,13 @@ done
 
 [ -z "$phase" ]    && { echo "ERROR: --phase required" >&2; exit 1; }
 [ -z "$artifact" ] && { echo "ERROR: --artifact required" >&2; exit 1; }
+
+# Validate artifact name before filter check so unknown artifacts produce the right error.
+case "$artifact" in
+  plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant) ;;
+  *) echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant" >&2; exit 1 ;;
+esac
+
 [ -z "$filter_kind" ] && { echo "ERROR: filter required (--task/--wave/--full/--list/--index/etc.)" >&2; exit 1; }
 
 # Resolve phase_dir — accept "7", "7.14", "01-foo", or full path.
@@ -217,8 +236,57 @@ case "$artifact" in
     esac
     ;;
 
+  crud-surfaces)
+    # Task 37 (Bug E) — per-resource slicing for build envelope.
+    sub_dir="$phase_dir/CRUD-SURFACES"
+    flat_file="$phase_dir/CRUD-SURFACES.md"
+    case "$filter_kind" in
+      full)  cat "$flat_file" 2>/dev/null || { echo "ERROR: $flat_file not found" >&2; exit 2; } ;;
+      index) cat "$sub_dir/index.md" 2>/dev/null || { echo "ERROR: $sub_dir/index.md not found" >&2; exit 2; } ;;
+      list)  ls "$sub_dir"/*.md 2>/dev/null | grep -v '/index\.md$' || { echo "no resource files" >&2; exit 3; } ;;
+      resource)
+        f="$sub_dir/${filter_value}.md"
+        [ -f "$f" ] || { echo "ERROR: resource file not found: $f" >&2; exit 2; }
+        cat "$f"
+        ;;
+      *) echo "ERROR: unsupported filter '$filter_kind' for crud-surfaces (use --resource <name>, --full, --index, --list)" >&2; exit 1 ;;
+    esac
+    ;;
+
+  lens-walk)
+    # Task 37 — per-goal slicing for build envelope (consumes blueprint 2b5e_a_lens_walk output).
+    sub_dir="$phase_dir/LENS-WALK"
+    flat_file="$phase_dir/LENS-WALK.md"
+    case "$filter_kind" in
+      full)  cat "$flat_file" 2>/dev/null || { echo "ERROR: $flat_file not found" >&2; exit 2; } ;;
+      index) cat "$sub_dir/index.md" 2>/dev/null || { echo "ERROR: $sub_dir/index.md not found" >&2; exit 2; } ;;
+      list)  ls "$sub_dir"/G-*.md 2>/dev/null || { echo "no lens-walk goal files" >&2; exit 3; } ;;
+      goal)
+        f="$sub_dir/${filter_value}.md"
+        [ -f "$f" ] || { echo "ERROR: lens-walk file not found: $f" >&2; exit 2; }
+        cat "$f"
+        ;;
+      *) echo "ERROR: unsupported filter '$filter_kind' for lens-walk (use --goal G-NN, --full, --index, --list)" >&2; exit 1 ;;
+    esac
+    ;;
+
+  rcrurd-invariant)
+    # Task 37 — per-goal RCRURD/RCRURDR invariants (Task 22 schema, extended Task 39).
+    sub_dir="$phase_dir/RCRURD-INVARIANTS"
+    case "$filter_kind" in
+      index) cat "$sub_dir/index.md" 2>/dev/null || { echo "ERROR: $sub_dir/index.md not found" >&2; exit 2; } ;;
+      list)  ls "$sub_dir"/G-*.yaml 2>/dev/null || { echo "no rcrurd files" >&2; exit 3; } ;;
+      goal)
+        f="$sub_dir/${filter_value}.yaml"
+        [ -f "$f" ] || { echo "ERROR: rcrurd file not found: $f" >&2; exit 2; }
+        cat "$f"
+        ;;
+      *) echo "ERROR: unsupported filter '$filter_kind' for rcrurd-invariant (use --goal G-NN, --index, --list)" >&2; exit 1 ;;
+    esac
+    ;;
+
   *)
-    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases" >&2
+    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant" >&2
     exit 1
     ;;
 esac
