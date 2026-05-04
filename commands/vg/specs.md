@@ -70,8 +70,10 @@ Output: `${PLANNING_DIR}/phases/{phase_dir}/SPECS.md`
 </objective>
 
 <HARD-GATE>
-You MUST follow STEP 1 through STEP 3 in exact order. Each step is gated
-by hooks. Skipping ANY step will be blocked by PreToolUse + Stop hooks.
+You MUST follow STEP 1 through STEP 3 in exact order. Marker-tracked
+steps emit `step-active` + `mark-step` (those listed in
+`must_touch_markers` above); skipping any of those is blocked by
+PreToolUse + Stop hooks via missing-marker detection.
 You CANNOT rationalize past these gates.
 
 You MUST call TodoWrite IMMEDIATELY after STEP 1 (`parse_args` + preamble

@@ -486,8 +486,11 @@ PY
 )
 
   if [ -n "$BLOCKING_LIST" ]; then
+    DEBT_REGISTER_PATH="${CONFIG_DEBT_REGISTER_PATH:-${PLANNING_DIR}/OVERRIDE-DEBT.md}"
     echo ""
     echo "⛔ Override resolution gate BLOCKED — unresolved overrides (bỏ qua, chưa giải quyết) for phase ${PHASE_NUMBER}:"
+    echo "   Debt register: ${DEBT_REGISTER_PATH}"
+    echo "   (cat the file above to inspect each entry's gate_id, reason, and logged_ts)"
     echo ""
     echo "$BLOCKING_LIST"
     echo ""
