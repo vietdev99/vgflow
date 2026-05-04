@@ -59,6 +59,12 @@ Codex hook parity is evidence-based: `.vg/events.db`, step markers,
 `must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
 run is not complete just because the model says it is complete.
 
+Codex hook processes cannot mutate the environment of later shell tool calls.
+If a command-body shell lacks `CLAUDE_SESSION_ID`, `vg-orchestrator` recovers
+the session from `.vg/.session-context.json` and the matching
+`.vg/active-runs/<session>.json`. Do not create a fresh run when the
+UserPromptSubmit hook already registered the same command/phase.
+
 Before executing command bash blocks from a Codex skill, export
 `VG_RUNTIME=codex`. This is an adapter signal, not a source replacement:
 Claude/unknown runtime keeps the canonical `AskUserQuestion` + Haiku path,
@@ -91,11 +97,14 @@ validators/orchestrator calls.
 `step-active <namespace> <step>`, `event --type`, or grouped helper calls
 that mix tasklist projection with the first step marker.
 
-For tasklist projection, Codex must write evidence before any step marker call:
-after `emit-tasklist.py`, run `vg-orchestrator tasklist-projected --adapter codex`
-as its own tool call. Do not group `tasklist-projected` and `step-active` in
-one shell command; PreToolUse evaluates the entire command before the evidence
-file exists and will block the grouped command.
+For tasklist projection, Codex must write evidence as soon as
+`tasklist-contract.json` exists: after `emit-tasklist.py`, run
+`vg-orchestrator tasklist-projected --adapter codex` as its own tool call.
+Do not group `tasklist-projected` and `step-active` in one shell command;
+PreToolUse evaluates the entire command before the evidence file exists and
+will block the grouped command. Some command preflights have bootstrap steps
+before `emit-tasklist.py`; only those declared bootstrap steps may run before
+the tasklist contract exists.
 
 For top-level VG commands that include a mandatory `git commit` step, ensure
 the parent Codex session can write Git metadata. Some Codex
@@ -2032,15 +2041,21 @@ except: print("   (could not parse error)")
         exit 1
       fi
       if [ "$PRE_RC" -eq 1 ] && [ "${VG_PREFLIGHT_SEVERITY:-block}" = "block" ]; then
-        echo "⛔ Phase 0.5 preflight invariants gate BLOCK — fix path:"
-        echo "$PRE_OUT" | "${PYTHON_BIN:-python3}" -c '
-import json, sys
-d = json.loads(sys.stdin.read())
-for g in d.get("gaps", []):
-    print("    " + g.get("fix_hint", ""))
-'
         "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_invariants_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-        exit 1
+
+        source scripts/lib/blocking-gate-prompt.sh
+        EVIDENCE_PATH="${PHASE_DIR}/.vg/preflight-invariants-evidence.json"
+        mkdir -p "$(dirname "$EVIDENCE_PATH")"
+        cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "preflight_invariants",
+  "summary": "Phase 0.5 preflight invariants gate BLOCK",
+  "fix_hint": "Fix the data invariant gaps reported by the preflight validator. Check fix_hint in each gap entry."
+}
+JSON
+        blocking_gate_prompt_emit "preflight_invariants" "$EVIDENCE_PATH" "error"
+        # AI controller calls AskUserQuestion → resolve via Leg 2.
+        # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
       fi
     else
       # Codex-HIGH-5-bis fix: missing base_url WAS silent skip — that's
@@ -2108,19 +2123,21 @@ except: print("   (could not parse error)")
         exit 1
       fi
       if [ "$RCRURD_RC" -eq 1 ] && [ "${VG_RCRURD_SEVERITY:-block}" = "block" ]; then
-        echo "⛔ Phase 0.5 RCRURD gate BLOCK — fixture pre_state assertions failed."
-        echo "$RCRURD_OUT" | "${PYTHON_BIN:-python3}" -c '
-import json, sys
-d = json.loads(sys.stdin.read())
-for r in d.get("results", []):
-    if r.get("passed") is False:
-        print(f"    {r[\"goal\"]}:")
-        for err in r.get("errors", [])[:3]:
-            print(f"      - {err[:200]}")
-'
-        echo "  Fix path: ensure sandbox seed data matches each fixture's lifecycle.pre_state assertions"
         "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_preflight_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-        exit 1
+
+        source scripts/lib/blocking-gate-prompt.sh
+        EVIDENCE_PATH="${PHASE_DIR}/.vg/rcrurd-preflight-evidence.json"
+        mkdir -p "$(dirname "$EVIDENCE_PATH")"
+        cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "rcrurd_preflight",
+  "summary": "Phase 0.5 RCRURD gate BLOCK — fixture pre_state assertions failed",
+  "fix_hint": "Ensure sandbox seed data matches each fixture's lifecycle.pre_state assertions"
+}
+JSON
+        blocking_gate_prompt_emit "rcrurd_preflight" "$EVIDENCE_PATH" "error"
+        # AI controller calls AskUserQuestion → resolve via Leg 2.
+        # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
       fi
 
       # Codex-HIGH-1-ter fix: validate snapshot was captured. If pre-mode
@@ -2544,10 +2561,22 @@ PROBE_SCRIPT="${VG_SCRIPT_ROOT}/review-api-contract-probe.py"
 INTERFACE_CHECK_OUT="${PHASE_DIR}/.tmp/interface-standards-review.json"
 
 if [ ! -f "$PROBE_SCRIPT" ]; then
-  echo "⛔ API contract probe setup error — missing helper: $PROBE_SCRIPT" | tee "$API_PROBE_OUT"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_helper\"}" >/dev/null 2>&1 || true
-  exit 1
+
+  source scripts/lib/blocking-gate-prompt.sh
+  EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
+  mkdir -p "$(dirname "$EVIDENCE_PATH")"
+  cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "api_precheck",
+  "summary": "API contract probe setup error — missing helper: $PROBE_SCRIPT",
+  "fix_hint": "Ensure review-api-contract-probe.py exists in .claude/scripts/ or scripts/"
+}
+JSON
+  blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
+  # AI controller calls AskUserQuestion → resolve via Leg 2.
+  # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
 fi
 
 mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
@@ -2626,11 +2655,22 @@ if m:
 [ -z "$API_PROBE_BASE" ] && API_PROBE_BASE="${VG_BASE_URL:-}"
 
 if [ -z "$API_PROBE_BASE" ]; then
-  echo "⛔ API contract probe setup error — no base_url found in ENV-CONTRACT.md and VG_BASE_URL is empty." | tee "$API_PROBE_OUT"
-  echo "   Fix path: set target.base_url in ENV-CONTRACT.md or export VG_BASE_URL." | tee -a "$API_PROBE_OUT"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_base_url\"}" >/dev/null 2>&1 || true
-  exit 1
+
+  source scripts/lib/blocking-gate-prompt.sh
+  EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
+  mkdir -p "$(dirname "$EVIDENCE_PATH")"
+  cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "api_precheck",
+  "summary": "API contract probe setup error — no base_url found in ENV-CONTRACT.md and VG_BASE_URL is empty",
+  "fix_hint": "Set target.base_url in ENV-CONTRACT.md or export VG_BASE_URL"
+}
+JSON
+  blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
+  # AI controller calls AskUserQuestion → resolve via Leg 2.
+  # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
 fi
 
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_started" \
@@ -2652,10 +2692,22 @@ API_PROBE_RC=$?
 cat "$API_PROBE_OUT"
 
 if [ "$API_PROBE_RC" -ne 0 ]; then
-  echo "⛔ API contract probe failed — browser discovery is not allowed to start on stale/broken API surface." >&2
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "$(printf '{"phase":"%s","base_url":"%s","rc":%s}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "${API_PROBE_RC}")" >/dev/null 2>&1 || true
-  exit 1
+
+  source scripts/lib/blocking-gate-prompt.sh
+  EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
+  mkdir -p "$(dirname "$EVIDENCE_PATH")"
+  cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "api_precheck",
+  "summary": "API contract probe failed — browser discovery is not allowed to start on stale/broken API surface",
+  "fix_hint": "Fix the API surface issues found in api-contract-precheck.txt before continuing review"
+}
+JSON
+  blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
+  # AI controller calls AskUserQuestion → resolve via Leg 2.
+  # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
 fi
 
 "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/emit-evidence-manifest.py" \
@@ -7074,13 +7126,21 @@ if [ -f "$MATRIX_LINK_VAL" ]; then
   ${PYTHON_BIN:-python3} "$MATRIX_LINK_VAL" --phase-dir "$PHASE_DIR" --severity block
   MATRIX_LINK_RC=$?
   if [ "$MATRIX_LINK_RC" -ne 0 ]; then
-    echo "⛔ Review matrix-evidence-link gate failed."
-    echo "   GOAL-COVERAGE-MATRIX.md asserts goal status that runtime evidence does not support."
-    echo "   Fix path:"
-    echo "     1. Re-run /vg:review ${PHASE_NUMBER} --retry-failed (record real sequences)"
-    echo "     2. OR reclassify goals to UNREACHABLE/INFRA_PENDING/DEFERRED with justification"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_evidence_link_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-    exit 1
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/matrix-evidence-link-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "matrix_evidence_link",
+  "summary": "Review matrix-evidence-link gate failed — GOAL-COVERAGE-MATRIX.md asserts goal status that runtime evidence does not support",
+  "fix_hint": "1. Re-run /vg:review ${PHASE_NUMBER} --retry-failed (record real sequences); 2. OR reclassify goals to UNREACHABLE/INFRA_PENDING/DEFERRED with justification"
+}
+JSON
+    blocking_gate_prompt_emit "matrix_evidence_link" "$EVIDENCE_PATH" "warn"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
   fi
 fi
 
@@ -7158,21 +7218,21 @@ except: print("   (could not parse error)")
     exit 1
   fi
   if [ "$POST_RC" -eq 1 ] && [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
-    echo "⛔ RCRURD post_state gate BLOCK — fixture lifecycle assertions failed"
-    echo "   after the scanner action. State did not transition as expected."
-    echo "$POST_OUT" | "${PYTHON_BIN:-python3}" -c '
-import json, sys
-d = json.loads(sys.stdin.read())
-for r in d.get("results", []):
-    if r.get("passed") is False:
-        print(f"    {r[\"goal\"]}:")
-        for err in r.get("errors", [])[:3]:
-            print(f"      - {err[:200]}")
-'
-    echo "   Fix path: re-run scanner if action genuinely succeeded; or fix"
-    echo "   the action's expected_network/post_state assertion drift."
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_state_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-    exit 1
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/rcrurd-post-state-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "rcrurd_post_state",
+  "summary": "RCRURD post_state gate BLOCK — fixture lifecycle assertions failed after the scanner action. State did not transition as expected.",
+  "fix_hint": "Re-run scanner if action genuinely succeeded; or fix the action's expected_network/post_state assertion drift."
+}
+JSON
+    blocking_gate_prompt_emit "rcrurd_post_state" "$EVIDENCE_PATH" "error"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
   fi
 fi
 
@@ -7193,16 +7253,21 @@ import json
 try: print(json.load(open('${PHASE_DIR}/.matrix-staleness.json'))['suspected_count'])
 except: print('?')
 ")
-    echo "⛔ Matrix-staleness gate failed — ${SUSPECTED_N} mutation goal(s) marked READY without submit/2xx evidence."
-    echo "   Matrix lying again: scanner navigated but never submitted, or submitted without successful network."
-    echo "   This is the meta-bug Phase 3.2 dogfood surfaced (matrix=PASS but real test fails)."
-    echo "   Fix path:"
-    echo "     1. /vg:review ${PHASE_NUMBER} --retry-failed   (auto-folds SUSPECTED into retry set)"
-    echo "     2. /vg:review ${PHASE_NUMBER} --re-scan-goals=G-XX,G-YY  (targeted; see .matrix-staleness.json)"
-    echo "     3. /vg:review ${PHASE_NUMBER} --dogfood   (re-scan ALL mutation goals)"
-    echo "     4. /vg:review ${PHASE_NUMBER} --allow-stale-matrix --override-reason=\"...\"  (debt)"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_staleness_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"suspected\":${SUSPECTED_N}}" >/dev/null 2>&1 || true
-    exit 1
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/matrix-staleness-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "matrix_staleness",
+  "summary": "Matrix-staleness gate failed — ${SUSPECTED_N} mutation goal(s) marked READY without submit/2xx evidence",
+  "fix_hint": "1. /vg:review ${PHASE_NUMBER} --retry-failed; 2. /vg:review ${PHASE_NUMBER} --re-scan-goals=G-XX,G-YY; 3. /vg:review ${PHASE_NUMBER} --dogfood; 4. /vg:review ${PHASE_NUMBER} --allow-stale-matrix --override-reason=... (debt)"
+}
+JSON
+    blocking_gate_prompt_emit "matrix_staleness" "$EVIDENCE_PATH" "warn"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
   fi
 fi
 
@@ -7230,16 +7295,21 @@ if [ -f "$PROV_VAL" ]; then
   ${PYTHON_BIN:-python3} "$PROV_VAL" --phase "${PHASE_NUMBER}" $PROV_FLAGS
   PROV_RC=$?
   if [ "$PROV_RC" -ne 0 ] && [ "$PROV_MODE" = "block" ]; then
-    echo "⛔ Evidence provenance gate failed — mutation steps claim success without"
-    echo "   structured provenance object (RFC v9 D10). Possible fabricated evidence."
-    echo "   Fix path:"
-    echo "     1. Re-run scanner: /vg:review ${PHASE_NUMBER} --retry-failed"
-    echo "        (Haiku scanner records evidence.source=scanner with scanner_run_id)"
-    echo "     2. For legacy phases pre-RFC-v9: --allow-legacy-provenance"
-    echo "        (marks missing-evidence steps as legacy_pre_provenance, informational)"
-    echo "     3. Set review.provenance.enforcement: warn in vg.config.md to defer enforcement"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.evidence_provenance_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-    exit 1
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/evidence-provenance-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "evidence_provenance",
+  "summary": "Evidence provenance gate failed — mutation steps claim success without structured provenance object (RFC v9 D10). Possible fabricated evidence.",
+  "fix_hint": "1. Re-run scanner: /vg:review ${PHASE_NUMBER} --retry-failed; 2. For legacy phases: --allow-legacy-provenance; 3. Set review.provenance.enforcement: warn in vg.config.md to defer enforcement"
+}
+JSON
+    blocking_gate_prompt_emit "evidence_provenance" "$EVIDENCE_PATH" "error"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
   fi
 fi
 
@@ -7257,16 +7327,21 @@ if [ -f "$MUT_SUBMIT_VAL" ]; then
   ${PYTHON_BIN:-python3} "$MUT_SUBMIT_VAL" --phase "${PHASE_NUMBER}" $MUT_FLAGS
   MUT_RC=$?
   if [ "$MUT_RC" -ne 0 ]; then
-    echo "⛔ Review mutation-actually-submitted gate failed."
-    echo "   Mutation goals marked passed without actual submit click + 2xx network."
-    echo "   This is the 'performative review' meta-bug: scanner Cancel modal → never test"
-    echo "   happy path → CSRF/auth/idempotency bugs slip through to user."
-    echo "   Fix path:"
-    echo "     1. Re-run /vg:review ${PHASE_NUMBER} với scanner prompt yêu cầu SUBMIT (sandbox = disposable seed)"
-    echo "     2. OR --allow-cancel-only-mutations override (logs OVERRIDE-DEBT — legitimate"
-    echo "        only nếu phase explicitly không muốn mutate)"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.mutation_submit_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-    exit 1
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/mutation-submit-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "mutation_submit",
+  "summary": "Review mutation-actually-submitted gate failed — mutation goals marked passed without actual submit click + 2xx network",
+  "fix_hint": "Re-run /vg:review ${PHASE_NUMBER} with scanner prompt requiring SUBMIT, or use --allow-cancel-only-mutations override (logs OVERRIDE-DEBT)"
+}
+JSON
+    blocking_gate_prompt_emit "mutation_submit" "$EVIDENCE_PATH" "error"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
   fi
 fi
 
@@ -7284,10 +7359,21 @@ if [ -f "$RCRURD_VAL" ]; then
   ${PYTHON_BIN:-python3} "$RCRURD_VAL" --phase "${PHASE_NUMBER}" $RCRURD_FLAGS
   RCRURD_RC=$?
   if [ "$RCRURD_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
-    echo "⛔ RCRURD depth gate failed — scanner stopped too early on mutation goals."
-    echo "   See scanner-report-contract.md 'RCRURD Lifecycle Protocol'. Goal class drives min steps."
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_depth_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-    exit 1
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/rcrurd-depth-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "rcrurd_depth",
+  "summary": "RCRURD depth gate failed — scanner stopped too early on mutation goals",
+  "fix_hint": "See scanner-report-contract.md 'RCRURD Lifecycle Protocol'. Goal class drives min steps."
+}
+JSON
+    blocking_gate_prompt_emit "rcrurd_depth" "$EVIDENCE_PATH" "warn"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
   fi
 fi
 
@@ -7299,9 +7385,21 @@ if [ -f "$ASSERTED_VAL" ]; then
   ${PYTHON_BIN:-python3} "$ASSERTED_VAL" --phase "${PHASE_NUMBER}" $ASSERTED_FLAGS
   ASSERTED_RC=$?
   if [ "$ASSERTED_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
-    echo "⛔ Asserted-rule-match gate failed — scanner asserted_quote drifts from BR-NN text."
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.asserted_drift_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-    exit 1
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/asserted-drift-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "asserted_drift",
+  "summary": "Asserted-rule-match gate failed — scanner asserted_quote drifts from BR-NN text",
+  "fix_hint": "Align scanner asserted_quote fields with the business rule text in BUSINESS-RULES.md or use --allow-asserted-drift override"
+}
+JSON
+    blocking_gate_prompt_emit "asserted_drift" "$EVIDENCE_PATH" "error"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
   fi
 fi
 
