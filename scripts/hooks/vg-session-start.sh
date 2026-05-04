@@ -138,6 +138,17 @@ fi
 
 session_context=$'<EXTREMELY_IMPORTANT>\nYou have VGFlow harness loaded.\n\n'"${base_text}${diagnostics}"$'\n</EXTREMELY_IMPORTANT>'
 
-escaped="$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read())[1:-1])' <<< "$session_context")"
-
-printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$escaped"
+# Tier 1 #108 — already uses JSON hookSpecificOutput.additionalContext shape.
+# Switched to python3 json.dumps (full envelope, not just the string) for
+# consistency with the dual-channel pattern in sibling hooks. Auto-handles
+# 10K char cap with file+preview fallback (Claude Code 2.0+).
+VG_SESSION_CTX="$session_context" python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": os.environ.get("VG_SESSION_CTX", ""),
+  }
+}))
+sys.stdout.write("\n")
+'

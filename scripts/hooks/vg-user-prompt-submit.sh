@@ -37,23 +37,39 @@ if [[ ! "$prompt" =~ ^/vg:([a-z][a-z0-9_-]*)([[:space:]]+(.*))?$ ]]; then
     if [ "$is_alive" -eq 1 ]; then
       # Build reminder per state. Goes to stderr — Claude Code surfaces
       # UserPromptSubmit stderr as a system-reminder block to the AI.
-      printf "<vg-flow-context>\n" >&2
-      printf "Active VG run detected: %s on phase %s (run_id %s).\n" \
-        "$active_cmd" "$active_phase" "${active_run_id:-?}" >&2
+      # Tier 1 #108 — also emit JSON additionalContext on stdout for
+      # Claude Code 2.0+ (richer surface, no 10K char clip).
+      ctx_body=""
+      ctx_body+="<vg-flow-context>"$'\n'
+      ctx_body+="Active VG run detected: ${active_cmd} on phase ${active_phase} (run_id ${active_run_id:-?})."$'\n'
       if [ "$tasklist_projected" = "no" ]; then
-        printf "STATE: tasklist NOT yet projected.\n" >&2
-        printf "BEFORE any tool call (Bash/etc), you MUST:\n" >&2
-        printf "  1. Read .vg/runs/%s/tasklist-contract.json\n" "$active_run_id" >&2
-        printf "  2. Call the TodoWrite tool with hierarchical 2-layer projection (group + ↳ sub-items)\n" >&2
-        printf "  3. Run: python3 .claude/scripts/vg-orchestrator tasklist-projected --adapter claude\n" >&2
-        printf "PreToolUse-bash hook will BLOCK step-active calls until evidence file exists with depth_valid=true and adapter='claude'.\n" >&2
+        ctx_body+="STATE: tasklist NOT yet projected."$'\n'
+        ctx_body+="BEFORE any tool call (Bash/etc), you MUST:"$'\n'
+        ctx_body+="  1. Read .vg/runs/${active_run_id}/tasklist-contract.json"$'\n'
+        ctx_body+="  2. Call the TodoWrite tool with hierarchical 2-layer projection (group + sub-items)"$'\n'
+        ctx_body+="  3. Run: python3 .claude/scripts/vg-orchestrator tasklist-projected --adapter claude"$'\n'
+        ctx_body+="PreToolUse-bash hook will BLOCK step-active calls until evidence file exists with depth_valid=true and adapter='claude'."$'\n'
       elif [ "$adapter" != "claude" ] && [ -n "$adapter" ]; then
-        printf "STATE: tasklist projected with adapter='%s' — Claude Code session requires adapter='claude'. Re-call TodoWrite + tasklist-projected --adapter claude before next step-active or PreToolUse hook will BLOCK.\n" "$adapter" >&2
+        ctx_body+="STATE: tasklist projected with adapter='${adapter}' — Claude Code session requires adapter='claude'. Re-call TodoWrite + tasklist-projected --adapter claude before next step-active or PreToolUse hook will BLOCK."$'\n'
       else
-        printf "STATE: tasklist projected OK (adapter=claude). Continue executing the flow per slim-entry STEP order. DO NOT ad-hoc skip steps.\n" >&2
+        ctx_body+="STATE: tasklist projected OK (adapter=claude). Continue executing the flow per slim-entry STEP order. DO NOT ad-hoc skip steps."$'\n'
       fi
-      printf "Slim entry: commands/vg/%s.md\n" "${active_cmd#vg:}" >&2
-      printf "</vg-flow-context>\n" >&2
+      ctx_body+="Slim entry: commands/vg/${active_cmd#vg:}.md"$'\n'
+      ctx_body+="</vg-flow-context>"
+
+      # Emit JSON additionalContext on stdout (Claude Code 2.0+).
+      VG_HOOK_CTX="$ctx_body" python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": os.environ.get("VG_HOOK_CTX", ""),
+  }
+}))
+' 2>/dev/null || true
+
+      # Stderr mirror (Claude Code 1.x compat + grep-friendly).
+      printf '%s\n' "$ctx_body" >&2
     fi
   fi
   exit 0
@@ -156,6 +172,22 @@ except Exception:
     case "$MAINLINE_CMDS" in *" $cmd "*) is_new_mainline=1 ;; *) is_new_mainline=0 ;; esac
     if [ "$is_existing_mainline" -eq 1 ] && [ "$is_new_mainline" -eq 1 ]; then
       # Both mainline → hard-block (preserve pipeline ordering)
+      # Tier 1 #108 — emit JSON deny on stdout (Claude Code 2.0+).
+      # UserPromptSubmit hook spec: `decision: "block"` halts processing of the prompt.
+      VG_HOOK_REASON="vg-cross-run: active ${existing_cmd} on phase ${existing_phase}; finish or abort before invoking ${cmd} on same phase. Both are mainline pipeline commands (blueprint -> build -> review -> test -> accept) and intra-phase ordering must be preserved." \
+      VG_HOOK_ADDL="VG cross-run conflict — finish or abort the active ${existing_cmd} run before starting ${cmd}." \
+      python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "decision": "block",
+  "reason": os.environ.get("VG_HOOK_REASON", ""),
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": os.environ.get("VG_HOOK_ADDL", ""),
+  }
+}))
+' 2>/dev/null || true
+
       printf "\033[38;5;208mvg-cross-run: active %s on phase %s; finish or abort before invoking %s on same phase\033[0m\n" \
         "$existing_cmd" "$existing_phase" "$cmd" >&2
       exit 2

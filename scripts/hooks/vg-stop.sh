@@ -11,8 +11,20 @@ if [ ! -f "$run_file" ]; then
   exit 0
 fi
 
-run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file")"
-command="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"])' "$run_file")"
+# Race-safe JSON parse — tolerate concurrent writes from parallel sessions
+# (mid-rename, partial flush). Fall back to exit 0 silently rather than
+# crashing; the next stop fire will re-evaluate once file settles.
+parse_field() {
+  python3 -c '
+import json, sys
+try:
+    print(json.load(open(sys.argv[1]))[sys.argv[2]])
+except (json.JSONDecodeError, FileNotFoundError, KeyError, OSError):
+    sys.exit(99)
+' "$run_file" "$1" 2>/dev/null
+}
+run_id="$(parse_field run_id)" || { echo "▸ vg-stop: run_file unreadable (race or partial write) — skipping" >&2; exit 0; }
+command="$(parse_field command)" || { echo "▸ vg-stop: run_file unreadable (race or partial write) — skipping" >&2; exit 0; }
 db=".vg/events.db"
 
 failures=()
@@ -73,6 +85,33 @@ if [ "${#failures[@]}" -gt 0 ]; then
     echo "- STATE MACHINE → events emitted out of expected order; investigate which step ran late."
     echo "- CONTRACT → check \`runtime_contract.must_write\` artifacts + \`must_touch_markers\`."
   } > "$block_file"
+
+  # Tier 1 #108 — JSON stdout for Stop hook decision channel.
+  # Stop hook uses `decision: "block"` (not permissionDecision — that's PreToolUse-only).
+  # Reference: Claude Code Stop hook spec — JSON output supports `{"decision":"block","reason":"..."}`.
+  VG_HOOK_REASON="${gate_id}: ${#failures[@]} failure(s) for run ${run_id} (${command})
+Block file: ${block_file}
+
+Failures:
+$(printf -- '- %s\n' "${failures[@]}")
+
+Required fix:
+Resolve each failure above. Common patterns:
+- UNHANDLED DIAGNOSTIC -> emit vg.block.handled for each unpaired vg.block.fired.
+- STATE MACHINE -> events emitted out of expected order; investigate which step ran late.
+- CONTRACT -> check runtime_contract.must_write artifacts + must_touch_markers." \
+  VG_HOOK_ADDL="VG Stop hook blocked — read ${block_file} for failure details + fix" \
+  python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "decision": "block",
+  "reason": os.environ.get("VG_HOOK_REASON", ""),
+  "hookSpecificOutput": {
+    "hookEventName": "Stop",
+    "additionalContext": os.environ.get("VG_HOOK_ADDL", ""),
+  }
+}))
+' 2>/dev/null || true
 
   # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
   printf "\033[38;5;208m%s: %d failure(s) for run %s (%s)\033[0m\n→ Read %s for details + fix\n" \

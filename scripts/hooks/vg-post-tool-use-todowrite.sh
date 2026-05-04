@@ -104,3 +104,20 @@ if command -v vg-orchestrator >/dev/null 2>&1; then
   cmd="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"])' "$run_file" | sed 's/^vg://')"
   vg-orchestrator emit-event "${cmd}.native_tasklist_projected" >/dev/null 2>&1 || true
 fi
+
+# Tier 1 #108 — emit hookSpecificOutput JSON status on stdout (Claude Code 2.0+).
+# PostToolUse spec accepts hookSpecificOutput.additionalContext as a status
+# surface. Mirrors dual-channel pattern in sibling PreToolUse hooks; here the
+# hook is non-blocking so we only carry additionalContext (no permissionDecision).
+VG_HOOK_RUN_ID="$run_id" VG_HOOK_EV_OUT="$evidence_out" python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "VG tasklist evidence written for run "
+      + os.environ.get("VG_HOOK_RUN_ID", "")
+      + " at "
+      + os.environ.get("VG_HOOK_EV_OUT", ""),
+  }
+}))
+' 2>/dev/null || true

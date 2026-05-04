@@ -59,6 +59,34 @@ For debug retries, use \`general-purpose\` (or invoke \`/vg:debug\` interactivel
 [VG diagnostic] Spawn subagent bị chặn vì kiểu '${subagent}' không trong allow-list.
 EOF
 
+  # Tier 1 #108 — JSON stdout (Claude Code 2.0+ permissionDecision channel).
+  # Mirrors .claude/scripts/vg-agent-spawn-guard.py:140-177 dual-channel pattern.
+  VG_HOOK_REASON="${gate_id}: ${cause}
+Block file: ${block_file}
+
+Allowed subagents:
+- general-purpose — generic task delegation (also canonical debug-retry slot)
+- Explore — read-only code search
+- Plan — implementation planning (read-only)
+- vg-* — VG custom agents (vg-blueprint-planner, vg-blueprint-contracts, vg-haiku-scanner, etc.)
+
+Required fix:
+Switch subagent_type to one in the allow-list above.
+gsd-* agents are blocked — VG framework no longer borrows from GSD.
+For debug retries, use general-purpose (or invoke /vg:debug interactively)." \
+  VG_HOOK_ADDL="VG run blocked — read ${block_file} for allowed-list + fix" \
+  python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": os.environ.get("VG_HOOK_REASON", ""),
+    "additionalContext": os.environ.get("VG_HOOK_ADDL", ""),
+  }
+}))
+' 2>/dev/null || true
+
   # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
   printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for allowed list\n" "$gate_id" "$cause" "$block_file" >&2
 

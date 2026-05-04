@@ -20,6 +20,9 @@ fi
 # Protected path patterns.
 protected_patterns=(
   '\.vg/runs/[^/]+/\.tasklist-projected\.evidence\.json$'
+  '\.vg/runs/[^/]+/\.codex-spawn-manifest\.jsonl$'
+  '\.vg/runs/[^/]+/\.spawn-count\.json$'
+  '\.vg/runs/[^/]+/codex-spawns/.*'
   '\.vg/runs/[^/]+/evidence-.*\.json$'
   '\.vg/runs/[^/]+/.*evidence.*'
   '\.vg/phases/.*/\.step-markers/.*\.done$'
@@ -62,6 +65,34 @@ vg-orchestrator emit-event vg.block.handled --gate ${gate_id} \\
   --resolution "switched to signed helper"
 \`\`\`
 EOF
+
+    # Tier 1 #108 — JSON stdout (Claude Code 2.0+ permissionDecision channel).
+    # Mirrors .claude/scripts/vg-agent-spawn-guard.py:140-177 dual-channel pattern.
+    VG_HOOK_REASON="${gate_id}: ${cause}
+Block file: ${block_file}
+
+This path holds harness-controlled evidence; direct writes would forge
+the harness's view of what AI did.
+
+Required fix:
+- For evidence files: use scripts/vg-orchestrator-emit-evidence-signed.py
+- For markers: use vg-orchestrator mark-step <command> <step>
+- For events: use vg-orchestrator emit-event <type> --payload <json>
+
+After fix:
+vg-orchestrator emit-event vg.block.handled --gate ${gate_id} --resolution \"switched to signed helper\"" \
+    VG_HOOK_ADDL="VG run blocked — read ${block_file} for diagnostic + fix" \
+    python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": os.environ.get("VG_HOOK_REASON", ""),
+    "additionalContext": os.environ.get("VG_HOOK_ADDL", ""),
+  }
+}))
+' 2>/dev/null || true
 
     # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
     printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for fix\n→ After fix: vg-orchestrator emit-event vg.block.handled --gate %s\n" \

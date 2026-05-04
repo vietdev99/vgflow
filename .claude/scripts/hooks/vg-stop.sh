@@ -86,6 +86,33 @@ if [ "${#failures[@]}" -gt 0 ]; then
     echo "- CONTRACT → check \`runtime_contract.must_write\` artifacts + \`must_touch_markers\`."
   } > "$block_file"
 
+  # Tier 1 #108 — JSON stdout for Stop hook decision channel.
+  # Stop hook uses `decision: "block"` (not permissionDecision — that's PreToolUse-only).
+  # Reference: Claude Code Stop hook spec — JSON output supports `{"decision":"block","reason":"..."}`.
+  VG_HOOK_REASON="${gate_id}: ${#failures[@]} failure(s) for run ${run_id} (${command})
+Block file: ${block_file}
+
+Failures:
+$(printf -- '- %s\n' "${failures[@]}")
+
+Required fix:
+Resolve each failure above. Common patterns:
+- UNHANDLED DIAGNOSTIC -> emit vg.block.handled for each unpaired vg.block.fired.
+- STATE MACHINE -> events emitted out of expected order; investigate which step ran late.
+- CONTRACT -> check runtime_contract.must_write artifacts + must_touch_markers." \
+  VG_HOOK_ADDL="VG Stop hook blocked — read ${block_file} for failure details + fix" \
+  python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "decision": "block",
+  "reason": os.environ.get("VG_HOOK_REASON", ""),
+  "hookSpecificOutput": {
+    "hookEventName": "Stop",
+    "additionalContext": os.environ.get("VG_HOOK_ADDL", ""),
+  }
+}))
+' 2>/dev/null || true
+
   # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
   printf "\033[38;5;208m%s: %d failure(s) for run %s (%s)\033[0m\n→ Read %s for details + fix\n" \
     "$gate_id" "${#failures[@]}" "$run_id" "$command" "$block_file" >&2

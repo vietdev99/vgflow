@@ -2,8 +2,31 @@
 # PreToolUse on Bash — gate before vg-orchestrator step-active.
 # Verifies signed tasklist evidence file exists + HMAC valid + checksum matches contract.
 # Uses hmac.compare_digest (constant-time) to prevent timing side-channel attacks.
+#
+# Tier 1 #108 — dual-channel deny (JSON stdout + 3-line stderr).
+# Mirrors .claude/scripts/vg-agent-spawn-guard.py:140-177 (canonical Python form).
+# Claude Code 2.0+ reads JSON on stdout (hookSpecificOutput.permissionDecision="deny");
+# 1.x reads stderr+exit-2. Both channels carry the same reason.
 
 set -euo pipefail
+
+# Shared helper — emit hookSpecificOutput JSON on stdout.
+# Args: $1 = full reason text, $2 = additionalContext (short).
+_emit_hook_json_deny() {
+  local reason="$1"
+  local addl="$2"
+  VG_HOOK_REASON="$reason" VG_HOOK_ADDL="$addl" python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": os.environ.get("VG_HOOK_REASON", ""),
+    "additionalContext": os.environ.get("VG_HOOK_ADDL", ""),
+  }
+}))
+' 2>/dev/null || true
+}
 
 input="$(cat)"
 cmd_text="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null || true)"
@@ -160,6 +183,10 @@ emit_codex_prestep_scope_block() {
     echo '```'
   } > "$block_file"
 
+  _emit_hook_json_deny \
+    "${gate_id}: ${cause}"$'\nBlock file: '"${block_file}"$'\n\nBlocked command:\n'"${cmd_text}"$'\n\nNext: run first bootstrap step-active, not broad rg/find. See block file for allowed/blocked examples + after-fix emit-event command.' \
+    "VG run blocked — read ${block_file} for diagnostic + fix"
+
   printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for fix\n→ Next: run first bootstrap step-active, not broad rg/find\n" \
     "$gate_id" "$cause" "$block_file" >&2
 
@@ -221,6 +248,10 @@ emit_codex_pretasklist_scope_block() {
     echo "  --resolution \"stopped broad pre-tasklist scan; continuing preflight/tasklist\""
     echo '```'
   } > "$block_file"
+
+  _emit_hook_json_deny \
+    "${gate_id}: ${cause}"$'\nBlock file: '"${block_file}"$'\n\nBlocked command:\n'"${cmd_text}"$'\n\nNext: continue preflight/tasklist, not broad rg/find. See block file for allowed/blocked examples + after-fix emit-event command.' \
+    "VG run blocked — read ${block_file} for diagnostic + fix"
 
   printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for fix\n→ Next: continue preflight/tasklist, not broad rg/find\n" \
     "$gate_id" "$cause" "$block_file" >&2
@@ -325,6 +356,11 @@ emit_block() {
     echo ""
     echo "If this gate blocked ≥3 times this run, MUST call AskUserQuestion instead of retrying."
   } > "$block_file"
+
+  # Tier 1 #108 — JSON stdout (Claude Code 2.0+ permissionDecision channel).
+  _emit_hook_json_deny \
+    "${gate_id}: ${cause}"$'\nBlock file: '"${block_file}"$'\n\nBefore any non-bootstrap `vg-orchestrator step-active` call, you MUST:\n1. Ensure '"${contract_path}"$' exists (run emit-tasklist.py preflight if missing).\n2. Read '"${contract_path}"$' (parse checklists[]).\n3. Call TodoWrite with one entry per items[] row.\n4. Run: python3 .claude/scripts/vg-orchestrator tasklist-projected --adapter claude\n\nDo NOT just emit vg.block.handled — the evidence file must exist.\nSee commands/vg/_shared/lib/tasklist-projection-instruction.md for full instructions.\n\nAfter fix:\nvg-orchestrator emit-event vg.block.handled --gate '"${gate_id}"$' --resolution "TodoWrite called, evidence regenerated"\n\nIf this gate blocked >=3 times this run, MUST call AskUserQuestion instead of retrying.' \
+    "VG run blocked — read ${block_file} for diagnostic + fix"
 
   # Compact stderr — 3 lines max.
   # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to the first line (title); follow-up lines plain.
