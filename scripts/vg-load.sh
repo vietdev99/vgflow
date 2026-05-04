@@ -6,7 +6,7 @@
 # partial loading instead of reading the full flat file — saves context budget.
 #
 # USAGE
-#   vg-load --phase <N> --artifact <plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant> [<filter-flags>]
+#   vg-load --phase <N> --artifact <plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant|workflow> [<filter-flags>]
 #
 # ARTIFACTS + FILTERS
 #   --artifact plan
@@ -50,6 +50,10 @@
 #       --goal G-NN          → RCRURD-INVARIANTS/G-NN.yaml (per-goal invariant)
 #       --index | --list
 #
+#   --artifact workflow (Task 40 — Bug H, multi-actor workflows)
+#       --workflow WF-NN   → WORKFLOW-SPECS/WF-NN.md (per-workflow detail)
+#       --full | --index | --list
+#
 # OPTIONAL
 #   --phases-dir DIR    override default .vg/phases (or $PHASES_DIR env)
 #   --quiet             suppress informational stderr
@@ -81,6 +85,7 @@ while [ $# -gt 0 ]; do
     --artifact)     artifact="$2"; shift 2 ;;
     --task|--wave|--endpoint|--resource|--goal|--priority|--decision)
                     filter_kind="${1#--}"; filter_value="$2"; shift 2 ;;
+    --workflow)     filter_kind="workflow"; filter_value="$2"; shift 2 ;;
     --full|--list|--index)
                     filter_kind="${1#--}"; filter_value=""; shift ;;
     --phases-dir)   phases_dir="$2"; shift 2 ;;
@@ -95,8 +100,8 @@ done
 
 # Validate artifact name before filter check so unknown artifacts produce the right error.
 case "$artifact" in
-  plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant) ;;
-  *) echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant" >&2; exit 1 ;;
+  plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant|workflow) ;;
+  *) echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant, workflow" >&2; exit 1 ;;
 esac
 
 [ -z "$filter_kind" ] && { echo "ERROR: filter required (--task/--wave/--full/--list/--index/etc.)" >&2; exit 1; }
@@ -285,8 +290,25 @@ case "$artifact" in
     esac
     ;;
 
+  workflow)
+    # Task 40 (Bug H) — multi-actor workflow specs.
+    sub_dir="$phase_dir/WORKFLOW-SPECS"
+    flat_file="$phase_dir/WORKFLOW-SPECS.md"
+    case "$filter_kind" in
+      full)  cat "$flat_file" 2>/dev/null || { echo "ERROR: $flat_file not found" >&2; exit 2; } ;;
+      index) cat "$sub_dir/index.md" 2>/dev/null || { echo "ERROR: $sub_dir/index.md not found" >&2; exit 2; } ;;
+      list)  ls "$sub_dir"/WF-*.md 2>/dev/null || { echo "no WF files" >&2; exit 3; } ;;
+      workflow)
+        f="$sub_dir/${filter_value}.md"
+        [ -f "$f" ] || { echo "ERROR: workflow file not found: $f" >&2; exit 2; }
+        cat "$f"
+        ;;
+      *) echo "ERROR: unsupported filter '$filter_kind' for workflow (use --workflow WF-NN, --full, --index, --list)" >&2; exit 1 ;;
+    esac
+    ;;
+
   *)
-    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant" >&2
+    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant, workflow" >&2
     exit 1
     ;;
 esac

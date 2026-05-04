@@ -1,7 +1,7 @@
 ---
 name: vg:blueprint
 description: Plan + API contracts + verify + CrossAI review — 4 sub-steps before build
-argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--skip-rcrurdr] [--skip-fe-contracts] [--from=<substep>] [--only=<step>] [--override-reason=<text>] [--apply-amendments]"
+argument-hint: "<phase> [--skip-research] [--gaps] [--reviews] [--text] [--crossai-only] [--skip-crossai] [--skip-codex-test-goal-lane] [--skip-edge-cases] [--skip-lens-walk] [--skip-rcrurdr] [--skip-fe-contracts] [--skip-workflows] [--from=<substep>] [--only=<step>] [--override-reason=<text>] [--apply-amendments]"
 allowed-tools:
   - Read
   - Write
@@ -124,6 +124,11 @@ runtime_contract:
     - name: "2b8_rcrurdr_invariants"
       severity: "warn"
       required_unless_flag: "--skip-rcrurdr"
+    # Task 40 (Bug H) — Pass 3 multi-actor workflow specs. Profile-gated.
+    - name: "2b9_workflows"
+      profile: "web-fullstack,web-frontend-only,backend-multi-actor"
+      severity: "warn"
+      required_unless_flag: "--skip-workflows"
     # Flag-gated markers (skip via override flag with debt entry)
     - name: "2b5a_codex_test_goal_lane"
       required_unless_flag: "--skip-codex-test-goal-lane"
@@ -168,6 +173,13 @@ runtime_contract:
     - event_type: "blueprint.fe_contract_block5_blocked"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # Task 40 — Pass 3 lifecycle
+    - event_type: "blueprint.workflows_pass_completed"
+      phase: "${PHASE_NUMBER}"
+      severity: "info"
+    - event_type: "blueprint.workflows_pass_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--skip-crossai"
     - "--skip-codex-test-goal-lane"
@@ -175,6 +187,7 @@ runtime_contract:
     - "--skip-lens-walk"
     - "--skip-rcrurdr"
     - "--skip-fe-contracts"
+    - "--skip-workflows"
     - "--override-reason"
 ---
 

@@ -56,6 +56,12 @@ files (capsule, plan slice, contract slices, design ref).
     "G-04",
     "G-12"
   ],
+  "crud_surfaces_slice_path": ".task-capsules/task-04.crud-surfaces.md",
+  "lens_walk_slice_path": ".task-capsules/task-04.lens-walk.md",
+  "rcrurd_invariants_paths": [
+    "${PHASE_DIR}/RCRURD-INVARIANTS/G-04.yaml",
+    "${PHASE_DIR}/RCRURD-INVARIANTS/G-12.yaml"
+  ],
   "bootstrap_rules": [
     /* Resolved by orchestrator pre-spawn (Task 11 — L1 scope-matched).
        Pseudocode (driven from .claude/scripts/lib/rule_resolver.py):
@@ -92,6 +98,9 @@ files (capsule, plan slice, contract slices, design ref).
 | `build_cmd` | maybe | From `vg.config.md > build_gates.build_cmd`. May be empty. |
 | `binding_requirements` | yes | Citations the subagent's commit MUST satisfy via `// vg-binding: <id>` comments + commit-msg cite. |
 | `edge_cases_for_goals` | maybe | List of goal IDs (G-NN) whose EDGE-CASES this task implements. Subagent MUST load via `vg-load --artifact edge-cases --goal G-NN` and handle each variant_id in code. Empty list = task touches no goals (rare, e.g., infra/migration tasks). |
+| `crud_surfaces_slice_path` | maybe | Pre-resolved CRUD-SURFACES slice for resources this task touches. NULL when task has no API endpoints OR phase predates Task 37. Subagent reads via `cat $crud_surfaces_slice_path` (file is concatenation of per-resource slices). |
+| `lens_walk_slice_path` | maybe | Pre-resolved LENS-WALK slice for goals this task implements. NULL when task touches no goals OR phase has no `LENS-WALK/`. Subagent loads to understand bug-class probe variants. |
+| `rcrurd_invariants_paths` | maybe | List of per-goal RCRURD-INVARIANTS yaml paths (Task 22 schema, Task 39 RCRURDR extension). One entry per goal. Empty list = no invariants apply. Subagent MUST honor `lifecycle: rcrurd \| rcrurdr \| partial` when emitting test code or handler ordering. |
 | `bootstrap_rules` | maybe | Scope-matched rule cards from `.vg/BOOTSTRAP-RULES.yaml` resolved by `rule_resolver.resolve_rules()`. Empty list = no rules apply to this task's files. Subagent reads `severity` field — BLOCK/TRIAGE_REQUIRED rules MUST be honored before commit; ADVISORY are informational. |
 
 ---
@@ -170,6 +179,18 @@ ${CONTRACT_SLICE_BLOCKS}    # one @<path> per contract_slice_paths entry
 # Match the screenshot exactly. No "improvements".
 ${DESIGN_REF_BLOCK}    # @${design_ref_path} when present, else "NONE — non-UI task"
 </design_context>
+
+<crud_surface_context>
+${CRUD_SURFACE_BLOCK}    # @${crud_surfaces_slice_path} when present, else "NONE — task touches no CRUD resources"
+</crud_surface_context>
+
+<lens_walk_context>
+${LENS_WALK_BLOCK}       # @${lens_walk_slice_path} when present, else "NONE — task touches no goals"
+</lens_walk_context>
+
+<rcrurd_invariants_context>
+${RCRURD_INVARIANTS_BLOCK}    # Concatenation of @${rcrurd_invariants_paths[N]} entries; "NONE" when list empty.
+</rcrurd_invariants_context>
 
 <binding_requirements>
 ${BINDING_REQUIREMENTS_LIST}

@@ -237,6 +237,25 @@ if [ -f "$BLOCK5_VALIDATOR" ] && [ -d "${PHASE_DIR}/API-CONTRACTS" ]; then
 fi
 ```
 
+### 6.2.5c — Task 40: verify WORKFLOW-SPECS (before blueprint.completed)
+
+```bash
+# Task 40 — run verify-workflow-specs.py before close. BLOCKs if any WF file
+# fails schema validation. Phases without multi-actor workflows pass automatically
+# (empty index with flows: [] is valid). Skip via --skip-workflows --override-reason.
+WORKFLOW_VALIDATOR="${REPO_ROOT:-.}/scripts/validators/verify-workflow-specs.py"
+if [ -f "$WORKFLOW_VALIDATOR" ] && [ -d "${PHASE_DIR}/WORKFLOW-SPECS" ]; then
+  python3 "$WORKFLOW_VALIDATOR" \
+    --workflows-dir "${PHASE_DIR}/WORKFLOW-SPECS"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    vg-orchestrator emit-event blueprint.workflows_validation_blocked --phase "${PHASE_NUMBER}" 2>/dev/null || true
+    echo "BLOCK: WORKFLOW-SPECS validator failed." >&2
+    exit "$rc"
+  fi
+fi
+```
+
 ### 6.2.6 — terminal telemetry + run-complete
 
 ```bash

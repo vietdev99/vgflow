@@ -131,6 +131,10 @@ runtime_contract:
     - event_type: "build.pre_test_skipped"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # Task 37 — per-task slice resolution (Bug E)
+    - event_type: "build.envelope_slice_resolved"
+      phase: "${PHASE_NUMBER}"
+      severity: "info"
   forbidden_without_override:
     # Every escape hatch must leave a debt-register trail.
     - "--override-reason"
