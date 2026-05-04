@@ -39,9 +39,23 @@ FE structure rather than guessing.
 ```bash
 # Skip-flag check (forbidden_without_override paired)
 if [[ "$ARGUMENTS" =~ --skip-fe-contracts ]]; then
+  if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+    echo "⛔ --skip-fe-contracts requires --override-reason=<text>"
+    exit 1
+  fi
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
     "blueprint.fe_contracts_pass_skipped" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"--skip-fe-contracts\"}" 2>/dev/null || true
+  # Canonical override.used emit — runtime_contract.forbidden_without_override
+  # requires an exact override.used.flag match for --skip-fe-contracts before
+  # run-complete will pass.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--skip-fe-contracts" \
+    --reason "Pass 2 FE consumer contracts skipped (phase ${PHASE_NUMBER})" \
+    >/dev/null 2>&1 || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "blueprint-fe-contracts-skipped" "${PHASE_NUMBER}" \
+      "Pass 2 FE consumer contracts skipped" "$PHASE_DIR"
   exit 0
 fi
 

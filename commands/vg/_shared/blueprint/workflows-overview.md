@@ -36,9 +36,23 @@ real goal_ids, real endpoint paths, real component names from FE artifacts.
 ```bash
 # Skip-flag check (forbidden_without_override paired)
 if [[ "$ARGUMENTS" =~ --skip-workflows ]]; then
+  if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+    echo "⛔ --skip-workflows requires --override-reason=<text>"
+    exit 1
+  fi
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
     "blueprint.workflows_pass_skipped" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"--skip-workflows\"}" 2>/dev/null || true
+  # Canonical override.used emit — runtime_contract.forbidden_without_override
+  # requires an exact override.used.flag match for --skip-workflows before
+  # run-complete will pass.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--skip-workflows" \
+    --reason "Pass 3 multi-actor workflow specs skipped (phase ${PHASE_NUMBER})" \
+    >/dev/null 2>&1 || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "blueprint-workflows-skipped" "${PHASE_NUMBER}" \
+      "Pass 3 multi-actor workflow specs skipped" "$PHASE_DIR"
   exit 0
 fi
 

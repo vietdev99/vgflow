@@ -25,11 +25,25 @@ review/test consumers.
 ## Lifecycle wrapper (R6 Task 1 — wire missing marker)
 
 ```bash
-# Skip-flag check
+# Skip-flag check (forbidden_without_override paired)
 if [[ "$ARGUMENTS" =~ --skip-rcrurdr ]]; then
+  if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+    echo "⛔ --skip-rcrurdr requires --override-reason=<text>"
+    exit 1
+  fi
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
     "blueprint.rcrurdr_invariant_skipped" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"--skip-rcrurdr\"}" 2>/dev/null || true
+  # Canonical override.used emit — runtime_contract.forbidden_without_override
+  # requires an exact override.used.flag match for --skip-rcrurdr before
+  # run-complete will pass.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--skip-rcrurdr" \
+    --reason "RCRURDR invariant validation skipped (phase ${PHASE_NUMBER})" \
+    >/dev/null 2>&1 || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "blueprint-rcrurdr-skipped" "${PHASE_NUMBER}" \
+      "RCRURDR invariant validation skipped" "$PHASE_DIR"
   exit 0
 fi
 
