@@ -382,6 +382,98 @@ site token leak.
 - **New phases** (scope/blueprint v2+): blueprint step 2b5 SHOULD emit enriched format. AI reads this template to infer structure.
 - **Manual enrichment**: user edits TEST-GOALS.md adding fields. Validators re-run, may unlock additional coverage.
 
+## Phase-level goal class — `G-PHASE-NN` (R8-C 2026-05-05)
+
+Codex closed-loop audit (2026-05-05) found that component-level `G-XX`
+goals verify per-feature behavior but no goal asserts the WHOLE phase
+delivers user-visible value end-to-end. Phase-level goal class closes
+this gap: 1 phase-goal per user journey, ordered children, postcondition
+asserted after the full sequence.
+
+File path (Layer 1 split): `${PHASE_DIR}/TEST-GOALS/G-PHASE-NN.md`
+(numbered separately from `G-XX` component goals).
+
+### Schema — `goal_class: phase-happy-path`
+
+```yaml
+---
+id: G-PHASE-01                # numbering separate from component G-XX
+goal_class: phase-happy-path  # REQUIRED — distinguishes from component
+priority: critical            # phase-happy-path is ALWAYS critical
+children:                     # REQUIRED — ordered child goal IDs
+  - G-04                      # dependency order — first runs first
+  - G-05
+  - G-06
+  - G-07
+postcondition: |              # REQUIRED — narrative end-state after all children
+  After running all child goals in order, deployed system shows:
+  - User created site successfully
+  - Site visible in list
+  - User edited site metadata
+  - Site shows updated metadata
+  - User deleted site
+  - Site no longer in list
+rcrurdr_required: true        # OPTIONAL — phase contains full mutation lifecycle
+context_goal_ref: |           # OPTIONAL — quote from CONTEXT ## Goals bullet
+  "Manage sites end-to-end (CRUD + list + detail)"
+status: NOT_SCANNED | READY | BLOCKED | FAILED   # populated by /vg:test
+evidence_file: apps/web/e2e/site-management.phase.spec.ts  # populated by codegen
+---
+
+# Phase happy path — Site management
+
+## Steps
+
+1. (G-04) User creates a new site with name="Acme Corp"
+2. (G-05) User views site list — Acme Corp appears
+3. (G-06) User opens Acme Corp, edits metadata
+4. (G-07) User deletes Acme Corp
+5. Final assertion: site list empty / no Acme Corp row
+
+## Postcondition
+
+User can manage sites end-to-end without errors. Data flows correctly
+from form input → API → DB → list view.
+```
+
+### Generation rule (blueprint contracts pass)
+
+After component `G-XX` goals are emitted, the blueprint subagent groups
+them by user journey (heuristic: same actor + sequential CRUD on same
+resource) and emits ONE `G-PHASE-NN.md` per journey. See
+`commands/vg/_shared/blueprint/contracts-delegation.md` Part 2 §
+"Phase-level goals (G-PHASE-NN)" for the procedure.
+
+### Validator — `verify-phase-goal-coverage.py`
+
+BLOCK conditions:
+1. CONTEXT.md `## Goals` bullet has no covering `G-PHASE-NN`
+2. Component `G-XX` goal not listed in any `G-PHASE-NN.children[]`
+3. `G-PHASE-NN.children[]` references non-existent goal ID
+4. `G-PHASE-NN` missing `postcondition` or empty
+
+Override flag (logged as override-debt):
+- `--allow-phase-goal-incomplete` + `--override-reason "<text>"`
+
+### Codegen — phase E2E spec
+
+For each `G-PHASE-NN`, codegen emits ONE Playwright spec at
+`apps/**/e2e/<slug>.phase.spec.ts` that imports child-goal helpers,
+runs them in `children[]` order, and asserts `postcondition`. If
+`rcrurdr_required: true`, the spec MUST call `expectLifecycleRoundtrip()`
+for the resource.
+
+### Review verdict gating
+
+Phase READY status REQUIRES every `G-PHASE-NN` to have runtime evidence
+(`.runs/G-PHASE-NN.json`). BLOCK when any phase-goal missing or failed.
+
+### UAT acceptance
+
+`vg-accept-uat-builder` emits a special `PHASE-G-PHASE-NN` item in
+section B (Goals) with the postcondition as the question. Critical:
+true. Failed → quorum BLOCK on accept verdict.
+
 ## Consumer behavior
 
 | Command | Reads enriched fields | Effect |

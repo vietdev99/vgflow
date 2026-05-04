@@ -335,6 +335,115 @@ Each goal:
    transient drag-sort), declare `url_sync: false` + `url_sync_waive_reason: "<why>"`.
    Validator at /vg:review phase 2.7 logs soft OD debt.
 
+8. **Phase-level goals (G-PHASE-NN) — R8-C closed-loop coverage (2026-05-05).**
+
+   AFTER all component `G-XX` goals are emitted, generate ONE
+   `G-PHASE-NN.md` per logical user journey to assert the WHOLE phase
+   delivers user-visible value end-to-end. Closes gap surfaced by Codex
+   closed-loop audit 2026-05-05: component goals verify per-feature but
+   no goal asserts data flows from user input → API → DB → list view
+   correctly across the full phase.
+
+   **Procedure:**
+
+   a. Read CONTEXT.md `## Goals` `### In-scope` bullets — each bullet is
+      a candidate phase-level user journey.
+   b. Group component `G-XX` goals by journey using heuristic:
+      - Same `actor` (e.g. publisher, admin)
+      - Sequential CRUD operations on the SAME resource (Create →
+        List/Read → Update → Delete)
+      - OR explicitly cited as serving the same CONTEXT goal bullet
+   c. For each journey, emit `${PHASE_DIR}/TEST-GOALS/G-PHASE-NN.md`
+      with the schema below. Number `G-PHASE-NN` independently
+      starting at `G-PHASE-01`.
+   d. Update `${PHASE_DIR}/TEST-GOALS/index.md` to list phase goals
+      under a new "## Phase-level goals" section after the existing
+      component goal table.
+
+   **Schema (frontmatter — see TEST-GOAL-enriched-template.md):**
+
+   ```yaml
+   ---
+   id: G-PHASE-01
+   goal_class: phase-happy-path
+   priority: critical
+   children: [G-04, G-05, G-06, G-07]   # ordered child goal IDs
+   postcondition: |
+     After running all children in order, deployed system shows:
+     - <user-visible end state>
+   rcrurdr_required: true   # set true if any child has lifecycle: rcrurdr
+   context_goal_ref: |
+     "<verbatim quote of CONTEXT ## Goals bullet this covers>"
+   ---
+
+   # Phase happy path — <Journey title>
+
+   ## Steps
+
+   1. (G-04) <step description>
+   2. (G-05) <step description>
+   ...
+
+   ## Postcondition
+
+   <user-visible end state, plain prose>
+   ```
+
+   **Rules:**
+
+   - Phase-goal `priority: critical` ALWAYS (asserts whole-phase value).
+   - `children[]` MUST list ≥2 goals (single-goal phases skip phase-goal —
+     component G-XX is sufficient).
+   - `children[]` order = dependency order (Create before Read,
+     Read before Update, etc).
+   - Every CONTEXT `## Goals` `### In-scope` bullet MUST be covered by
+     ≥1 phase-goal (validator BLOCKS on uncovered bullet).
+   - Every component `G-XX` SHOULD appear in ≥1 phase-goal `children[]`
+     (validator BLOCKS on orphan G-XX unless flagged as setup/util goal
+     via frontmatter `phase_goal_orphan_reason: "<reason>"`).
+   - `rcrurdr_required: true` REQUIRED when any child has
+     `lifecycle: rcrurdr` in its YAML invariant — drives codegen to call
+     `expectLifecycleRoundtrip()`.
+   - Skip phase-goal generation entirely if phase has `no_crud_reason`
+     in CRUD-SURFACES.md (no user resource lifecycle to assert).
+
+   **Example for site-management phase (4.1):**
+
+   Component goals: G-04 (create site), G-05 (list sites), G-06 (edit
+   site), G-07 (delete site). All actor=publisher, all on resource=site,
+   sequential CRUD. → Single phase-goal:
+
+   ```yaml
+   ---
+   id: G-PHASE-01
+   goal_class: phase-happy-path
+   priority: critical
+   children: [G-04, G-05, G-06, G-07]
+   postcondition: |
+     Publisher creates Acme Corp site → site appears in list → publisher
+     edits metadata → list reflects new metadata → publisher deletes
+     site → list shows empty/no Acme Corp row.
+   rcrurdr_required: true
+   context_goal_ref: |
+     "Publisher manages sites end-to-end (CRUD + list)"
+   ---
+
+   # Phase happy path — Site management
+
+   ## Steps
+   1. (G-04) Publisher creates new site name="Acme Corp"
+   2. (G-05) Publisher views site list — Acme Corp visible at top
+   3. (G-06) Publisher edits Acme Corp description, saves
+   4. (G-07) Publisher deletes Acme Corp via list row action
+   5. Final assert: list reload — Acme Corp absent
+
+   ## Postcondition
+   User can manage sites end-to-end without errors.
+   ```
+
+   Update `goal_count` in return JSON to count BOTH component G-XX +
+   phase G-PHASE-NN goals. Add `phase_goal_count` field separately.
+
 **Output format:**
 
 ```markdown
@@ -599,7 +708,9 @@ After all 3 files written, compute sha256 and return (shape MUST match
   "test_goals_path": "${PHASE_DIR}/TEST-GOALS.md",
   "test_goals_index_path": "${PHASE_DIR}/TEST-GOALS/index.md",
   "test_goals_sub_files": ["${PHASE_DIR}/TEST-GOALS/G-00.md"],
+  "phase_goal_sub_files": ["${PHASE_DIR}/TEST-GOALS/G-PHASE-01.md"],
   "goal_count": 1,
+  "phase_goal_count": 1,
   "crud_surfaces_path": "${PHASE_DIR}/CRUD-SURFACES.md",
   "edge_cases_path": "${PHASE_DIR}/EDGE-CASES.md",
   "edge_cases_index_path": "${PHASE_DIR}/EDGE-CASES/index.md",

@@ -486,6 +486,12 @@ run_validator "ui-scope-coherence" \
   "${REPO_ROOT}/.claude/scripts/validators/verify-ui-scope-coherence.py" \
   "ui-scope-coherence.json" "--skip-ui-scope-coherence"
 
+# R8-C — phase-level G-PHASE-NN goal coverage (closes Codex closed-loop audit
+# 2026-05-05 gap: component goals verify per-feature, no whole-phase E2E goal).
+run_validator "phase-goal-coverage" \
+  "${REPO_ROOT}/.claude/scripts/validators/verify-phase-goal-coverage.py" \
+  "phase-goal-coverage.json" "--allow-phase-goal-incomplete"
+
 # crossai-output gated on --crossai flag
 if [[ "$ARGUMENTS" =~ --crossai ]]; then
   run_validator "P16 crossai-output" \

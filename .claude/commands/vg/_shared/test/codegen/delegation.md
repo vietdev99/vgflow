@@ -236,6 +236,98 @@ test.skip('INFRA_PENDING: {goal title} — requires {deps}', async ({ page }) =>
 });
 ```
 
+### Step C.3 — Phase-level G-PHASE-NN E2E spec emission (R8-C 2026-05-05)
+
+After all component G-XX specs are generated, emit ONE Playwright spec
+per `TEST-GOALS/G-PHASE-NN.md` that runs child goals in declared order
+and asserts the postcondition. Closes Codex closed-loop audit gap:
+component goals verify per-feature, no goal asserts the WHOLE phase
+delivers user-visible value end-to-end.
+
+**Discovery:**
+
+```bash
+PHASE_GOAL_DIR="${PHASE_DIR}/TEST-GOALS"
+if [ -d "$PHASE_GOAL_DIR" ]; then
+  PHASE_GOALS=$(find "$PHASE_GOAL_DIR" -name 'G-PHASE-*.md' -type f | sort)
+fi
+```
+
+**Per phase-goal spec template:**
+
+For each `G-PHASE-NN.md`:
+
+1. Parse frontmatter (id, children[], postcondition, rcrurdr_required,
+   context_goal_ref).
+2. Compute slug from id (e.g. `G-PHASE-01` → `g-phase-01`).
+3. Emit `${GENERATED_TESTS_DIR}/<slug>.phase.spec.ts`:
+
+```typescript
+// === AUTO-GENERATED PHASE SPEC (R8-C) — DO NOT EDIT MANUALLY ===
+// Phase goal: G-PHASE-NN — <postcondition first line>
+// Children (in order): G-04, G-05, G-06, G-07
+// Source: ${PHASE_DIR}/TEST-GOALS/G-PHASE-NN.md
+// vg-binding: phase-goal:G-PHASE-NN
+import { test, expect } from '@playwright/test';
+import { runG04 } from './G-04.helpers';   // child helper imports
+import { runG05 } from './G-05.helpers';
+import { runG06 } from './G-06.helpers';
+import { runG07 } from './G-07.helpers';
+// Optional — only when rcrurdr_required: true
+import { expectLifecycleRoundtrip } from '@/test-helpers/expectReadAfterWrite';
+import invariantG04 from './fixtures/invariants/G-04';
+
+test.describe('Phase happy path — G-PHASE-NN', () => {
+  test('runs full child sequence and asserts postcondition', async ({ page, request }) => {
+    // Step 1 — child G-04 (Create)
+    await runG04(page, request);
+    // Step 2 — child G-05 (List)
+    await runG05(page, request);
+    // Step 3 — child G-06 (Update)
+    await runG06(page, request);
+    // Step 4 — child G-07 (Delete)
+    await runG07(page, request);
+
+    // RCRURDR lifecycle assertion (rcrurdr_required: true)
+    await expectLifecycleRoundtrip(page, request, invariantG04, { name: 'PhaseTest' });
+
+    // Postcondition assertion — narrative end-state
+    // <emit prose from postcondition as comment + concrete asserts derived
+    //  from children[]'s post-states. At minimum, assert final UI state
+    //  matches the postcondition's last bullet.>
+    await expect(page.getByTestId('site-list-empty')).toBeVisible();
+  });
+});
+```
+
+**Child helper convention:**
+
+Per-component spec files (`G-XX.spec.ts`) MUST also export a `runGNN(page,
+request)` helper alongside their `test()` block so phase-spec can import
+them. If component spec does NOT export a helper, codegen MUST emit one
+by extracting the test body into a named export. Track unmigrated
+components in return JSON `phase_spec_helpers_missing[]` (warning, not
+block — phase spec falls back to `test.skip()` with TODO comment).
+
+**Postcondition translation:**
+
+Codegen MAY use the structured postcondition prose to emit concrete
+asserts (e.g. "site list empty" → `expect(page.getByTestId('site-list-empty')).toBeVisible()`).
+When translation is ambiguous, codegen emits a `TODO(POSTCONDITION):` comment
+referencing the full prose so reviewer can manually tighten. The phase
+spec is still EMITTED (not skipped) so /vg:test can run the children
+sequence at minimum.
+
+**Skip rule:**
+
+If `${PHASE_DIR}/TEST-GOALS/G-PHASE-*.md` does not exist (legacy phase
+or phase with `no_crud_reason`), Step C.3 emits 0 phase specs and logs
+`[skip-phase-goal] no G-PHASE-NN files found`. No error.
+
+**Return JSON:** add `phase_spec_files[]` (list of emitted phase spec
+paths), `phase_goal_count` (int), `phase_spec_helpers_missing[]`
+(component goals lacking a `runGNN` export — warning only).
+
 ## Step D — auto-emitted goal skeletons (5d-auto)
 
 After main codegen, emit skeleton specs for auto/expanded goals:

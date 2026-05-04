@@ -350,8 +350,74 @@ p.write_text(json.dumps(d, indent=2))
 PY
 fi
 
+# Gate 4 (R8-C 2026-05-05): Phase-level G-PHASE-NN attestation gate.
+# Codex closed-loop audit found generic goal-level UAT does NOT cover
+# whole-phase happy-path. PHASE-G-PHASE-NN items emitted by uat-builder
+# attest the FULL child sequence + postcondition. Failed answer →
+# potential silent data-flow break (form input → API → DB → list view
+# coherence broken across full phase). BLOCKs verdict like RCRURDR gate.
+PHASE_GOAL_FAILED=$(${PYTHON_BIN:-python3} - "$RESP_JSON" 2>/dev/null <<'PY' || echo 0:
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.exists():
+    print("0:"); sys.exit()
+try:
+    data = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    print("0:"); sys.exit()
+# Look in section B (Goals) for items with id starting "PHASE-G-PHASE-"
+sections = data.get("sections") or {}
+section_b = sections.get("B") or {}
+items = section_b.get("items") or []
+failed_ids = [
+    it.get("id") for it in items
+    if (it.get("id") or "").startswith("PHASE-G-PHASE-")
+    and it.get("verdict") in ("f", "fail", "no")
+]
+print(f"{len(failed_ids)}:{','.join(filter(None, failed_ids))}")
+PY
+)
+PHASE_GOAL_FAILED_COUNT="${PHASE_GOAL_FAILED%%:*}"
+PHASE_GOAL_FAILED_IDS="${PHASE_GOAL_FAILED#*:}"
+
+if [ "${PHASE_GOAL_FAILED_COUNT:-0}" -gt 0 ]; then
+  echo "⛔ UAT phase-goal gate FAILED: ${PHASE_GOAL_FAILED_COUNT} phase happy-path attestation(s) failed." >&2
+  echo "   Failed items: ${PHASE_GOAL_FAILED_IDS}" >&2
+  echo "" >&2
+  echo "Phase-goal attestation (G-PHASE-NN) = WHOLE-phase end-to-end value." >&2
+  echo "Failed attestation means data flow broke across full child sequence:" >&2
+  echo "  form input → API → DB → list view coherence not preserved end-to-end." >&2
+  echo "" >&2
+  echo "Options:" >&2
+  echo "  (a) Re-run /vg:build --gaps-only to fix broken child(ren), re-accept" >&2
+  echo "  (b) --allow-failed-phase-goal-attestation override (logs override-debt;" >&2
+  echo "      forces DEFERRED verdict). Requires --override-reason=\"<text>\"." >&2
+
+  if [[ ! "${ARGUMENTS}" =~ --allow-failed-phase-goal-attestation ]]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "accept.uat_phase_goal_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"failed_count\":${PHASE_GOAL_FAILED_COUNT},\"failed_ids\":\"${PHASE_GOAL_FAILED_IDS}\"}" \
+      >/dev/null 2>&1 || true
+    exit 1
+  fi
+
+  PG_REASON=$(_uat_extract_reason 2>/dev/null || echo "")
+  if [ -z "$PG_REASON" ]; then
+    echo "⛔ --allow-failed-phase-goal-attestation requires --override-reason=\"<text>\"" >&2
+    exit 1
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--allow-failed-phase-goal-attestation" --reason "$PG_REASON" 2>/dev/null || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "accept-uat-phase-goal-failed" "${PHASE_NUMBER}" \
+    "${PHASE_GOAL_FAILED_COUNT} failed phase-goal attestations (${PHASE_GOAL_FAILED_IDS}) — ${PG_REASON}" \
+    "${PHASE_DIR}"
+  echo "⚠ --allow-failed-phase-goal-attestation — proceeding, forced DEFERRED verdict" >&2
+fi
+
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "accept.uat_quorum_passed" \
-  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"critical_skips\":${CRITICAL_SKIPS},\"total_skips\":${TOTAL_SKIPS},\"rcrurdr_failed\":${RCRURD_FAILED_COUNT:-0}}" >/dev/null 2>&1 || true
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"critical_skips\":${CRITICAL_SKIPS},\"total_skips\":${TOTAL_SKIPS},\"rcrurdr_failed\":${RCRURD_FAILED_COUNT:-0},\"phase_goal_failed\":${PHASE_GOAL_FAILED_COUNT:-0}}" >/dev/null 2>&1 || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5_uat_quorum_gate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5_uat_quorum_gate.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_uat_quorum_gate 2>/dev/null || true

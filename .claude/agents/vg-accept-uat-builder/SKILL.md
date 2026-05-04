@@ -136,6 +136,85 @@ while IFS= read -r gid; do
 done <<< "$GOALS_LIST"
 ```
 
+#### Section B — phase-level PHASE-G-PHASE-NN items (R8-C 2026-05-05)
+
+For each `${PHASE_DIR}/TEST-GOALS/G-PHASE-NN.md`, emit a special
+`PHASE-G-PHASE-NN` item in section B with the phase-goal's postcondition
+as the question prompt. Closes Codex closed-loop audit gap: component
+goals verify per-feature but no goal asserts the WHOLE phase delivers
+user-visible value end-to-end.
+
+These items are CRITICAL — failed attestation BLOCKs quorum gate
+(STEP 6) just like RCRURDR items.
+
+```bash
+${PYTHON_BIN} - <<'PY' >> "${VG_TMP}/uat-goals.txt"
+import os, re
+from pathlib import Path
+
+phase_dir = Path(os.environ["PHASE_DIR"])
+goals_dir = phase_dir / "TEST-GOALS"
+if not goals_dir.is_dir():
+    raise SystemExit(0)
+
+for pf in sorted(goals_dir.glob("G-PHASE-*.md")):
+    text = pf.read_text(encoding="utf-8", errors="ignore")
+    # Frontmatter scan — id, postcondition, children
+    if not text.startswith("---"):
+        continue
+    end = text.find("\n---", 3)
+    if end < 0:
+        continue
+    fm = text[3:end]
+
+    # children
+    ch_match = re.search(r'^children:\s*\[(.*?)\]', fm, re.MULTILINE)
+    children: list[str] = []
+    if ch_match:
+        children = [c.strip().strip('"').strip("'") for c in ch_match.group(1).split(",") if c.strip()]
+    else:
+        # multiline list
+        ch_block = re.search(r'^children:\s*$([\s\S]*?)(?=^\w|\Z)', fm, re.MULTILINE)
+        if ch_block:
+            for ln in ch_block.group(1).splitlines():
+                lm = re.match(r'\s*-\s*(.+)', ln)
+                if lm:
+                    children.append(lm.group(1).strip())
+
+    # postcondition (multiline `|` literal)
+    pc_match = re.search(r'^postcondition:\s*\|\s*$([\s\S]*?)(?=^\w|\Z)', fm, re.MULTILINE)
+    postcond = ""
+    if pc_match:
+        # Strip uniform indent
+        lines = [l for l in pc_match.group(1).splitlines() if l.strip()]
+        postcond = " ".join(l.strip() for l in lines[:3])  # first 3 lines
+    if len(postcond) > 200:
+        postcond = postcond[:197] + "..."
+
+    pgid = pf.stem  # G-PHASE-01
+    item_id = f"PHASE-{pgid}"
+    children_str = ",".join(children) if children else "(no children)"
+    print(f"{item_id}\tCRITICAL\tPhase happy path: {postcond} (children: {children_str})")
+PY
+```
+
+Each `PHASE-G-PHASE-NN` row in `uat-goals.txt` produces a section B item
+with question text:
+
+```
+Phase {pgid} happy path:
+  - Did the FULL child sequence ({children}) run successfully?
+  - Did the postcondition hold? ({postcondition})
+  - Did data flow correctly form input → API → DB → list view across all
+    children?
+
+[ ] Yes — full E2E run successful, postcondition verified
+[ ] No  — describe failure
+```
+
+Quorum gate (STEP 6) treats `PHASE-*` items as CRITICAL and BLOCKs
+verdict on any "No" / failed answer (mirrors RCRURD-* item handling).
+
 ### Section B.1 — CRUD surfaces (CRUD-SURFACES.md, KEEP-FLAT) + RCRURDR lifecycle items (R8-D)
 
 Parse JSON inside fenced block. Each resource → row with operations,

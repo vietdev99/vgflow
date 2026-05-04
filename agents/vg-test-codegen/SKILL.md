@@ -483,3 +483,55 @@ each_exists), scalar (text_equals/text_matches), conditional
 (visible_when/hidden_when), and attribute (attribute_equals/
 aria_state_matches/input_value_equals) layers — see
 `schemas/rcrurd-invariant.schema.yaml` `ui_assert_op` definition.
+
+## Phase-level spec emission — G-PHASE-NN (R8-C 2026-05-05)
+
+After all component G-XX specs are emitted, generate ONE Playwright
+spec per `TEST-GOALS/G-PHASE-NN.md` to assert WHOLE phase delivers
+user-visible value end-to-end. Codex closed-loop audit (2026-05-05)
+found phase-level TEST-GOAL gap: component goals verify per-feature
+but no goal asserts data flows from form input → API → DB → list view
+across full phase.
+
+**Discovery + emission contract:**
+
+1. Glob `${PHASE_DIR}/TEST-GOALS/G-PHASE-*.md`. If 0 files, skip
+   (legacy phase / no_crud_reason) — log `[skip-phase-goal]`.
+2. Per phase-goal, parse frontmatter: `id`, `children[]` (ordered),
+   `postcondition`, `rcrurdr_required` (bool), `context_goal_ref`.
+3. Emit `${GENERATED_TESTS_DIR}/<id-lowercase>.phase.spec.ts` that:
+   - Imports `runG-NN` helper from each child spec file.
+   - Calls children in `children[]` order inside a single
+     `test('runs full child sequence and asserts postcondition', ...)`.
+   - When `rcrurdr_required: true`, calls `expectLifecycleRoundtrip()`
+     using the invariant fixture from the FIRST mutation child (heuristic:
+     scan children for `goal_type: mutation` + `lifecycle: rcrurdr`).
+   - Asserts postcondition — translate prose bullets to concrete asserts
+     where unambiguous; emit `TODO(POSTCONDITION):` comments where prose
+     ambiguous so reviewer can tighten.
+
+**Helper-missing fallback:**
+
+If a child component spec does NOT export `runG-NN(page, request)`,
+codegen has 2 options:
+- (preferred) Re-emit the child spec extracting test body into a
+  named `runG-NN` export, leaving the original `test()` calling that
+  helper. Idempotent — safe to re-run.
+- (fallback) Phase spec emits the failing child as `test.skip(...)`
+  with `TODO: extract runG-NN helper from G-NN.spec.ts`. Track in
+  return JSON `phase_spec_helpers_missing[]`. Continue emitting the
+  phase spec — partial coverage is better than zero.
+
+**Return JSON additions:**
+
+```json
+{
+  "phase_spec_files": ["apps/web/e2e/generated/4.1/g-phase-01.phase.spec.ts"],
+  "phase_goal_count": 1,
+  "phase_spec_helpers_missing": []
+}
+```
+
+**No new validator on the codegen side** — `verify-codegen-rcrurd-helper.py`
+already covers component specs. Phase specs are tracked by Layer 5 review
+verdict gate (RUNTIME-MAP must contain phase-spec evidence per phase-goal).

@@ -125,6 +125,73 @@ if [ "$RCRURD_RAN" -gt 0 ]; then
 fi
 ```
 
+### 4.0b: Phase-level G-PHASE-NN runtime gate (R8-C 2026-05-05)
+
+After RCRURD per-component runs, gate phase-level goals. Phase READY
+status REQUIRES every `${PHASE_DIR}/TEST-GOALS/G-PHASE-NN.md` to have
+runtime evidence demonstrating the FULL child sequence executed and
+the postcondition held. Closes Codex closed-loop audit gap: component
+goals verify per-feature, no goal asserts the WHOLE phase.
+
+```bash
+PHASE_GOAL_DIR="${PHASE_DIR}/TEST-GOALS"
+PHASE_GOAL_FAILED=0
+PHASE_GOAL_RAN=0
+PHASE_GOAL_MISSING_EVIDENCE=()
+
+if [ -d "$PHASE_GOAL_DIR" ]; then
+  for pgoal in "$PHASE_GOAL_DIR"/G-PHASE-*.md; do
+    [ -f "$pgoal" ] || continue
+    PHASE_GOAL_RAN=$((PHASE_GOAL_RAN+1))
+    pgid=$(basename "$pgoal" .md)
+    # Evidence file written by /vg:test phase-spec runner
+    ev_file="${PHASE_DIR}/.runs/${pgid}.json"
+    if [ ! -f "$ev_file" ]; then
+      PHASE_GOAL_MISSING_EVIDENCE+=("${pgid}")
+      continue
+    fi
+    # Check verdict — FAIL = block
+    pverd=$("${PYTHON_BIN:-python3}" -c \
+      "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('verdict','UNKNOWN'))" \
+      "$ev_file" 2>/dev/null || echo "UNKNOWN")
+    if [ "$pverd" = "FAILED" ] || [ "$pverd" = "BLOCK" ]; then
+      PHASE_GOAL_FAILED=$((PHASE_GOAL_FAILED+1))
+    fi
+  done
+fi
+
+if [ "$PHASE_GOAL_RAN" -gt 0 ]; then
+  if [ "${#PHASE_GOAL_MISSING_EVIDENCE[@]}" -gt 0 ] || [ "$PHASE_GOAL_FAILED" -gt 0 ]; then
+    echo "⛔ Phase 4.0b — phase-level G-PHASE-NN goals incomplete:"
+    [ "${#PHASE_GOAL_MISSING_EVIDENCE[@]}" -gt 0 ] && \
+      printf '   missing evidence: %s\n' "${PHASE_GOAL_MISSING_EVIDENCE[@]}"
+    [ "$PHASE_GOAL_FAILED" -gt 0 ] && \
+      echo "   failed runs: ${PHASE_GOAL_FAILED}"
+    echo "   Evidence dir: ${PHASE_DIR}/.runs/"
+    if [[ ! "${ARGUMENTS}" =~ --allow-phase-goal-incomplete ]]; then
+      echo "   Override: --allow-phase-goal-incomplete --override-reason \"<text>\" (logs override-debt)"
+      exit 1
+    fi
+    echo "⚠ --allow-phase-goal-incomplete set — proceeding with incomplete phase coverage"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.phase_goal_override_applied" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"missing\":${#PHASE_GOAL_MISSING_EVIDENCE[@]},\"failed\":${PHASE_GOAL_FAILED}}" \
+      2>/dev/null || true
+  else
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.phase_goal_runtime_passed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goals_ran\":${PHASE_GOAL_RAN}}" \
+      2>/dev/null || true
+  fi
+fi
+```
+
+**Override flag:** `--allow-phase-goal-incomplete` + `--override-reason "<text>"`.
+Logs override-debt entry; reviewer triages at /vg:accept.
+
+**Skip path:** No `G-PHASE-*.md` files found → `PHASE_GOAL_RAN=0` →
+gate is no-op (legacy phase or `no_crud_reason`).
+
 ### Branch dispatch
 
 Compute UI_GOAL_COUNT and dispatch:
