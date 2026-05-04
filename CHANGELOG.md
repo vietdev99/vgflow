@@ -1,5 +1,51 @@
 # Changelog
 
+## v2.49.2 — Codex round-4 security patches + Bug L P6 adapter spoofing (post-merge fork-branch hotfixes)
+
+Patch release. Two hotfixes that landed on the `feat/rfc-v9-followup-fixes` fork branch *after* PR #104 was squash-merged into main, picked up here as cherry-picks. Both target hook gate integrity — the kind of fix that should not wait for the next minor.
+
+### Fixed (commit 78daf5f cherry-pick — Codex round-4 paranoid review)
+
+Codex GPT-5.5 round-4 post-implementation review found 6 Important issues in the PreToolUse-Bash gate. This commit clears 4/6 (24h SLA); remaining 2 (I-3 ts injection redundant w/ this fix; I-6 regex loose-match) deferred to 1-week SLA.
+
+- **I-1: V4 mtime slack inverted safety direction** — `scripts/hooks/vg-pre-tool-use-bash.sh:592` was `ev_mtime + 1 < handled_epoch` (1s slack stacked on 1s timestamp granularity = **2s bypass window**). Now strict `ev_mtime <= handled_epoch` — fails closed in the boundary case.
+- **I-2: V4 catch-all fail-OPEN inconsistent with V1/V2/V3 fail-CLOSED** — line 644 was `*) exit 0 ;;` (silent pass on parser errors). Now `emit_block 'handled check failed: ...'` matching depth/run_id catch-alls.
+- **I-3: V4 unparseable timestamp swallowed → no-op** — line 589 `except Exception: print('ok')` let bad-ts events downgrade V4. Now prints `unresolved|<ts>` and exits 0 (downstream catches as block).
+- **I-4: First-actor JSON injection** — `scripts/lib/blocking-gate-prompt.sh` formatted user-controlled `actor_text` into JSON via raw concatenation. Now uses `python3 -c 'json.dumps(...)'` for safe encoding.
+- **I-5: workflow-specs JSON injection** — `scripts/validators/verify-workflow-specs.py` interpolated user error text into JSON output via f-string. Now `json.dumps()`-encoded.
+
+No regression in 117-test delivery suite. Codex round-4 verdict: **APPROVED-WITH-FOLLOWUPS** (0 critical, 6 important; 4/6 cleared in this commit).
+
+### Fixed (commit ef031a7 cherry-pick — Bug L P6 adapter spoofing)
+
+Operator dogfood discovered live during `/vg:blueprint 4.2` on PrintwayV3: tasklist UI not rendered in Claude Code CLI, yet hook accepted evidence and allowed `step-active` to proceed past STEP 1.4. Inspection of `.tasklist-projected.evidence.json`:
+
+```json
+"adapter": "fallback"
+```
+
+instead of `"claude"`. Codex round-4 missed this — V1/V2/V3/V4 checks all PASS on a fallback-adapter evidence file because contract SHA, HMAC signature, depth_valid, and run_id are all valid; the AI just **never called Claude Code's TodoWrite tool** — it ran:
+
+```bash
+vg-orchestrator tasklist-projected --adapter fallback
+```
+
+which writes evidence directly without invoking the runtime's native projection. Result: contract satisfied for the hook BUT the TodoWrite UI never renders, defeating Bug L Track D's user-visibility goal.
+
+**Fix:** PreToolUse-bash hook (after depth_valid + run_id + handled checks) validates `adapter` when `CLAUDE_SESSION_ID` is set:
+- `adapter == "claude"` → pass
+- `adapter ∈ {"fallback", "codex"}` → BLOCK exit 2 with diagnostic pointing AI to call TodoWrite then re-project with `--adapter claude`
+- no `CLAUDE_SESSION_ID` (Codex CLI runtime) → adapter check skipped (correct behavior — fallback/codex adapters are valid in non-Claude contexts)
+
+Diagnostic explicitly explains the bypass pattern so AI doesn't repeat it. 8/8 depth-enforcement tests green (4 base + 4 NEW P6 tests covering all 4 adapter cases).
+
+### Internal
+
+- VERSION + VGFLOW-VERSION → 2.49.2 (patch — 2 cherry-picked hotfixes, no new features)
+- Files changed (cherry-pick): `scripts/hooks/vg-pre-tool-use-bash.sh` (+adapter-check + I-1/I-2/I-3 fixes), `scripts/lib/blocking-gate-prompt.sh` (I-4), `scripts/validators/verify-workflow-specs.py` (I-5), `tests/test_tasklist_depth_enforcement.py` (+4 new adapter tests). Both `scripts/` and `.claude/scripts/` mirrors stay in sync.
+- Codex mirror equivalence verified — no `commands/vg/*.md` modifications in this release, mirrors unchanged.
+- Credit: hot patches authored by @vietnhprintway during PrintwayV3 dogfood; landed on fork branch ~30-40 minutes after PR #104 merged. Cherry-picked as v2.49.2 since the merge window for PR #104 had already closed.
+
 ## v2.49.1 — `.claude/settings.json` machine-locked path hotfix (PR #104 regression)
 
 Patch release. PR #104 committed `.claude/settings.json` with absolute hook paths baked at install time on one developer's macOS box (`/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/...`). Every other machine pulling v2.49.0 saw `Stop hook error: bash: <stale path>: No such file or directory` because the file simply does not exist on their disk. Reported immediately after v2.49.0 ship by an operator on a different host; this patch unblocks them and prevents recurrence.
