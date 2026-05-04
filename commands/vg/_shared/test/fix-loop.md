@@ -392,4 +392,4 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 ---
 
-After both step markers touched, return to entry SKILL.md -> STEP 7 (regression + security).
+After both step markers touched, return to entry SKILL.md -> STEP 7 (regression+security).

@@ -184,7 +184,7 @@ không cần đọc Bash output. Hook không reject append vì tolerant match (B
 9. **Zero hardcode** — no endpoint, role, page name, or project-specific value in this workflow. All values from config or runtime observation.
 10. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as FINAL action:
     `touch "${PHASE_DIR}/.step-markers/{STEP_NAME}.done"`.
-    Browser steps (5c-smoke, 5c-flow, 5d codegen) carry `profile="web-fullstack,web-frontend-only"`.
+    Browser steps (5c-smoke, 5c-flow, 5d_codegen) carry `profile="web-fullstack,web-frontend-only"`.
     Contract-curl (5b) carries `profile="web-fullstack,web-backend-only"`.
     `create_task_tracker` preflight filters to applicable steps only; missing markers at step complete → BLOCK.
 </rules>

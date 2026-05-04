@@ -26,7 +26,7 @@ reviewing against role-specific standard:
 | blueprint | ⚠ 3 markers prose-only | ⚠ CrossAI unbounded re-invoke | ✓ | ⚠ design-ref warn-tier | With fixes | `2b6d_fe_contracts`, `2b8_rcrurdr_invariants`, `2b9_workflows` declared but no lifecycle wiring in slim entry |
 | build | ⚠ XML test stale | ⚠ CrossAI 6-10 fallthrough | ✓ | ⚠ TDD not first-class | With fixes | Post-executor spawn count prompt-only (not hook-enforced); TDD red/green not in executor return schema |
 | review | ✓ (post R3 fix) | ⚠ no global session cap | ✓ | ⚠ per-lens telemetry missing | Production-ready (Phase A enhancement deferred) | Per-lens dispatched events not yet emitted |
-| test | ✓ | ✓ watch L2 re-spawn | ✓ | ⚠ trust-review skips replay | With fixes | Fix-loop/codegen order conflict (entry says codegen → fix; fix-loop says proceed/return to 5d) |
+| test | ✓ | ✓ watch L2 re-spawn | ✓ | ⚠ trust-review skips replay | With fixes | Fix-loop/codegen order conflict (entry says codegen → fix; fix-loop says proceed/return to 5d) **[RESOLVED in R6 Task 5 (commit eda5367) — option (b): codegen → fix-loop unidirectional, fix-loop proceeds to STEP 7]** |
 | accept | ⚠ 2 XML wrappers missing | ✓ | ✓ | ⚠ 6-section validation `>=5` | With fixes | `4_build_uat_checklist` + `7_post_accept_actions` lifecycle-only (no XML step wrap); 6-section UAT checklist not enforced (validator accepts ≥5) |
 
 ---
