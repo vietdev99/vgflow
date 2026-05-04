@@ -1,23 +1,189 @@
-# review close (STEP 8 — finalize artifacts + reflection + run-complete)
+# review close (STEP 9 — write artifacts + reflection + run-complete)
 
-5 sub-steps in this ref:
-1. PIPELINE-STATE update (status=reviewed)
-2. Auto-resolve hotfix debt from prior phases (v2.6.1)
-3. Spawn vg-reflector subagent for retrospective (heavy, narrate)
-4. Run-complete (orchestrator validates contract)
-5. Tasklist clear (close-on-complete sentinel)
+3 steps for run-completion:
+- `write_artifacts` — verify + commit RUNTIME-MAP.json/.md, GOAL-COVERAGE-MATRIX.md, element-counts.json
+- `bootstrap_reflection` — spawn vg-reflector subagent for retrospective (heavy, narrate)
+- `complete` — PIPELINE-STATE update + auto-resolve hotfix debt + verdict-aware closing message + 8+ post-verdict gates + tasklist clear + run-complete
 
 <HARD-GATE>
-You MUST complete all sub-steps before reporting success. The
-`complete` marker + `review.completed` event MUST fire — Stop hook
-verifies both.
+You MUST complete all 3 steps in order. The `complete` marker +
+`review.completed` event MUST fire — Stop hook verifies both. Tasklist
+clear via R1a sentinel (TodoWrite all items completed) — implementation
+in `_shared/lib/tasklist-projection-instruction.md`.
 
-Reflection spawn MUST use `Agent` (not `Task` — Codex correction #3) +
-narrate-spawn wrapper (UX baseline req 2). DO NOT skip reflection on
-"clean" runs — empirical 96.5% inline-skip rate without subagent.
+Required artifacts (BLOCK commit if any missing — verify with Glob):
+- `${PHASE_DIR}/RUNTIME-MAP.json` (canonical JSON, write FIRST)
+- `${PHASE_DIR}/RUNTIME-MAP.md` (derived from JSON)
+- `${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md` (from Phase 4)
+
+Reflection spawn MUST use `Agent` (not `Task` — Codex correction per
+plan §C) + narrate-spawn wrapper (UX baseline req 2). Reflector reads
+artifacts + telemetry + git log only — NEVER the parent transcript
+(echo chamber forbidden). DO NOT skip reflection on "clean" runs —
+empirical 96.5% inline-skip rate without subagent.
+
+Post-verdict gates in `complete` step (run AFTER mark-step + emit-event,
+BEFORE run-complete):
+- verify-flow-compliance (advisory by default, override --skip-compliance)
+- verify-matrix-evidence-link (block on fabricated READY status)
+- rcrurd-preflight --mode post (post_state lifecycle gate, BLOCK on assertion fail)
+- verify-matrix-staleness (block on goals READY without submit/2xx)
+- verify-evidence-provenance (block on missing structured provenance)
+- verify-mutation-actually-submitted (block on Cancel-only "passed" goals)
+- verify-rcrurd-depth (scanner-stopped-too-early gate)
+- verify-asserted-rule-match (BR-NN drift gate)
+- verify-replay-evidence (--enable-replay opt-in)
+- verify-cross-phase-decision-validity (D-XX revoked/missing gate)
+- verify-scanner-business-alignment (two-phase adversarial verifier)
+- DEFECT-LOG.md generation via tester-pro-cli.py (D21)
 </HARD-GATE>
 
 ---
+
+## STEP 9.1 — write artifacts (write_artifacts)
+
+<step name="write_artifacts" mode="full">
+## Write Final Artifacts
+
+**Write order: JSON first, then derive MD from it.**
+
+**1. `${PHASE_DIR}/RUNTIME-MAP.json`** — canonical JSON (source of truth). MUST be written FIRST.
+**2. `${PHASE_DIR}/RUNTIME-MAP.md`** — derived from JSON (human-readable). Written AFTER JSON.
+**3. `${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md`** — from Phase 4
+**4. `${PHASE_DIR}/element-counts.json`** — from Phase 1b
+
+### MANDATORY ARTIFACT VALIDATION (do NOT skip)
+
+After writing all files, verify they exist before committing:
+```
+Required files — BLOCK commit if ANY missing:
+  ✓ ${PHASE_DIR}/RUNTIME-MAP.json     ← downstream /vg:test reads this, NOT .md
+  ✓ ${PHASE_DIR}/RUNTIME-MAP.md
+  ✓ ${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md
+
+Use Glob to confirm each file exists. If RUNTIME-MAP.json is missing,
+you MUST create it before proceeding. The .md alone is NOT sufficient.
+```
+
+Commit:
+```bash
+git add ${PHASE_DIR}/RUNTIME-MAP.json ${PHASE_DIR}/RUNTIME-MAP.md \
+       ${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md ${PHASE_DIR}/element-counts.json \
+       ${SCREENSHOTS_DIR}/
+# UNREACHABLE-TRIAGE artifacts (only exist if triage ran — i.e., any UNREACHABLE goal)
+[ -f "${PHASE_DIR}/UNREACHABLE-TRIAGE.md" ]   && git add "${PHASE_DIR}/UNREACHABLE-TRIAGE.md"
+[ -f "${PHASE_DIR}/.unreachable-triage.json" ] && git add "${PHASE_DIR}/.unreachable-triage.json"
+git commit -m "review({phase}): RUNTIME-MAP — {views} views, {actions} actions, gate {PASS|BLOCK}"
+```
+</step>
+
+---
+
+## STEP 9.2 — end-of-step reflection (bootstrap_reflection)
+
+<step name="bootstrap_reflection" mode="full">
+## End-of-Step Reflection (v1.15.0 Bootstrap Overlay)
+
+Before closing review, spawn the **reflector** subagent to analyze this step's
+artifacts + user messages + telemetry and draft learning candidates for user
+review. Primary path for project self-adaptation.
+
+**Skip conditions** (reflection does nothing, exit 0):
+- `.vg/bootstrap/` directory absent (project hasn't opted in)
+- `config.bootstrap.reflection_enabled == false` (user disabled)
+- Review verdict = `FAIL` with fatal errors (reflect when next review succeeds)
+
+### Pre-spawn narration (UX req 2)
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-reflector spawning \
+  "end-of-step reflection for review phase ${PHASE_NUMBER}"
+```
+
+### Run
+
+```bash
+BOOTSTRAP_DIR=".vg/bootstrap"
+if [ ! -d "$BOOTSTRAP_DIR" ]; then
+  :  # Bootstrap not opted in — skip silently
+else
+  REFLECT_TS=$(date -u +%Y%m%dT%H%M%SZ)
+  REFLECT_OUT="${PHASE_DIR}/reflection-review-${REFLECT_TS}.yaml"
+  USER_MSG_FILE="${VG_TMP}/reflect-user-msgs-${REFLECT_TS}.txt"
+
+  : > "$USER_MSG_FILE"
+
+  TELEMETRY_SLICE="${VG_TMP}/reflect-telemetry-${REFLECT_TS}.jsonl"
+  grep -E "\"phase\":\"${PHASE}\".*\"command\":\"vg:review\"" "${PLANNING_DIR}/telemetry.jsonl" 2>/dev/null \
+    | tail -200 > "$TELEMETRY_SLICE" || true
+
+  OVERRIDE_SLICE="${VG_TMP}/reflect-overrides-${REFLECT_TS}.md"
+  grep -E "\"step\":\"review\"" "${PLANNING_DIR}/OVERRIDE-DEBT.md" 2>/dev/null > "$OVERRIDE_SLICE" || true
+
+  echo "📝 Running end-of-step reflection (Haiku, isolated context)..."
+fi
+```
+
+### Spawn reflector agent (isolated Haiku) — Tool name = Agent
+
+Use `Agent` tool (NOT `Task` — per plan §C Codex correction) with skill
+`vg-reflector`, model `haiku`, fresh context:
+
+```
+Agent(
+  description="End-of-step reflection for review phase {PHASE}",
+  subagent_type="general-purpose",
+  prompt="""
+Use skill: vg-reflector
+
+Arguments:
+  STEP           = "review"
+  PHASE          = "{PHASE}"
+  PHASE_DIR      = "{PHASE_DIR absolute path}"
+  USER_MSG_FILE  = "{USER_MSG_FILE}"
+  TELEMETRY_FILE = "{TELEMETRY_SLICE}"
+  OVERRIDE_FILE  = "{OVERRIDE_SLICE}"
+  ACCEPTED_MD    = ".vg/bootstrap/ACCEPTED.md"
+  REJECTED_MD    = ".vg/bootstrap/REJECTED.md"
+  OUT_FILE       = "{REFLECT_OUT}"
+
+Read .claude/skills/vg-reflector/SKILL.md and follow workflow exactly.
+Do NOT read parent conversation transcript — echo chamber forbidden.
+Output max 3 candidates with evidence to OUT_FILE.
+"""
+)
+```
+
+### Post-spawn narration
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-reflector returned \
+  "${CANDIDATE_COUNT:-0} learning candidate(s) drafted to ${REFLECT_OUT}"
+```
+
+### Interactive promote flow (user gates)
+
+After reflector exits, parse OUT_FILE. If candidates found, show to user with the [y]/[n]/[e]/[s] menu (see review.md.r3-backup lines 7146-7184 for verbatim format). For `y` → delegate to `/vg:learn --promote L-{id}` internally; for `n` → REJECTED.md; for `e` → field-by-field edit; for `s` → leave in `.vg/bootstrap/CANDIDATES.md` for `/vg:learn --review`.
+
+### Emit telemetry
+
+```bash
+emit_telemetry "bootstrap.reflection_ran" PASS \
+  "{\"step\":\"review\",\"phase\":\"${PHASE}\",\"candidates\":${CANDIDATE_COUNT:-0}}"
+```
+
+### Failure mode
+
+Reflector crash or timeout → log warning, continue to `complete` step. Never block review completion.
+
+```
+⚠ Reflection failed — review completes normally. Check .vg/bootstrap/logs/
+```
+</step>
+
+---
+
+## STEP 9.3 — complete (run-end + post-verdict gates + tasklist clear)
 
 <step name="complete">
 **Update PIPELINE-STATE.json:**
