@@ -289,6 +289,27 @@ for task_num in "${WAVE_TASKS[@]}"; do
   [ -n "$FILE_PATH" ] && WAVE_FILES+=("${task_num}:${FILE_PATH}")
 done
 
+# R6 Task 15 — collect cross-task DAG edges from each task's plan file.
+# Same-file conflicts (above) auto-serialize via sequential_groups; this
+# captures cross-FILE logical deps (e.g., Task 04 consumes API from Task 01)
+# declared via optional `depends_on:` field (see plan-overview.md).
+# Format: WAVE_DEPS entry = "task-NN:task-XX,task-YY" (downstream:upstream-csv).
+WAVE_DEPS=()
+for task_num in "${WAVE_TASKS[@]}"; do
+  TASK_PLAN="${PHASE_DIR}/PLAN/task-${task_num}.md"
+  # Fallback to .wave-tasks shard when PLAN/task-NN.md missing (flat PLAN.md case)
+  [ -f "$TASK_PLAN" ] || TASK_PLAN="${PHASE_DIR}/.wave-tasks/task-${task_num}.md"
+  if [ -f "$TASK_PLAN" ]; then
+    # Accept three syntaxes: YAML frontmatter `depends_on:`, markdown
+    # `**depends_on:**`, or XML-tag `<depends_on>` — first match wins.
+    DEPS_LINE=$(grep -E "^(depends_on:|\*\*depends_on:\*\*|<depends_on>)" "$TASK_PLAN" | head -1)
+    if [ -n "$DEPS_LINE" ]; then
+      DEPS=$(echo "$DEPS_LINE" | grep -oE 'task-[0-9]+' | sort -u | tr '\n' ',' | sed 's/,$//')
+      [ -n "$DEPS" ] && WAVE_DEPS+=("task-${task_num}:${DEPS}")
+    fi
+  fi
+done
+
 # Detect conflicts — same file in 2+ tasks
 SEEN_FILES=$(printf '%s\n' "${WAVE_FILES[@]}" | cut -d: -f2 | sort | uniq -d)
 if [ -n "$SEEN_FILES" ]; then
@@ -319,6 +340,7 @@ fi
 PYTHONIOENCODING=utf-8 GUARD_PLAN_OUT="$GUARD_PLAN" ${PYTHON_BIN} - <<PY > "$SPAWN_PLAN"
 import json, os, sys
 wave_files = """$(printf '%s\n' "${WAVE_FILES[@]}")"""
+wave_deps = """$(printf '%s\n' "${WAVE_DEPS[@]}")"""
 pairs = [line.split(':', 1) for line in wave_files.strip().split('\n') if ':' in line]
 file_to_tasks = {}
 for t, f in pairs:
@@ -335,11 +357,24 @@ for t, _ in pairs:
     except ValueError:
         pass
 parallel = sorted(set(all_tasks) - seq_flat)
+
+# R6 Task 15 — parse WAVE_DEPS into dag_edges {downstream-task-id: [upstream-task-ids]}
+dag_edges = {}
+for line in wave_deps.strip().split('\n'):
+    if ':' not in line:
+        continue
+    downstream, upstream_csv = line.split(':', 1)
+    downstream = downstream.strip()
+    upstreams = [u.strip() for u in upstream_csv.split(',') if u.strip()]
+    if downstream and upstreams:
+        dag_edges[downstream] = upstreams
+
 plan = {
     "wave": "${N:-unknown}",
     "parallel": parallel,
     "sequential_groups": seq_groups,
     "conflict_files": sorted(set(f for f, tasks in file_to_tasks.items() if len(tasks) >= 2)),
+    "dag_edges": dag_edges,
 }
 print(json.dumps(plan, indent=2))
 
@@ -347,6 +382,9 @@ print(json.dumps(plan, indent=2))
 # `expected` is the full ordered task-NN list (parallel first, then each
 # sequential group's tasks in order). The guard pops from `remaining[]`
 # per spawn and asserts `spawned == expected` at wave Stop hook.
+# R6 Task 15 — `dag_edges` mirrored into guard schema so spawn-guard's
+# _enforce_dag_dependencies() can pre-spawn block tasks whose upstream
+# deps haven't committed yet (no fingerprint on disk).
 guard_out = os.environ.get("GUARD_PLAN_OUT") or ""
 if guard_out:
     expected_ids = [f"task-{n:02d}" for n in parallel]
@@ -355,6 +393,7 @@ if guard_out:
     guard_plan = {
         "wave_id": ${N:-0},
         "expected": expected_ids,
+        "dag_edges": dag_edges,
     }
     with open(guard_out, "w", encoding="utf-8") as fh:
         json.dump(guard_plan, fh, indent=2)

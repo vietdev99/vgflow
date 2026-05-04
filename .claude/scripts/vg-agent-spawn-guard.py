@@ -508,6 +508,148 @@ def _enforce_post_executor_single_spawn(
     return None  # allow
 
 
+def _resolve_phase_dir(hook_session: str | None) -> Path | None:
+    """Best-effort phase_dir lookup for fingerprint-based DAG checks.
+
+    R6 Task 15 — `_enforce_dag_dependencies` needs to inspect
+    `${PHASE_DIR}/.fingerprints/task-NN.fingerprint.md` to decide whether
+    each upstream dependency has actually committed yet. The orchestrator
+    writes the active phase_dir into `.vg/active-runs/<session>.json`
+    (and legacy `.vg/current-run.json`) when entering a /vg:build run.
+
+    Returns:
+      Path  — repo-relative or absolute phase dir as recorded by the
+              orchestrator. Caller resolves against REPO_ROOT.
+      None  — no active-run record OR phase_dir field missing/blank.
+
+    Sibling to `_resolve_run_id` (same pair of state files; identical
+    fallback ordering).
+    """
+    if hook_session:
+        per_session = ACTIVE_RUNS_DIR / f"{_safe_session_filename(hook_session)}.json"
+        if per_session.exists():
+            try:
+                data = json.loads(per_session.read_text(encoding="utf-8"))
+                pdir = data.get("phase_dir")
+                if isinstance(pdir, str) and pdir:
+                    p = Path(pdir)
+                    return p if p.is_absolute() else REPO_ROOT / pdir
+            except (OSError, json.JSONDecodeError):
+                pass
+    if CURRENT_RUN.exists():
+        try:
+            data = json.loads(CURRENT_RUN.read_text(encoding="utf-8"))
+            pdir = data.get("phase_dir")
+            if isinstance(pdir, str) and pdir:
+                p = Path(pdir)
+                return p if p.is_absolute() else REPO_ROOT / pdir
+        except (OSError, json.JSONDecodeError):
+            pass
+    return None
+
+
+def _enforce_dag_dependencies(
+    hook_input: dict, run_id: str,
+    hook_session: str | None = None,
+) -> int | None:
+    """R6 Task 15 — cross-task DAG enforcement beyond same-file conflicts.
+
+    Returns:
+      int  — deny rc when a vg-build-task-executor spawn is attempted for
+             a task whose upstream dependencies have NOT yet committed
+             (= upstream fingerprint absent on disk).
+      None — fall-through (caller proceeds with normal allow()).
+
+    Pass-through cases (return None):
+      - subagent_type is not vg-build-task-executor (other agents are
+        not subject to wave-plan DAG attribution).
+      - .wave-spawn-plan.json missing or unparseable (covered by
+        `_enforce_spawn_count` upstream — that runs first and would have
+        already fail-closed; this function only sees plans that parsed).
+      - `dag_edges` field absent from plan (back-compat — existing wave
+        plans without the field act as if no cross-file deps declared).
+      - Current task_id has no entry in `dag_edges` (root task — no
+        upstream deps).
+      - phase_dir cannot be resolved (no fingerprint dir to consult →
+        cannot enforce → fail-soft to allow).
+
+    Background: same-file conflict serialization via `sequential_groups`
+    handles co-edits correctly, but cross-file logical dependencies
+    (e.g., Task 04 consumes API endpoint produced by Task 01) slip
+    through. Wave parallel spawn could violate the task DAG → executor
+    for Task 04 reads stale code that Task 01 hasn't committed yet.
+    Optional `depends_on:` field in task plans (documented in
+    plan-overview.md) is parsed by waves-overview.md Step 6 and emitted
+    as `dag_edges` in `.wave-spawn-plan.json`; this guard reads that
+    field pre-spawn and denies when ANY upstream lacks a committed
+    fingerprint at `${PHASE_DIR}/.fingerprints/task-${upstream}.fingerprint.md`.
+
+    Sibling to `_enforce_spawn_count` and `_enforce_post_executor_single_spawn`
+    (same `is_active` + `run_id` gate; runs after both).
+    """
+    tool_input = hook_input.get("tool_input") or {}
+    subagent = tool_input.get("subagent_type", "")
+    if subagent != BUILD_TASK_EXECUTOR:
+        return None
+
+    plan_path, _ = _spawn_count_paths(run_id)
+    if not plan_path.exists():
+        return None  # spawn-count check already handles missing-plan fail-closed
+
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None  # spawn-count check handles unparseable; do not double-deny
+
+    dag_edges = plan.get("dag_edges") or {}
+    if not isinstance(dag_edges, dict) or not dag_edges:
+        return None  # back-compat — no DAG declared, no enforcement
+
+    prompt = tool_input.get("prompt", "") or ""
+    task_id = _extract_task_id(prompt)
+    if not task_id:
+        return None  # spawn-count check already enforces task_id presence
+
+    upstream_deps = dag_edges.get(task_id) or []
+    if not isinstance(upstream_deps, list) or not upstream_deps:
+        return None  # root task — no upstream
+
+    phase_dir = _resolve_phase_dir(hook_session)
+    if phase_dir is None:
+        # Fingerprint dir unknown → cannot enforce → fail-soft allow.
+        # Sibling enforcement (_enforce_spawn_count) already gates the
+        # wave-plan path; missing phase_dir here is an orchestrator
+        # config gap, not a hot-path block.
+        return None
+
+    fingerprints_dir = phase_dir / ".fingerprints"
+    missing_upstream = []
+    for upstream in upstream_deps:
+        if not isinstance(upstream, str) or not upstream:
+            continue
+        fp_file = fingerprints_dir / f"{upstream}.fingerprint.md"
+        if not fp_file.is_file():
+            missing_upstream.append(upstream)
+
+    if not missing_upstream:
+        return None  # all upstream committed → allow
+
+    deps_str = ", ".join(upstream_deps)
+    missing_str = ", ".join(missing_upstream)
+    return deny(
+        f"\033[38;5;208mvg-build-task-executor spawn rejected — DAG violation.\033[0m\n"
+        f"Task {task_id} declares depends_on: [{deps_str}] but upstream "
+        f"task(s) [{missing_str}] have not committed yet (no fingerprint "
+        f"at {fingerprints_dir}/<upstream>.fingerprint.md).\n"
+        "Wave parallel spawn must wait for upstream tasks.\n"
+        "Fix: spawn upstream tasks first (let them commit and emit "
+        "fingerprints); OR remove depends_on from the task plan if it is "
+        "a false dependency.",
+        hook_session=hook_session,
+        gate_id="PreToolUse-Agent-spawn-guard-dag-violation",
+    )
+
+
 def _safe_session_filename(sid: str) -> str:
     if not sid:
         return "unknown"
@@ -637,6 +779,11 @@ def main() -> int:
             if rc is not None:
                 return rc
             rc = _enforce_post_executor_single_spawn(
+                hook_input, run_id, hook_session=hook_session,
+            )
+            if rc is not None:
+                return rc
+            rc = _enforce_dag_dependencies(
                 hook_input, run_id, hook_session=hook_session,
             )
             if rc is not None:

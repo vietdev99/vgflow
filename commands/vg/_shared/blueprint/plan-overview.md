@@ -34,6 +34,41 @@ then post-spawn validation + marker). The agent prompt itself lives in
 
 ---
 
+## Codex adapter: deterministic pre-spawn helper
+
+If `VG_RUNTIME=codex`, do NOT hand-transcribe the long Bash/Python heredocs
+in STEP 3.1. Codex shell calls are zsh-wrapped in many installs; nested
+heredocs, `$...`, braces, and markdown fences can be expanded before Bash sees
+them. Instead run the deterministic helper below, then continue at the spawn
+step using `plan-delegation.md`.
+
+```bash
+PHASE_NUMBER="${PHASE_NUMBER:-$(printf '%s' "${ARGUMENTS:-}" | awk '{print $1}')}"
+[ -z "$PHASE_NUMBER" ] && { echo "phase number required"; exit 1; }
+PY_BOOT="$(command -v python3 || command -v python || command -v py)"
+eval "$("$PY_BOOT" .claude/scripts/codex-vg-env.py --phase "$PHASE_NUMBER" --format shell)"
+"$PYTHON_BIN" .claude/scripts/codex-blueprint-plan-prep.py \
+  --phase "$PHASE_NUMBER" \
+  --arguments "${ARGUMENTS:-$PHASE_NUMBER}"
+```
+
+This helper:
+- emits `vg-orchestrator step-active 2a_plan`;
+- resolves `REPO_ROOT`, `PHASE_DIR`, `PROFILE`, `PHASE_PROFILE`, and
+  `PYTHON_BIN` without broad scans;
+- writes `.graphify-brief.md`, `.deploy-lessons-brief.md`, and
+  `.tmp/bootstrap-rules-blueprint.md`;
+- enforces the R5 prompt-size gate;
+- does NOT write `PLAN.md` and does NOT mark `2a_plan` complete.
+
+After the helper exits 0, create the planner prompt file from
+`plan-delegation.md`, then run `codex-spawn.sh --tier planner
+--spawn-role vg-blueprint-planner --spawn-id blueprint-2a-plan`. The child
+must write `PLAN.md`, `PLAN/index.md`, and `PLAN/task-*.md`; only after
+post-spawn validation passes may the parent mark `2a_plan`.
+
+---
+
 ## STEP 3.1 — pre-spawn setup
 
 ### CONTEXT.md format validation (<5 sec)
@@ -42,9 +77,12 @@ then post-spawn validation + marker). The agent prompt itself lives in
 vg-orchestrator step-active 2a_plan
 
 CONTEXT_FILE="${PHASE_DIR}/CONTEXT.md"
-HAS_ENDPOINTS=$(grep -c "^\*\*Endpoints:\*\*" "$CONTEXT_FILE" 2>/dev/null || echo 0)
-HAS_TESTS=$(grep -c "^\*\*Test Scenarios:\*\*" "$CONTEXT_FILE" 2>/dev/null || echo 0)
-DECISION_COUNT=$(grep -cE "^### (P[0-9.]+\.)?D-" "$CONTEXT_FILE" 2>/dev/null || echo 0)
+HAS_ENDPOINTS=$(grep -c "^\*\*Endpoints:\*\*" "$CONTEXT_FILE" 2>/dev/null || true)
+HAS_TESTS=$(grep -c "^\*\*Test Scenarios:\*\*" "$CONTEXT_FILE" 2>/dev/null || true)
+DECISION_COUNT=$(grep -cE "^### (P[0-9.]+\.)?D-" "$CONTEXT_FILE" 2>/dev/null || true)
+HAS_ENDPOINTS="${HAS_ENDPOINTS:-0}"
+HAS_TESTS="${HAS_TESTS:-0}"
+DECISION_COUNT="${DECISION_COUNT:-0}"
 
 if [ "$DECISION_COUNT" -eq 0 ]; then
   echo "⛔ CONTEXT.md has 0 decisions. Run /vg:scope ${PHASE_NUMBER} first."
@@ -468,6 +506,49 @@ Warning budget:
 - > 50% tasks have HIGH warnings → return to planner with feedback (loop to 2a)
 - > 30% tasks have MED warnings → proceed; CrossAI review catches in step 2d
 
+### Optional `depends_on:` cross-task DAG declaration (R6 Task 15)
+
+Same-file conflict detection (waves-overview.md Step 6) auto-serializes
+tasks that edit the SAME file. But cross-FILE logical dependencies — e.g.,
+Task 04 consumes an API endpoint produced by Task 01 — slip through that
+detector and can violate the DAG when Wave-N spawns multiple tasks in
+parallel.
+
+To declare such a dependency, the planner (or human editor) MAY add an
+optional `depends_on:` field to a task plan file at
+`${PHASE_DIR}/PLAN/task-NN.md` (or the equivalent shard at
+`${PHASE_DIR}/.wave-tasks/task-NN.md` for flat PLAN.md layouts) listing
+upstream task IDs that MUST complete before this task spawns.
+
+Three syntaxes accepted (first match per file wins):
+
+```markdown
+depends_on: [task-01, task-03]
+```
+or
+```markdown
+**depends_on:** task-01, task-03
+```
+or
+```markdown
+<depends_on>task-01, task-03</depends_on>
+```
+
+Behavior:
+
+- Field is OPTIONAL (back-compat — empty implies no cross-file deps).
+- waves-overview.md Step 6 parses these and emits a `dag_edges` map
+  into `.vg/runs/<run_id>/.wave-spawn-plan.json` (and the phase-local
+  spawn plan at `${PHASE_DIR}/.wave-spawn-plan.json`).
+- `scripts/vg-agent-spawn-guard.py` (`_enforce_dag_dependencies`) reads
+  `dag_edges` pre-spawn. If task-04 declares `depends_on: [task-01]`
+  but `${PHASE_DIR}/.fingerprints/task-01.fingerprint.md` does not yet
+  exist (= upstream not committed), the spawn is DENIED with gate_id
+  `PreToolUse-Agent-spawn-guard-dag-violation`.
+- Use sparingly: same-file conflicts already serialize for free. Reach
+  for `depends_on:` only when the dependency is across files (e.g.,
+  Task 04 imports a symbol Task 01 introduces in a different file).
+
 ### Schema validation (BLOCK on PLAN.md frontmatter drift)
 
 ```bash
@@ -553,7 +634,9 @@ echo ""
 echo "Cross-System Check summary:"
 echo "  Route conflicts: ${ROUTE_CONFLICTS:-0}"
 echo "  Existing schema files: ${EXISTING_SCHEMAS:-0}"
-echo "  Prior phase overlap: $(echo -e "${PRIOR_OVERLAP:-}" | grep -c . || echo 0)"
+PRIOR_OVERLAP_COUNT=$(echo -e "${PRIOR_OVERLAP:-}" | grep -c . || true)
+PRIOR_OVERLAP_COUNT="${PRIOR_OVERLAP_COUNT:-0}"
+echo "  Prior phase overlap: ${PRIOR_OVERLAP_COUNT}"
 echo "  Warnings injected into PLAN.md as <!-- cross-system-warning: ... -->"
 echo ""
 echo "No BLOCK — warnings only. Planner should address each in task descriptions."

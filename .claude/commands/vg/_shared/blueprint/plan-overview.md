@@ -506,6 +506,49 @@ Warning budget:
 - > 50% tasks have HIGH warnings → return to planner with feedback (loop to 2a)
 - > 30% tasks have MED warnings → proceed; CrossAI review catches in step 2d
 
+### Optional `depends_on:` cross-task DAG declaration (R6 Task 15)
+
+Same-file conflict detection (waves-overview.md Step 6) auto-serializes
+tasks that edit the SAME file. But cross-FILE logical dependencies — e.g.,
+Task 04 consumes an API endpoint produced by Task 01 — slip through that
+detector and can violate the DAG when Wave-N spawns multiple tasks in
+parallel.
+
+To declare such a dependency, the planner (or human editor) MAY add an
+optional `depends_on:` field to a task plan file at
+`${PHASE_DIR}/PLAN/task-NN.md` (or the equivalent shard at
+`${PHASE_DIR}/.wave-tasks/task-NN.md` for flat PLAN.md layouts) listing
+upstream task IDs that MUST complete before this task spawns.
+
+Three syntaxes accepted (first match per file wins):
+
+```markdown
+depends_on: [task-01, task-03]
+```
+or
+```markdown
+**depends_on:** task-01, task-03
+```
+or
+```markdown
+<depends_on>task-01, task-03</depends_on>
+```
+
+Behavior:
+
+- Field is OPTIONAL (back-compat — empty implies no cross-file deps).
+- waves-overview.md Step 6 parses these and emits a `dag_edges` map
+  into `.vg/runs/<run_id>/.wave-spawn-plan.json` (and the phase-local
+  spawn plan at `${PHASE_DIR}/.wave-spawn-plan.json`).
+- `scripts/vg-agent-spawn-guard.py` (`_enforce_dag_dependencies`) reads
+  `dag_edges` pre-spawn. If task-04 declares `depends_on: [task-01]`
+  but `${PHASE_DIR}/.fingerprints/task-01.fingerprint.md` does not yet
+  exist (= upstream not committed), the spawn is DENIED with gate_id
+  `PreToolUse-Agent-spawn-guard-dag-violation`.
+- Use sparingly: same-file conflicts already serialize for free. Reach
+  for `depends_on:` only when the dependency is across files (e.g.,
+  Task 04 imports a symbol Task 01 introduces in a different file).
+
 ### Schema validation (BLOCK on PLAN.md frontmatter drift)
 
 ```bash
