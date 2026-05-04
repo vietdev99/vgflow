@@ -414,6 +414,23 @@ in `spawn_recursive_probe.py`; eligibility gate checks 6 preconditions
 automatically. AI cannot cherry-pick. Skipping the entire phase requires
 `--skip-discovery` flag WITH `--override-reason="<text>"`.
 
+### STEP 4.5 — runtime checks (web/mobile profile)
+
+Read `_shared/review/runtime-checks.md` and follow it exactly.
+
+This step covers 7 sub-steps:
+- `phase2_exploration_limits` — exploration boundary enforcement
+- `phase2_mobile_discovery` — mobile-profile-specific discovery
+- `phase2_5_visual_checks` — visual regression vs design fingerprints
+- `phase2_5_mobile_visual_checks` — mobile visual gates
+- `phase2_7_url_state_sync` — URL ↔ component-state sync verification
+- `phase2_8_url_state_runtime` — runtime URL state coherence
+- `phase2_9_error_message_runtime` — error message UX validation
+
+Profile-aware: web-fullstack / web-frontend-only run all 7;
+mobile-* substitutes mobile variants; web-backend-only skips entirely.
+All markers severity=warn — emit telemetry but don't block run.
+
 ### STEP 5 — findings collect + fix loop
 
 Read `_shared/review/findings/collect.md` then `_shared/review/findings/fix-loop.md`.
