@@ -1128,9 +1128,13 @@ def cmd_step_active(args) -> int:
         payload={"step": args.step_name},
     )
     print(f"active: {args.step_name}")
-    pretty = _render_taskboard(current, db.get_run(current["run_id"]), compact=True)
-    if pretty:
-        print(pretty)
+    # Bug D3 token-spike fix (2026-05-04): taskboard re-render REMOVED from
+    # cmd_step_active. Each compact taskboard ≈ 285 tokens (cl100k); a typical
+    # accept run fires step-active 100-200x → 28K-57K tokens of redundant
+    # re-rendering of the same checklist on every step transition. AI already
+    # sees the projected tasklist via TodoWrite (Bug D2 payload-ordering UI);
+    # the duplicate text rendering is decorative noise. Use
+    # `vg-orchestrator run-status --pretty` for explicit on-demand inspection.
     return 0
 
 
@@ -1485,9 +1489,12 @@ def cmd_mark_step(args) -> int:
         current.pop("active_step_at", None)
         state_mod.write_active_run(current)
     print(f"marked: {args.namespace}/{args.step_name}")
-    pretty = _render_taskboard(current, db.get_run(current["run_id"]), compact=True)
-    if pretty:
-        print(pretty)
+    # Bug D3 token-spike fix (2026-05-04): taskboard re-render REMOVED from
+    # cmd_mark_step. Same rationale as cmd_step_active — each call would
+    # re-render ~285 tokens of the same checklist; with step-active +
+    # mark-step pairs, that's ~570 tokens per step transition × 17 accept
+    # markers = ~10K tokens minimum, much more with intermediate sub-steps.
+    # AI already has TodoWrite UI for live progress visibility.
     return 0
 
 
