@@ -157,6 +157,8 @@ runtime_contract:
     - "--skip-design-pixel-gate"
     - "--skip-task-fidelity-audit"
     - "--skip-tdd-evidence"
+    # R7 Task 3 (G1) — heuristic RCRURD implementation audit (handler grep)
+    - "--skip-rcrurd-implementation-audit"
     - "--skip-uimap-injection-audit"
     - "--allow-verify-divergence"
     # Task 18 (pre-test gate) — escape hatch for STEP 6.5 (T1+T2+deploy+smoke)

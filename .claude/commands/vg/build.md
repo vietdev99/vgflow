@@ -157,6 +157,8 @@ runtime_contract:
     - "--skip-design-pixel-gate"
     - "--skip-task-fidelity-audit"
     - "--skip-tdd-evidence"
+    # R7 Task 3 (G1) — heuristic RCRURD implementation audit (handler grep)
+    - "--skip-rcrurd-implementation-audit"
     - "--skip-uimap-injection-audit"
     - "--allow-verify-divergence"
     # Task 18 (pre-test gate) — escape hatch for STEP 6.5 (T1+T2+deploy+smoke)
@@ -194,6 +196,12 @@ step-active calls until signed evidence exists.
 TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
+
+**Payload ordering (Bug D2 2026-05-04):** Claude Code TodoWrite UI renders
+in payload-array order — does NOT auto-sort. On every TodoWrite call
+REORDER `todos[]` so active group header + its `in_progress` sub-step
+appear FIRST, remaining pending next, completed items LAST. Hierarchy
+preserved (group header still precedes its own sub-steps).
 
 For HEAVY steps (STEP 4 waves, STEP 5 post-execution), you MUST spawn the
 named subagent via the `Agent` tool. DO NOT execute waves or
@@ -297,7 +305,11 @@ fi
 ```
 
 ### STEP 5 — post-execution verification (HEAVY)
-Read `_shared/build/post-execution-overview.md` AND `_shared/build/post-execution-delegation.md`.
+Read `_shared/build/post-execution-overview.md` (slim entry) which routes
+through `_shared/build/post-execution-spawn.md` (pre-spawn checklist +
+Spawn site) and `_shared/build/post-execution-validation.md` (post-spawn
+JSON validation + L4a gates + SUMMARY commit + API-DOCS). Also read
+`_shared/build/post-execution-delegation.md` for the subagent contract.
 Then narrate + spawn ONE vg-build-post-executor (single — sequential per-task gate walk):
 ```bash
 bash scripts/vg-narrate-spawn.sh vg-build-post-executor spawning "L2/L3/L5/L6 + truthcheck for ${PHASE_NUMBER}"

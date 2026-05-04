@@ -148,7 +148,7 @@ vg-orchestrator step-active 1_parse_args
 #   --allow-coverage-regression      (close.md PR-D route schema coverage)
 # All gate-skip flags route through forbidden_without_override (entry
 # frontmatter); --allow-coverage-regression is informational + accept-and-log.
-VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-design-pixel-gate|skip-uimap-injection-audit|skip-task-fidelity-audit|skip-tdd-evidence|skip-context-rebuild|resume|skip-truthcheck|skip-compliance|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|allow-missing-commits|allow-missing-fixtures|allow-r5-violation|allow-verify-divergence|allow-coverage-regression|allow-rule-not-implemented|allow-ux-violations|override-reason|force|help)$'
+VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-design-pixel-gate|skip-uimap-injection-audit|skip-task-fidelity-audit|skip-tdd-evidence|skip-rcrurd-implementation-audit|skip-context-rebuild|resume|skip-truthcheck|skip-compliance|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|allow-missing-commits|allow-missing-fixtures|allow-r5-violation|allow-verify-divergence|allow-coverage-regression|allow-rule-not-implemented|allow-ux-violations|override-reason|force|help)$'
 UNKNOWN_FLAGS=""
 for tok in ${ARGUMENTS:-}; do
   case "$tok" in
@@ -166,7 +166,8 @@ if [ -n "$UNKNOWN_FLAGS" ]; then
   echo "   Valid flags: --wave, --only, --status, --gaps-only, --interactive, --auto,"
   echo "                --reset-queue, --skip-design-check, --skip-design-pixel-gate,"
   echo "                --skip-uimap-injection-audit, --skip-task-fidelity-audit,"
-  echo "                --skip-tdd-evidence, --skip-context-rebuild, --resume,"
+  echo "                --skip-tdd-evidence, --skip-rcrurd-implementation-audit,"
+  echo "                --skip-context-rebuild, --resume,"
   echo "                --skip-truthcheck, --skip-compliance,"
   echo "                --skip-reflection, --allow-missing-commits, --allow-missing-fixtures,"
   echo "                --allow-r5-violation, --allow-verify-divergence, --allow-coverage-regression,"
@@ -350,6 +351,14 @@ Per sub-step lifecycle:
 - When ALL sub-steps in a group are `completed`: set group header todo `completed`.
 - On run-complete: clear projected tasklist per `close-on-complete`.
 
+**Payload ordering rule (Bug D2 2026-05-04):** Claude Code's TodoWrite UI
+renders todos in payload-array order — it does NOT auto-sort by status.
+On every TodoWrite call, REORDER the `todos[]` array so the active group
+header + its `in_progress` sub-step appear FIRST, followed by remaining
+pending items, with completed items LAST. Otherwise sếp loses sight of
+"what's running now" because it's buried mid-list. Hierarchy stays
+intact: each group header still precedes its own sub-steps.
+
 Example projection for vg:build web-fullstack (5 groups, 18 sub-steps):
 ```
 [ ] 📋 Build Preflight (6 steps)
@@ -486,6 +495,16 @@ then set the item completed. The native tasklist is UI projection; markers and
 events remain the enforcement source of truth.
 
 ```bash
+# Bug D 2026-05-04: explicit emission — was previously instruction-text-only,
+# AI could skip the tasklist-projected call. Now bash-enforced:
+# build.native_tasklist_projected MUST fire for run-complete contract.
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+  --adapter "${VG_TASKLIST_ADAPTER:-claude}" || {
+    echo "⛔ vg-orchestrator tasklist-projected failed — build.native_tasklist_projected event will not fire." >&2
+    echo "   Check .vg/runs/<run_id>/tasklist-contract.json + adapter ∈ {claude,codex,fallback}." >&2
+    exit 1
+}
+
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "create_task_tracker" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/create_task_tracker.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build create_task_tracker 2>/dev/null || true

@@ -1021,6 +1021,61 @@ if [ -x "$TDD_VAL" ]; then
 fi
 ```
 
+### 8d.5c — RCRURD implementation audit (R7 Task 3 — G1)
+
+Heuristic post-spawn check that handler implementations honor RCRURD
+invariants (Read-After-Create / Update / Delete + error-shape contracts).
+Pairs with R7 Task 2 (G7 — `yaml-rcrurd` inline fence source unification).
+
+The validator scans each task capsule with non-empty
+`rcrurd_invariants_paths[]`, parses the per-goal yaml, and grep-audits
+the handler files in `BUILD-LOG/task-NN.md`'s `Files modified` list:
+
+  - DELETE invariants → expect 404 / NotFoundError marker. WARN on
+    miss; BLOCK on contradiction (handler hardcodes status 200 on the
+    not-found branch).
+  - POST/PUT/PATCH invariants → expect a leaf field from `assert[].path`
+    to appear in modified handler text. WARN on miss.
+  - Malformed yaml → WARN (graceful degradation, no crash).
+
+Static analysis cannot prove invariant compliance — this gate is
+heuristic. WARN does NOT stop the wave; only BLOCK rc=1 halts.
+
+```bash
+RCRURD_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-rcrurd-implementation.py"
+if [ -x "$RCRURD_VAL" ]; then
+  ${PYTHON_BIN} "$RCRURD_VAL" --phase "${PHASE_NUMBER}" --wave-id "${N}" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/rcrurd-implementation-w${N}.json" 2>&1 || true
+  RCRURDV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/rcrurd-implementation-w${N}.json" 2>/dev/null)
+  case "$RCRURDV" in
+    PASS|WARN) echo "✓ R7 Task 3 RCRURD implementation audit: $RCRURDV" ;;
+    BLOCK)
+      echo "⛔ R7 Task 3 RCRURD implementation audit: BLOCK — handler implementation contradicts RCRURD invariant (e.g. DELETE goal asserts 404 but handler hardcodes 200)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-rcrurd-implementation-audit ]]; then exit 1; fi
+      OVERRIDE_REASON=""
+      if [[ "${ARGUMENTS:-}" =~ --override-reason=([^[:space:]]+) ]]; then
+        OVERRIDE_REASON="${BASH_REMATCH[1]}"
+      fi
+      if [ -z "$OVERRIDE_REASON" ]; then
+        echo "⛔ --skip-rcrurd-implementation-audit requires --override-reason=<ticket-or-URL-or-SHA>." >&2
+        echo "   Re-run: /vg:build ${PHASE_NUMBER} --skip-rcrurd-implementation-audit --override-reason=\"<issue-id>: R7 Task 3 wave-${N} BLOCK accepted\"" >&2
+        exit 1
+      fi
+      if ! "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--skip-rcrurd-implementation-audit \
+        --reason="build.rcrurd-implementation wave-${N} ${OVERRIDE_REASON} — R7 Task 3 BLOCK accepted: RCRURD invariant contradiction tolerated ts=$(date -u +%FT%TZ); see ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/rcrurd-implementation-w${N}.json"; then
+        echo "⛔ vg-orchestrator override emit FAILED for --skip-rcrurd-implementation-audit — refusing silent skip." >&2
+        exit 1
+      fi
+      type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
+        "--skip-rcrurd-implementation-audit" "$PHASE_NUMBER" "build.rcrurd-implementation.wave-${N}" "$OVERRIDE_REASON" "build-rcrurd-implementation-audit-skipped"
+      ;;
+    *) echo "ℹ R7 Task 3 RCRURD implementation audit: $RCRURDV" ;;
+  esac
+fi
+```
+
 ### 8d.6 — Post-wave gate matrix (typecheck/build/test/contract/goals/utility)
 
 Run gates 1-5 in order, BLOCK on first failure. Adaptive typecheck
