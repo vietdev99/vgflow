@@ -325,7 +325,7 @@ def write_pin(
 def _cmd_extract(args: argparse.Namespace) -> int:
     contract = extract_contract_for_command(args.command)
     if contract is None:
-        print(f"⛔ Unknown command or missing skill: {args.command}",
+        print(f"\033[38;5;208mUnknown command or missing skill: {args.command}\033[0m",
               file=sys.stderr)
         return 2
     print(json.dumps(contract, indent=2))
@@ -335,7 +335,7 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 def _cmd_status(args: argparse.Namespace) -> int:
     phase_dir = _resolve_phase_dir(args.phase)
     if not phase_dir:
-        print(f"⛔ Phase not found: {args.phase}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase not found: {args.phase}\033[0m", file=sys.stderr)
         return 2
     pin = read_pin(phase_dir)
     if pin is None:
@@ -350,7 +350,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 def _cmd_write(args: argparse.Namespace) -> int:
     phase_dir = _resolve_phase_dir(args.phase)
     if not phase_dir:
-        print(f"⛔ Phase not found: {args.phase}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase not found: {args.phase}\033[0m", file=sys.stderr)
         return 2
     data = write_pin(phase_dir, command=args.command, overwrite=args.overwrite)
     cmds = sorted(data.get("commands", {}).keys())
@@ -361,11 +361,11 @@ def _cmd_write(args: argparse.Namespace) -> int:
 def _cmd_read(args: argparse.Namespace) -> int:
     phase_dir = _resolve_phase_dir(args.phase)
     if not phase_dir:
-        print(f"⛔ Phase not found: {args.phase}", file=sys.stderr)
+        print(f"\033[38;5;208mPhase not found: {args.phase}\033[0m", file=sys.stderr)
         return 2
     contract = get_pinned_contract(phase_dir, args.command)
     if contract is None:
-        print(f"⛔ No pin for {args.command} in {phase_dir.name}",
+        print(f"\033[38;5;208mNo pin for {args.command} in {phase_dir.name}\033[0m",
               file=sys.stderr)
         return 1
     print(json.dumps(contract, indent=2))

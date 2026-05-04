@@ -10,3 +10,6 @@ pytest>=7.0          # regression suite (scripts/tests/) — optional at runtime
 jsonschema>=4.0      # RFC v9 fixture/data-invariants schema validation (PR-pre-A onwards)
 jsonpath-ng>=1.6     # RFC v9 PR-A1 recipe runtime — JSONPath capture (RFC 9535-aligned)
 requests>=2.31       # RFC v9 PR-A2 native API executor — no external runtime dep
+
+# Task 43 (Bug K, M3) — MANDATORY for Vietnamese-aware token counting
+tiktoken>=0.7

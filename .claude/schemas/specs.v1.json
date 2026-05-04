@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/specs.v1.json",
+  "title": "VG SPECS.md frontmatter (v1)",
+  "description": "Validates the YAML frontmatter of a phase SPECS.md per .vg/workflow-hardening-v2.7/SPEC-E.md section 4.1. Body H2 sections (Goal, Scope, Out of scope, Constraints, Success criteria) are validated by verify-artifact-schema.py via regex, not by this schema.",
+  "type": "object",
+  "required": ["phase", "profile", "platform", "status", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "phase": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)*(-[a-z0-9-]+)?$",
+      "description": "Phase identifier — e.g. '7.14.3', '14', '7.14.3-list-view'"
+    },
+    "profile": {
+      "type": "string",
+      "enum": ["feature", "infra", "hotfix", "bugfix", "migration", "docs"]
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "web-fullstack",
+        "web-frontend-only",
+        "web-backend-only",
+        "mobile-rn",
+        "mobile-flutter",
+        "mobile-native",
+        "desktop-electron",
+        "desktop-tauri",
+        "cli-tool",
+        "library",
+        "server-setup",
+        "server-management"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["scope", "blueprint", "build", "review", "test", "accept", "done", "draft", "approved"]
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "created": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Legacy alias for created_at — accepted but not preferred"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["ai-draft", "user-guided", "migrated"]
+    },
+    "parent_phase": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)*$"
+    },
+    "related_milestones": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "estimated_effort_days": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}

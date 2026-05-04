@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LensDispatchPlan",
+  "description": "Canonical manifest of expected (lens × goal/element/role) dispatches for a phase review. Written by spawner BEFORE workers spawn. Consumed by verify-lens-runs-coverage.py.",
+  "type": "object",
+  "required": ["review_run_id", "phase", "plan_hash", "commit_sha", "dispatches"],
+  "properties": {
+    "review_run_id": {"type": "string", "minLength": 1},
+    "phase": {"type": "string", "minLength": 1},
+    "plan_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16,64}$",
+      "description": "sha256 prefix of the dispatch plan body — detects reuse from prior runs"
+    },
+    "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{7,40}$|^unknown$"},
+    "emitted_at": {"type": "string"},
+    "dispatches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["dispatch_id", "lens", "goal_id", "applicability_status", "expected_artifact_path"],
+        "properties": {
+          "dispatch_id": {"type": "string"},
+          "lens": {"type": "string", "pattern": "^lens-[a-z][a-z0-9-]*$"},
+          "goal_id": {"type": "string", "pattern": "^G-\\d+$"},
+          "view": {"type": ["string", "null"]},
+          "element_class": {"type": ["string", "null"]},
+          "selector_hash": {"type": ["string", "null"]},
+          "resource": {"type": ["string", "null"]},
+          "role": {"type": ["string", "null"]},
+          "applicability_status": {
+            "type": "string",
+            "enum": ["APPLICABLE", "N/A", "SKIPPED_BY_POLICY", "SKIPPED_BY_OVERRIDE"]
+          },
+          "applicability_reason": {"type": "string"},
+          "expected_artifact_path": {"type": "string"},
+          "worker_tier": {"type": "string", "enum": ["haiku", "sonnet", "opus", "crossai"]},
+          "worker_tool": {"type": "string", "enum": ["claude", "codex", "gemini"]},
+          "min_actions_floor": {"type": "integer", "minimum": 1},
+          "min_evidence_steps": {"type": "integer", "minimum": 1},
+          "required_probe_kinds": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

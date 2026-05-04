@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/narration-strings.v1.json",
+  "title": "VG narration-strings.yaml (v1) — UAT keys subset",
+  "description": "Validates that narration-strings.yaml contains UAT-required keys per D-18. Permissive on other key categories (gate_*, goal_*, view_*, fix_*, override_*, debt_*, telemetry_*) — those are validated by narration-strings-validators.yaml (existing). This schema only enforces the UAT subset added in Phase 15. Used by verify-uat-strings-no-hardcode.py forward check (each {{uat_*}} reference in UAT-NARRATIVE.md must resolve to a key validated here). Schema is permissive on additional uat_* keys (validators may add more in future).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "uat_entry_label",
+    "uat_role_label",
+    "uat_account_label",
+    "uat_navigation_label",
+    "uat_precondition_label",
+    "uat_expected_label",
+    "uat_region_label",
+    "uat_screenshot_compare",
+    "uat_prompt_pfs"
+  ],
+  "definitions": {
+    "localized_string": {
+      "type": "object",
+      "required": ["en"],
+      "additionalProperties": false,
+      "description": "Per existing convention in narration-strings.yaml: 'en' required as fallback locale, 'vi' optional but strongly preferred for VG default locale.",
+      "properties": {
+        "vi": {"type": "string", "minLength": 1},
+        "en": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "properties": {
+    "uat_entry_label": {"$ref": "#/definitions/localized_string"},
+    "uat_role_label": {"$ref": "#/definitions/localized_string"},
+    "uat_account_label": {"$ref": "#/definitions/localized_string"},
+    "uat_navigation_label": {"$ref": "#/definitions/localized_string"},
+    "uat_precondition_label": {"$ref": "#/definitions/localized_string"},
+    "uat_expected_label": {"$ref": "#/definitions/localized_string"},
+    "uat_region_label": {"$ref": "#/definitions/localized_string"},
+    "uat_screenshot_compare": {"$ref": "#/definitions/localized_string"},
+    "uat_prompt_pfs": {"$ref": "#/definitions/localized_string"}
+  }
+}

@@ -317,7 +317,7 @@ def main() -> int:
             log(f"orchestrator run-start rc={r.returncode} "
                 f"stderr={r.stderr[:200]}")
             approve(context=(
-                f"⚠ VG orchestrator rejected run-start for {command} "
+                f"\033[33mVG orchestrator rejected run-start for {command} \033[0m"
                 f"phase={phase_token}: {r.stderr.strip()[:200]}. "
                 f"Resolve via /vg:doctor stack or vg-orchestrator run-abort."
             ))

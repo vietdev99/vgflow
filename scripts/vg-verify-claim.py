@@ -60,6 +60,18 @@ EVENTS_DB = REPO_ROOT / ".vg" / "events.db"
 STALE_MINUTES = 30
 DRIFT_STATE_TTL_MINUTES = 120  # GC stale entries after this
 
+# Hotfix 2026-05-04: interactive commands span hours by design (user reads
+# diagnostic + fixes + retries between AskUserQuestion turns). Bump to 6h
+# so live debug/amend/scope/accept sessions don't get falsely stale-blocked.
+INTERACTIVE_CMDS = {"vg:debug", "vg:amend", "vg:scope", "vg:accept"}
+INTERACTIVE_STALE_MINUTES = 360
+
+
+def _stale_threshold_for(command: str | None) -> int:
+    if command and command in INTERACTIVE_CMDS:
+        return INTERACTIVE_STALE_MINUTES
+    return STALE_MINUTES
+
 # v2.8.3 anti-forge: only auto-fire for these "structurally safe" violations.
 # must_write (artifacts) and must_emit_telemetry (events) cannot be backfilled
 # without proof — they signal real pipeline gaps. Marker drift is the only
@@ -139,7 +151,7 @@ def is_stale(run: dict) -> bool:
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=datetime.timezone.utc)
         age_min = (datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds() / 60
-        return age_min > STALE_MINUTES
+        return age_min > _stale_threshold_for(run.get("command"))
     except Exception:
         return True
 
@@ -351,6 +363,107 @@ def _auto_fire_markers(phase: str, session_id: str | None = None) -> tuple[int, 
     return proc.returncode, proc.stdout, proc.stderr
 
 
+# ─── Modern BLOCK format (orange title + block file + vg.block.fired) ────
+
+
+def _emit_stale_block(current: dict, session_id: str | None) -> None:
+    """Render stale-run BLOCK using the modern 3-line stderr + block-file
+    + vg.block.fired pattern (parity with vg-pre-tool-use-bash.sh emit_block).
+
+    Replaces the legacy bare-text format which had no ANSI color, no
+    diagnostic event, and no Layer-4 narration template — those are
+    contract requirements for any hook BLOCK now (see vg-meta-skill.md
+    and `Hook authoring rule — VG context guard`).
+    """
+    gate_id = "Stop-stale-run"
+    run_id = current.get("run_id") or "unknown"
+    command = current.get("command", "?")
+    phase = current.get("phase", "?")
+    started = current.get("started_at", "?")
+    cause = (
+        f"active run {command} phase={phase} started_at={started} "
+        f"exceeds STALE_MINUTES={STALE_MINUTES}"
+    )
+
+    block_dir = REPO_ROOT / ".vg" / "blocks" / run_id
+    block_file = block_dir / f"{gate_id}.md"
+    try:
+        block_dir.mkdir(parents=True, exist_ok=True)
+        block_file.write_text(
+            f"""# Block diagnostic — {gate_id}
+
+## Cause
+{cause}
+
+## Required fix
+Stale runs are NOT auto-cleared (OHOK-6). AI could previously wait out
+the {STALE_MINUTES}-minute threshold and get silent Stop approval —
+that escape hatch is closed. Pick ONE recovery path:
+
+1. **Abandon the run** (most common):
+   ```
+   python .claude/scripts/vg-orchestrator run-abort --reason "abandoned >{STALE_MINUTES}min idle"
+   ```
+
+2. **Force-repair** (use only if you know the run actually completed
+   but state file is out of sync):
+   ```
+   python .claude/scripts/vg-orchestrator run-repair --force
+   ```
+
+Then retry Stop. Hook will re-evaluate against current state.
+
+## Narration template (use session language)
+[VG diagnostic] Run /{command} phase {phase} đã chạy quá {STALE_MINUTES}p
+(started_at={started}). Đang abort run cũ trước khi tiếp tục.
+
+## After fix
+```
+vg-orchestrator emit-event vg.block.handled \\
+  --gate {gate_id} \\
+  --resolution "stale run aborted/repaired, Stop retried"
+```
+
+If this gate blocks ≥3 times in this session, MUST call AskUserQuestion —
+something is preventing run-abort/run-repair from succeeding.
+""",
+            encoding="utf-8",
+        )
+    except Exception as e:
+        log(f"failed to write block file {block_file}: {e}")
+
+    # Compact 3-line stderr (orange title) — parity with vg-pre-tool-use-bash.sh.
+    sys.stderr.write(
+        f"\033[38;5;208m{gate_id}: {cause}\033[0m\n"
+        f"→ Read {block_file} for fix\n"
+        f"→ After fix: vg-orchestrator emit-event vg.block.handled --gate {gate_id}\n"
+    )
+
+    # Emit vg.block.fired so Stop hook's diagnostic-pairing gate sees it.
+    try:
+        env = os.environ.copy()
+        if session_id:
+            env["CLAUDE_SESSION_ID"] = session_id
+        subprocess.run(
+            [sys.executable, str(ORCHESTRATOR), "emit-event",
+             "vg.block.fired",
+             "--actor", "hook",
+             "--outcome", "FAIL",
+             "--payload", json.dumps({
+                 "gate": gate_id,
+                 "cause": cause,
+                 "run_id": run_id,
+                 "command": command,
+                 "phase": phase,
+                 "block_file": str(block_file),
+             })],
+            capture_output=True, text=True, timeout=10,
+            env=env,
+        )
+    except Exception as e:
+        log(f"vg.block.fired emit failed for {gate_id}: {e}")
+
+
 def main() -> int:
     # Read hook input from stdin
     try:
@@ -443,21 +556,17 @@ def main() -> int:
 
     if is_stale(current):
         # OHOK-6 (Gemini P1): previously auto-cleared + approved. That was
-        # a time-based escape hatch — AI could idle >30min then call Stop
-        # to bypass all gates. Now BLOCK with explicit recovery path.
+        # a time-based escape hatch — AI could idle >STALE_MINUTES then
+        # call Stop to bypass all gates. Now BLOCK with explicit recovery.
         # User must consciously acknowledge the run was abandoned.
+        #
+        # Format modernization (2026-05-03): use _emit_stale_block helper
+        # for parity with the rest of the VG block surface (orange ANSI +
+        # .vg/blocks/{run_id}/Stop-stale-run.md + vg.block.fired event).
+        # The bare-text legacy form lacked all three, breaking Layer-4
+        # diagnostic pairing + UX color cues.
         log(f"active run {command} phase={phase} is stale → BLOCK")
-        err = (
-            f"⛔ Active run is stale (>30min, started {current.get('started_at', '?')}):\n"
-            f"   {command} phase={phase} run_id={current.get('run_id', '?')[:12]}\n\n"
-            f"   Stale runs are NOT auto-cleared anymore (OHOK-6). AI could\n"
-            f"   previously wait out the threshold and get silent approval.\n"
-            f"   Explicitly abort or repair:\n"
-            f"   - python .claude/scripts/vg-orchestrator run-abort --reason 'abandoned'\n"
-            f"   - python .claude/scripts/vg-orchestrator run-repair --force\n"
-            f"   Then retry Stop."
-        )
-        print(err, file=sys.stderr)
+        _emit_stale_block(current, session_id if session_id and session_id != "?" else None)
         return 2
 
     log(f"active run {command} phase={phase} → invoking orchestrator run-complete")
@@ -527,7 +636,7 @@ def main() -> int:
                 else:
                     log(f"migrate-state failed rc={ar_rc}, stderr={ar_err[:200]}")
                     msg = (
-                        f"⛔ Marker-drift auto-recovery FAILED.\n\n"
+                        f"\033[38;5;208mMarker-drift auto-recovery FAILED.\033[0m\n\n"
                         f"migrate-state rc={ar_rc}\n"
                         f"stderr: {ar_err.strip()[:500]}\n\n"
                         f"Original violations:\n{msg}\n\n"
@@ -606,7 +715,7 @@ def main() -> int:
     # then retry Stop. We do NOT auto-escape anymore.
     log(f"orchestrator unexpected rc={rc}, stderr={stderr[:500]}")
     err_msg = (
-        f"⛔ vg-orchestrator run-complete returned unexpected rc={rc}.\n"
+        f"\033[38;5;208mvg-orchestrator run-complete returned unexpected rc={rc}.\033[0m\n"
         f"   This is NOT a BLOCK from contract violations — it's a bug or\n"
         f"   transient state issue. Previous versions soft-approved here,\n"
         f"   which let AI claim PASS without real verification.\n\n"

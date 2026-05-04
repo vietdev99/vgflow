@@ -1,0 +1,187 @@
+<EXTREMELY-IMPORTANT>
+You have entered a VGFlow workflow session.
+
+VGFlow is a deterministic harness. Steps are not suggestions. They are
+contracts validated by hooks. You CANNOT skip a step by claiming it is
+"obvious" or "already done" — every step has a marker file and an event
+record that the Stop hook verifies.
+
+If a tool call is blocked by PreToolUse hook, read the stderr message,
+fulfill the missing prerequisite, then retry. Do not work around the gate.
+</EXTREMELY-IMPORTANT>
+
+## Red Flags (you have used these before — they will not work)
+
+| Thought | Reality |
+|---|---|
+| "I already understand the structure, no need to read references" | References contain step-specific instructions absent from entry |
+| "Subagent overkill for this small step" | Heavy step has empirical 96.5% skip rate without subagent |
+| "TodoWrite is just UI, the contract is in events" | Hook checks TodoWrite payload against contract checksum |
+| "I can mark step done now and finish content later" | Stop hook reads must_write content_min_bytes; placeholder fails |
+| "The block was a one-off, retrying should work" | Each block emits vg.block.fired; Stop hook blocks if unhandled |
+| "I'll just retry, no need to tell the user" | Layer 5 rule: narrate in session language using template, never retry silently |
+| "I'll write the evidence file directly" | Protected paths blocked by PreToolUse on Write — use vg-orchestrator-emit-evidence-signed.py |
+
+## Open diagnostic threads (Layer 4 mechanism)
+
+If this injected context contains "OPEN DIAGNOSTICS for current run", you
+have unresolved blocks from earlier in this run (possibly across context
+compactions). For each open diagnostic, you MUST:
+
+1. Read the cause + required fix from the original block message (still in
+   events.db, query: `vg-orchestrator query-events --event-type vg.block.fired`)
+2. Apply the fix
+3. Narrate to user in session language using the template from the original block
+4. Bash: `vg-orchestrator emit-event vg.block.handled --gate <gate_id> --resolution "<summary>"`
+
+You CANNOT do other work until all open diagnostics are closed. Stop hook
+will refuse run-complete if any vg.block.fired is unpaired with vg.block.handled.
+
+## Pipeline commands governed by VGFlow
+
+project, roadmap, specs, scope, blueprint, build, review, test, accept
+
+When the user invokes `/vg:<cmd>`, follow the slim entry SKILL.md exactly.
+Read references when instructed. Spawn subagents (using tool name `Agent`,
+NOT `Task`) when instructed.
+
+## Subagent spawn narration (MANDATORY)
+
+For EVERY `Agent(subagent_type=...)` call, emit a colored-tag narration
+BEFORE the spawn AND AFTER its return. Uses bash helper that outputs ANSI
+escape codes — Claude Code chat renders as green/cyan/red pill.
+
+Pattern:
+```bash
+bash scripts/vg-narrate-spawn.sh <subagent-name> spawning ["<short context>"]
+```
+Then call:
+```
+Agent(subagent_type="<subagent-name>", prompt=<...>)
+```
+On return:
+```bash
+bash scripts/vg-narrate-spawn.sh <subagent-name> returned ["<result summary>"]
+```
+On failure (subagent error JSON or empty output):
+```bash
+bash scripts/vg-narrate-spawn.sh <subagent-name> failed "<one-line cause>"
+```
+
+State → background color:
+- `spawning` → 🟢 green pill — about to spawn
+- `returned` → 🔵 cyan pill — completed successfully
+- `failed` → 🔴 red pill — error/timeout/refused
+
+WHY: makes subagent transitions visually distinct in chat — user can
+glance-scan run progress without parsing prose. GSD-style chip UX.
+
+DO NOT skip narration to "save bash calls" — UX consistency matters more
+than 1 bash call savings. Hook does not enforce this convention; it is
+operator courtesy.
+
+## Blueprint artifact convention (R2 — downstream consumption contract)
+
+Blueprint writes 3-layer artifacts: per-task/endpoint/goal split (Layer 1)
++ index files (Layer 2) + flat concat (Layer 3, legacy compat).
+
+**Downstream commands (build, test, review, accept, roam) MUST prefer
+`vg-load` over flat read.** Direct `cat $PHASE_DIR/{PLAN,API-CONTRACTS,
+TEST-GOALS}.md` is forbidden in AI-context paths (executor capsules,
+agent prompts, codegen inputs) because the flat file enters AI context
+as a 30-100KB+ blob and triggers skim. Use:
+
+  vg-load --phase N --artifact plan --task NN
+  vg-load --phase N --artifact contracts --endpoint <slug>
+  vg-load --phase N --artifact goals --goal G-NN
+
+Deterministic transforms (grep validators, mtime checks, surface scans)
+MAY keep flat reads — they don't enter AI context. Per-command audit
+docs under `docs/audits/` are the canonical KEEP-FLAT classification
+(e.g., `docs/audits/2026-05-04-build-flat-vs-split.md`).
+
+Threshold: flat artifact > 30 KB without split subdir triggers a WARN
+(advisory, not block) via `scripts/validators/verify-blueprint-split-size.py`.
+30 KB ≈ 7K tokens — empirical AI-skim boundary.
+
+Backward compat: `vg-load --full` falls back to flat read for legacy
+phases that pre-date the per-task split.
+
+---
+
+## Scope-specific Red Flags (R4 pilot, 2026-05-03)
+
+| Thought | Reality |
+|---|---|
+| "Skip challenger to speed up round" | Per-answer trigger; skipping = blind spot risk (Codex review confirmed) |
+| "Skip expander on small round" | Per-round end gate; missing = critical_missing undetected |
+| "Auto-accept all challenger findings" | User must choose Address / Acknowledge / Defer per finding (not blanket) |
+| "Profile branch is suggestion" | Profile branch enforces R4 skip for backend-only — don't override |
+| "Per-decision split optional" | UX baseline R1 — blueprint depends on `vg-load.sh --decision D-NN` |
+| "Spawn Task() for challenger" | Tool name is `Agent` (Codex correction #1) |
+
+---
+
+## Hook authoring rule — VG context guard
+
+Every NEW hook script that enforces VG-specific policy MUST start with
+the canonical "VG context guard" block. Hooks that enforce filesystem-
+scoped invariants (write protection on `.vg/runs/*`) MAY skip the
+guard, but MUST document the rationale at the top of the script.
+
+The guard pattern is identical bytes across all hooks for grep-ability:
+
+```bash
+# ── VG context guard ──
+# Hook is harmless when no VG run is active. Silent exit prevents
+# false blocks on unrelated Claude Code skills (superpowers, gsd, etc).
+session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+run_file=".vg/active-runs/${session_id}.json"
+if [ ! -f "$run_file" ]; then
+  exit 0
+fi
+```
+
+Placement: immediately after `set -euo pipefail` and `input="$(cat)"`
+(if the hook reads stdin), before any policy check.
+
+Pytest suite `tests/hooks/test_hooks_silent_on_non_vg.py` enforces this
+for all hooks except the documented exceptions in
+`tests/hooks/test_write_protection_unconditional.py`.
+
+Source: `docs/superpowers/specs/2026-05-03-vg-r5.5-hooks-source-isolation-design.md`
+
+## Deploy-specific Red Flags
+
+| Thought | Reality |
+|---|---|
+| "Spawn vg-deploy-executor with parallel envs for speed" | Rule 2: sequential — parallel risks shared SSH/DB contention. R7 may add `--parallel-envs`; until then keep sequential. |
+| "Subagent should write DEPLOY-STATE.json directly" | NO — orchestrator-only writer to preserve `preferred_env_for` keys per rule 5. Subagent returns JSON; Step 2 merges. |
+| "Skip narrate-spawn for vg-deploy-executor — UX nicety only" | UX baseline R2 makes it MANDATORY. Each env iteration → green pill at start, cyan/red at end. |
+| "Health check 1× is enough" | 6× retry with 5s sleep (30s total) is the contract. Reducing masks transient cold-start failures. |
+| "Dry-run can skip emitting result JSON" | Dry-run MUST emit JSON with `health: "dry-run"` so orchestrator merge in Step 2 has a record to write. |
+| "Add a schema_version to DEPLOY-STATE.json — best practice" | R6a explicitly does NOT introduce one. Existing consumers don't expect it. |
+
+Source: `docs/superpowers/specs/2026-05-03-vg-r6a-deploy-design.md`
+
+## Amend-specific Red Flags
+
+| Thought | Reality |
+|---|---|
+| "Subagent should auto-apply ripple to PLAN.md" | Rule 6: cascade is INFORMATIONAL only. Subagent is read-only. Orchestrator displays report; user decides next action. |
+| "Skip cascade analysis, just commit Step 6" | Rule 6 still requires the report; user needs awareness before commit. |
+| "Cascade analyzer can write a RIPPLE-ANALYSIS.json file" | NO — output is markdown report on stdout. AMENDMENT-LOG.md (existing) captures change context; cascade is ephemeral inline. |
+| "Skip narrate-spawn for cascade analyzer — read-only is harmless" | UX baseline R2 makes narrate-spawn MANDATORY for ALL spawns. |
+
+## Debug-specific Red Flags
+
+| Thought | Reality |
+|---|---|
+| "Cap fix loop at 3 to prevent infinite retry" | Rule 2: AskUserQuestion-driven, NO max iterations. User-controlled exit. |
+| "Use a subagent for classification (Step 0)" | Rule 3: Auto-classify is heuristic regex (deterministic, fast). Subagent is overkill + slow. |
+| "Skip Step 1 runtime_ui — too complex" | The Agent(vg-debug-ui-discovery) spawn IS the implementation. Skipping = pseudo-code remains. |
+| "MCP unavailable → abort debug session" | Rule 5: fallback to amendment-trigger; do NOT abort. |
+| "Subagent should write to DEBUG-LOG.md directly" | NO — orchestrator owns the append (rule 6: atomic commits per fix). Subagent returns markdown; orchestrator appends. |
+| "Spec_gap should NOT auto-route to /vg:amend" | Rule 4 + flag default is auto-route. Use --no-amend-trigger to disable. |
+
+Source: `docs/superpowers/specs/2026-05-03-vg-r6b-amend-debug-design.md`

@@ -84,7 +84,7 @@ def _validate_against_schema(contract: dict, command: str) -> None:
         errors = list(validator.iter_errors(contract))
         if errors:
             print(
-                f"⚠ runtime_contract schema issues in {command}:",
+                f"\033[33mruntime_contract schema issues in {command}:\033[0m",
                 file=sys.stderr,
             )
             for err in errors[:5]:  # cap output
@@ -293,18 +293,30 @@ def substitute(template: str, phase: str, phase_dir: Path | None) -> str:
 # helper in .claude/commands/vg/_shared/lib/phase-profile.sh.
 
 _PROFILE_KEYWORDS = {
-    "migration": [r"\bmigration\b", r"\brollback\b", r"\bschema\s+change\b"],
-    "hotfix":    [r"\bhotfix\b", r"\bhot[-\s]fix\b"],
-    "bugfix":    [r"\bbugfix\b", r"\bbug[-\s]fix\b", r"^\s*issue[_-]?id\s*:"],
-    "infra":     [r"\binfra(structure)?\b", r"\bansible\b", r"\bterraform\b",
-                  r"\bVPS\b", r"\bdocker\s+compose\b"],
-    "docs":      [r"\bdocumentation\b", r"^\s*#\s+Documentation\b"],
+    "hotfix": [r"^\s*\*\*Parent phase:\*\*\s*", r"^\s*parent_phase\s*:"],
+    "bugfix": [
+        r"^\s*\*\*issue_id\*\*:\s*",
+        r"^\s*issue_id\s*:",
+        r"^\s*\*\*bug_ref\*\*:\s*",
+        r"^\s*bug_ref\s*:",
+        r"^\s*\*\*Fixes bug\*\*:\s*",
+    ],
+    "infra": [
+        r"\bansible\b",
+        r"\bterraform\b",
+        r"\bpm2\b",
+        r"\bsystemctl\b",
+        r"\bkubectl\b",
+        r"\bdocker\s+compose\b",
+    ],
+    "docs": [r"\bdocumentation\b", r"^\s*#\s+Documentation\b"],
 }
 
 # Artifacts REQUIRED per profile. Anything missing from the profile's list
 # converts to a WARN (not a BLOCK) when _verify_contract sees must_write.
 _PROFILE_REQUIRED_ARTIFACTS = {
     "feature":   {"SPECS.md", "CONTEXT.md", "PLAN.md", "API-CONTRACTS.md",
+                  "API-DOCS.md",
                   "TEST-GOALS.md", "SUMMARY.md", "DISCUSSION-LOG.md",
                   "api-contract-precheck.txt"},
     "infra":     {"SPECS.md", "PLAN.md", "SUMMARY.md"},
@@ -340,11 +352,75 @@ def detect_phase_profile(phase: str) -> str:
         if m and m.group(1).lower() in _PROFILE_REQUIRED_ARTIFACTS:
             return m.group(1).lower()
 
-    # Heuristic — first matching profile wins (most specific first)
-    for prof in ("migration", "hotfix", "bugfix", "infra", "docs"):
-        for pat in _PROFILE_KEYWORDS.get(prof, []):
+    plan = phase_dir / "PLAN.md"
+    test_goals = phase_dir / "TEST-GOALS.md"
+
+    if plan.exists():
+        try:
+            plan_text = plan.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            plan_text = ""
+    else:
+        plan_text = ""
+
+    # Docs-only: PLAN references only markdown file paths.
+    if plan_text:
+        file_paths = _re.findall(r"<file-path>([^<]+)</file-path>", plan_text)
+        if file_paths and all(p.strip().endswith(".md") for p in file_paths):
+            return "docs"
+
+    for pat in _PROFILE_KEYWORDS["hotfix"]:
+        if _re.search(pat, text, _re.IGNORECASE | _re.MULTILINE):
+            if not test_goals.exists():
+                infra_cmd_count = len(_re.findall(
+                    r"`[^`]*(curl|ssh|pm2|systemctl|ansible|kubectl|docker|sqlite|psql|clickhouse-client|clickhouse|kafka-topics|kafka|mongosh|redis-cli)[^`]*`",
+                    text,
+                    _re.IGNORECASE,
+                ))
+                if infra_cmd_count >= 3:
+                    return "infra"
+            return "hotfix"
+
+    for pat in _PROFILE_KEYWORDS["bugfix"]:
+        if _re.search(pat, text, _re.IGNORECASE | _re.MULTILINE):
+            return "bugfix"
+
+    # Migration: frontmatter `profile: migration` already returned above.
+    # Remaining heuristics require stronger quorum so casual prose like
+    # "deferred migration later" does not soften feature-only contracts.
+    if _re.search(r"^migration_plan\s*:", text, _re.IGNORECASE | _re.MULTILINE):
+        return "migration"
+    if _re.search(r"\b(migration|migrate|schema change|db migration)\b",
+                  text, _re.IGNORECASE):
+        mig_paths = _re.findall(
+            r"<file-path>[^<]*(migrations|schema|\.sql)[^<]*</file-path>",
+            plan_text,
+            _re.IGNORECASE,
+        )
+        if len(mig_paths) >= 2:
+            return "migration"
+        if _re.search(
+            r"(prisma migrate|sqlx migrate|knex migrate|alembic upgrade|django.*makemigrations)",
+            text,
+            _re.IGNORECASE,
+        ):
+            return "migration"
+
+    if not test_goals.exists():
+        for pat in _PROFILE_KEYWORDS["infra"]:
             if _re.search(pat, text, _re.IGNORECASE | _re.MULTILINE):
-                return prof
+                return "infra"
+        infra_cmd_count = len(_re.findall(
+            r"`[^`]*(curl|ssh|pm2|systemctl|ansible|kubectl|docker|sqlite|psql|clickhouse-client|clickhouse|kafka-topics|kafka|mongosh|redis-cli)[^`]*`",
+            text,
+            _re.IGNORECASE,
+        ))
+        if infra_cmd_count >= 1:
+            return "infra"
+
+    for pat in _PROFILE_KEYWORDS["docs"]:
+        if _re.search(pat, text, _re.IGNORECASE | _re.MULTILINE):
+            return "docs"
     return "feature"
 
 

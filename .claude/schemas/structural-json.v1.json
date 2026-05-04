@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/structural-json.v1.json",
+  "title": "VG design structural JSON (v1)",
+  "description": "Unified node-tree output from design extractors (HTML cheerio AST, PNG OCR box-list, Pencil MCP, Penboard MCP, legacy XML/PB parsers). Compared by drift validators (D-03 wave-scoped, D-12b per-wave, D-12e holistic) against UI-MAP as-built scan from generate-ui-map.mjs. Each node represents a structural element with optional bounding box (for visual sources) and props (for semantic sources).",
+  "type": "object",
+  "required": ["format_version", "source_format", "root"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "const": "1.0"
+    },
+    "source_format": {
+      "enum": [
+        "html",
+        "png-structural",
+        "pencil-mcp",
+        "pencil-xml",
+        "penboard-mcp",
+        "penboard-pb"
+      ]
+    },
+    "extracted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_path": {
+      "type": "string",
+      "description": "Source file path for traceability."
+    },
+    "root": {
+      "$ref": "#/definitions/node"
+    }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": ["tag", "children"],
+      "additionalProperties": true,
+      "properties": {
+        "tag": {
+          "type": "string",
+          "description": "Element/component name. HTML: lowercase tag (div, button). Pencil/Penboard: shape type or component name. PNG OCR: region_type."
+        },
+        "id": {
+          "type": "string",
+          "description": "Optional stable node id (HTML id attr, Pencil/Penboard node id)."
+        },
+        "classes": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "role": {
+          "type": ["string", "null"],
+          "description": "ARIA role or semantic role."
+        },
+        "text": {
+          "type": ["string", "null"],
+          "description": "Static text content. For PNG OCR: extracted text with confidence ≥ cutoff (default 0.6). null if dynamic."
+        },
+        "bbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Bounding box in source coordinate space. Populated for png-structural/pencil-*/penboard-*; absent for html.",
+          "properties": {
+            "x": {"type": "number"},
+            "y": {"type": "number"},
+            "w": {"type": "number"},
+            "h": {"type": "number"}
+          }
+        },
+        "style": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Visual properties (fill, fontSize, padding, etc.) for visual-source nodes."
+        },
+        "props": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Semantic props (data-* attrs for HTML; entity bindings for Penboard)."
+        },
+        "children": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/node"}
+        }
+      }
+    }
+  }
+}

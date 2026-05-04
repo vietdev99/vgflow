@@ -1,0 +1,17 @@
+# Probe {{lens}} on {{element_class}}: {{element_description}}
+
+Run lens at `commands/vg/_shared/lens-prompts/{{lens}}.md`.
+
+## Context
+- View: {{view}}
+- Element: {{element_description}}
+- Selector: {{selector}}
+- Resource: {{resource}}
+- Role: {{role}}
+- Auth: ${{tool_token_env}}
+- Peer auth: $PEER_TOKEN
+- Base URL: {{base_url}}
+- Output path: runs/{{tool}}/recursive-{{lens}}-{{element_slug}}-d{{depth}}.json
+- Budget: {{action_budget}} actions
+
+Use playwright MCP tools. Follow exploration discipline in lens file. Probe-only contract: report facts, no severity/fix proposals.

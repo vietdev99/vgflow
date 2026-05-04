@@ -1,0 +1,158 @@
+# test mobile codegen (STEP 5)
+
+<HARD-GATE>
+You MUST run this sub-step orchestrator-side when `PHASE_PROFILE=mobile-*`.
+You MUST emit `5d_mobile_codegen` step-active + mark-step (see 5d block).
+You MUST consume per-goal slices from `${VG_TMP}/goals/<G-NN>.json` — never
+flat-read TEST-GOALS.md. Skipping this step on a mobile profile = Stop
+hook block (the marker is profile-gated to mobile-* in test.md).
+</HARD-GATE>
+
+This step runs DIRECTLY in the main agent (orchestrator-side). It is NOT
+delegated to a subagent. It is read and executed when `PHASE_PROFILE=mobile-*`
+(see `codegen/overview.md` STEP 5.5).
+
+Profile: `mobile-*`
+
+---
+
+## 5d (mobile): CODEGEN — Maestro YAML Generation
+
+Mobile equivalent of `5d_codegen` (which generates Playwright .spec.ts).
+Reads TEST-GOALS.md + RUNTIME-MAP.json and emits one Maestro YAML per
+goal group. The flow templates minimize scope: launchApp → tap/input →
+assertVisible → takeScreenshot.
+
+Output path: `${GENERATED_TESTS_DIR}/mobile/<phase>/<G-XX>.maestro.yaml`
+
+```bash
+vg-orchestrator step-active 5d_mobile_codegen
+
+OUT_DIR="${GENERATED_TESTS_DIR}/mobile/${PHASE_NUMBER}"
+mkdir -p "$OUT_DIR"
+
+# Discover goals via vg-load --list (NEVER flat-read TEST-GOALS.md for codegen
+# consumption). Per-goal slice via `vg-load --goal G-NN` populates VG_TMP.
+# See review-v2 D1/D2 — per-goal vg-load mandate covers mobile branch too.
+VG_TMP_DIR="${VG_TMP:-${PHASE_DIR}/.vg-tmp}"
+mkdir -p "${VG_TMP_DIR}/goals" 2>/dev/null
+GOAL_INDEX=$(vg-load --phase "${PHASE_NUMBER}" --artifact goals --list 2>/dev/null)
+GOALS=$(echo "$GOAL_INDEX" | ${PYTHON_BIN:-python3} -c \
+  "import json,sys; d=json.load(sys.stdin); print('\n'.join(g.get('id','') for g in d.get('goals',[]) if g.get('id')))" 2>/dev/null | sort -u)
+for GID in $GOALS; do
+  [ -f "${VG_TMP_DIR}/goals/${GID}.json" ] || \
+    vg-load --phase "${PHASE_NUMBER}" --artifact goals --goal "$GID" \
+      > "${VG_TMP_DIR}/goals/${GID}.json" 2>/dev/null || true
+done
+RUNTIME_MAP="${PHASE_DIR}/RUNTIME-MAP.json"
+
+if [ ! -f "$RUNTIME_MAP" ]; then
+  echo "⚠ RUNTIME-MAP.json missing — codegen needs discovery artifacts from /vg:review"
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5d_mobile_codegen" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5d_mobile_codegen.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5d_mobile_codegen 2>/dev/null || true
+  exit 0
+fi
+
+# Bundle id — from app.json or user-provided via MAESTRO_APP_ID
+BUNDLE_ID=$(${PYTHON_BIN:-python3} -c "
+import json,sys,pathlib
+try:
+    d = json.loads(pathlib.Path('app.json').read_text(encoding='utf-8'))
+    e = d.get('expo') or d
+    bid = (e.get('ios') or {}).get('bundleIdentifier') or (e.get('android') or {}).get('package')
+    print(bid or '')
+except Exception:
+    print('')
+")
+BUNDLE_ID="${BUNDLE_ID:-${MAESTRO_APP_ID:-com.example.app}}"
+
+GENERATED=0
+for GID in $GOALS; do
+  # Read goal slice (vg-load --goal output), NOT flat TEST-GOALS.md.
+  # Slice JSON has title + success_criteria + surface fields per-goal.
+  GOAL_SLICE="${VG_TMP_DIR}/goals/${GID}.json"
+  GOAL_TEXT=""
+  if [ -f "$GOAL_SLICE" ]; then
+    GOAL_TEXT=$(${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    d = json.load(open('$GOAL_SLICE', encoding='utf-8'))
+    g = (d.get('goals') or [d])[0] if isinstance(d.get('goals'), list) else d
+    print(g.get('title',''))
+    for c in (g.get('success_criteria') or []):
+        print(f'- {c}')
+except Exception:
+    pass
+" 2>/dev/null)
+  fi
+
+  [ -z "$GOAL_TEXT" ] && { echo "· skip $GID (no slice at ${GOAL_SLICE})"; continue; }
+
+  # Pull goal-sequence steps from RUNTIME-MAP.json — tap/input events
+  # captured during review. Mobile equivalent of web "goal_sequences[].steps[]".
+  STEPS_YAML=$(${PYTHON_BIN:-python3} - <<PY
+import json,pathlib,sys
+try:
+    rm = json.loads(pathlib.Path("${RUNTIME_MAP}").read_text(encoding='utf-8'))
+except Exception:
+    print("# RUNTIME-MAP missing or malformed"); sys.exit(0)
+
+seq = rm.get("goal_sequences", {}).get("${GID}", {})
+start_view = seq.get("start_view", "")
+steps = seq.get("steps", [])
+if not steps:
+    print("# no steps recorded for ${GID} — manual flow author required")
+else:
+    for s in steps[:20]:  # cap at 20 steps per flow
+        kind = s.get("action", "tap")
+        target = s.get("target") or s.get("selector") or ""
+        value = s.get("value", "")
+        if kind in ("tap", "click"):
+            print(f"- tapOn:")
+            print(f"    text: \"{target}\"")
+        elif kind in ("input", "type", "fill"):
+            print(f"- tapOn:")
+            print(f"    text: \"{target}\"")
+            print(f"- inputText: \"{value}\"")
+        elif kind == "assertVisible":
+            print(f"- assertVisible: \"{target}\"")
+        else:
+            print(f"# unhandled action '{kind}' target='{target}'")
+PY
+)
+
+  # Build the flow file
+  cat > "${OUT_DIR}/${GID}.maestro.yaml" <<EOF
+# Auto-generated by /vg:test 5d_mobile_codegen
+# Goal: ${GID}
+# Source: TEST-GOALS.md + RUNTIME-MAP.json goal_sequences.${GID}
+# Regenerate: /vg:test ${PHASE_NUMBER} --skip-deploy
+
+appId: ${BUNDLE_ID}
+---
+- launchApp
+
+${STEPS_YAML}
+
+- takeScreenshot: "${GID}-final"
+EOF
+  GENERATED=$((GENERATED+1))
+  echo "✓ Generated ${OUT_DIR}/${GID}.maestro.yaml"
+done
+
+echo ""
+echo "5d Mobile Codegen: ${GENERATED} flow(s) generated → ${OUT_DIR}/"
+
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5d_mobile_codegen" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5d_mobile_codegen.done"
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5d_mobile_codegen 2>/dev/null || true
+```
+
+---
+
+**Note on template quality:**
+V1 emits a minimal happy-path template. Mutation probes (edit/boundary/
+repeat) from `goal_sequences[].probes[]` are deferred to V2 — web already
+handles these via Playwright test.each(); mobile equivalent requires more
+care with state reset between probes (app restart costs ~5s on
+simulator). For V1 ship, one flow per goal is enough regression coverage.

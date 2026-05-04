@@ -1,0 +1,172 @@
+# VG Workflow Narration Strings
+# Used by: .claude/commands/vg/_shared/narration-i18n.md t() helper
+# Format: <key>: { <locale>: "<template with {placeholders}>" }
+# Locales: vi (default), en (fallback). Add more as needed.
+# Adding a new key: EN required, others optional.
+
+# ─── Gates ─────────────────────────────────────────────────────────
+gate_blocked_intermediate:
+  vi: "⛔ Review cannot exit — {count} intermediate goals (NOT_SCANNED/FAILED). Resolve trước khi exit."
+  en: "⛔ Review cannot exit — {count} intermediate goals (NOT_SCANNED/FAILED). Resolve before exit."
+
+gate_blocked_nottest:
+  vi: "⛔ Test chỉ replay goals có status=READY + goal_sequence.steps[] ≥ 1. {count} intermediate blocked."
+  en: "⛔ Test only replays goals with status=READY + goal_sequence.steps[] ≥ 1. {count} intermediate blocked."
+
+gate_blocked_commits:
+  vi: "⛔ Wave {wave} thiếu commits: {missing}. Use --allow-missing-commits nếu biết lý do."
+  en: "⛔ Wave {wave} missing commits: {missing}. Use --allow-missing-commits if intentional."
+
+gate_blocked_design:
+  vi: "⛔ Design manifest missing. Run /vg:design-extract hoặc --skip-design-check (NOT RECOMMENDED)."
+  en: "⛔ Design manifest missing. Run /vg:design-extract or --skip-design-check (NOT RECOMMENDED)."
+
+gate_blocked_tests:
+  vi: "⛔ Test infrastructure missing. Configure test_cmd hoặc --allow-no-tests."
+  en: "⛔ Test infrastructure missing. Configure test_cmd or --allow-no-tests."
+
+gate_blocked_debt_critical:
+  vi: "⛔ {count} OPEN debt entries at critical severity. Resolve trước khi accept."
+  en: "⛔ {count} OPEN debt entries at critical severity. Resolve before accept."
+
+# ─── Override & Debt ───────────────────────────────────────────────
+override_logged:
+  vi: "⚠ Override debt logged: {id} ({severity}). Review: {path}"
+  en: "⚠ Override debt logged: {id} ({severity}). Review: {path}"
+
+debt_open_warning:
+  vi: "⚠ Debt: {open} OPEN · {escalated} ESCALATED — see {path}"
+  en: "⚠ Debt: {open} OPEN · {escalated} ESCALATED — see {path}"
+
+debt_auto_escalated:
+  vi: "Auto-escalated {count} stale debt entries (> {days} days)"
+  en: "Auto-escalated {count} stale debt entries (> {days} days)"
+
+# ─── Goals ─────────────────────────────────────────────────────────
+goal_start:
+  vi: "🎯 Goal {goal_id}: {name}"
+  en: "🎯 Goal {goal_id}: {name}"
+
+goal_step:
+  vi: "  → {step_num}/{total} {action}"
+  en: "  → {step_num}/{total} {action}"
+
+goal_end_ready:
+  vi: "✅ {goal_id} READY ({steps} steps)"
+  en: "✅ {goal_id} READY ({steps} steps)"
+
+goal_end_blocked:
+  vi: "❌ {goal_id} BLOCKED — {reason}"
+  en: "❌ {goal_id} BLOCKED — {reason}"
+
+goal_end_unreachable:
+  vi: "⬜ {goal_id} UNREACHABLE — {reason}"
+  en: "⬜ {goal_id} UNREACHABLE — {reason}"
+
+goal_end_infra:
+  vi: "🔧 {goal_id} INFRA_PENDING — {deps}"
+  en: "🔧 {goal_id} INFRA_PENDING — {deps}"
+
+# ─── Phases / Views ────────────────────────────────────────────────
+phase_header:
+  vi: "━━━ {phase_name} ━━━"
+  en: "━━━ {phase_name} ━━━"
+
+view_scan_start:
+  vi: "🔍 Scanning view: {view_name}"
+  en: "🔍 Scanning view: {view_name}"
+
+view_scan_done:
+  vi: "   ✓ {view_name} — {findings} findings"
+  en: "   ✓ {view_name} — {findings} findings"
+
+# ─── Fix routing ───────────────────────────────────────────────────
+fix_routed_inline:
+  vi: "🔧 [inline] {severity} — {bug}"
+  en: "🔧 [inline] {severity} — {bug}"
+
+fix_routed_spawn:
+  vi: "🔧 [spawn {model}] {severity} — {bug}"
+  en: "🔧 [spawn {model}] {severity} — {bug}"
+
+fix_routed_escalated:
+  vi: "🚨 [escalated] {severity} — {bug} → REVIEW-FEEDBACK.md"
+  en: "🚨 [escalated] {severity} — {bug} → REVIEW-FEEDBACK.md"
+
+# ─── Telemetry ─────────────────────────────────────────────────────
+telemetry_emit_fail:
+  vi: "(telemetry disabled: {reason})"
+  en: "(telemetry disabled: {reason})"
+
+# ─── Security ──────────────────────────────────────────────────────
+security_register_update:
+  vi: "🔒 SECURITY-REGISTER updated: {added} added, {resolved} resolved, {open} open"
+  en: "🔒 SECURITY-REGISTER updated: {added} added, {resolved} resolved, {open} open"
+
+security_cross_phase_threat:
+  vi: "🚨 Cross-phase threat: {threat_id} spans phases {phases} — correlated severity {severity}"
+  en: "🚨 Cross-phase threat: {threat_id} spans phases {phases} — correlated severity {severity}"
+
+# ─── Visual regression ─────────────────────────────────────────────
+visual_diff_fail:
+  vi: "🖼 Visual regression: {view} diff {pct}% > threshold {threshold}%"
+  en: "🖼 Visual regression: {view} diff {pct}% > threshold {threshold}%"
+
+visual_baseline_missing:
+  vi: "🖼 {view} — no baseline. Run /vg:accept để promote current → baseline."
+  en: "🖼 {view} — no baseline. Run /vg:accept to promote current → baseline."
+
+visual_baseline_promoted:
+  vi: "🖼 Baseline promoted: {count} views saved to {path}"
+  en: "🖼 Baseline promoted: {count} views saved to {path}"
+
+# ─── Graphify ──────────────────────────────────────────────────────
+graphify_skip_fresh:
+  vi: "Graph fresh ({commits} commits since last rebuild). Skipped."
+  en: "Graph fresh ({commits} commits since last rebuild). Skipped."
+
+graphify_incremental:
+  vi: "Incremental rebuild: {changed_files} files changed, {affected_nodes} nodes affected"
+  en: "Incremental rebuild: {changed_files} files changed, {affected_nodes} nodes affected"
+
+# ─── UAT narrative (Phase 15 D-18) ─────────────────────────────────
+# Used by /vg:accept step 4b_build_uat_narrative + UAT-NARRATIVE.md template.
+# verify-uat-strings-no-hardcode.py forward-checks all {{uat_*}} references
+# resolve to keys here. Backward-checks UAT template has no literal text outside
+# {{...}} interpolation. All 9 keys REQUIRED per narration-strings.v1.json schema.
+
+uat_entry_label:
+  vi: "Truy cập"
+  en: "Open"
+
+uat_role_label:
+  vi: "vai trò"
+  en: "role"
+
+uat_account_label:
+  vi: "tài khoản"
+  en: "account"
+
+uat_navigation_label:
+  vi: "Điều hướng"
+  en: "Navigation"
+
+uat_precondition_label:
+  vi: "Tiền điều kiện dữ liệu"
+  en: "Data precondition"
+
+uat_expected_label:
+  vi: "Hành vi mong đợi"
+  en: "Expected behavior"
+
+uat_region_label:
+  vi: "Vùng tập trung"
+  en: "Focus region"
+
+uat_screenshot_compare:
+  vi: "So sánh với screenshot"
+  en: "Compare against screenshot"
+
+uat_prompt_pfs:
+  vi: "Đã thực hiện đúng chưa? [p=pass / f=fail / s=skip]"
+  en: "Was this implemented correctly? [p=pass / f=fail / s=skip]"

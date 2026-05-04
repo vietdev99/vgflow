@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/slug-registry.v1.json",
+  "title": "VG design slug registry (v1)",
+  "description": "Per-project slug ↔ design source path mapping. Emitted by /vg:design-extract Layer 1 inventory + finalized at Layer 4 merge. Consumed by verify-design-ref-required.py (D-02) cross-check + design extractor router (D-01). One entry per design source asset; slug is filesystem-safe canonical name derived from source path.",
+  "type": "object",
+  "required": ["version", "generated_at", "slugs"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": "1",
+      "description": "Schema version. Bump when breaking change to slug entry shape."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of last full registry rebuild."
+    },
+    "scope": {
+      "type": "string",
+      "description": "Inventory scope when registry was built — 'all' or specific phase id (e.g. '7.14.3')."
+    },
+    "slugs": {
+      "type": "object",
+      "description": "Slug → entry map. Slug name MUST match filesystem-safe regex ^[a-z0-9-]+$.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["source_path", "format", "extracted_at"],
+        "additionalProperties": true,
+        "properties": {
+          "source_path": {
+            "type": "string",
+            "description": "Repo-relative or absolute path to original design source file/dir."
+          },
+          "format": {
+            "enum": [
+              "html",
+              "png",
+              "png-structural",
+              "pencil-mcp",
+              "pencil-xml",
+              "penboard-mcp",
+              "penboard-pb",
+              "figma"
+            ],
+            "description": "Detected format. -mcp suffix = MCP-based extractor (Phase 15 D-01); -xml/-pb = legacy file parser; png-structural = .structural.png marker present (OCR applied)."
+          },
+          "extracted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "structural_json": {
+            "type": ["string", "null"],
+            "description": "Path to refs/<slug>.structural.json if extractor produced AST/box-list output."
+          },
+          "screenshots": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Paths to screenshots/<slug>.<state>.png pinned per state."
+          },
+          "interactions_md": {
+            "type": ["string", "null"],
+            "description": "Path to refs/<slug>.interactions.md handler map (HTML/Penboard only)."
+          },
+          "mcp_handler_used": {
+            "type": "boolean",
+            "description": "True if extractor used MCP tools (D-01 Pencil/Penboard arms). False for legacy file parsers + HTML/PNG."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

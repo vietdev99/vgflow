@@ -1,0 +1,18 @@
+# Manual Probe Session — {{tool_label}} CLI ({{phase_name}})
+
+## Setup
+1. Set env: `export {{tool_token_env}}="<your-test-account-token>"`
+2. {{cli_open_instruction}}
+3. For each probe below, paste content of corresponding `lens-*.md` file
+
+## Probes ({{probe_count}} total)
+
+{{probe_list}}
+
+## After all probes complete
+
+Run: `python scripts/verify_manual_run_artifacts.py --phase-dir {{phase_dir}} --tool {{tool}}`
+
+This validates all expected outputs exist and are well-formed JSON.
+
+## Minimum required (for {{mode}} mode): {{min_required}} probes

@@ -1,0 +1,102 @@
+$schema: "http://json-schema.org/draft-07/schema#"
+title: RCRURDInvariant
+description: |
+  Read-after-write invariant for a mutation goal. Single source of truth
+  consumed by review (Task 23) + codegen (Task 24). Authored in TEST-GOALS.md
+  per mutation goal.
+
+type: object
+required: [goal_type, read_after_write_invariant]
+properties:
+  goal_type:
+    type: string
+    enum: [mutation]
+  read_after_write_invariant:
+    type: object
+    required: [write, read, assert]
+    properties:
+      write:
+        type: object
+        required: [method, endpoint]
+        properties:
+          method:    {type: string, enum: [POST, PUT, PATCH, DELETE]}
+          endpoint:  {type: string, pattern: "^/.*"}
+      read:
+        type: object
+        required: [method, endpoint, cache_policy, settle]
+        properties:
+          method:        {type: string, enum: [GET]}
+          endpoint:      {type: string, pattern: "^/.*"}
+          cache_policy:  {type: string, enum: [no_store, cache_ok, bypass_cdn]}
+          settle:
+            type: object
+            required: [mode]
+            properties:
+              mode:         {type: string, enum: [immediate, poll, wait_event]}
+              timeout_ms:   {type: integer, minimum: 100, maximum: 60000}
+              interval_ms:  {type: integer, minimum: 50, maximum: 5000}
+      assert:
+        type: array
+        minItems: 1
+        items: {$ref: "#/definitions/assertion"}
+      precondition:
+        type: array
+        items: {$ref: "#/definitions/assertion"}
+      side_effects:
+        type: array
+        items:
+          allOf:
+            - {$ref: "#/definitions/assertion"}
+            - {type: object, required: [layer], properties: {layer: {type: string}}}
+      ui_assert:
+        description: |
+          R9 ui_render_truth_mismatch (Task 25). UI-layer verification —
+          DOM must reflect API truth after settle. Optional (backend-only
+          goals like cron/worker skip it).
+        type: object
+        required: [settle, ops]
+        properties:
+          settle:
+            type: object
+            required: [timeout_ms]
+            properties:
+              timeout_ms: {type: integer, minimum: 100, maximum: 60000}
+              poll_ms:    {type: integer, minimum: 50, maximum: 5000}
+          ops:
+            type: array
+            minItems: 1
+            items: {$ref: "#/definitions/ui_assert_op"}
+
+definitions:
+  assertion:
+    type: object
+    required: [path, op, value_from]
+    properties:
+      path:        {type: string, pattern: "^\\$"}
+      op:          {type: string, enum: [contains, equals, matches, not_contains]}
+      value_from:  {type: string}
+  ui_assert_op:
+    type: object
+    required: [op]
+    properties:
+      op:
+        type: string
+        enum:
+          - count_matches_response_array
+          - text_contains_all
+          - each_exists_for_array_item
+          - text_equals_response_value
+          - text_matches_response_value
+          - visible_when_response_value
+          - hidden_when_response_value
+          - attribute_equals_response_value
+          - aria_state_matches
+          - input_value_equals_response
+      dom_selector:      {type: string}
+      selector_template: {type: string}
+      key_from:          {type: string, pattern: "^\\$"}
+      response_path:     {type: string, pattern: "^\\$"}
+      attribute:         {type: string}
+      aria_state:        {type: string}
+      regex:             {type: string}
+      expected_value:    {}

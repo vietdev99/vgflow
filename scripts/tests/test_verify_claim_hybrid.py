@@ -133,7 +133,7 @@ def test_marker_drift_first_blocks_with_hint(tmp_path, capsys, monkeypatch):
     mod = _load_hook_module(repo)
 
     stderr_block = (
-        "⛔ VG runtime_contract violations — cannot complete run.\n"
+        "\033[38;5;208mVG runtime_contract violations — cannot complete run.\033[0m\n"
         "\n"
         "Command: /vg:accept 7.14.3\n"
         "\n"

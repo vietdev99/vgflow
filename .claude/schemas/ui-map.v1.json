@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/ui-map.v1.json",
+  "title": "VG UI-MAP planner contract (v1) — 5-field-per-node lock",
+  "description": "Schema for the JSON code block embedded in UI-MAP.md (markdown wrapper, JSON inside ```json fence). Per D-15 every node MUST have 5 required fields: tag, classes, children_count_order, props_bound, text_content_static. Permissive on additional fields (planner may add notes, owner_wave_id for D-12a/b/e, owner_task_id for D-14). Validator: verify-uimap-schema.py walks tree and BLOCKs on any missing required field. Used by /vg:blueprint planner contract + /vg:build executor inject (D-12a) + drift validators (D-03 wave-scoped, D-12b per-wave, D-12e holistic via verify-ui-structure.py + visual-diff.py wrappers).",
+  "type": "object",
+  "required": ["version", "root"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "const": "1"
+    },
+    "phase_id": {
+      "type": "string",
+      "description": "Optional — phase id this UI-MAP belongs to."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "root": {
+      "$ref": "#/definitions/node"
+    }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": [
+        "tag",
+        "classes",
+        "children_count_order",
+        "props_bound",
+        "text_content_static"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Field 1/5 — Component/element name (e.g. 'Button', 'Sidebar', 'div', 'NavItem')."
+        },
+        "classes": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Field 2/5 — Key class names. For Tailwind: per-class entries (utility-bound semantics). For component libraries: BEM-style or component class names."
+        },
+        "children_count_order": {
+          "type": "object",
+          "required": ["count", "order"],
+          "additionalProperties": false,
+          "description": "Field 3/5 — Child structure metadata. count = number of direct children; order = array of child node IDs (or descriptive labels) in render order.",
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "order": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        },
+        "props_bound": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Field 4/5 — Data prop bindings. Map of prop name → source description (e.g. {'campaigns': 'state.campaigns', 'onClick': 'handleEdit'}). Empty {} if no props."
+        },
+        "text_content_static": {
+          "type": ["string", "null"],
+          "description": "Field 5/5 — Static text content. null if dynamic (driven by props/state)."
+        },
+        "id": {
+          "type": "string",
+          "description": "Optional — stable node id for cross-referencing in children_count_order.order."
+        },
+        "owner_wave_id": {
+          "type": "string",
+          "description": "Optional — wave that owns this node. Set by planner for D-12a/b wave-scoped diff. Format: 'wave-N' or descriptive label."
+        },
+        "owner_task_id": {
+          "type": "string",
+          "description": "Optional — task that owns this node. Set by planner for D-14 Haiku subtree extraction."
+        },
+        "children": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/node"}
+        }
+      }
+    }
+  }
+}

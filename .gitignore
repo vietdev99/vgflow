@@ -12,3 +12,4 @@ graphify-out/
 # vgflow-bugfix is the workflow repo, not a phase-managed project — .vg/
 # only ever appears here as test-run telemetry/artifacts.
 .vg/
+.worktrees/
