@@ -17,7 +17,11 @@ This test locks the alignment so future refactors can't silently regress.
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -122,3 +126,151 @@ def test_specs_template_does_not_emit_capitalized_success_criteria():
         "specs template still emits `## Success Criteria` (capitalized C) — "
         "validator regex requires lowercase `## Success criteria`"
     )
+
+
+# ---------------------------------------------------------------------------
+# E2E coverage gap fix (R6 Task 2 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _extract_template_body() -> str:
+    """Extract the SPECS.md template body from authoring.md.
+
+    The template is wrapped in a ```markdown ... ``` code-fence inside the
+    `<step name="write_specs">` block. We grab the first markdown fence in
+    the file (scoped to that step in practice — there is only one such fence
+    in authoring.md as of R6).
+    """
+    text = _template_text()
+    m = re.search(r"```markdown\n(.*?)\n```", text, re.DOTALL)
+    assert m, (
+        "could not locate ```markdown ... ``` template fence in "
+        f"{TEMPLATE_REF} — extraction regex needs update"
+    )
+    return m.group(1)
+
+
+def _substitute_placeholders(template_body: str) -> str:
+    """Render the template fence into a valid SPECS.md.
+
+    Two transformations:
+
+    1. Strip the inline `<LANGUAGE_POLICY>...</LANGUAGE_POLICY>` block. That
+       block is an AI directive embedded inside the template fence (a known
+       template artifact — see authoring.md lines 95-111), not literal output.
+       At render time the AI applies the directive's behavior; the file the
+       AI actually writes does NOT include the block. This test mirrors that.
+
+    2. Substitute brace-wrapped placeholders in frontmatter with schema-valid
+       enum values. Body placeholder hints (e.g. `{1-2 sentence phase
+       objective}`) are left as literal text — validator only checks
+       frontmatter shape + H2 anchors, NOT body content quality.
+    """
+    out = template_body
+
+    # 1. Strip the LANGUAGE_POLICY directive block. Also collapse the blank
+    #    line that immediately follows the opening `---` (template style).
+    out = re.sub(
+        r"<LANGUAGE_POLICY>.*?</LANGUAGE_POLICY>\n",
+        "",
+        out,
+        flags=re.DOTALL,
+    )
+    # Collapse "---\n\n" (opening delimiter + intentional blank) → "---\n"
+    out = re.sub(r"\A---\n\n+", "---\n", out)
+
+    # 2. Substitute brace placeholders.
+    # phase: schema pattern ^[0-9]+(\.[0-9]+)*(-[a-z0-9-]+)?$
+    out = out.replace("{X}", "7.14.3")
+    # profile: pick first enum value
+    out = out.replace(
+        "{feature|infra|hotfix|bugfix|migration|docs}",
+        "feature",
+    )
+    # platform: schema enum value (web-fullstack is canonical).
+    # Template enum string includes mobile-rn / mobile-flutter / mobile-native
+    # / desktop-electron / desktop-tauri / server-setup / server-management
+    # per authoring.md line 114.
+    out = out.replace(
+        "{web-fullstack|web-frontend-only|web-backend-only|mobile-rn|mobile-flutter|mobile-native|desktop-electron|desktop-tauri|cli-tool|library|server-setup|server-management}",
+        "web-fullstack",
+    )
+    # created_at: ISO date YYYY-MM-DD
+    out = out.replace("{YYYY-MM-DD}", "2026-05-04")
+    # source: literal `ai-draft|user-guided` (no braces in template) → first enum.
+    out = out.replace("source: ai-draft|user-guided", "source: ai-draft")
+    return out
+
+
+def test_specs_template_passes_schema_validator_e2e():
+    """E2E: render template → write SPECS.md → run validator subprocess → assert PASS.
+
+    This is the contract-level check the static template tests above lock
+    DOWNSTREAM of. If any of:
+      - schema `required` adds a field
+      - validator regex tightens body anchor pattern
+      - template placeholder enum drifts out of schema enum
+    ...this test catches it where the static tests would pass blindly.
+    """
+    template_body = _extract_template_body()
+    rendered = _substitute_placeholders(template_body)
+
+    # Sanity: any leftover unresolved `{...}` placeholder in frontmatter would
+    # fail schema validation later. Surface that here with a clearer message
+    # than a downstream YAML parse error.
+    fm_match = re.match(r"\A---\n(.*?)\n---", rendered, re.DOTALL)
+    assert fm_match, (
+        "rendered template missing YAML frontmatter delimiters — "
+        f"first 200 chars:\n{rendered[:200]}"
+    )
+    leftover = re.findall(r"\{[^}\n]+\}", fm_match.group(1))
+    assert not leftover, (
+        f"rendered frontmatter still has unresolved placeholders: {leftover}. "
+        f"Update _substitute_placeholders() to cover them."
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        phase_dir = tmp_root / ".vg" / "phases" / "7.14.3-r6-task2-followup"
+        phase_dir.mkdir(parents=True)
+        specs_path = phase_dir / "SPECS.md"
+        specs_path.write_text(rendered, encoding="utf-8")
+
+        # Validator resolves repo root via VG_REPO_ROOT env var (see
+        # _common.find_phase_dir + verify-artifact-schema.py REPO_ROOT).
+        # Schema dir is loaded relative to that root, so we must point it at
+        # the real repo schemas while phase lookup walks tmp/.vg/phases.
+        # The validator hard-codes SCHEMA_DIR = REPO_ROOT/.claude/schemas at
+        # import time, so VG_REPO_ROOT MUST point somewhere that has BOTH
+        # .claude/schemas/ AND .vg/phases/<phase-dir>. We achieve this by
+        # symlinking the real schemas dir into tmp_root.
+        (tmp_root / ".claude").mkdir()
+        os.symlink(
+            REPO_ROOT / ".claude" / "schemas",
+            tmp_root / ".claude" / "schemas",
+            target_is_directory=True,
+        )
+
+        env = {**os.environ, "VG_REPO_ROOT": str(tmp_root)}
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--phase", "7.14.3",
+                "--artifact", "specs",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(tmp_root),
+        )
+
+        assert proc.returncode == 0, (
+            f"verify-artifact-schema.py rejected the rendered template — "
+            f"this means the template+schema+validator drifted apart.\n"
+            f"  exit code: {proc.returncode}\n"
+            f"  stdout: {proc.stdout}\n"
+            f"  stderr: {proc.stderr}\n"
+            f"  rendered SPECS.md frontmatter:\n"
+            f"{fm_match.group(0) if fm_match else '<no frontmatter found>'}"
+        )
