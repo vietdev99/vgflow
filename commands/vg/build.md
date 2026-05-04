@@ -159,6 +159,8 @@ runtime_contract:
     - "--skip-tdd-evidence"
     # R7 Task 3 (G1) — heuristic RCRURD implementation audit (handler grep)
     - "--skip-rcrurd-implementation-audit"
+    # R7 Task 4 (G2) — heuristic workflow implementation audit (state literal grep)
+    - "--skip-workflow-implementation-audit"
     - "--skip-uimap-injection-audit"
     - "--allow-verify-divergence"
     # Task 18 (pre-test gate) — escape hatch for STEP 6.5 (T1+T2+deploy+smoke)

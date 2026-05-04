@@ -6,10 +6,12 @@ REPO = Path(__file__).resolve().parents[2]
 # R2 build refs: large extracts (waves-overview, post-execution-overview, close) need higher ceilings.
 # Document EACH exception's reason inline.
 REFS = {
-    "preflight.md":                500,
+    # R7 Task 3 + 4 added skip-rcrurd-implementation-audit /
+    # skip-workflow-implementation-audit override flags + help-string lines.
+    "preflight.md":                525,
     "context.md":                  500,
     "validate-blueprint.md":       500,
-    "waves-overview.md":          1350,  # extracted from backup step 8; R2 round-2 + Codex spawn parity keep orchestration local to the heavy spawn site
+    "waves-overview.md":          1600,  # extracted from backup step 8; R2 round-2 + Codex spawn parity keep orchestration local to the heavy spawn site. R7 Tasks 3+4 added 8d.5c (RCRURD impl) + 8d.5d (workflow impl) gates.
     "waves-delegation.md":         500,
     # post-execution split into 3 sub-refs (Anthropic Skill body < 200 lines).
     # Slim overview holds HARD-GATE + Step ordering + section map + final marker.

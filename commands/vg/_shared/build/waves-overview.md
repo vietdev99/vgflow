@@ -1076,6 +1076,71 @@ if [ -x "$RCRURD_VAL" ]; then
 fi
 ```
 
+### 8d.5d — Workflow implementation audit (R7 Task 4 — G2)
+
+Heuristic post-spawn check that handler implementations actually
+transition to the state declared by WORKFLOW-SPECS state_machine.
+Pairs with R7 Task 5 (G9 — review replay of workflow runtime probe).
+
+Codex audit failure mode (G2): Blueprint generates
+WORKFLOW-SPECS/<WF-NN>.md (multi-actor flows: actor A → state X →
+actor B → state Y). Build inject context to executor via
+capsule.workflow_id + workflow_step BUT does NOT verify implementation
+actually transitions state. Build typecheck/tests pass while the task
+implements `approved` instead of `pending_admin_review`. Review may
+catch via runtime probe — but late.
+
+The validator scans each task capsule with non-null `workflow_id` AND
+`workflow_step`, parses WORKFLOW-SPECS/<wf>.md state_machine to
+resolve the expected `state_after` literal for that step, and
+grep-audits the modified files in BUILD-LOG/task-NN.md:
+
+  - PASS: state literal found in handler / route / state / store /
+    reducer / service file (modified).
+  - WARN: state literal found ONLY in *.spec.ts / *.test.ts files —
+    test asserts the state but production code never writes it.
+  - WARN: malformed WORKFLOW-SPECS yaml (graceful degradation).
+  - BLOCK: workflow_id declared but expected state literal NOT found
+    in ANY modified file. Strong signal of spec/impl divergence.
+
+Static analysis cannot prove state-machine correctness — this gate is
+heuristic. WARN does NOT stop the wave; only BLOCK rc=1 halts.
+
+```bash
+WFIMPL_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-workflow-implementation.py"
+if [ -x "$WFIMPL_VAL" ]; then
+  ${PYTHON_BIN} "$WFIMPL_VAL" --phase "${PHASE_NUMBER}" --wave-id "${N}" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/workflow-implementation-w${N}.json" 2>&1 || true
+  WFIMPLV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/workflow-implementation-w${N}.json" 2>/dev/null)
+  case "$WFIMPLV" in
+    PASS|WARN) echo "✓ R7 Task 4 workflow implementation audit: $WFIMPLV" ;;
+    BLOCK)
+      echo "⛔ R7 Task 4 workflow implementation audit: BLOCK — handler does not implement WORKFLOW-SPECS state transition (e.g. capsule says step expects pending_admin_review but no modified file contains that literal)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-workflow-implementation-audit ]]; then exit 1; fi
+      OVERRIDE_REASON=""
+      if [[ "${ARGUMENTS:-}" =~ --override-reason=([^[:space:]]+) ]]; then
+        OVERRIDE_REASON="${BASH_REMATCH[1]}"
+      fi
+      if [ -z "$OVERRIDE_REASON" ]; then
+        echo "⛔ --skip-workflow-implementation-audit requires --override-reason=<ticket-or-URL-or-SHA>." >&2
+        echo "   Re-run: /vg:build ${PHASE_NUMBER} --skip-workflow-implementation-audit --override-reason=\"<issue-id>: R7 Task 4 wave-${N} BLOCK accepted\"" >&2
+        exit 1
+      fi
+      if ! "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--skip-workflow-implementation-audit \
+        --reason="build.workflow-implementation wave-${N} ${OVERRIDE_REASON} — R7 Task 4 BLOCK accepted: workflow state literal divergence tolerated ts=$(date -u +%FT%TZ); see ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/workflow-implementation-w${N}.json"; then
+        echo "⛔ vg-orchestrator override emit FAILED for --skip-workflow-implementation-audit — refusing silent skip." >&2
+        exit 1
+      fi
+      type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
+        "--skip-workflow-implementation-audit" "$PHASE_NUMBER" "build.workflow-implementation.wave-${N}" "$OVERRIDE_REASON" "build-workflow-implementation-audit-skipped"
+      ;;
+    *) echo "ℹ R7 Task 4 workflow implementation audit: $WFIMPLV" ;;
+  esac
+fi
+```
+
 ### 8d.6 — Post-wave gate matrix (typecheck/build/test/contract/goals/utility)
 
 Run gates 1-5 in order, BLOCK on first failure. Adaptive typecheck
