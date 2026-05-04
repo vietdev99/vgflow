@@ -37,7 +37,7 @@ blocking_gate_prompt_emit() {
     cat <<EOF
 {"gate_id": "${gate_id}", "severity": "${severity}", "non_interactive_auto_abort": true, "options": []}
 EOF
-    return 0
+    return 3
   fi
 
   # Read evidence + fix_hint snippets (truncated for prompt budget)
@@ -112,6 +112,10 @@ blocking_gate_prompt_resolve() {
           "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
             "review.gate_autofix_attempted" --actor agent --outcome FAIL \
             --payload "{\"gate\":\"${gate_id}\",\"status\":\"UNRESOLVED\"}" \
+            >/dev/null 2>&1 || true
+          "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+            "review.gate_autofix_unresolved" --actor agent --outcome FAIL \
+            --payload "{\"gate\":\"${gate_id}\",\"reason\":\"${VG_AUTOFIX_BLOCKED_BY:-unknown}\",\"attempts\":${VG_AUTOFIX_ATTEMPTS:-0}}" \
             >/dev/null 2>&1 || true
           return 4  # re-prompt needed
           ;;

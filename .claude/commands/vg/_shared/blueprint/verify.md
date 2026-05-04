@@ -90,8 +90,10 @@ if [ -d "$API_ROUTES" ] && [ -n "$CONTRACT_EPS" ]; then
   done <<< "$CONTRACT_EPS"
 fi
 
-ENDPOINT_COUNT=$(echo "$CONTRACT_EPS" | grep -c . || echo 0)
-CONTEXT_COUNT=$(echo "$CONTEXT_EPS" | grep -c . || echo 0)
+ENDPOINT_COUNT=$(echo "$CONTRACT_EPS" | grep -c . || true)
+CONTEXT_COUNT=$(echo "$CONTEXT_EPS" | grep -c . || true)
+ENDPOINT_COUNT="${ENDPOINT_COUNT:-0}"
+CONTEXT_COUNT="${CONTEXT_COUNT:-0}"
 echo "Verify 1 (grep): ${ENDPOINT_COUNT} contract eps, ${CONTEXT_COUNT} context eps, ${MISMATCHES} mismatches"
 
 if [ "$MISMATCHES" -eq 0 ]; then

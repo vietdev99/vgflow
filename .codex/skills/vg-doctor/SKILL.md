@@ -207,6 +207,14 @@ Invoke this skill as `$vg-doctor`. Treat all user text after the skill name as a
 
 
 
+<NARRATION_POLICY>
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate.**
+
+Markdown headers for progress. This command is a thin router — actual work happens in sub-commands.
+
+**Translate English terms (RULE)** — `dispatcher (điều phối)`, `sub-command (lệnh con)`, `legacy flag (cờ cũ)`. Không áp dụng: file path, code ID.
+</NARRATION_POLICY>
+
 <rules>
 1. **Pure routing** — never does health/integrity/gate/recover work directly. Invokes sub-command via Skill tool.
 2. **Positional verb** — first arg parsed as verb: `health | integrity | gate-stats | recover`. Unknown verb → print help.

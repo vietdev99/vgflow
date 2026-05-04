@@ -135,7 +135,8 @@ if [ -f "${PHASE_DIR}/CRUD-SURFACES.md" ] && [[ ! "$ARGUMENTS" =~ --crossai-only
   CRUD_VALIDATOR=".claude/scripts/validators/verify-crud-surface-contract.py"
   if [ -f "$CRUD_VALIDATOR" ]; then
     if ! "${PYTHON_BIN:-python3}" "$CRUD_VALIDATOR" --phase "${PHASE_NUMBER}" --json > /tmp/.crud-strictness.$$ 2>&1; then
-      MISSING_COUNT=$(grep -c crud_surface_missing_field /tmp/.crud-strictness.$$ 2>/dev/null || echo 0)
+      MISSING_COUNT=$(grep -c crud_surface_missing_field /tmp/.crud-strictness.$$ 2>/dev/null || true)
+      MISSING_COUNT="${MISSING_COUNT:-0}"
       echo "⛔ CRUD-SURFACES.md schema strictness check failed (${MISSING_COUNT} missing fields)"
       echo "   First 5 violations:"
       grep crud_surface_missing_field /tmp/.crud-strictness.$$ | head -5
@@ -461,7 +462,8 @@ else
   EXPAND_RC=$?
 
   if [ "$EXPAND_RC" -eq 0 ] && [ -f "${PHASE_DIR}/TEST-GOALS-EXPANDED.md" ]; then
-    EXPANDED_COUNT=$(grep -c "^id: G-CRUD-" "${PHASE_DIR}/TEST-GOALS-EXPANDED.md" 2>/dev/null || echo 0)
+    EXPANDED_COUNT=$(grep -c "^id: G-CRUD-" "${PHASE_DIR}/TEST-GOALS-EXPANDED.md" 2>/dev/null || true)
+    EXPANDED_COUNT="${EXPANDED_COUNT:-0}"
     echo "  ✓ ${EXPANDED_COUNT} expansion goal(s) → TEST-GOALS-EXPANDED.md"
     type -t emit_telemetry_v2 >/dev/null 2>&1 && \
       emit_telemetry_v2 "blueprint_2b5d_expanded" "${PHASE_NUMBER}" "blueprint.2b5d-expand" \

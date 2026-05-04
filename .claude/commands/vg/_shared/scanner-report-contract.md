@@ -529,6 +529,41 @@ Scanner copies `expected` verbatim into `observations[].expected_per_lens`. No p
 
 ---
 
+## Section 9 — Finding ID Namespace (Task 35)
+
+Standardized prefixes for findings emitted to REVIEW-FEEDBACK.md /
+TEST-REPORT.md / UAT.md. Validator at
+`scripts/validators/verify-finding-id-namespace.py`.
+
+| Prefix | Category | Source |
+|---|---|---|
+| `EP-` | Endpoint | API contract probe (Phase 2a.5), call-graph (Task 3 L4a-i) |
+| `DR-` | Drift | Asserted-rule drift, foundation drift, matrix staleness |
+| `RV-` | Rule-violation | Bootstrap-rule violation, scope-matched rule (Task 11) |
+| `GC-` | Goal-comparison | Goal-comparison miss (Phase 4) |
+| `FN-` | Foundation | FOUNDATION-DRIFT entries (distinct from `F-` replay-finding) |
+| `SC-` | Schema | Contract-shape mismatch (Task 4 L4a-ii) |
+| `TM-` | Telemetry | Missing required event |
+
+ID format: `<prefix>-<3-digit-zero-padded>` (e.g. `EP-001`).
+
+Header format in markdown reports (matches existing PV3 convention):
+```
+### EP-001 [MAJOR] GET /api/users — handler missing
+```
+
+Validator regex: `^###\s+(EP|DR|RV|GC|FN|SC|TM)-\d{3}\s+\[(?:CRITICAL|MAJOR|MINOR|INFO)\]\s`
+
+### Promotion criteria
+
+Validator runs warn-tier (severity=warn). Promote to BLOCK when:
+- Zero `review.finding_id_invalid` events for 14 consecutive runs
+- Across ≥2 projects
+
+Operator-triggered (edit `--severity block` flag default in code), not auto-time-based.
+
+---
+
 ## Quick reference card
 
 ```

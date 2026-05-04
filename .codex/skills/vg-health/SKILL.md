@@ -207,6 +207,14 @@ Invoke this skill as `$vg-health`. Treat all user text after the skill name as a
 
 
 
+<NARRATION_POLICY>
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate.**
+
+Use markdown headers in text output (e.g. `## ━━━ Scanning phases ━━━`). Long Bash > 30s → `run_in_background: true`.
+
+**Translate English terms (RULE)** — first-occurrence English term phải có giải thích VN trong ngoặc. Tham khảo `_shared/term-glossary.md`. Ví dụ: `manifest (kê khai)`, `override (bỏ qua)`, `debt (nợ kỹ thuật)`, `drift (lệch hướng)`, `pipeline (đường ống)`, `telemetry (đo đạc)`. Không áp dụng: file path, code ID.
+</NARRATION_POLICY>
+
 <rules>
 1. **Read-only** — never writes, never deletes, no git ops. Pure state inspection.
 2. **Summary vs deep** — no arg = project-wide summary table. `{phase}` arg = deep inspection of that phase.

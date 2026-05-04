@@ -112,7 +112,8 @@ fi
 
 ```bash
 PLAN_COUNT=$(ls "${PHASE_DIR}"/PLAN*.md 2>/dev/null | wc -l | tr -d ' ')
-ENDPOINT_COUNT=$(grep -c '^## ' "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || echo 0)
+ENDPOINT_COUNT=$(grep -c '^## ' "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || true)
+ENDPOINT_COUNT="${ENDPOINT_COUNT:-0}"
 echo ""
 echo "Blueprint complete for Phase ${PHASE_NUMBER}."
 echo "  Plans: ${PLAN_COUNT} created"

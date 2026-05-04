@@ -207,23 +207,6 @@ Invoke this skill as `$vg-review-batch`. Treat all user text after the skill nam
 
 
 
----
-name: vg:review-batch
-description: Multi-phase /vg:review orchestrator — sandbox/staging batch sweep with per-env policy enforcement (v2.40 Phase 1.D-bis)
-argument-hint: "(--phases <list> | --milestone <M> | --since <git-sha>) [--recursion=light|deep|exhaustive] [--probe-mode=auto|manual|hybrid] [--target-env=local|sandbox|staging|prod] [--non-interactive]"
-allowed-tools:
-  - Read
-  - Write
-  - Bash
-  - Glob
-  - Grep
-runtime_contract:
-  must_write:
-    - path: "BATCH-FINDINGS-*.json"
-      severity: "warn"
-      content_min_bytes: 32
----
-
 # /vg:review-batch
 
 Run the v2.40 recursive-lens-probe review across multiple phases sequentially. Wraps `scripts/review_batch.py` with bash arg parsing + user-facing docs.

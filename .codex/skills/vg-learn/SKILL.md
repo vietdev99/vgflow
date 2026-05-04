@@ -207,19 +207,6 @@ Invoke this skill as `$vg-learn`. Treat all user text after the skill name as ar
 
 
 
----
-description: Review, promote, reject, or retract bootstrap candidates — user-gate for AI-proposed learnings
-argument-hint: "[--auto-surface|--review [id]|--review --all|--promote <id> --reason '...'|--reject <id> --reason '...'|--retract <id> --reason '...']"
-mutates_repo: true
-runtime_contract:
-  must_emit_telemetry:
-    - event_type: "learn.started"
-    - event_type: "learn.completed"
-    - event_type: "learn.promoted"  # on successful promote
-    - event_type: "learn.rejected"  # on successful reject
-    - event_type: "learn.promote_attempt_unauthenticated"  # blocked attempt
----
-
 # /vg:learn
 
 User gate for bootstrap overlay changes. Primary entry point: **end-of-step reflection** auto-drafts candidates into `.vg/bootstrap/CANDIDATES.md`. This command reviews them.

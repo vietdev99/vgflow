@@ -42,9 +42,12 @@ then post-spawn validation + marker). The agent prompt itself lives in
 vg-orchestrator step-active 2a_plan
 
 CONTEXT_FILE="${PHASE_DIR}/CONTEXT.md"
-HAS_ENDPOINTS=$(grep -c "^\*\*Endpoints:\*\*" "$CONTEXT_FILE" 2>/dev/null || echo 0)
-HAS_TESTS=$(grep -c "^\*\*Test Scenarios:\*\*" "$CONTEXT_FILE" 2>/dev/null || echo 0)
-DECISION_COUNT=$(grep -cE "^### (P[0-9.]+\.)?D-" "$CONTEXT_FILE" 2>/dev/null || echo 0)
+HAS_ENDPOINTS=$(grep -c "^\*\*Endpoints:\*\*" "$CONTEXT_FILE" 2>/dev/null || true)
+HAS_TESTS=$(grep -c "^\*\*Test Scenarios:\*\*" "$CONTEXT_FILE" 2>/dev/null || true)
+DECISION_COUNT=$(grep -cE "^### (P[0-9.]+\.)?D-" "$CONTEXT_FILE" 2>/dev/null || true)
+HAS_ENDPOINTS="${HAS_ENDPOINTS:-0}"
+HAS_TESTS="${HAS_TESTS:-0}"
+DECISION_COUNT="${DECISION_COUNT:-0}"
 
 if [ "$DECISION_COUNT" -eq 0 ]; then
   echo "⛔ CONTEXT.md has 0 decisions. Run /vg:scope ${PHASE_NUMBER} first."
@@ -553,7 +556,9 @@ echo ""
 echo "Cross-System Check summary:"
 echo "  Route conflicts: ${ROUTE_CONFLICTS:-0}"
 echo "  Existing schema files: ${EXISTING_SCHEMAS:-0}"
-echo "  Prior phase overlap: $(echo -e "${PRIOR_OVERLAP:-}" | grep -c . || echo 0)"
+PRIOR_OVERLAP_COUNT=$(echo -e "${PRIOR_OVERLAP:-}" | grep -c . || true)
+PRIOR_OVERLAP_COUNT="${PRIOR_OVERLAP_COUNT:-0}"
+echo "  Prior phase overlap: ${PRIOR_OVERLAP_COUNT}"
 echo "  Warnings injected into PLAN.md as <!-- cross-system-warning: ... -->"
 echo ""
 echo "No BLOCK — warnings only. Planner should address each in task descriptions."

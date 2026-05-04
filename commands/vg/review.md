@@ -256,6 +256,10 @@ runtime_contract:
     - event_type: "review.aborted_non_interactive_block"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # Task 35 — finding-ID namespace validator (Bug C)
+    - event_type: "review.finding_id_invalid"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--override-reason"
     - "--skip-scan"

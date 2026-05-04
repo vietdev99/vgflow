@@ -207,6 +207,14 @@ Invoke this skill as `$vg-integrity`. Treat all user text after the skill name a
 
 
 
+<NARRATION_POLICY>
+**⛔ DO NOT USE TodoWrite / TaskCreate / TaskUpdate.**
+
+Markdown headers for progress. Long Bash > 30s → `run_in_background: true`.
+
+**Translate English terms (RULE)** — first-occurrence English term phải có giải thích VN trong ngoặc. Ví dụ: `manifest (kê khai)`, `integrity (toàn vẹn)`, `corruption (hư hỏng)`, `hash mismatch (lệch băm)`, `artifact (tạo phẩm)`, `sweep (quét)`. Không áp dụng: file path, code ID.
+</NARRATION_POLICY>
+
 <rules>
 1. **Read-only** — sweep compares file hashes against `.artifact-manifest.json`. Never repairs. Recovery belongs in `/vg:recover`.
 2. **Delegates to `artifact_manifest_validate`** — no reimplementation.

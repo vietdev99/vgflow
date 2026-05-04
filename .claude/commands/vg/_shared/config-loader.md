@@ -631,14 +631,14 @@ vg_config_get() {
   [ ! -f "$config" ] && { echo "$default"; return; }
   local top="${path%%.*}" field="${path#*.}"
   if [ "$top" = "$field" ]; then
-    local val=$(awk -v k="^${top}:" '$0 ~ k { sub(/^[^:]+:[[:space:]]*/,""); gsub(/["]/,""); print; exit }' "$config" 2>/dev/null)
+    local val=$(awk -v k="^${top}:" '$0 ~ k { sub(/^[^:]+:[[:space:]]*/,""); sub(/[[:space:]]+#.*$/,""); gsub(/["'\''\r]/,""); gsub(/^[[:space:]]+|[[:space:]]+$/,""); print; exit }' "$config" 2>/dev/null)
     echo "${val:-$default}"; return
   fi
   local val=$(awk -v t="^${top}:" -v f="^[[:space:]]+${field}:" '
     $0 ~ t {in_block=1; next}
     in_block && /^[a-z_]/ {in_block=0}
     in_block && $0 ~ f {
-      sub(/^[^:]+:[[:space:]]*/,""); gsub(/["\r]/,""); print; exit
+      sub(/^[^:]+:[[:space:]]*/,""); sub(/[[:space:]]+#.*$/,""); gsub(/["'\''\r]/,""); gsub(/^[[:space:]]+|[[:space:]]+$/,""); print; exit
     }
   ' "$config" 2>/dev/null)
   echo "${val:-$default}"
@@ -657,7 +657,7 @@ vg_config_get_array() {
     in_top && /^[a-z_]/ {in_top=0}
     in_top && $0 ~ f {in_field=1; next}
     in_field && /^[[:space:]]+-[[:space:]]/ {
-      sub(/^[[:space:]]+-[[:space:]]*/,""); gsub(/["\r]/,""); print
+      sub(/^[[:space:]]+-[[:space:]]*/,""); sub(/[[:space:]]+#.*$/,""); gsub(/["'\''\r]/,""); gsub(/^[[:space:]]+|[[:space:]]+$/,""); print
       next
     }
     in_field && !/^[[:space:]]+-/ {in_field=0}

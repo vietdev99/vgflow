@@ -51,12 +51,16 @@ else
 
   if [ "$AI_SCOPE_DETECT_ENABLED" = "true" ] && { [ ! -f "$UI_SCOPE_JSON" ] || [[ "$ARGUMENTS" =~ --redetect-ui-scope ]]; }; then
     echo "▸ Detecting UI scope via Haiku semantic analysis..."
-    DETECT_FLAGS=()
-    [[ "$ARGUMENTS" =~ --redetect-ui-scope ]] && DETECT_FLAGS+=( --force )
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/preflight/detect-ui-scope.py" \
-      --phase-dir "${PHASE_DIR}" \
-      --output ".ui-scope.json" \
-      "${DETECT_FLAGS[@]}" >/dev/null 2>&1
+    if [[ "$ARGUMENTS" =~ --redetect-ui-scope ]]; then
+      "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/preflight/detect-ui-scope.py" \
+        --phase-dir "${PHASE_DIR}" \
+        --output ".ui-scope.json" \
+        --force >/dev/null 2>&1
+    else
+      "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/preflight/detect-ui-scope.py" \
+        --phase-dir "${PHASE_DIR}" \
+        --output ".ui-scope.json" >/dev/null 2>&1
+    fi
     UI_SCOPE_RC=$?
 
     case "$UI_SCOPE_RC" in
@@ -86,15 +90,22 @@ else
   fi
 
   BLUEPRINT_DESIGN_PREFLIGHT_JSON="${PHASE_DIR}/.tmp/blueprint-design-preflight.json"
-  PREFLIGHT_EXTRA=()
-  [[ "$ARGUMENTS" =~ --allow-shared-mockup-reuse ]] && PREFLIGHT_EXTRA+=( --allow-shared-mockup-reuse )
-  "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/blueprint-design-preflight.py" \
-    --phase-dir "${PHASE_DIR}" \
-    --repo-root "${REPO_ROOT}" \
-    --config "${REPO_ROOT}/.claude/vg.config.md" \
-    --apply \
-    --output "${BLUEPRINT_DESIGN_PREFLIGHT_JSON}" \
-    "${PREFLIGHT_EXTRA[@]}" >/dev/null
+  if [[ "$ARGUMENTS" =~ --allow-shared-mockup-reuse ]]; then
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/blueprint-design-preflight.py" \
+      --phase-dir "${PHASE_DIR}" \
+      --repo-root "${REPO_ROOT}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      --apply \
+      --output "${BLUEPRINT_DESIGN_PREFLIGHT_JSON}" \
+      --allow-shared-mockup-reuse >/dev/null
+  else
+    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/blueprint-design-preflight.py" \
+      --phase-dir "${PHASE_DIR}" \
+      --repo-root "${REPO_ROOT}" \
+      --config "${REPO_ROOT}/.claude/vg.config.md" \
+      --apply \
+      --output "${BLUEPRINT_DESIGN_PREFLIGHT_JSON}" >/dev/null
+  fi
 
   if [ -z "${HAS_UI}" ]; then
     HAS_UI=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('has_ui') else '0')" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
@@ -118,10 +129,17 @@ else
       fi
       echo "▸ No design mockups found — auto-running /vg:design-scaffold --tool=pencil-mcp"
       SlashCommand: /vg:design-scaffold --tool=pencil-mcp
-      "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/blueprint-design-preflight.py" \
-        --phase-dir "${PHASE_DIR}" --repo-root "${REPO_ROOT}" \
-        --config "${REPO_ROOT}/.claude/vg.config.md" --apply \
-        --output "${BLUEPRINT_DESIGN_PREFLIGHT_JSON}" "${PREFLIGHT_EXTRA[@]}" >/dev/null
+      if [[ "$ARGUMENTS" =~ --allow-shared-mockup-reuse ]]; then
+        "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/blueprint-design-preflight.py" \
+          --phase-dir "${PHASE_DIR}" --repo-root "${REPO_ROOT}" \
+          --config "${REPO_ROOT}/.claude/vg.config.md" --apply \
+          --output "${BLUEPRINT_DESIGN_PREFLIGHT_JSON}" --allow-shared-mockup-reuse >/dev/null
+      else
+        "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/blueprint-design-preflight.py" \
+          --phase-dir "${PHASE_DIR}" --repo-root "${REPO_ROOT}" \
+          --config "${REPO_ROOT}/.claude/vg.config.md" --apply \
+          --output "${BLUEPRINT_DESIGN_PREFLIGHT_JSON}" >/dev/null
+      fi
       NEEDS_SCAFFOLD=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('needs_scaffold') else '0')" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
       NEEDS_EXTRACT=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); print('1' if d.get('needs_extract') else '0')" "$BLUEPRINT_DESIGN_PREFLIGHT_JSON")
       [ "$NEEDS_SCAFFOLD" = "1" ] && { echo "⛔ /vg:design-scaffold did not produce phase design assets."; exit 1; }

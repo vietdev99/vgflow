@@ -207,16 +207,6 @@ Invoke this skill as `$vg-lesson`. Treat all user text after the skill name as a
 
 
 
----
-description: Manual lesson capture — rare backup when reflector missed something. Drafts a candidate from user's text for later review.
-argument-hint: "\"<lesson text>\""
-mutates_repo: true
-runtime_contract:
-  must_emit_telemetry:
-    - event_type: "lesson.started"
-    - event_type: "lesson.completed"
----
-
 # /vg:lesson
 
 Capture a learning manually. **Rare backup** — primary flow is end-of-step reflection (`/vg:scope`, `/vg:review`, etc.) which auto-drafts candidates.

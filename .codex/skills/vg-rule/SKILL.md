@@ -207,12 +207,6 @@ Invoke this skill as `$vg-rule`. Treat all user text after the skill name as arg
 
 
 
----
-description: Quản lý rule cards qua mô tả tự nhiên — wrapper cho edit-rule-cards.py
-argument-hint: "<intent> <skill> [step] <description>"
-allowed-tools: Bash, Read
----
-
 # /vg:rule — natural-language rule card management
 
 Wrapper around `edit-rule-cards.py` that lets operator describe rule changes
