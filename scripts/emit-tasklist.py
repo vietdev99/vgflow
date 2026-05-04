@@ -31,6 +31,17 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Bug F (Codex+code-reviewer round-1 finding I3): defensive stdout UTF-8
+# reconfigure. The summary uses 📋 emoji + em-dash; under LC_ALL=C / minimal
+# Docker / Codex sandboxes the script can crash with UnicodeEncodeError
+# before the call site can set PYTHONIOENCODING. One-line guard avoids
+# reliance on every call site exporting PYTHONIOENCODING=utf-8.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 FILTER_STEPS = REPO_ROOT / ".claude" / "scripts" / "filter-steps.py"
 ORCHESTRATOR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
@@ -540,15 +551,31 @@ def _print_tasklist(
     steps: list[str],
     checklists: list[dict],
 ) -> None:
-    # Bug F (2026-05-04 token-audit Priority 3) — compact stdout summary.
-    # Previous output was 95 lines (75 projection items + 9 prose lines + 5
-    # separators) ≈ 280 tokens per emit-tasklist invocation, returned to AI
-    # via Bash tool result. AI receives this once per /vg:<cmd> session start
-    # but never uses it for actual projection — TodoWrite projection reads
-    # tasklist-contract.json from disk (per slim-entry HARD-GATE block).
-    # Drop projection-item enumeration + lifecycle prose; keep summary line.
-    # Marker semantics live in commands/vg/_shared/lib/tasklist-projection-
-    # instruction.md (referenced from every slim entry's Tasklist policy).
+    # Bug F (2026-05-04 token-audit Priority 3) — balanced compact stdout.
+    #
+    # Previous verbose form: 95 lines (5 separators + 6 metadata + 1 projection
+    # header + N projection items + 9 lines of marker/lifecycle prose). AI
+    # never used the prose template (lifecycle/marker semantics are owned by
+    # commands/vg/_shared/lib/tasklist-projection-instruction.md, referenced
+    # from every slim entry's Tasklist policy block) but DOES need group +
+    # step IDs for situational awareness + TodoWrite projection planning.
+    #
+    # First Bug-F attempt (1-line summary only) was too aggressive — AI lost
+    # visibility into groups + step IDs. Sếp dogfood 2026-05-04 flagged this:
+    # "cẩn thận không là cắt sau quá, mất hết khả năng của AI."
+    #
+    # Final form: 1 header line + 1 line per checklist group with step IDs
+    # joined CSV-style. Drops verbose prose template only. Cross-AI reviewed
+    # 2026-05-04 (Codex GO + superpowers code-reviewer GO with minor fixes).
+    #
+    # Measured cost (cl100k_base on actual --no-emit output):
+    #   - vg:specs    102 tokens  (was 458, -78%)
+    #   - vg:build    245 tokens  (was 644, -62%)
+    #   - vg:review   356 tokens  (was 849, -58%)
+    #   - vg:blueprint 358 tokens (was 811, -56%)
+    # Empty groups: _build_checklists() filters items per profile; if a group
+    # ends up with 0 active items it's still listed (count=0, no CSV) so the
+    # operator sees it was profile-skipped, not silently dropped.
     projection_items = _build_hierarchical_projection(checklists)
     mode_label = f" — Mode {mode}" if mode else ""
     print(
@@ -556,6 +583,17 @@ def _print_tasklist(
         f"{len(steps)} step(s), {len(checklists)} group(s), "
         f"{len(projection_items)} projection items"
     )
+    for group in checklists:
+        gid = group.get("id", "?")
+        gtitle = group.get("title", gid)
+        gitems = group.get("items", [])
+        if not gitems:
+            # Profile-filtered empty group (M1 fix): print group skeleton
+            # without trailing colon-space so format stays clean.
+            print(f"  📋 {gtitle} [{gid}] (0)")
+            continue
+        items_csv = ", ".join(gitems)
+        print(f"  📋 {gtitle} [{gid}] ({len(gitems)}): {items_csv}")
 
 
 def main() -> int:

@@ -79,3 +79,38 @@ indent will NOT satisfy the depth check.
   evidence still missing — next step-active blocks again. Telemetry event
   `<command>.tasklist_projection_skipped` (warn-tier) records each bypass
   attempt for `/vg:gate-stats` analysis.
+
+## Tasklist lifecycle contract
+
+Every command's tasklist follows the same lifecycle (canonical here so every
+slim entry's Tasklist policy block can reference this ref instead of repeating
+the prose — moved out of emit-tasklist.py stdout per Bug F 2026-05-04 token
+audit):
+
+- **`replace-on-start`** — the FIRST native projection MUST replace any stale
+  task list from a previous workflow. Never append current items onto a
+  previous run's list. Example: if `/vg:build 4.1` left a tasklist visible
+  and operator now invokes `/vg:review 4.1`, review's first TodoWrite call
+  must REPLACE (not append to) the build tasklist.
+
+- **`close-on-complete`** — before reporting success, mark all checklist
+  items completed. Then either clear the native list (if the runtime exposes
+  a clear API) OR replace it with one completed sentinel item:
+  `<command> phase ${PHASE_NUMBER} complete`. Sentinel ensures the
+  user/operator can confirm the run terminated cleanly and didn't get
+  stuck mid-step.
+
+- **`payload-ordering`** (Bug D2 2026-05-04) — Claude Code TodoWrite UI
+  renders todos in payload-array order, NOT auto-sorted by status. On every
+  TodoWrite call REORDER `todos[]` so the active group header + its
+  `in_progress` sub-step appear FIRST, remaining pending items next,
+  completed items LAST. Hierarchy is preserved (each group header still
+  precedes its own ↳ sub-steps). This keeps the operator's eye on
+  "what's running now" instead of forcing them to scroll through completed
+  groups.
+
+Slim entries reference this ref via `Read _shared/lib/tasklist-projection-
+instruction.md and follow it exactly.` — so any slim entry that uses
+TodoWrite inherits this lifecycle contract automatically. Authoring a new
+slim entry: add the same one-line reference inside the Tasklist policy
+section. No need to repeat the lifecycle prose inline.
