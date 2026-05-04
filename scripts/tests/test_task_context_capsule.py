@@ -11,6 +11,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_EXECUTOR = REPO_ROOT / "scripts" / "pre-executor-check.py"
 VALIDATOR = REPO_ROOT / "scripts" / "validators" / "verify-task-context-capsule.py"
 BUILD_MD = REPO_ROOT / "commands" / "vg" / "build.md"
+# Capsule generation + prompt injection wires moved out of slim entry build.md.
+# `--capsule-out` invocation lives in waves-overview.md (orchestrator side);
+# `<task_context_capsule path=` template + `.task-context-capsules` literal
+# live in waves-delegation.md (subagent prompt template).
+WAVES_OVERVIEW_MD = REPO_ROOT / "commands" / "vg" / "_shared" / "build" / "waves-overview.md"
+WAVES_DELEGATION_MD = REPO_ROOT / "commands" / "vg" / "_shared" / "build" / "waves-delegation.md"
 
 
 def _make_phase(tmp_path: Path) -> Path:
@@ -131,7 +137,8 @@ def test_pre_executor_writes_task_context_capsule(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
     assert payload["task_context_capsule"] == capsule
-    assert capsule["capsule_version"] == "1"
+    # Task 41 bumped capsule_version 1→2; legacy v1 still tolerated by validator.
+    assert capsule["capsule_version"] in {"1", "2"}
     assert capsule["task_num"] == 1
     assert capsule["goals"] == ["G-01"]
     assert capsule["context_refs"] == ["P9.D-01"]
@@ -216,9 +223,18 @@ def test_capsule_validator_passes_when_prompt_contains_capsule(tmp_path: Path) -
 
 
 def test_build_workflow_wires_capsule_generation_and_prompt_injection() -> None:
-    build = BUILD_MD.read_text(encoding="utf-8")
+    """Capsule wire lives in shared waves-overview.md (Task 41 refactor).
 
-    assert "--capsule-out \"$TASK_CAPSULE_PATH\"" in build
-    assert "TASK_CONTEXT_CAPSULE=" in build
-    assert "<task_context_capsule path=" in build
-    assert ".task-context-capsules" in build
+    Slim entry build.md still owns frontmatter + STEP markers; the actual
+    `--capsule-out` invocation moved into the shared build sub-step file.
+    """
+    waves_overview = WAVES_OVERVIEW_MD.read_text(encoding="utf-8")
+    waves_delegation = WAVES_DELEGATION_MD.read_text(encoding="utf-8")
+
+    # Orchestrator-side: emit-tasklist invocation with --capsule-out + path constants
+    assert "--capsule-out \"$TASK_CAPSULE_PATH\"" in waves_overview
+    assert "TASK_CONTEXT_CAPSULE=" in waves_overview
+    # Canonical dir is `.task-capsules/` (orchestrator-side, waves-overview)
+    assert ".task-capsules" in waves_overview
+    # Subagent prompt template references the capsule by path
+    assert "<task_context_capsule path=" in waves_delegation

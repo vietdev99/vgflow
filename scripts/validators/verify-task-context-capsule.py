@@ -46,8 +46,8 @@ def _prompt_has_capsule(prompt_text: str, task_num: int) -> bool:
 
 def _check_capsule_shape(capsule: dict, task_num: int) -> list[str]:
     errors: list[str] = []
-    if capsule.get("capsule_version") != "1":
-        errors.append("capsule_version must be '1'")
+    if capsule.get("capsule_version") not in {"1", "2"}:
+        errors.append("capsule_version must be '1' or '2'")
     if capsule.get("task_num") != task_num:
         errors.append(f"task_num mismatch: expected {task_num}, got {capsule.get('task_num')!r}")
     for key in ("source_artifacts", "required_context", "execution_contract"):
