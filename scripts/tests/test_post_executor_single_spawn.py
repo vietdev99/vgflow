@@ -77,3 +77,15 @@ def test_post_executor_other_subagent_unaffected(tmp_path, monkeypatch):
     assert proc.returncode == 0
     counter = tmp_path / f".vg/runs/{run_id}/.post-executor-spawns.json"
     assert not counter.exists(), "Unrelated subagent must not create post-executor counter"
+
+
+def test_post_executor_corrupt_counter_resets_to_zero(tmp_path, monkeypatch):
+    """Corrupt counter must not lock out wave — graceful reset to 0 and allow."""
+    monkeypatch.chdir(tmp_path)
+    run_id = _setup_run(tmp_path)
+    counter = tmp_path / f".vg/runs/{run_id}/.post-executor-spawns.json"
+    counter.write_text("{not valid json")  # corrupt
+    rc, _ = _spawn_post_executor(tmp_path)
+    assert rc == 0, "Corrupt counter must not lock out the wave; reset to 0 and allow"
+    data = json.loads(counter.read_text())
+    assert data["count"] == 1, "Fresh write must replace the corrupt content"

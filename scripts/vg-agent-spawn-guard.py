@@ -480,8 +480,10 @@ def _enforce_post_executor_single_spawn(
             "/vg:review and /vg:test downstream — a workflow violation.\n"
             "Fix: pause and read the existing SUMMARY.md (the post-executor's "
             "result already on disk). If the orchestrator marked the wave "
-            "incomplete, invoke `/vg:build N --resume` instead of re-spawning "
-            "the verifier.\n"
+            "incomplete, re-run `/vg:build N --resume` — the UserPromptSubmit "
+            "hook issues a fresh run_id (UUID) on every /vg: prompt, so this "
+            "counter resets automatically under the new .vg/runs/<run_id>/ "
+            "directory. No manual cleanup needed.\n"
             f"Counter: .vg/runs/{run_id[:12]}/.post-executor-spawns.json",
             hook_session=hook_session,
             gate_id="PreToolUse-Agent-spawn-guard-post-executor-overspawn",

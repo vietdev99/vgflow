@@ -208,6 +208,7 @@ post-execution gates inline. The PreToolUse Agent hook
   - task_id missing from prompt
   - task_id not in current wave's remaining[]
   - capsule .task-capsules/task-${N}.capsule.json missing
+  - subagent_type=vg-build-post-executor spawned 2nd time within same run (R6 Task 3)
 
 You MUST narrate every Agent() spawn via vg-narrate-spawn.sh (R1a UX
 baseline Req 2 — green-tag chip).
@@ -238,6 +239,7 @@ Task 92" thay vì chỉ nhìn 1 dòng `Wave Execution`.
 | "Step này đơn giản, bỏ qua" | Marker thiếu = Stop hook fail = run cannot complete |
 | "Wave có thể chạy inline cho nhanh" | spawn-guard count check (Task 1) blocks shortfall — N tasks MUST = N spawns |
 | "Spawn 3 task xong, dừng vì biết hết rồi" | spawn-guard fires nếu spawned[] != expected[] khi wave-complete |
+| "Spawn post-executor lần 2 cho chắc / kiểm tra lại SUMMARY" | spawn-guard deny — exactly ONE post-executor per run; read existing SUMMARY.md or use `--resume` |
 | "Capsule không cần, AI tự đọc PLAN.md cũng được" | PreToolUse Agent hook blocks spawn without .task-capsules/task-${N}.capsule.json |
 | "Đọc PLAN.md/API-CONTRACTS.md cho gọn" | UX baseline Req 1: dùng vg-load --task NN / --endpoint <slug> — flat read trong AI-context path bị Task 16b enforcer chặn |
 | "Spawn không cần narrate, save 1 bash call" | UX baseline Req 2 — operator courtesy convention; skip = ugly UX nhưng không block |
