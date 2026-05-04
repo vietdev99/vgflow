@@ -434,12 +434,44 @@ echo ""
 echo "━━━ Phase 2d — CRUD round-trip lens dispatch ━━━"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2d_crud_roundtrip_dispatch >/dev/null 2>&1 || true
 
-# Skip if no CRUD-SURFACES or no resources declare this kit
-if [ ! -f "${PHASE_DIR}/CRUD-SURFACES.md" ]; then
-  echo "  (no CRUD-SURFACES.md — skipping Phase 2d)"
-elif ! grep -q '"kit"\s*:\s*"crud-roundtrip"' "${PHASE_DIR}/CRUD-SURFACES.md"; then
-  echo "  (no resources with kit: crud-roundtrip — skipping Phase 2d)"
+# R8-B (codex audit 2026-05-05) — universal CRUD round-trip dispatch.
+# Dispatch when ANY of the 3 paths qualify:
+#   1. CRUD-SURFACES.md exists AND a resource declares kit: crud-roundtrip
+#      (existing kit-declared path, kept for back-compat).
+#   2. Any TEST-GOALS/G-NN.md declares `goal_class: crud-roundtrip`
+#      (universal — fires even without CRUD-SURFACES.md).
+#   3. Any TEST-GOALS/G-NN.md inline yaml-rcrurd fence declares
+#      `lifecycle: rcrurdr` (full-7-phase mutation goal needs round-trip
+#      lifecycle proof at the browser layer, not just code-side).
+# Closes the closed-loop review-layer gap where mutation goals could slip
+# through without lifecycle proof when the phase did not author a
+# CRUD-SURFACES.md or did not tag resources with kit: crud-roundtrip.
+KIT_DECLARED=0
+GOAL_CLASS_DECLARED=0
+LIFECYCLE_DECLARED=0
+if [ -f "${PHASE_DIR}/CRUD-SURFACES.md" ] && \
+   grep -q '"kit"\s*:\s*"crud-roundtrip"' "${PHASE_DIR}/CRUD-SURFACES.md" 2>/dev/null; then
+  KIT_DECLARED=1
+fi
+if [ -d "${PHASE_DIR}/TEST-GOALS" ]; then
+  if grep -lE '^[*_-]*\s*goal_class\s*:\s*crud-roundtrip' "${PHASE_DIR}/TEST-GOALS"/G-*.md >/dev/null 2>&1; then
+    GOAL_CLASS_DECLARED=1
+  fi
+  # Inline yaml-rcrurd fence detection — `lifecycle: rcrurdr` inside the
+  # ```yaml-rcrurd``` block in any TEST-GOALS/G-NN.md.
+  if grep -lE '^\s*lifecycle\s*:\s*rcrurdr\s*$' "${PHASE_DIR}/TEST-GOALS"/G-*.md >/dev/null 2>&1; then
+    LIFECYCLE_DECLARED=1
+  fi
+fi
+
+if [ "$KIT_DECLARED" = "0" ] && [ "$GOAL_CLASS_DECLARED" = "0" ] && [ "$LIFECYCLE_DECLARED" = "0" ]; then
+  if [ ! -f "${PHASE_DIR}/CRUD-SURFACES.md" ]; then
+    echo "  (no CRUD-SURFACES.md, no goal_class: crud-roundtrip, no lifecycle: rcrurdr — skipping Phase 2d)"
+  else
+    echo "  (no kit: crud-roundtrip + no goal_class: crud-roundtrip + no lifecycle: rcrurdr — skipping Phase 2d)"
+  fi
 else
+  echo "  Phase 2d qualifying: kit=${KIT_DECLARED}, goal_class=${GOAL_CLASS_DECLARED}, lifecycle=${LIFECYCLE_DECLARED} (R8-B universal dispatch)"
   # Bootstrap auth tokens if missing
   TOKENS_PATH="${PHASE_DIR}/.review-fixtures/tokens.local.yaml"
   REPO_TOKENS_PATH="${REPO_ROOT}/.review-fixtures/tokens.local.yaml"

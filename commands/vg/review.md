@@ -295,6 +295,7 @@ runtime_contract:
     - "--skip-lens-plan-gate"  # NEW R3 audit FAIL #13 (Codex review)
     - "--allow-build-crossai-deferred"  # R7-A Task 1 (G5) — carry forward build CrossAI deferred findings into review backlog
     - "--allow-missing-build-provenance"  # R7-D Task 6 (G6+G8) — bypass BUILD-LOG/index + build.completed audit for legacy phases
+    - "--skip-crud-coverage-universal"  # R8-B (codex 2026-05-05) — bypass universal CRUD round-trip coverage gate (qualifying mutation goal w/o run artifact)
 ---
 
 
