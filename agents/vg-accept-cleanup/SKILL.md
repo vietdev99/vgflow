@@ -2,7 +2,12 @@
 name: vg-accept-cleanup
 description: "Run post-accept lifecycle cleanup (8 subroutines: scan-cleanup, screenshot cleanup, worktree prune, bootstrap outcome attribution, PIPELINE-STATE update, ROADMAP flip, CROSS-PHASE-DEPS flip, DEPLOY-RUNBOOK lifecycle). Branches on UAT_VERDICT — short-circuits for non-ACCEPTED. ONLY this task."
 tools: [Read, Write, Edit, Bash, Glob, Grep]
-model: opus
+model: sonnet  # 2026-05-04 audit (Tier 2 Fix #109): downgraded from opus.
+               # Cleanup = mechanical file ops (worktree prune, BUILD-LOG
+               # layer concat, PIPELINE-STATE update, screenshot cleanup).
+               # 8 bounded subroutines, not creative architecture work.
+               # opus reasoning depth wasted; sonnet ~5× cheaper for
+               # similar output quality on bounded mechanical work.
 ---
 
 <HARD-GATE>

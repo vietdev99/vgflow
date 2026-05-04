@@ -2,6 +2,12 @@
 name: vg-blueprint-workflows
 description: Generate WORKFLOW-SPECS for multi-actor cross-role workflows (Task 40 Pass 3). Reads BLOCK 5 + UI-MAP + VIEW-COMPONENTS + scope CONTEXT, emits per-workflow WF-NN.md files.
 tools: Read, Bash, Grep
+model: sonnet  # 2026-05-04 audit (Tier 2 Fix #109): explicit sonnet pin.
+               # Multi-actor workflow spec generation = state machine
+               # extraction from existing BLOCK 5 + UI-MAP, template-driven
+               # WF-NN.md emission. Synthesis with state validation, not
+               # creative architecture. Was implicit default; sonnet ~5×
+               # cheaper than opus for this bounded transformation.
 ---
 
 # vg-blueprint-workflows (Pass 3)

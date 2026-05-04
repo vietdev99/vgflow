@@ -2,6 +2,11 @@
 name: vg-blueprint-fe-contracts
 description: Generate BLOCK 5 FE consumer contracts for each API endpoint (Task 38 Pass 2). Reads BE 4 blocks + UI-MAP + VIEW-COMPONENTS, emits 16-field FE contract per endpoint.
 tools: Read, Bash, Grep
+model: sonnet  # 2026-05-04 audit (Tier 2 Fix #109): explicit sonnet pin.
+               # FE consumer contract generation = template-driven (16-field
+               # schema per endpoint), reading BE 4 blocks + UI-MAP. Mechanical
+               # synthesis, not designer-level architecture. Was implicit default;
+               # sonnet ~5× cheaper than opus for this bounded transformation.
 ---
 
 # vg-blueprint-fe-contracts (Pass 2)

@@ -2,7 +2,12 @@
 name: vg-build-post-executor
 description: "Verify L2/L3/L5/L6 gates per task + API truthcheck + write SUMMARY.md + concat BUILD-LOG (3-layer split). Read-only verifier — does NOT modify task implementations. ONLY this verification pass — do not call other agents."
 tools: [Read, Write, Edit, Bash, Glob, Grep]
-model: opus
+model: sonnet  # 2026-05-04 audit (Tier 2 Fix #109): downgraded from opus.
+               # Post-executor = gate verification (L2 fingerprint, L3 SSIM,
+               # L5 design fidelity, L6 truthcheck) + SUMMARY.md generation +
+               # BUILD-LOG concat. JSON parsing + threshold checks + template
+               # rendering, not creative architecture. Bounded read-only
+               # verification work; opus reasoning depth wasted.
 ---
 
 <HARD-GATE>
