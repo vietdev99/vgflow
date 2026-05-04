@@ -4347,6 +4347,47 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
             violations.append({"type": "must_emit_telemetry",
                                "missing": block_missing_tel})
 
+    # Bug D 2026-05-04 — universal tasklist-projection gate.
+    # Defense-in-depth: even if a mainline command's runtime_contract
+    # forgets to declare `{cmd}.native_tasklist_projected` in
+    # must_emit_telemetry, this universal check enforces it. Closes the
+    # systemic gap where AI could skip TodoWrite + tasklist-projected
+    # entirely on commands whose authors hadn't yet wired the per-command
+    # telemetry declaration.
+    #
+    # Mainline = pipeline-gate commands (specs → scope → blueprint →
+    # build → review → test → accept) plus deploy/roam which are
+    # auxiliary but still user-visible flows. Excluded: amend, polish,
+    # debug — short-lived and may legitimately have no projectable
+    # tasklist contract.
+    MAINLINE_CMDS_FOR_TASKLIST = {
+        "vg:specs", "vg:scope", "vg:blueprint", "vg:build",
+        "vg:review", "vg:test", "vg:accept", "vg:deploy", "vg:roam",
+    }
+    if command in MAINLINE_CMDS_FOR_TASKLIST:
+        projection_event = _tasklist_projection_event_name(command)
+        # Avoid double-blocking if must_emit_telemetry already caught it.
+        already_blocked = any(
+            projection_event in (v.get("missing") or [])
+            for v in violations
+            if v.get("type") == "must_emit_telemetry"
+        )
+        if not already_blocked:
+            projection_events = db.query_events(
+                run_id=run_id, event_type=projection_event,
+            )
+            if not projection_events:
+                violations.append({
+                    "type": "tasklist_projection_required",
+                    "missing": [
+                        f"{projection_event} not emitted — call "
+                        f"`vg-orchestrator tasklist-projected --adapter "
+                        f"<claude|codex|fallback>` after TodoWrite. "
+                        f"This is the universal Bug D gate; mainline "
+                        f"commands MUST project the tasklist hierarchy."
+                    ],
+                })
+
     # forbidden_without_override
     forbidden = contract.get("forbidden_without_override") or []
     unresolved_overrides = []
