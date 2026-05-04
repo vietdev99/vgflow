@@ -342,7 +342,7 @@ def cmd_run_start(args) -> int:
     as a WARN, never blocking — prevents user-perceived "lock" when one
     window runs /vg:scope while another runs /vg:build.
     """
-    session_id = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    session_id = state_mod.current_session_id()
 
     active = state_mod.read_active_run(session_id)
     if active:
@@ -1125,10 +1125,7 @@ def cmd_run_status(_args) -> int:
     v2.28.0: surfaces multi-tenant state. Two parallel sessions on the same
     project will both show up, each scoped to its own session_id.
     """
-    session_id = (
-        os.environ.get("CLAUDE_SESSION_ID")
-        or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    )
+    session_id = state_mod.current_session_id()
     current = state_mod.read_active_run(session_id)
     all_active = state_mod.list_active_runs()
     current_run_id = current.get("run_id") if current else None
@@ -1977,7 +1974,7 @@ def cmd_promote_goal_manual(args) -> int:
             command="vg:promote-goal-manual",
             phase=phase,
             args=f"--goal-id {args.goal_id}",
-            session_id=os.environ.get("CLAUDE_SESSION_ID"),
+            session_id=state_mod.current_session_id(),
             git_sha=_git_sha(),
         )
         event_command = "vg:promote-goal-manual"

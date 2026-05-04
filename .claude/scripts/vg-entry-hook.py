@@ -88,12 +88,18 @@ def _orchestrator_path() -> Path | None:
     return None
 
 
-def _write_session_context(run_id: str, command: str, phase: str) -> None:
+def _write_session_context(
+    run_id: str,
+    command: str,
+    phase: str,
+    session_id: str | None = None,
+) -> None:
     """Initialize .vg/.session-context.json for Layer 2 step tracker.
 
     Schema (consumed by vg-step-tracker.py PostToolUse hook):
       {
         "run_id": "...",
+        "session_id": "...",
         "command": "vg:build",
         "phase": "7.14.3",
         "started_at": "ISO-8601",
@@ -105,6 +111,7 @@ def _write_session_context(run_id: str, command: str, phase: str) -> None:
     SESSION_CONTEXT.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "run_id": run_id,
+        "session_id": session_id,
         "command": command,
         "phase": phase,
         "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -321,7 +328,7 @@ def main() -> int:
             # updates current_step when AI runs `touch .step-markers/N.done`.
             # Best-effort: never fail run-start on session-context write error.
             try:
-                _write_session_context(run_id, command, phase_token)
+                _write_session_context(run_id, command, phase_token, session_id=session_id)
             except Exception as e:
                 log(f"session-context init failed (non-fatal): {e}")
 

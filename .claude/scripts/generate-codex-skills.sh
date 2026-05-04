@@ -123,6 +123,12 @@ Codex hook parity is evidence-based: \`.vg/events.db\`, step markers,
 \`must_emit_telemetry\`, and \`run-complete\` output are authoritative. A Codex
 run is not complete just because the model says it is complete.
 
+Codex hook processes cannot mutate the environment of later shell tool calls.
+If a command-body shell lacks \`CLAUDE_SESSION_ID\`, \`vg-orchestrator\` recovers
+the session from \`.vg/.session-context.json\` and the matching
+\`.vg/active-runs/<session>.json\`. Do not create a fresh run when the
+UserPromptSubmit hook already registered the same command/phase.
+
 Before executing command bash blocks from a Codex skill, export
 \`VG_RUNTIME=codex\`. This is an adapter signal, not a source replacement:
 Claude/unknown runtime keeps the canonical \`AskUserQuestion\` + Haiku path,
@@ -155,11 +161,14 @@ validators/orchestrator calls.
 \`step-active <namespace> <step>\`, \`event --type\`, or grouped helper calls
 that mix tasklist projection with the first step marker.
 
-For tasklist projection, Codex must write evidence before any step marker call:
-after \`emit-tasklist.py\`, run \`vg-orchestrator tasklist-projected --adapter codex\`
-as its own tool call. Do not group \`tasklist-projected\` and \`step-active\` in
-one shell command; PreToolUse evaluates the entire command before the evidence
-file exists and will block the grouped command.
+For tasklist projection, Codex must write evidence as soon as
+\`tasklist-contract.json\` exists: after \`emit-tasklist.py\`, run
+\`vg-orchestrator tasklist-projected --adapter codex\` as its own tool call.
+Do not group \`tasklist-projected\` and \`step-active\` in one shell command;
+PreToolUse evaluates the entire command before the evidence file exists and
+will block the grouped command. Some command preflights have bootstrap steps
+before \`emit-tasklist.py\`; only those declared bootstrap steps may run before
+the tasklist contract exists.
 
 For top-level VG commands that include a mandatory \`git commit\` step, ensure
 the parent Codex session can write Git metadata. Some Codex

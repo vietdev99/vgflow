@@ -23,6 +23,34 @@ run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_i
 evidence_path=".vg/runs/${run_id}/.tasklist-projected.evidence.json"
 contract_path=".vg/runs/${run_id}/tasklist-contract.json"
 key_path="${VG_EVIDENCE_KEY_PATH:-.vg/.evidence-key}"
+step_name=""
+if [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+step-active[[:space:]]+([A-Za-z0-9_.:-]+) ]]; then
+  step_name="${BASH_REMATCH[1]}"
+fi
+command_from_run="$(python3 -c '
+import json,sys
+try: print(json.load(open(sys.argv[1]))["command"])
+except Exception: print("")
+' "$run_file" 2>/dev/null || echo "")"
+
+is_bootstrap_before_tasklist() {
+  case "${command_from_run}:${step_name}" in
+    vg:blueprint:0_design_discovery|\
+    vg:blueprint:0_amendment_preflight|\
+    vg:blueprint:1_parse_args|\
+    vg:build:0_gate_integrity_precheck|\
+    vg:build:0_session_lifecycle|\
+    vg:test:00_gate_integrity_precheck|\
+    vg:test:00_session_lifecycle|\
+    vg:accept:0_gate_integrity_precheck|\
+    vg:accept:0_load_config|\
+    vg:review:00_gate_integrity_precheck|\
+    vg:review:00_session_lifecycle)
+      return 0
+      ;;
+  esac
+  return 1
+}
 
 emit_block() {
   local cause="$1"
@@ -40,11 +68,13 @@ emit_block() {
     echo ""
     echo "## Required fix"
     echo ""
-    echo "Before any \`vg-orchestrator step-active\` call, you MUST:"
+    echo "Before any non-bootstrap \`vg-orchestrator step-active\` call, you MUST:"
     echo ""
-    echo "1. Read \`${contract_path}\` (parse \`checklists[]\`)."
-    echo "2. Call the \`TodoWrite\` tool with one entry per \`items[]\` row."
-    echo "3. Run:"
+    echo "1. Ensure \`${contract_path}\` exists. If missing, run the command's"
+    echo "   \`emit-tasklist.py\` preflight block first."
+    echo "2. Read \`${contract_path}\` (parse \`checklists[]\`)."
+    echo "3. Call the \`TodoWrite\` tool with one entry per \`items[]\` row."
+    echo "4. Run:"
     echo "   \`\`\`bash"
     echo "   python3 .claude/scripts/vg-orchestrator tasklist-projected --adapter claude"
     echo "   \`\`\`"
@@ -79,12 +109,6 @@ emit_block() {
   fi
 
   # Per-command telemetry — gate-stats can graph bypass attempts.
-  command_from_run="$(python3 -c '
-import json,sys
-try: print(json.load(open(sys.argv[1]))["command"])
-except: print("")
-' "$run_file" 2>/dev/null || echo "")"
-
   if [ -n "$command_from_run" ]; then
     event_type="${command_from_run/vg:/}.tasklist_projection_skipped"
     # Attempt via orchestrator (production path — has active run + FK).
@@ -124,6 +148,13 @@ if db_path.exists():
 
   exit 2
 }
+
+if [ ! -f "$contract_path" ]; then
+  if is_bootstrap_before_tasklist; then
+    exit 0
+  fi
+  emit_block "tasklist contract missing at ${contract_path}; run emit-tasklist.py and project the native tasklist before step ${step_name:-unknown}"
+fi
 
 if [ ! -f "$evidence_path" ]; then
   emit_block "evidence file missing at ${evidence_path}; TodoWrite has not been called for run ${run_id}"

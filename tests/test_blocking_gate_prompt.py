@@ -38,13 +38,17 @@ def test_leg1_emits_json_with_4_options(tmp_path: Path) -> None:
 
 
 def test_leg1_non_interactive_auto_aborts(tmp_path: Path) -> None:
-    """When --non-interactive in $ARGUMENTS, Leg 1 emits abort directly."""
+    """When --non-interactive in $ARGUMENTS, Leg 1 emits abort directly and exits 3."""
     evidence = tmp_path / "ev.json"
     evidence.write_text('{}', encoding="utf-8")
     result = _bash(f'export ARGUMENTS="--non-interactive"; source "{WRAPPER}"; '
                    f'blocking_gate_prompt_emit "g" "{evidence}" "error"', cwd=tmp_path)
     payload = json.loads(result.stdout)
     assert payload.get("non_interactive_auto_abort") is True
+    assert result.returncode == 3, (
+        f"non-interactive auto-abort must exit 3 (contract: behave as user picked [x]); "
+        f"got {result.returncode}"
+    )
 
 
 def test_leg2_skip_with_override_exits_1(tmp_path: Path) -> None:
@@ -128,3 +132,49 @@ def test_review_md_declares_all_wrapper_telemetry_events() -> None:
     ]:
         assert event in text, \
             f"review.md must_emit_telemetry must declare '{event}' (else Stop hook silent-skips)"
+
+
+def test_leg2_choice_a_unresolved_emits_both_attempted_and_unresolved_events(tmp_path: Path) -> None:
+    """Leg 2 with VG_AUTOFIX_STATUS=UNRESOLVED must emit BOTH gate_autofix_attempted
+    AND gate_autofix_unresolved (contract: declared-but-never-emitted = Stop hook violation),
+    and must exit 4 (re-prompt)."""
+    # The wrapper invokes: "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event ...
+    # Output is redirected to /dev/null, so we stub via a log file written by a Python shim.
+    log_file = tmp_path / "emit.log"
+
+    # Python stub: writes all CLI args to log_file so assertions can inspect them.
+    scripts_dir = tmp_path / ".claude" / "scripts"
+    scripts_dir.mkdir(parents=True)
+    stub_path = scripts_dir / "vg-orchestrator"
+    stub_path.write_text(
+        f'import sys\n'
+        f'with open({str(log_file)!r}, "a") as f:\n'
+        f'    f.write(" ".join(sys.argv[1:]) + "\\n")\n',
+        encoding="utf-8",
+    )
+
+    result = _bash(
+        f'source "{WRAPPER}"; blocking_gate_prompt_resolve "typecheck" --user-choice=a',
+        env_extra={
+            "VG_AUTOFIX_STATUS": "UNRESOLVED",
+            "VG_AUTOFIX_BLOCKED_BY": "linter_config_missing",
+            "VG_AUTOFIX_ATTEMPTS": "2",
+        },
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 4, (
+        f"UNRESOLVED path must exit 4 (re-prompt); got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    emit_calls = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
+    assert "review.gate_autofix_attempted" in emit_calls, (
+        "UNRESOLVED path must emit review.gate_autofix_attempted\n"
+        f"emit log: {emit_calls!r}"
+    )
+    assert "review.gate_autofix_unresolved" in emit_calls, (
+        "UNRESOLVED path must ALSO emit review.gate_autofix_unresolved "
+        "(declared in must_emit_telemetry; Stop hook treats absent emission as violation)\n"
+        f"emit log: {emit_calls!r}"
+    )
