@@ -170,11 +170,15 @@ def test_2layer_todowrite_writes_depth_valid_evidence(tmp_path: Path) -> None:
     )
 
 
-def _seed_evidence(tmp: Path, run_id: str, depth_valid: bool) -> None:
+def _seed_evidence(tmp: Path, run_id: str, depth_valid: bool, adapter: str = "claude") -> None:
     """Manually emit a signed evidence file with chosen depth_valid value.
 
     Uses the canonical signer so HMAC verifies, then PreToolUse hook can
     proceed past signature_valid into the depth check.
+
+    `adapter` defaults to "claude" so existing tests don't need updates;
+    Bug L P6 (sếp dogfood 2026-05-04) tests use adapter="fallback" or
+    "codex" to assert the new adapter-spoofing block.
     """
     contract_path = tmp / ".vg" / "runs" / run_id / "tasklist-contract.json"
     import hashlib
@@ -189,6 +193,7 @@ def _seed_evidence(tmp: Path, run_id: str, depth_valid: bool) -> None:
         "depth_valid": depth_valid,
         "groups_with_subs_count": 5 if depth_valid else 0,
         "flat_groups": [] if depth_valid else ["g1", "g2", "g3", "g4", "g5"],
+        "adapter": adapter,
     }
     out = tmp / ".vg" / "runs" / run_id / ".tasklist-projected.evidence.json"
     subprocess.run(
@@ -230,5 +235,93 @@ def test_pretooluse_passes_on_depth_valid_evidence(tmp_path: Path) -> None:
     # still succeed because we're using a fresh evidence/run.
     assert result.returncode == 0, (
         f"expected PASS exit 0 for depth_valid=true; got {result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+# Bug L P6 (sếp dogfood discovery 2026-05-04): adapter spoofing.
+# AI used `--adapter fallback` to satisfy the evidence-file gate without
+# calling Claude Code's TodoWrite tool. UI never rendered. Hook must
+# require adapter="claude" when CLAUDE_SESSION_ID is set.
+
+def _run_pre_hook_with_claude_session(tmp: Path, command: str):
+    """Inject CLAUDE_SESSION_ID to simulate Claude Code runtime."""
+    payload = json.dumps({"tool_input": {"command": command}})
+    return subprocess.run(
+        ["bash", PRE_HOOK],
+        input=payload,
+        env={
+            **os.environ,
+            "CLAUDE_HOOK_SESSION_ID": "test-session",
+            "CLAUDE_SESSION_ID": "claude-code-runtime-marker",
+            "VG_REPO_ROOT": str(tmp),
+            "VG_EVIDENCE_KEY_PATH": str(tmp / ".vg" / ".evidence-key"),
+        },
+        capture_output=True,
+        text=True,
+        cwd=str(tmp),
+        timeout=15,
+    )
+
+
+def test_pretooluse_blocks_on_adapter_fallback_in_claude_session(tmp_path: Path) -> None:
+    """adapter='fallback' + CLAUDE_SESSION_ID set → BLOCK with adapter-mismatch diagnostic."""
+    run_id = _setup_run(tmp_path)
+    _mk_key(tmp_path)
+    _seed_evidence(tmp_path, run_id, depth_valid=True, adapter="fallback")
+
+    cmd = "python3 .claude/scripts/vg-orchestrator step-active phase1_code_scan"
+    result = _run_pre_hook_with_claude_session(tmp_path, cmd)
+    assert result.returncode == 2, (
+        f"expected BLOCK exit 2 on adapter spoof; got {result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+    assert "adapter" in result.stderr.lower(), (
+        f"diagnostic must mention adapter mismatch; got:\n{result.stderr}"
+    )
+    assert "fallback" in result.stderr or "claude" in result.stderr, (
+        f"diagnostic should name adapter values; got:\n{result.stderr}"
+    )
+
+
+def test_pretooluse_blocks_on_adapter_codex_in_claude_session(tmp_path: Path) -> None:
+    """adapter='codex' wrong runtime in Claude Code session → BLOCK."""
+    run_id = _setup_run(tmp_path)
+    _mk_key(tmp_path)
+    _seed_evidence(tmp_path, run_id, depth_valid=True, adapter="codex")
+
+    cmd = "python3 .claude/scripts/vg-orchestrator step-active phase1_code_scan"
+    result = _run_pre_hook_with_claude_session(tmp_path, cmd)
+    assert result.returncode == 2, (
+        f"expected BLOCK exit 2 on cross-runtime adapter; got {result.returncode}"
+    )
+
+
+def test_pretooluse_passes_on_adapter_claude_in_claude_session(tmp_path: Path) -> None:
+    """adapter='claude' + Claude Code session → PASS."""
+    run_id = _setup_run(tmp_path)
+    _mk_key(tmp_path)
+    _seed_evidence(tmp_path, run_id, depth_valid=True, adapter="claude")
+
+    cmd = "python3 .claude/scripts/vg-orchestrator step-active phase1_code_scan"
+    result = _run_pre_hook_with_claude_session(tmp_path, cmd)
+    assert result.returncode == 0, (
+        f"expected PASS exit 0 for adapter=claude in Claude session; got {result.returncode}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+def test_pretooluse_skips_adapter_check_when_no_claude_session(tmp_path: Path) -> None:
+    """Without CLAUDE_SESSION_ID (e.g., Codex CLI), adapter check skipped."""
+    run_id = _setup_run(tmp_path)
+    _mk_key(tmp_path)
+    _seed_evidence(tmp_path, run_id, depth_valid=True, adapter="codex")
+
+    # _run_pre_hook does NOT set CLAUDE_SESSION_ID
+    cmd = "python3 .claude/scripts/vg-orchestrator step-active phase1_code_scan"
+    result = _run_pre_hook(tmp_path, cmd)
+    # adapter check skipped → passes (depth+run_id+handled all pass)
+    assert result.returncode == 0, (
+        f"adapter check should be skipped when no Claude session; got {result.returncode}\n"
         f"stderr: {result.stderr}"
     )
