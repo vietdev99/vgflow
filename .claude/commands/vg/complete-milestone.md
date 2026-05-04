@@ -1,12 +1,16 @@
 ---
 name: vg:complete-milestone
 description: Close out a milestone — verify all phases accepted, run security audit + summary, archive phase dirs, advance STATE.md to next milestone
-argument-hint: "<milestone-id> [--check] [--allow-open-critical=<reason>] [--allow-open-override-debt=<reason>] [--no-archive]"
+argument-hint: "<milestone-id> [--check] [--allow-open-critical=<reason>] [--allow-open-override-debt=<reason>] [--allow-unsatisfied-foundation-goals --override-reason=<reason>] [--no-archive]"
 allowed-tools:
   - Bash
   - Read
   - Write
 mutates_repo: true
+forbidden_without_override:
+  - flag: "--allow-unsatisfied-foundation-goals"
+    requires: "--override-reason"
+    gate: "milestone-foundation-coverage"
 runtime_contract:
   must_emit_telemetry:
     - event_type: "complete_milestone.started"
@@ -41,6 +45,8 @@ CHECK_ONLY=false
 NO_ARCHIVE=false
 ALLOW_CRITICAL=""
 ALLOW_DEBT=""
+ALLOW_UNSAT_FOUNDATION=false
+OVERRIDE_REASON=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -48,9 +54,17 @@ for arg in "$@"; do
     --no-archive) NO_ARCHIVE=true ;;
     --allow-open-critical=*) ALLOW_CRITICAL="${arg#*=}" ;;
     --allow-open-override-debt=*) ALLOW_DEBT="${arg#*=}" ;;
+    --allow-unsatisfied-foundation-goals) ALLOW_UNSAT_FOUNDATION=true ;;
+    --override-reason=*) OVERRIDE_REASON="${arg#*=}" ;;
     *) echo "⚠ Unknown arg: $arg (ignored)" ;;
   esac
 done
+
+# Pair gate: --allow-unsatisfied-foundation-goals requires --override-reason
+if [ "$ALLOW_UNSAT_FOUNDATION" = "true" ] && [ -z "$OVERRIDE_REASON" ]; then
+  echo "⛔ --allow-unsatisfied-foundation-goals requires --override-reason=\"<text>\"" >&2
+  exit 1
+fi
 ```
 </step>
 
@@ -85,6 +99,45 @@ if [ "$CHECK_ONLY" = "true" ]; then
   echo ""
   echo "✓ --check mode — no mutations performed. Re-run without --check to finalize."
   exit 0
+fi
+```
+</step>
+
+<step name="2_5_foundation_coverage">
+```bash
+echo ""
+echo "━━━ Step 1.5 — Foundation coverage matrix (R8-G) ━━━"
+
+# Cross-phase Q-loop check: every FOUNDATION milestone goal F-XX must be
+# delivered by ≥1 phase that (a) cites it in SPECS.md, (b) has UAT
+# ACCEPTED, and (c) links back via RUNTIME-MAP. Writes
+# .vg/milestones/${MILESTONE}/FOUNDATION-COVERAGE-MATRIX.md as a durable
+# hand-off artifact.
+
+${PYTHON_BIN:-python3} .claude/scripts/validators/verify-milestone-foundation-coverage.py --milestone "$MILESTONE"
+COV_RC=$?
+
+if [ "$COV_RC" -ne 0 ]; then
+  if [ "$ALLOW_UNSAT_FOUNDATION" = "true" ]; then
+    # --override-reason already validated in step 0; record debt
+    ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator override \
+      --flag "--allow-unsatisfied-foundation-goals" \
+      --reason "$OVERRIDE_REASON" 2>/dev/null || true
+    if type -t log_override_debt >/dev/null 2>&1; then
+      log_override_debt "milestone-foundation-coverage-skipped" "$MILESTONE" \
+        "$OVERRIDE_REASON" "${REPO_ROOT:-.}"
+    fi
+    echo "⚠ Override accepted — milestone closed with unsatisfied foundation goal(s)."
+    echo "  Reason: $OVERRIDE_REASON"
+    echo "  Logged to OVERRIDE-DEBT for next-milestone triage."
+  else
+    echo ""
+    echo "⛔ Foundation coverage gate failed."
+    echo "  Inspect .vg/milestones/${MILESTONE}/FOUNDATION-COVERAGE-MATRIX.md"
+    echo "  Either deliver the unsatisfied goal(s), or pass:"
+    echo "    --allow-unsatisfied-foundation-goals --override-reason=\"<text>\""
+    exit 1
+  fi
 fi
 ```
 </step>
@@ -209,6 +262,8 @@ echo "  Then: /vg:roadmap               # add phases for the new milestone"
 - All resolved phases were UAT-accepted before close (gate enforced)
 - Critical OPEN security threats were either resolved or explicitly waived (override-debt logged)
 - Critical OVERRIDE-DEBT entries were either resolved or explicitly deferred (logged)
+- All FOUNDATION milestone goals SATISFIED (or explicitly waived with `--allow-unsatisfied-foundation-goals --override-reason`)
+- `.vg/milestones/{M}/FOUNDATION-COVERAGE-MATRIX.md` written (durable goal × phase × evidence join)
 - `.vg/milestones/{M}/MILESTONE-SUMMARY.md` regenerated
 - `.vg/milestones/{M}/.completed` marker JSON written with vgflow version + timestamp
 - `.vg/STATE.md` advanced (`current_milestone` incremented, `milestones_completed[]` appended)
@@ -219,6 +274,7 @@ echo "  Then: /vg:roadmap               # add phases for the new milestone"
 
 <dependencies>
 - `scripts/complete-milestone.py` — gate + state engine
+- `scripts/validators/verify-milestone-foundation-coverage.py` — R8-G FOUNDATION goal × phase × runtime cross-check
 - `scripts/generate-milestone-summary.py` — summary aggregator
 - `commands/vg/security-audit-milestone.md` — security gate (Step 4 already wires `--milestone-gate`)
 - `git` (for archive via `git mv` to preserve history)
