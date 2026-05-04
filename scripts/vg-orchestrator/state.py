@@ -29,14 +29,65 @@ REPO_ROOT = find_repo_root(__file__)
 ACTIVE_RUNS_DIR = REPO_ROOT / ".vg" / "active-runs"
 LEGACY_CURRENT_RUN = REPO_ROOT / ".vg" / "current-run.json"
 CURRENT_RUN_FILE = LEGACY_CURRENT_RUN  # back-compat alias
+SESSION_CONTEXT = REPO_ROOT / ".vg" / ".session-context.json"
+
+
+def _session_id_from_session_context() -> str | None:
+    """Best-effort session recovery for Codex command-body shells.
+
+    Codex hooks receive `session_id` and write per-session active-run state,
+    but later shell tool calls do not inherit environment mutations from the
+    hook process. When `CLAUDE_SESSION_ID` is absent, recover the session from
+    `.vg/.session-context.json` so `run-start` reconciles with the hook-seeded
+    run instead of creating a synthetic `session-unknown-*` run.
+    """
+    ctx = _read_json(SESSION_CONTEXT)
+    if not isinstance(ctx, dict):
+        return None
+
+    ctx_sid = ctx.get("session_id")
+    if isinstance(ctx_sid, str) and ctx_sid:
+        return ctx_sid
+
+    ctx_run_id = ctx.get("run_id")
+    if not isinstance(ctx_run_id, str) or not ctx_run_id:
+        return None
+
+    if ACTIVE_RUNS_DIR.exists():
+        for f in sorted(ACTIVE_RUNS_DIR.glob("*.json")):
+            run = _read_json(f)
+            if (
+                isinstance(run, dict)
+                and run.get("run_id") == ctx_run_id
+                and isinstance(run.get("session_id"), str)
+                and run.get("session_id")
+            ):
+                return run["session_id"]
+
+    legacy = _read_json(LEGACY_CURRENT_RUN)
+    if (
+        isinstance(legacy, dict)
+        and legacy.get("run_id") == ctx_run_id
+        and isinstance(legacy.get("session_id"), str)
+        and legacy.get("session_id")
+    ):
+        return legacy["session_id"]
+
+    return None
 
 
 def _session_id_from_env() -> str | None:
     return (
         os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        or os.environ.get("CODEX_SESSION_ID")
+        or _session_id_from_session_context()
         or None
     )
+
+
+def current_session_id() -> str | None:
+    return _session_id_from_env()
 
 
 def _safe_session_filename(sid: str) -> str:
