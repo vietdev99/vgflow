@@ -342,7 +342,7 @@ def cmd_run_start(args) -> int:
     as a WARN, never blocking — prevents user-perceived "lock" when one
     window runs /vg:scope while another runs /vg:build.
     """
-    session_id = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    session_id = state_mod.current_session_id()
 
     active = state_mod.read_active_run(session_id)
     if active:
@@ -851,6 +851,18 @@ def _write_tasklist_projection_evidence(
 
     contract_bytes = contract_path.read_bytes()
     projection_items = contract.get("projection_items") or []
+    # Task 44b — additive depth metadata. Codex/fallback adapters project the
+    # full hierarchy via projection_items (groups + ↳ sub-steps), so
+    # depth_valid is True by construction unless a checklist has zero items.
+    checklists_in_contract = contract.get("checklists") or []
+    flat_groups = sorted([
+        c["id"] for c in checklists_in_contract
+        if not (c.get("items") or [])
+    ])
+    groups_with_subs_count = sum(
+        1 for c in checklists_in_contract if (c.get("items") or [])
+    )
+    depth_valid = (len(checklists_in_contract) > 0) and (len(flat_groups) == 0)
     payload = {
         "run_id": run_id,
         "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -860,6 +872,9 @@ def _write_tasklist_projection_evidence(
         "contract_ids": sorted(checklist_ids),
         "match": True,
         "adapter": adapter,
+        "depth_valid": depth_valid,
+        "groups_with_subs_count": groups_with_subs_count,
+        "flat_groups": flat_groups,
     }
     key = _ensure_evidence_key()
     canonical = json.dumps(payload, sort_keys=True).encode()
@@ -1125,10 +1140,7 @@ def cmd_run_status(_args) -> int:
     v2.28.0: surfaces multi-tenant state. Two parallel sessions on the same
     project will both show up, each scoped to its own session_id.
     """
-    session_id = (
-        os.environ.get("CLAUDE_SESSION_ID")
-        or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    )
+    session_id = state_mod.current_session_id()
     current = state_mod.read_active_run(session_id)
     all_active = state_mod.list_active_runs()
     current_run_id = current.get("run_id") if current else None
@@ -1977,7 +1989,7 @@ def cmd_promote_goal_manual(args) -> int:
             command="vg:promote-goal-manual",
             phase=phase,
             args=f"--goal-id {args.goal_id}",
-            session_id=os.environ.get("CLAUDE_SESSION_ID"),
+            session_id=state_mod.current_session_id(),
             git_sha=_git_sha(),
         )
         event_command = "vg:promote-goal-manual"
