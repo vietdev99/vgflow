@@ -59,8 +59,56 @@ Read `config.trust_review`:
   Job limited to: baseline console check + spot-check non-READY goals only.
   Proceed directly to Step D. Skip Steps B and C.
 
+  **PRE-CONDITION (R6 Task 13):** Before entering Step D, run the
+  trust-review replay enforcement gate (Step A.1) per goal. Goals whose
+  fingerprint mismatches their baseline MUST take the full replay path
+  (Step C) regardless of `TRUST_REVIEW=true`.
+
 - **`false` (pre-v1.14 legacy) → FULL REPLAY mode (Steps B → C → D skipped)**
   Execute Steps B, C, then E in full.
+
+## Step A.1 — trust-review replay enforcement (R6 Task 13)
+
+Trust-review v1.14.0+ default lets the verifier spot-check instead of full
+replay (cost optimization). For UNCHANGED goals this is safe — they replayed
+last run and code hasn't moved. But for goals with code/spec changes since
+last replay, static review can't catch regressions in the delta → MUST replay.
+
+For each goal, BEFORE deciding trust-review vs replay:
+
+1. **Read prior baseline** — load goal's `replay_evidence` field from prior
+   run baseline at `${PHASE_DIR}/.replay-baseline/G-NN.json` (written by the
+   last `/vg:test` invocation). If absent → treat as fingerprint mismatch
+   (no baseline = changed goal by definition).
+
+2. **Compute current goal fingerprint** — sha256 over the concatenation of:
+   - Hash of test spec file content (e.g., `apps/web/e2e/<slug>.spec.ts`).
+   - Hash of source files referenced in goal's `<consumes_files>` if present.
+   - Hash of `TEST-GOAL G-NN.md` itself.
+
+3. **Compare to baseline fingerprint:**
+   - **Match (no change since last replay)**: trust-review allowed
+     (default mode). Set `fingerprint_match=true`, `trust_review=true`.
+   - **Mismatch (goal/code/spec changed)**: MUST replay. Skip trust-review
+     for this goal. Set `fingerprint_match=false`, `trust_review=false`,
+     route to Step C replay loop for this goal.
+
+4. **Update baseline after run** — once replay completes (or trust-review
+   for unchanged goals): rewrite
+   `${PHASE_DIR}/.replay-baseline/G-NN.json` with new fingerprint +
+   `commit_sha` + `replay_outcome`.
+
+5. **Override path** — if the operator passed
+   `--allow-trust-review-on-changed-goals --override-reason=<text>`
+   (intended for exceptional cases such as comment-only changes), the gate
+   may permit trust-review on a mismatched fingerprint, but MUST still
+   emit `test.trust_review_mismatch_replay_required` event with the
+   override reason recorded. Default (no flag): replay is required.
+
+Telemetry: every gate trigger emits
+`test.trust_review_mismatch_replay_required` with payload
+`{ goal_id, baseline_fingerprint, current_fingerprint, override: bool,
+override_reason: string|null }`.
 
 ## Step B — surface classification (TRUST_REVIEW=false only)
 
@@ -239,6 +287,11 @@ Return ONLY this JSON envelope — no other text:
       "source": "trust-review | replay | spot-check",
       "evidence_ref": "${VG_TMP}/goal-G-01-result.json",
       "regression": false,
+      "trust_review": true,
+      "replay_evidence": { "...trust-review evidence schema..." },
+      "goal_fingerprint": "sha256:abc123...",
+      "fingerprint_baseline": "sha256:abc123... | null",
+      "fingerprint_match": true,
       "note": "<optional — regression/resolution note>"
     }
   ],
@@ -253,6 +306,15 @@ Return ONLY this JSON envelope — no other text:
 `goals_verified` MUST contain one entry per goal in TEST-GOALS.md.
 `baseline_console_check_pass` MUST always be present (bool).
 `mode` MUST be `"trust_review"` when TRUST_REVIEW=true, else `"legacy_replay"`.
+
+**R6 Task 13 fields (per-goal):**
+- `goal_fingerprint` — sha256 of (test spec + consumed source files + TEST-GOAL.md), computed in Step A.1.
+- `fingerprint_baseline` — value from `${PHASE_DIR}/.replay-baseline/G-NN.json` (or `null` if no prior baseline).
+- `fingerprint_match` — boolean: `true` iff `goal_fingerprint == fingerprint_baseline`.
+- `trust_review` — MUST be `true` only when `fingerprint_match == true`
+  (or operator passed `--allow-trust-review-on-changed-goals` with
+  `--override-reason`). Otherwise the goal MUST be routed to full replay
+  and `trust_review` MUST be `false`.
 
 ## Failure modes
 
