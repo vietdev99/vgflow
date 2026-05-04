@@ -21,9 +21,22 @@ Inline execution will skim — empirical 96.5% skip rate without subagent.
 bash .claude/scripts/vg-narrate-spawn.sh vg-accept-uat-builder spawning "phase ${PHASE_NUMBER} UAT checklist"
 ```
 
+## Bootstrap rule injection (R9-B coverage 2026-05-05)
+
+STEP 1 preflight already exported `${BOOTSTRAP_RULES_BLOCK}`. Re-render
+defensively here in case preflight was bypassed; the builder prompt MUST
+embed the block so the subagent sees promoted rules:
+
+```bash
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "accept")
+vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "accept" "${PHASE_NUMBER}"
+```
+
 ## Spawn
 
-Read `delegation.md` to get the input/output contract. Then call:
+Read `delegation.md` to get the input/output contract. Then call (prompt
+embeds `<bootstrap_rules>${BOOTSTRAP_RULES_BLOCK}</bootstrap_rules>`):
 
 ```
 Agent(subagent_type="vg-accept-uat-builder", prompt=<built from delegation>)

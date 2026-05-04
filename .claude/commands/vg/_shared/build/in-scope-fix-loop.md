@@ -80,6 +80,17 @@ fi
 # Spawn fix-loop for each IN_SCOPE warning (max 3 attempts each)
 if [ "$TOTAL_IN_SCOPE" -gt 0 ]; then
   echo "▸ STEP 5.5: dispatching auto-fix subagent for ${TOTAL_IN_SCOPE} IN_SCOPE warning(s)"
+
+  # Bootstrap rule injection (R9-B coverage 2026-05-05) — render once for all
+  # in-scope-fix subagents in this loop. Without this, the auto-fix worker
+  # repeats past fix mistakes (e.g. ownership violations, regression patterns)
+  # the harness already learned in prior phases. Tag `build` matches existing
+  # build-step rule scope; helper filters by scope DSL further.
+  source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+  BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "build")
+  vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "build" "${PHASE_NUMBER}"
+  export BOOTSTRAP_RULES_BLOCK
+
   for ev in "${EVIDENCE_DIR}/classified/in-scope."*.json; do
     bash scripts/vg-narrate-spawn.sh general-purpose spawning "in-scope-fix $(basename "$ev")"
 
@@ -87,6 +98,9 @@ if [ "$TOTAL_IN_SCOPE" -gt 0 ]; then
     #   reads: $ev (warning evidence), PHASE_DIR/PLAN/, source files referenced
     #   writes: code edits (within phase ownership), commit per fix
     #   returns: {"status":"FIXED|UNRESOLVED|OUT_OF_SCOPE", "iterations":N, "summary":"..."}
+    #
+    # Prompt MUST include `<bootstrap_rules>${BOOTSTRAP_RULES_BLOCK}</bootstrap_rules>`
+    # block — see in-scope-fix-loop-delegation.md "Input envelope" + "Procedure".
 
     bash scripts/vg-narrate-spawn.sh general-purpose returned "$(basename "$ev")"
 

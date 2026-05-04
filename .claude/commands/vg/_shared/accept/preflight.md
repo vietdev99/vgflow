@@ -178,3 +178,33 @@ touch "${PHASE_DIR}/.step-markers/0c_telemetry_suggestions.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0c_telemetry_suggestions 2>/dev/null || true
 ```
 </step>
+
+## Bootstrap rules injection (R9-B coverage extension 2026-05-05)
+
+Render promoted bootstrap rules tagged for the `accept` step BEFORE
+STEP 3 (`uat/checklist-build`) spawns `vg-accept-uat-builder` and before
+STEP 8 (`cleanup/overview`) spawns `vg-accept-cleanup`. Closes R9-B gap
+from codex audit (2026-05-05): accept subagents previously spawned
+without seeing learned rules — repeated past mistakes (e.g. UAT checklist
+section drift, cleanup ordering issues) the harness already learned.
+
+```bash
+# Source helper + render block tagged for `accept` target_step.
+# Helper filters scope DSL → only accept-relevant rules render.
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "accept")
+vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "accept" "${PHASE_NUMBER}"
+export BOOTSTRAP_RULES_BLOCK
+```
+
+Downstream spawn sites (`accept.md` STEP 3 vg-accept-uat-builder, STEP 8
+vg-accept-cleanup) embed the block in their Agent prompts:
+
+```
+<bootstrap_rules>
+${BOOTSTRAP_RULES_BLOCK}
+</bootstrap_rules>
+```
+
+Empty match → helper emits the safe placeholder so the
+`<bootstrap_rules>` tag always appears (anti-silent-skip).

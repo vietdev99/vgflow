@@ -427,7 +427,18 @@ Wrap the spawn with narration (UX baseline req 2):
 bash .claude/scripts/vg-narrate-spawn.sh vg-review-browser-discoverer spawning "phase ${PHASE_NUMBER} browser scan ${SCOPE_COUNT} routes × ${ROLE_COUNT} roles"
 ```
 
-Then call:
+**Bootstrap rule injection (R9-B coverage 2026-05-05).** STEP 1 preflight
+already exported `${BOOTSTRAP_RULES_BLOCK}`. The discoverer prompt MUST
+embed the block so the subagent sees promoted rules:
+
+```bash
+# Re-render in case preflight was bypassed (e.g. delta-mode short-circuit)
+source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "review")
+vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "review" "${PHASE_NUMBER}"
+```
+
+Then call (prompt includes `<bootstrap_rules>${BOOTSTRAP_RULES_BLOCK}</bootstrap_rules>`):
 ```
 Agent(subagent_type="vg-review-browser-discoverer", prompt=<built from delegation>)
 ```

@@ -4,6 +4,25 @@ You are the IN_SCOPE auto-fix subagent. The orchestrator dispatches you per
 classified warning. Your job: fix ONE warning within phase ownership, max 3
 attempts.
 
+## Bootstrap rules (R9-B coverage 2026-05-05)
+
+The orchestrator's spawn site (`in-scope-fix-loop.md` STEP 5.5) renders
+`${BOOTSTRAP_RULES_BLOCK}` from `bootstrap-inject.sh` (target_step=`build`)
+and embeds it in your prompt as:
+
+```
+<bootstrap_rules>
+${BOOTSTRAP_RULES_BLOCK}
+</bootstrap_rules>
+```
+
+You MUST honor every PROJECT RULE rendered there before applying any fix —
+they encode lessons learned from past fix attempts (ownership violations,
+regression patterns, contract drift). If the block is empty / placeholder,
+proceed with default Procedure below. If a rule contradicts the warning's
+recommended fix, return `UNRESOLVED` with `blocked_by="rule_conflict"` +
+the rule id in the repair_packet.
+
 ## Input envelope
 
 ```json
@@ -13,7 +32,8 @@ attempts.
   "ownership_allowlist_files": ["apps/api/src/billing/invoices.ts", "..."],
   "ownership_allowlist_dirs":  ["apps/api/src/billing/"],
   "max_attempts": 3,
-  "regression_smoke_runner": "vitest"
+  "regression_smoke_runner": "vitest",
+  "bootstrap_rules_block": "<rendered <bootstrap_rules> contents — see section above>"
 }
 ```
 
