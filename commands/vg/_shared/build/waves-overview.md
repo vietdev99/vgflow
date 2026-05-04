@@ -415,21 +415,21 @@ CONTEXT_JSON=$(${PYTHON_BIN} .claude/scripts/pre-executor-check.py \
   --config .claude/vg.config.md \
   --capsule-out "$TASK_CAPSULE_PATH")
 
-# Parse output into variables for the spawn payload (passed to subagent).
-# pre-executor-check.py uses vg-load --artifact contracts --endpoint <slug>
-# semantics for CONTRACT_CONTEXT (per audit doc line 783 migration);
-# CONTRACT_CONTEXT is the JSON-shaped per-endpoint slice, NOT a full-file read.
-TASK_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['task_context'])")
-CONTRACT_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['contract_context'])")
-GOALS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['goals_context'])")
-INTERFACE_STANDARDS_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin).get('interface_standards_context','INTERFACE-STANDARDS.md not found'))")
-TASK_CONTEXT_CAPSULE=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.dumps(json.load(sys.stdin)['task_context_capsule'], indent=2, ensure_ascii=False))")
-TASK_SIBLINGS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['sibling_context'])")
-TASK_CALLERS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['downstream_callers'])")
-DESIGN_CONTEXT=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.load(sys.stdin)['design_context'])")
+# Bug E (Codex P1) 2026-05-04 — capsule double-load fix.
+#
+# The canonical capsule lives at "$TASK_CAPSULE_PATH" on disk. The subagent
+# reads it via `@${capsule_path}` reference in waves-delegation.md (line ~137).
+# Previously this block extracted 11 bash variables from CONTEXT_JSON via
+# Python one-liners (TASK_CONTEXT, CONTRACT_CONTEXT, GOALS_CONTEXT,
+# TASK_CONTEXT_CAPSULE, etc.) for "spawn payload substitution" — but
+# delegation.md template never substituted them. Audit confirmed 9/11 vars
+# were dead code: ~3-5K tokens of redundant subprocess output per task,
+# multiplied by task count (Phase 4.2 = 26 tasks → 80-130K tokens wasted).
+#
+# Only DESIGN_IMAGE_PATHS + DESIGN_IMAGE_REQUIRED are needed downstream
+# for the L1 design-pixel gate (Step 8 below).
 DESIGN_IMAGE_PATHS=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print('\n'.join(json.load(sys.stdin).get('design_image_paths', []) or []))")
 DESIGN_IMAGE_REQUIRED=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print('1' if json.load(sys.stdin).get('design_image_required') else '0')")
-BUILD_CONFIG=$(echo "$CONTEXT_JSON" | ${PYTHON_BIN} -c "import sys,json; print(json.dumps(json.load(sys.stdin)['build_config']))")
 ```
 
 ### Step 8 — L1 design-pixel gate (per task with `<design-ref>`)

@@ -227,14 +227,23 @@ def test_build_workflow_wires_capsule_generation_and_prompt_injection() -> None:
 
     Slim entry build.md still owns frontmatter + STEP markers; the actual
     `--capsule-out` invocation moved into the shared build sub-step file.
+
+    Bug E (Codex P1) 2026-05-04: TASK_CONTEXT_CAPSULE bash variable extraction
+    was removed (dead code — never substituted in delegation prompt). The
+    canonical capsule lives at TASK_CAPSULE_PATH on disk; subagent reads it
+    via `@${capsule_path}` in delegation. This test asserts the path-based
+    contract instead of the legacy variable-substitution contract.
     """
     waves_overview = WAVES_OVERVIEW_MD.read_text(encoding="utf-8")
     waves_delegation = WAVES_DELEGATION_MD.read_text(encoding="utf-8")
 
     # Orchestrator-side: emit-tasklist invocation with --capsule-out + path constants
     assert "--capsule-out \"$TASK_CAPSULE_PATH\"" in waves_overview
-    assert "TASK_CONTEXT_CAPSULE=" in waves_overview
+    # Canonical capsule path constant must still be defined
+    assert "TASK_CAPSULE_PATH=" in waves_overview
     # Canonical dir is `.task-capsules/` (orchestrator-side, waves-overview)
     assert ".task-capsules" in waves_overview
-    # Subagent prompt template references the capsule by path
+    # Subagent prompt template references the capsule by path (NOT by variable
+    # substitution — the @${capsule_path} pattern is path-by-reference per
+    # Anthropic Claude Code skill standard)
     assert "<task_context_capsule path=" in waves_delegation
