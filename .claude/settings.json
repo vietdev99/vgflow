@@ -4,11 +4,11 @@
       {
         "hooks": [
           {
-            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-post-tool-use-todowrite.sh'",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-post-tool-use-todowrite.sh\"",
             "type": "command"
           }
         ],
-        "matcher": "TodoWrite"
+        "matcher": "TodoWrite|TaskCreate|TaskUpdate"
       }
     ],
     "PreToolUse": [
@@ -24,7 +24,7 @@
       {
         "hooks": [
           {
-            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-pre-tool-use-bash.sh'",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-pre-tool-use-bash.sh\"",
             "type": "command"
           }
         ],
@@ -33,7 +33,7 @@
       {
         "hooks": [
           {
-            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-pre-tool-use-write.sh'",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-pre-tool-use-write.sh\"",
             "type": "command"
           }
         ],
@@ -42,7 +42,7 @@
       {
         "hooks": [
           {
-            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-pre-tool-use-agent.sh'",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-pre-tool-use-agent.sh\"",
             "type": "command"
           }
         ],
@@ -53,7 +53,7 @@
       {
         "hooks": [
           {
-            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-session-start.sh'",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-session-start.sh\"",
             "type": "command"
           }
         ],
@@ -64,7 +64,7 @@
       {
         "hooks": [
           {
-            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-stop.sh'",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-stop.sh\"",
             "type": "command"
           }
         ],
@@ -75,7 +75,7 @@
       {
         "hooks": [
           {
-            "command": "bash '/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/vg-user-prompt-submit.sh'",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-user-prompt-submit.sh\"",
             "type": "command"
           }
         ],

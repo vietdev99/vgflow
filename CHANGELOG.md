@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.49.1 — `.claude/settings.json` machine-locked path hotfix (PR #104 regression)
+
+Patch release. PR #104 committed `.claude/settings.json` with absolute hook paths baked at install time on one developer's macOS box (`/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/scripts/hooks/...`). Every other machine pulling v2.49.0 saw `Stop hook error: bash: <stale path>: No such file or directory` because the file simply does not exist on their disk. Reported immediately after v2.49.0 ship by an operator on a different host; this patch unblocks them and prevents recurrence.
+
+### Fixed
+
+- **`scripts/hooks/install-hooks.sh` now emits `${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/<name>.sh`** — Claude Code expands `${CLAUDE_PROJECT_DIR}` at hook execution time, so the same `settings.json` works on macOS, Linux, Windows, any developer's project root, and any path with spaces. Default mode is now `placeholder`. Set `VG_HOOKS_PATH_MODE=absolute` for the legacy bake-at-install behavior (escape hatch for environments where `CLAUDE_PROJECT_DIR` cannot be relied on).
+- **`.claude/settings.json` regenerated** with the new placeholder format. Pulling v2.49.1 directly fixes the broken Stop hook for everyone — no manual intervention needed.
+- **TodoWrite|TaskCreate|TaskUpdate matcher** (Issue #105.1, shipped as v2.49.0 fix) now actually appears in the regenerated `settings.json`. The v2.49.0 fix patched `install-hooks.sh` correctly but the committed `settings.json` was never re-emitted, so users still saw the narrow `TodoWrite`-only matcher until they re-ran the installer. v2.49.1 ships the regenerated file.
+- **Quoting** — wrapped expanded path in double-quotes (`bash "${CLAUDE_PROJECT_DIR}/..."`) so paths with spaces survive bash word-splitting after env expansion.
+
+### Internal
+
+- VERSION + VGFLOW-VERSION → 2.49.1 (patch — single-file regen + script behavior change)
+- Files changed: `scripts/hooks/install-hooks.sh`, `.claude/scripts/hooks/install-hooks.sh` (mirror), `.claude/settings.json`
+- Verified locally on Windows: `${CLAUDE_PROJECT_DIR}=D:/Workspace/Messi/Code/vgflow-repo` resolves the hook path correctly; `vg-stop.sh </dev/null` exits 0
+- Codex mirror equivalence unchanged (no `commands/vg/*.md` modifications)
+
+### Migration
+
+Existing installs auto-fix on `git pull origin main` — Claude Code re-reads the updated `.claude/settings.json` on next session start. No `sync.sh` re-run needed unless you also want to refresh the hook scripts themselves.
+
 ## v2.49.0 — RFC v9 followup batch (PR #104) + harness blocker hotfix (Issue #105)
 
 Minor release. Squash-merge of **PR #104** delivering R2 Test Pilot + R4 Scope/Accept + Hook UX overhaul + RFC v9 backlog cleanup, plus four harness fixes from PrintwayV3 dogfood reported as **Issue #105** by @vietnhprintway. Two maintainer-side CI fixes were applied to PR #104 mid-merge to clear the green bar (`state.current_session_id` mirror desync + `deploy.md` 538-line slim-cap regression).
