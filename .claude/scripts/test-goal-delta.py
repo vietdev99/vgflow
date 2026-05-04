@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 DECISION_RE = re.compile(r"\b(?:P\d+(?:\.\d+)*\.)?D-\d+\b")
-GOAL_HEADER_RE = re.compile(r"^##\s+(?:Goal\s+)?G-\d+.*$", re.MULTILINE)
+GOAL_HEADER_RE = re.compile(r"^#{2,3}\s+(?:Goal\s+)?G-\d+.*$", re.MULTILINE)
 
 ESSENTIAL_TERMS = {
     "authz": ("authz", "authorization", "permission", "object auth", "tenant"),
@@ -25,7 +25,14 @@ ESSENTIAL_TERMS = {
     "persistence": ("persistence", "refresh", "re-read", "ghost save"),
     "audit": ("audit log", "audit"),
     "performance": ("p95", "performance", "latency"),
-    "accessibility": ("accessibility", "aria", "keyboard", "focus"),
+    "accessibility": (
+        "accessibility",
+        "aria",
+        "keyboard navigation",
+        "focus trap",
+        "focus state",
+        "focus order",
+    ),
 }
 
 

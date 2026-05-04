@@ -43,6 +43,10 @@ Format example (task-04.md):
 <edits-endpoint>POST /api/sites</edits-endpoint>
 <contract-ref>API-CONTRACTS.md#post-api-sites lines 45-80</contract-ref>
 <context-refs>P7.D-02,P7.D-05</context-refs>
+<implements-decision>P7.D-02</implements-decision>
+<implements-decision>P7.D-05</implements-decision>
+<goals-covered>G-03,G-04</goals-covered>
+Covers goal: G-03, G-04
 
 ## Description
 [2-3 sentences what this task does]
@@ -67,10 +71,29 @@ Slim table linking each task. Build loader reads this FIRST to plan wave order.
 
 Format:
 ```markdown
+---
+phase: "{phase_number}"
+profile: {schema_profile}
+platform: {runtime_profile}
+phase_name: {human readable phase name}
+goal_summary: "{one sentence, max 200 chars}"
+total_waves: {total_waves}
+total_tasks: {total_tasks}
+generated_at: "{YYYY-MM-DD}"
+blueprint_version: "v1"
+---
+
 # Plan Index — Phase {N}
 
 Generated: {YYYY-MM-DD}
 Tasks: {total}  |  Waves: {N}  |  ORG dims covered: {list}
+
+## Scope Guard
+
+State the phase runtime surface. If `platform` is `cli-tool` or `library`,
+explicitly exclude API, frontend, mobile, server, database, deployment,
+package-manager, daemon, and network tasks unless the phase artifacts
+explicitly require them.
 
 ## Tasks
 
@@ -80,15 +103,59 @@ Tasks: {total}  |  Waves: {N}  |  ORG dims covered: {list}
 | 02 | Add categories model | 1 | task-02.md | G-01 | P7.D-02 |
 | 03 | ... | ... | ... | ... | ... |
 
-## Waves
-- Wave 1 (parallel): tasks 01, 02
-- Wave 2 (after 1): tasks 03, 04, 05
-- Wave 3 (after 2): tasks 06
+## Wave 1
+
+- Tasks: 01, 02
+- Dependency rule: can run in parallel if file ownership does not overlap.
+
+## Wave 2
+
+- Tasks: 03, 04, 05
+- Dependency rule: starts after Wave 1 completion.
+
+## Wave 3
+
+- Tasks: 06
+- Dependency rule: starts after Wave 2 completion.
+
+## Verification
+
+- List deterministic commands or checks required after all waves.
+
+## Risks
+
+- List concrete risks and rollback/mitigation notes.
 
 ## Bindings
 <!-- vg-binding: CONTEXT:decisions -->
 <!-- vg-binding: INTERFACE-STANDARDS:error-shape -->
 ```
+
+`schema_profile` MUST be one of `feature`, `infra`, `hotfix`, `bugfix`,
+`migration`, or `docs` because `.claude/schemas/plan.v1.json` validates that
+frontmatter field. If the runtime profile is a surface such as
+`web-fullstack`, `web-frontend-only`, `web-backend-only`, `mobile-*`,
+`cli-tool`, or `library`, set `profile: feature` and put the runtime surface in
+`platform`. Do NOT put `cli-tool` or `library` in `profile`.
+
+`PLAN.md` schema validation is strict:
+- Frontmatter MUST be the first bytes of `PLAN.md`.
+- Frontmatter MUST contain `phase`, `profile`, `goal_summary`, `total_waves`,
+  `total_tasks`, and `generated_at`.
+- Frontmatter MUST NOT contain keys outside `.claude/schemas/plan.v1.json`.
+- Body MUST contain exactly one top-level `## Wave N` H2 for each wave number
+  from 1 through `total_waves`, plus top-level `## Verification` and
+  `## Risks` H2 anchors.
+
+Traceability validation is also strict:
+- Every task MUST include one `<implements-decision>D-ID</implements-decision>`
+  line for each CONTEXT decision it implements.
+- Every task MUST include one `<goals-covered>G-XX,...</goals-covered>` line
+  listing TEST-GOALS covered by that task.
+- Every task MUST include a plain `Covers goal: G-XX, ...` line for legacy
+  scanners.
+- Human-readable `**Goals covered:**` and `**Decisions implemented:**` lines
+  are useful, but they do NOT satisfy machine validators by themselves.
 
 ### Layer 3 — `<phase_dir>/PLAN.md` (flat concat, legacy compat)
 

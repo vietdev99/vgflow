@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DELTA = REPO_ROOT / "scripts" / "test-goal-delta.py"
 VALIDATOR = REPO_ROOT / "scripts" / "validators" / "verify-codex-test-goal-lane.py"
 BLUEPRINT_MD = REPO_ROOT / "commands" / "vg" / "blueprint.md"
+CONTRACTS_OVERVIEW_MD = REPO_ROOT / "commands" / "vg" / "_shared" / "blueprint" / "contracts-overview.md"
 ORCH = REPO_ROOT / "scripts" / "vg-orchestrator" / "__main__.py"
 
 
@@ -88,6 +89,42 @@ def test_delta_passes_after_final_goal_reconciles_terms(tmp_path: Path) -> None:
     assert "Status: PASS" in delta
 
 
+def test_delta_splits_h3_proposal_goals_and_ignores_focus_verb(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    phase = repo / ".vg" / "phases" / "09-cli"
+    phase.mkdir(parents=True)
+    (phase / "CONTEXT.md").write_text(
+        "### P9.D-01 JSON health\n\n"
+        "Health output should be stable.\n\n"
+        "### P9.D-02 Re-run stability\n\n"
+        "Repeated runs should stay local.\n",
+        encoding="utf-8",
+    )
+    (phase / "TEST-GOALS.md").write_text(
+        "## Goal G-01: JSON health (P9.D-01)\n\n"
+        "Focus health JSON checks on stable output.\n\n"
+        "## Goal G-02: Local rerun (P9.D-02)\n\n"
+        "Repeated runs stay local.\n",
+        encoding="utf-8",
+    )
+    (phase / "TEST-GOALS.codex-proposal.md").write_text(
+        "### G-10: Explicit health command form\n"
+        "**Decisions:** P9.D-01\n\n"
+        "Focus health JSON checks on stable output.\n\n"
+        "### G-11: Idempotency across CLI modes\n"
+        "**Decisions:** P9.D-02\n\n"
+        "Add idempotency coverage for repeated help and error runs.\n",
+        encoding="utf-8",
+    )
+
+    result = _run([sys.executable, str(DELTA), "--phase-dir", str(phase)], repo)
+    delta = (phase / "TEST-GOALS.codex-delta.md").read_text(encoding="utf-8")
+
+    assert result.returncode == 1
+    assert "P9.D-02: proposal covers idempotency" in delta
+    assert "P9.D-01: proposal covers idempotency" not in delta
+    assert "accessibility" not in delta
+
 def test_codex_lane_validator_blocks_unresolved_delta(tmp_path: Path) -> None:
     repo = _phase(tmp_path)
     phase = repo / ".vg" / "phases" / "09-goals"
@@ -115,11 +152,13 @@ def test_codex_lane_validator_blocks_unresolved_delta(tmp_path: Path) -> None:
 
 def test_blueprint_and_orchestrator_wire_codex_goal_lane() -> None:
     blueprint = BLUEPRINT_MD.read_text(encoding="utf-8")
+    contracts_overview = CONTRACTS_OVERVIEW_MD.read_text(encoding="utf-8")
     orch = ORCH.read_text(encoding="utf-8")
+    combined = blueprint + "\n" + contracts_overview
 
     assert "2b5a_codex_test_goal_lane" in blueprint
     assert "TEST-GOALS.codex-proposal.md" in blueprint
     assert "TEST-GOALS.codex-delta.md" in blueprint
-    assert "test-goal-delta.py" in blueprint
+    assert "test-goal-delta.py" in combined
     assert "--skip-codex-test-goal-lane" in blueprint
     assert "verify-codex-test-goal-lane" in orch

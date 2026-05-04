@@ -127,6 +127,51 @@ graphify_active: ${GRAPHIFY_ACTIVE}
 
 Create PLAN.md for phase ${PHASE_NUMBER}. Follow vg-planner-rules exactly.
 
+PLAN SCHEMA REQUIREMENTS (BLOCKING):
+- `${PHASE_DIR}/PLAN.md` MUST begin with YAML frontmatter that passes
+  `.claude/schemas/plan.v1.json`.
+- Required frontmatter keys: `phase`, `profile`, `goal_summary`,
+  `total_waves`, `total_tasks`, `generated_at`.
+- Allowed optional keys only: `platform`, `phase_name`, `blueprint_version`.
+- `profile` is the schema category. Use one of:
+  `feature`, `infra`, `hotfix`, `bugfix`, `migration`, `docs`.
+- If `${PROFILE}` is a runtime surface/profile such as `web-fullstack`,
+  `web-frontend-only`, `web-backend-only`, `mobile-*`, `cli-tool`, or
+  `library`, set `profile: feature` and set `platform: ${PROFILE}`.
+- Do NOT put `cli-tool` or `library` in frontmatter `profile`.
+- Body MUST contain top-level H2 anchors:
+  - `## Wave 1` through `## Wave <wave_count>` exactly matching
+    frontmatter `total_waves`
+  - `## Verification`
+  - `## Risks`
+
+TRACEABILITY TAGS (BLOCKING):
+- Each task MUST include one `<implements-decision>D-ID</implements-decision>`
+  line for every CONTEXT decision implemented by that task.
+- Each task MUST include one `<goals-covered>G-XX,...</goals-covered>` line
+  listing TEST-GOALS covered by that task.
+- Each task MUST include a plain `Covers goal: G-XX, ...` line for legacy
+  scanners.
+- Do not rely only on human-readable `**Goals covered:**` or
+  `**Decisions implemented:**`; validators grep the machine tags above.
+- Layer 1 task files and Layer 3 `PLAN.md` flat concat must both contain these
+  tags.
+
+Frontmatter template:
+```yaml
+---
+phase: "${PHASE_NUMBER}"
+profile: feature
+platform: ${PROFILE}
+phase_name: "<human-readable phase name>"
+goal_summary: "<one sentence, max 200 chars>"
+total_waves: <int>
+total_tasks: <int>
+generated_at: "<YYYY-MM-DD>"
+blueprint_version: "v1"
+---
+```
+
 GRAPHIFY USAGE (when graphify_active=true):
 - graphify_brief lists god nodes + existing symbols + sibling files.
 - For EVERY task touching code, set <edits-*> attributes (REQUIRED, not optional)
@@ -167,8 +212,14 @@ When mode is "full" (phases 0-13), <context-refs> is optional.
 OUTPUT: Write the 3-layer artifacts described in vg-blueprint-planner
 SKILL.md (Layer 1 ${PHASE_DIR}/PLAN/task-NN.md per task, Layer 2
 ${PHASE_DIR}/PLAN/index.md, Layer 3 ${PHASE_DIR}/PLAN.md flat concat).
+Layer 2 index.md MUST include the same frontmatter because Layer 3 begins by
+copying index.md verbatim. Put `## Wave N`, `## Verification`, and `## Risks`
+in index.md before task concatenation so the flat PLAN.md validates.
 Each task MUST contain `<!-- vg-binding: <id> -->` HTML comments for
 each citation in must_cite_bindings.
+Each task MUST contain `<implements-decision>...</implements-decision>`,
+`<goals-covered>...</goals-covered>`, and `Covers goal: ...` traceability
+lines as described above.
 
 Then return JSON to main agent (shape MUST match SKILL.md "Example return"):
 

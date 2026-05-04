@@ -27,6 +27,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK = str(REPO_ROOT / "scripts/hooks/vg-user-prompt-submit.sh")
 
 
+INTERACTIVE_CMDS = ("vg:debug", "vg:amend", "vg:scope", "vg:accept")
+
+
 def _setup_active_run(tmp: Path, *, command: str, phase: str,
                       started_minutes_ago: int = 5,
                       session_id: str = "default",
@@ -226,3 +229,77 @@ def test_non_vg_prompt_skipped(tmp_path):
     """Plain prompt without /vg: prefix → hook exits 0 without touching state."""
     proc = _run_hook(tmp_path, "hello world how are you")
     assert proc.returncode == 0
+
+
+def test_interactive_debug_45min_not_dead(tmp_path):
+    """vg:debug at 45min is NOT stale (interactive threshold = 360min/6h)."""
+    _setup_active_run(tmp_path, command="vg:debug", phase="standalone",
+                      started_minutes_ago=45)
+    proc = _run_hook(tmp_path, "/vg:debug standalone")  # idempotent restart
+    assert proc.returncode == 0
+    # Should NOT mention "is dead" — debug is interactive, 45min < 360min
+    assert "is dead" not in proc.stderr
+
+
+def test_interactive_amend_2h_not_dead_blocks_mainline(tmp_path):
+    """vg:amend at 120min is NOT stale → still alive → mainline build same
+    phase still hard-blocks (intra-phase ordering)."""
+    _setup_active_run(tmp_path, command="vg:amend", phase="4.1",
+                      started_minutes_ago=120)
+    # amend is auxiliary, so amend+build doesn't trigger pipeline conflict
+    # (auxiliary↔mainline bypasses block per Task hotfix #2). Use this case
+    # to verify amend at 120min is NOT treated dead.
+    proc = _run_hook(tmp_path, "/vg:build 4.1")
+    assert proc.returncode == 0
+    # The output is the auxiliary soft-warn (mainline does not block aux),
+    # NOT the dead-run soft-warn — verify dead-run signal is absent.
+    assert "is dead" not in proc.stderr
+    assert "auxiliary vg:amend does not block mainline vg:build" in proc.stderr
+
+
+def test_interactive_debug_7h_finally_dead(tmp_path):
+    """vg:debug past 6h (360min) → finally treated dead (ceiling enforced)."""
+    _setup_active_run(tmp_path, command="vg:debug", phase="standalone",
+                      started_minutes_ago=420)  # 7h
+    proc = _run_hook(tmp_path, "/vg:build 5.0")  # different phase, but dead-warn fires before file overwrite
+    # Different phase normally silent overwrite. Dead check only fires when
+    # there's a same-phase conflict path. So for this test we use same phase
+    # to actually exercise the dead-detection branch:
+    _setup_active_run(tmp_path, command="vg:debug", phase="4.1",
+                      started_minutes_ago=420)
+    proc = _run_hook(tmp_path, "/vg:build 4.1")
+    assert proc.returncode == 0
+    assert "is dead" in proc.stderr
+    assert "stale 420min" in proc.stderr or "stale 420" in proc.stderr
+
+
+def test_non_interactive_review_30min_dead(tmp_path):
+    """Non-interactive review at 31min → dead (default threshold = 30min).
+    Confirms interactive bump did NOT change non-interactive threshold."""
+    _setup_active_run(tmp_path, command="vg:review", phase="4.1",
+                      started_minutes_ago=31)
+    proc = _run_hook(tmp_path, "/vg:build 4.1")  # mainline-mainline pair
+    assert proc.returncode == 0  # dead → soft-warn allow
+    assert "is dead" in proc.stderr
+    assert "stale 31min" in proc.stderr or "stale 31" in proc.stderr
+
+
+def test_interactive_threshold_helper_in_verify_claim():
+    """Pin verify-claim helper logic: debug=360, review=30."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    # Load module via importlib (filename has dash, can't `import vg-verify-claim`)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "vc_t", REPO_ROOT / "scripts" / "vg-verify-claim.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._stale_threshold_for("vg:debug") == 360
+    assert mod._stale_threshold_for("vg:amend") == 360
+    assert mod._stale_threshold_for("vg:scope") == 360
+    assert mod._stale_threshold_for("vg:accept") == 360
+    assert mod._stale_threshold_for("vg:review") == 30
+    assert mod._stale_threshold_for("vg:build") == 30
+    assert mod._stale_threshold_for(None) == 30
+    assert mod._stale_threshold_for("") == 30

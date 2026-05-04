@@ -204,6 +204,56 @@ def test_no_crud_signals_and_no_contract_passes(tmp_path: Path) -> None:
     assert rc == 0
     assert payload["verdict"] == "PASS"
 
+def test_cli_no_crud_reason_allows_metadata_and_interface_words(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir(parents=True)
+    (tmp_path / ".claude" / "vg.config.md").write_text("profile: cli-tool\n", encoding="utf-8")
+    phase = tmp_path / ".vg" / "phases" / "09-cli-health"
+    phase.mkdir(parents=True)
+    (phase / "SPECS.md").write_text(
+        "---\n"
+        "profile: feature\n"
+        "platform: cli-tool\n"
+        "created_at: \"2026-05-04\"\n"
+        "created: \"2026-05-04\"\n"
+        "---\n"
+        "Codex path can create specs and validate phase artifacts.\n",
+        encoding="utf-8",
+    )
+    (phase / "PLAN.md").write_text(
+        "---\nprofile: feature\nplatform: cli-tool\n---\n"
+        "## Wave 1\n- Task 01: CLI health behavior only.\n",
+        encoding="utf-8",
+    )
+    (phase / "API-CONTRACTS.md").write_text(
+        "# CLI Contract\n\n"
+        "There is no HTTP transport and no persistent resource mutation.\n",
+        encoding="utf-8",
+    )
+    _write_contract(phase, {
+        "version": "1",
+        "generated_from": ["CONTEXT.md", "API-CONTRACTS.md", "TEST-GOALS.md", "PLAN.md"],
+        "no_crud_reason": (
+            "CLI-only health behavior; no user resource CRUD, no HTTP API, "
+            "no frontend/mobile UI, no database."
+        ),
+        "resources": [],
+    })
+    rc, payload = _run(tmp_path)
+    assert rc == 0, payload
+    assert payload["verdict"] == "PASS"
+
+def test_web_phase_empty_resources_still_blocks(tmp_path: Path) -> None:
+    phase = _phase(tmp_path, "web-fullstack")
+    _write_contract(phase, {
+        "version": "1",
+        "generated_from": ["SPECS.md", "API-CONTRACTS.md", "TEST-GOALS.md", "PLAN.md"],
+        "no_crud_reason": "incorrectly declared no CRUD",
+        "resources": [],
+    })
+    rc, payload = _run(tmp_path)
+    assert rc == 1
+    assert payload["verdict"] == "BLOCK"
+    assert any(e["type"] == "crud_surface_resources_empty" for e in payload["evidence"])
 
 def test_be_only_phase_in_fullstack_skips_web_overlay(tmp_path: Path) -> None:
     """Issue #26: Backend-only phase in a web-fullstack project.

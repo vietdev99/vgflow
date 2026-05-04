@@ -100,6 +100,23 @@ def _read_project_profile(config: Path) -> str:
             return m.group(1).lower()
     return "web-fullstack"
 
+def _read_phase_surface(phase_dir: Path) -> str | None:
+    """Read phase-local profile/platform from artifact frontmatter.
+
+    Phase artifacts can use `profile: feature` with `platform: cli-tool`.
+    The CRUD validator needs the runtime surface, not only the phase profile.
+    """
+    for name in ("PLAN.md", "TEST-GOALS.md", "CONTEXT.md", "SPECS.md"):
+        text = _read(phase_dir / name)
+        for key in ("platform", "profile"):
+            m = re.search(rf"^\s*{key}\s*:\s*['\"]?([\w-]+)", text, re.MULTILINE)
+            if not m:
+                continue
+            value = m.group(1).lower()
+            if value in {"cli-tool", "library"}:
+                return value
+    return None
+
 
 def _required_platforms(profile: str, phase_text: str,
                         plan_text: str | None = None) -> list[str]:
@@ -399,6 +416,7 @@ def main() -> None:
         text = _phase_text(phase_dir)
         has_crud_signal = bool(CRUD_SIGNAL_RE.search(text))
         contract_path = phase_dir / "CRUD-SURFACES.md"
+        profile = _read_phase_surface(phase_dir) or _read_project_profile(Path(args.config))
 
         if not contract_path.exists():
             if has_crud_signal:
@@ -450,7 +468,14 @@ def main() -> None:
             ))
             resources = []
 
-        if has_crud_signal and not resources:
+        no_crud_declared = bool(str(data.get("no_crud_reason") or "").strip())
+        no_crud_allowed = (
+            no_crud_declared
+            and not resources
+            and profile in {"cli-tool", "library"}
+        )
+
+        if has_crud_signal and not resources and not no_crud_allowed:
             out.add(Evidence(
                 type="crud_surface_resources_empty",
                 message="CRUD/resource signals detected but resources[] is empty",
@@ -459,7 +484,6 @@ def main() -> None:
                 fix_hint="If this is not CRUD, add no_crud_reason and remove CRUD/list/form wording from artifacts.",
             ))
 
-        profile = _read_project_profile(Path(args.config))
         plan_text = _plan_text(phase_dir)
         required_platforms = _required_platforms(profile, text, plan_text)
         for resource in resources:

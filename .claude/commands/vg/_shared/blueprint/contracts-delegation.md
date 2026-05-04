@@ -75,7 +75,41 @@ NOT browse files outside input. Do NOT ask user — input is the contract.
 contract_format: ${CONTRACT_TYPE}
 url_param_naming: ${CONFIG_UI_STATE_URL_PARAM_NAMING:-kebab}
 array_format: ${CONFIG_UI_STATE_ARRAY_FORMAT:-csv}
+profile: ${PROFILE}
 </config>
+
+# Profile-aware interface contract rules
+
+`API-CONTRACTS` is the phase interface contract. It is not automatically an
+HTTP route list.
+
+If `${PROFILE}` is `cli-tool` or `library`, or PLAN frontmatter uses
+`platform: cli-tool` / `platform: library`:
+- Do NOT invent HTTP endpoints, routes, request handlers, frontend screens,
+  mobile flows, databases, services, daemons, or deployment contracts.
+- If CONTEXT.md and PLAN.md do not explicitly declare HTTP endpoint lines,
+  write CLI/library interface files under `${PHASE_DIR}/API-CONTRACTS/`
+  (example: `API-CONTRACTS/cli-health.md`) instead of
+  `{method}-{path-slug}.md` endpoint files.
+- `${PHASE_DIR}/API-CONTRACTS/index.md` MUST state `HTTP endpoint count = 0`
+  for no-HTTP phases.
+- Return JSON `endpoint_count` MUST be `0` for CLI/library phases with no
+  explicit HTTP endpoints.
+- Do NOT use endpoint headings matching `### GET /...`, `### POST /...`,
+  `### PUT /...`, `### PATCH /...`, or `### DELETE /...` unless CONTEXT/PLAN
+  explicitly declares that endpoint.
+- Include dependency-free fenced code blocks describing command/library
+  success and error envelopes. For `zod_code_block` or
+  `typescript_interface`, use standalone TypeScript interfaces/types when no
+  local schema library exists.
+- For CLI contracts, enumerate every supported invocation form declared in
+  SPECS/CONTEXT/PLAN (no-arg, subcommands, flags, JSON/human modes, help,
+  invalid inputs). Do NOT collapse distinct stdout/stderr/exit-code behavior
+  into a single generic command row.
+- TEST-GOALS may use `Surface: cli` or `Surface: library`; their
+  `api_contracts` entries must point to the interface contract file.
+- CRUD-SURFACES.md MUST use `resources: []` plus `no_crud_reason` for
+  read-only CLI/library behavior with no user resource CRUD.
 
 # Part 1 — API-CONTRACTS.md
 
@@ -92,6 +126,8 @@ Generate `${PHASE_DIR}/API-CONTRACTS.md`. Strict 4-block format per endpoint.
      Regex: `^###\s+(?:\d+\.\d+\s+)?(GET|POST|PUT|DELETE|PATCH)\s+(/\S+)`
 4. Cross-reference endpoints with CONTEXT decisions
 5. Draft contract for each endpoint without existing schema
+6. If profile/platform is CLI/library and step 3 found zero explicit HTTP
+   endpoints, generate interface contracts instead and keep `endpoint_count=0`.
 
 **STRICT 4-BLOCK FORMAT per endpoint** (zod_code_block example):
 

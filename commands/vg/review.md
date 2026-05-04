@@ -233,6 +233,10 @@ runtime_contract:
     - event_type: "review.edge_cases_unavailable"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # Task 34 — tasklist projection enforcement (Bug B)
+    - event_type: "review.tasklist_projection_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
   forbidden_without_override:
     - "--override-reason"
     - "--skip-scan"
@@ -264,6 +268,12 @@ CLI commands stay English. AskUserQuestion title + options + question prose:
 ngôn ngữ config.
 </LANGUAGE_POLICY>
 
+### Tasklist projection (REQUIRED before any step-active)
+
+Read `_shared/lib/tasklist-projection-instruction.md` and follow it
+verbatim. The PreToolUse-bash hook will BLOCK every `step-active` call
+in this slim entry until `.vg/runs/${RUN_ID}/.tasklist-projected.evidence.json`
+exists.
 
 <TASKLIST_POLICY>
 **Native task UI projection is REQUIRED.**

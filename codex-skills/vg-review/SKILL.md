@@ -169,6 +169,14 @@ When `--spawn-role` is set, it also writes Codex spawn evidence to
 heavy-step markers and `wave-complete` when required spawn evidence or
 build wave `.spawn-count.json` is missing.
 
+When creating prompt files for `codex-spawn.sh`, use a single-quoted heredoc
+delimiter such as `cat > "$PROMPT_FILE" <<'EOF'` or write from an existing
+template. Do not use unquoted `<<EOF` for prompts that contain backticks,
+`$...`, command substitutions, or markdown code fences: the shell will
+expand them before Codex sees the prompt and can corrupt the child contract.
+If runtime variables must be injected, prefer a small controlled render step
+that substitutes placeholders after the quoted template is written.
+
 ### Known Codex caveats to design around
 
 - Do not trust inline model selection for native subagents unless verified in the current Codex version; use TOML-pinned agents or `codex exec --model`.
@@ -209,6 +217,12 @@ CLI commands stay English. AskUserQuestion title + options + question prose:
 ngôn ngữ config.
 </LANGUAGE_POLICY>
 
+### Tasklist projection (REQUIRED before any step-active)
+
+Read `_shared/lib/tasklist-projection-instruction.md` and follow it
+verbatim. The PreToolUse-bash hook will BLOCK every `step-active` call
+in this slim entry until `.vg/runs/${RUN_ID}/.tasklist-projected.evidence.json`
+exists.
 
 <TASKLIST_POLICY>
 **Native task UI projection is REQUIRED.**

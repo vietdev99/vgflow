@@ -169,6 +169,14 @@ When `--spawn-role` is set, it also writes Codex spawn evidence to
 heavy-step markers and `wave-complete` when required spawn evidence or
 build wave `.spawn-count.json` is missing.
 
+When creating prompt files for `codex-spawn.sh`, use a single-quoted heredoc
+delimiter such as `cat > "$PROMPT_FILE" <<'EOF'` or write from an existing
+template. Do not use unquoted `<<EOF` for prompts that contain backticks,
+`$...`, command substitutions, or markdown code fences: the shell will
+expand them before Codex sees the prompt and can corrupt the child contract.
+If runtime variables must be injected, prefer a small controlled render step
+that substitutes placeholders after the quoted template is written.
+
 ### Known Codex caveats to design around
 
 - Do not trust inline model selection for native subagents unless verified in the current Codex version; use TOML-pinned agents or `codex exec --model`.
@@ -269,8 +277,6 @@ runtime_contract:
     - "1_parse_args"
     - "create_task_tracker"
     - "2_verify_prerequisites"
-    - "2b6c_view_decomposition"
-    - "2b6_ui_spec"
     - "2a_plan"
     - "2a5_cross_system_check"
     - "2b_contracts"
@@ -298,6 +304,10 @@ runtime_contract:
     - "3_complete"
     # Profile-gated markers (only run for specified profiles).
     - name: "2_fidelity_profile_lock"
+      profile: "web-fullstack,web-frontend-only"
+    - name: "2b6c_view_decomposition"
+      profile: "web-fullstack,web-frontend-only"
+    - name: "2b6_ui_spec"
       profile: "web-fullstack,web-frontend-only"
     - name: "2b6b_ui_map"
       profile: "web-fullstack,web-frontend-only"

@@ -22,6 +22,36 @@ You MUST NOT ask user questions.
 
 ## Required outputs (3-layer split for build context budget)
 
+## Profile-aware interface contract rules
+
+`API-CONTRACTS` means the phase interface contract, not always HTTP.
+
+When PLAN/CONTEXT/frontmatter says `platform: cli-tool`, `profile: cli-tool`,
+`platform: library`, or `profile: library`:
+- Do NOT invent HTTP endpoints, routes, request handlers, frontend screens,
+  mobile flows, databases, services, daemons, or deployment contracts.
+- Write one or more interface contract files under
+  `<phase_dir>/API-CONTRACTS/{interface-slug}.md` such as
+  `API-CONTRACTS/cli-health.md` or `API-CONTRACTS/library-public-api.md`.
+- `<phase_dir>/API-CONTRACTS/index.md` MUST state `HTTP endpoint count = 0`
+  unless explicit HTTP endpoints are present in CONTEXT/PLAN.
+- Return JSON `endpoint_count` MUST be `0` for CLI/library phases with no
+  explicit HTTP endpoints.
+- Do NOT use HTTP endpoint headings such as `### GET /...` or
+  `### POST /...` unless CONTEXT/PLAN explicitly declares that endpoint.
+- Include dependency-free fenced code blocks describing command/library
+  success and error envelopes. Use TypeScript interfaces/types for
+  `zod_code_block` or `typescript_interface` contract formats when no local
+  runtime schema library exists.
+- For CLI contracts, enumerate every supported invocation form declared in
+  SPECS/CONTEXT/PLAN (no-arg, subcommands, flags, JSON/human modes, help,
+  invalid inputs). Do NOT collapse distinct stdout/stderr/exit-code behavior
+  into a single generic command row.
+- `TEST-GOALS` should use the platform surface (`cli`, `library`) while still
+  grounding to `API-CONTRACTS/<interface-slug>.md`.
+- `CRUD-SURFACES.md` MUST use `resources: []` plus `no_crud_reason` for
+  read-only CLI/library behavior with no user resource CRUD.
+
 ### Layer 1 — per-endpoint / per-goal split (primary)
 
 | Path pattern | One file per | Example |
@@ -75,6 +105,8 @@ Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching `mus
    - Write `<phase_dir>/API-CONTRACTS/{method}-{path-slug}.md` with 4-block format.
    - path-slug = lowercase, hyphens, strip leading slash, strip path params:
      `POST /api/v1/sites/:id` → `post-api-v1-sites-id`
+   - If the phase is CLI/library and has no explicit HTTP endpoints, write
+     interface contract files instead and set `endpoint_count: 0`.
 4. Write `<phase_dir>/API-CONTRACTS/index.md` (Layer 2 — endpoint table grouped by resource).
 5. Concat `API-CONTRACTS/index.md` + all `API-CONTRACTS/{method}-*.md` →
    `<phase_dir>/API-CONTRACTS.md` (Layer 3 legacy).
