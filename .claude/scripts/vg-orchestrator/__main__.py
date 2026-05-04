@@ -1072,6 +1072,31 @@ def cmd_tasklist_projected(args) -> int:
                 file=sys.stderr,
             )
             return 2
+    elif args.adapter == "claude":
+        # HOTFIX (2026-05-05) — adapter=claude relies on PostToolUse TodoWrite
+        # hook to write evidence. Verify file exists; if missing, AI didn't
+        # call TodoWrite tool (just emit-tasklist text rendering doesn't count).
+        # Without this gate, AI can call this command + emit vg.block.handled
+        # to bypass evidence requirement → subsequent step-active proceed
+        # without native TodoWrite UI rendering. Bug observed in PV3 phase
+        # 4.2 build run a6f54da7 (2026-05-04 23:13:13Z).
+        evidence_path = contract_path.parent / ".tasklist-projected.evidence.json"
+        if not evidence_path.is_file():
+            print(
+                "\033[38;5;208mEvidence file missing — TodoWrite tool was not called.\033[0m",
+                file=sys.stderr,
+            )
+            print(
+                f"  Expected: {evidence_path}\n"
+                "  This is written by the PostToolUse hook on the TodoWrite\n"
+                "  tool. If you ran emit-tasklist.py without calling TodoWrite,\n"
+                "  the native UI render didn't happen.\n\n"
+                "  Fix: call the TodoWrite tool with one item per checklists[]\n"
+                "  row from tasklist-contract.json (with `↳` sub-items per\n"
+                "  group). Then re-run this command.",
+                file=sys.stderr,
+            )
+            return 2
 
     event_type = _tasklist_projection_event_name(current["command"])
     evt = db.append_event(
