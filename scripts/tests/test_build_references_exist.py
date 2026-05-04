@@ -9,9 +9,15 @@ REFS = {
     "preflight.md":                500,
     "context.md":                  500,
     "validate-blueprint.md":       500,
-    "waves-overview.md":          1200,  # extracted from backup step 8 (1882 lines), compressed; R2 round-2 added wave_id reset banner + override.used migration notes (5 paths)
+    "waves-overview.md":          1350,  # extracted from backup step 8; R2 round-2 + Codex spawn parity keep orchestration local to the heavy spawn site
     "waves-delegation.md":         500,
-    "post-execution-overview.md":  980,  # extracted from backup step 9 (896 lines); R2 round-2 expanded post-spawn validator to enforce BUILD-LOG sha + index + sub-files (closes A4/E2/C5 drift)
+    # post-execution split into 3 sub-refs (Anthropic Skill body < 200 lines).
+    # Slim overview holds HARD-GATE + Step ordering + section map + final marker.
+    "post-execution-overview.md":   250,
+    # Pre-spawn checklist (Steps 1-11) + Spawn site (single Agent() call + Codex variant).
+    "post-execution-spawn.md":      800,
+    # Post-spawn validation + L4a gates + commit + schema + API-DOCS.
+    "post-execution-validation.md": 400,
     "post-execution-delegation.md": 500,
     "crossai-loop.md":             500,
     "close.md":                    600,  # combines step 10 + 12 (90 + 395 = 485 source), wrapper at 539

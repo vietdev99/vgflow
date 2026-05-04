@@ -303,7 +303,11 @@ fi
 ```
 
 ### STEP 5 — post-execution verification (HEAVY)
-Read `_shared/build/post-execution-overview.md` AND `_shared/build/post-execution-delegation.md`.
+Read `_shared/build/post-execution-overview.md` (slim entry) which routes
+through `_shared/build/post-execution-spawn.md` (pre-spawn checklist +
+Spawn site) and `_shared/build/post-execution-validation.md` (post-spawn
+JSON validation + L4a gates + SUMMARY commit + API-DOCS). Also read
+`_shared/build/post-execution-delegation.md` for the subagent contract.
 Then narrate + spawn ONE vg-build-post-executor (single — sequential per-task gate walk):
 ```bash
 bash scripts/vg-narrate-spawn.sh vg-build-post-executor spawning "L2/L3/L5/L6 + truthcheck for ${PHASE_NUMBER}"
