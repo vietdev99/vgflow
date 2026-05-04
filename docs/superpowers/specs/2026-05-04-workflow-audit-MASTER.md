@@ -54,6 +54,23 @@ reviewing against role-specific standard:
 
 **Deferred to R8:** Task 5 (G9 multi-actor workflow review verdict replay) — requires Playwright MCP per-actor session infrastructure + state-machine traversal. Build-side workflow gate (R7 Task 4) already catches state literal absence statically; review replay is defense-in-depth, not first-line check.
 
+**R8 STATUS UPDATE (2026-05-05):** Codex GPT-5.5 deep audit (RCRURDR closed-loop + closed-loop data flow + phase-level goal critique) found 8 additional gaps. R8 closes ALL 8 across 8 tasks.
+
+| R8 Task | Gap (codex audit ID) | Severity | Resolution commit | Verdict |
+|---|---|---|---|---|
+| H | Milestone close UAT path mismatch (`UAT.md` vs `${PHASE}-UAT.md`) | Critical | `ec6b346` | ✅ Closed |
+| A | RCRURDR test layer — codegen full 7-phase enforcement | High | `5392ffd` | ✅ Closed |
+| F | FOUNDATION→SPECS goal traceability | High | `a04626a` | ✅ Closed |
+| G | Milestone foundation coverage matrix (cross-phase Q-loop) | High | `ef6ad9c` | ✅ Closed |
+| E | CONTEXT→API-CONTRACTS zero-tolerance mismatch | High | `c488bef` | ✅ Closed |
+| B | Review CRUD universal coverage (mutation goals beyond kit-declared) | High | `899d175` | ✅ Closed |
+| D | UAT RCRURDR lifecycle attestation (full 7-phase user attest) | High | `0a4734a` | ✅ Closed |
+| C | Phase-level TEST-GOAL (G-PHASE-NN end-to-end E2E) | High (heaviest) | `cdb6a72` | ✅ Closed |
+
+**R8 closing summary:** 8 tasks, 90/90 R8 tests green, full closed-loop integrity verified end-to-end (FOUNDATION → SPECS → CONTEXT → blueprint outputs → build → review → test → UAT → milestone close). Phase-level goals (G-PHASE-NN) added as first-class artifact — VG harness now answers BOTH "did we build it right?" (per-phase) AND "did we build the RIGHT thing?" (cross-phase milestone integrity).
+
+**Cumulative session totals:** R6 (16) + Tier 1 (2) + Tier 2/L2 (3) + R7 (6) + R8 (8) = **35 tasks shipped**, **317+ tests green**, 42 commits on `feat/rfc-v9-followup-fixes`.
+
 ---
 
 ## Per-workflow verdict matrix
