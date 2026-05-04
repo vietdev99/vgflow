@@ -253,6 +253,27 @@ Mismatch → error JSON `{"error": "input_envelope_length_mismatch"}`.
    compute it AFTER the atomic `mv` so the hash matches the on-disk
    file the validator opens.
 
+### JSON Schema enforcement (Tier 2 D — soft rollout)
+
+The success + error shapes above are formalized in
+`schemas/vg-build-post-executor-return.v1.json` (mirror at
+`.claude/schemas/vg-build-post-executor-return.v1.json`). The schema is
+draft-07 with a `oneOf` between the success object and the error object.
+
+**Spawn site MAY pass `--json-schema=.claude/schemas/vg-build-post-executor-return.v1.json`**
+when invoking this subagent via `claude --print`. Claude Code 2.0+ honors
+this flag and rejects subagent output that does not validate against the
+schema (subagent retries automatically). Soft rollout — current spawn
+site in `commands/vg/_shared/build/post-execution-overview.md` uses the
+Claude `Agent(...)` syntax which may not yet expose this flag;
+documentation references the file path so a future spawn-site update is
+mechanical.
+
+Future versions will require the flag (hard enforcement). Until then,
+the orchestrator's post-spawn validators continue to catch shape drift
+(e.g., `build_log_sha256` re-hash mismatch, missing `gates_passed`
+superset of `{L2, L5, truthcheck}`).
+
 ## Failure modes
 
 | Failure | Detection | Action |

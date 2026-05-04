@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "vg-build-post-executor-return.v1.json",
+  "title": "vg-build-post-executor return contract (v1)",
+  "description": "Return JSON shape for the vg-build-post-executor subagent. Mirrors agents/vg-build-post-executor/SKILL.md > Step 7 'Return JSON to the orchestrator'. Tier 2 D — soft rollout: spawn sites MAY pass --json-schema=<this-path> to enforce shape at the subagent layer. Hard enforcement deferred to Tier 2 follow-up.",
+  "oneOf": [
+    {
+      "type": "object",
+      "description": "Success return (no error key)",
+      "required": [
+        "gates_passed",
+        "gates_failed",
+        "summary_path",
+        "summary_sha256",
+        "build_log_path",
+        "build_log_index_path",
+        "build_log_sha256"
+      ],
+      "properties": {
+        "gates_passed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["L2", "L3", "L5", "L6", "truthcheck"]
+          },
+          "description": "Gates that passed for the phase. MUST be a superset of {L2, L5, truthcheck}, plus {L3, L6} when any task has design_ref."
+        },
+        "gates_failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["task_id", "gate", "reason"],
+            "properties": {
+              "task_id": {"type": "string"},
+              "gate": {
+                "type": "string",
+                "enum": ["L2", "L3", "L5", "L6", "truthcheck"]
+              },
+              "reason": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "description": "Per-task gate failures with reason strings. Empty array when all gates passed."
+        },
+        "gaps_closed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["task_id", "gate", "fix"],
+            "properties": {
+              "task_id": {"type": "string"},
+              "gate": {"type": "string"},
+              "fix": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "description": "Per-task gap-closure successes from step 4 (1-retry budget)."
+        },
+        "summary_path": {
+          "type": "string",
+          "description": "${PHASE_DIR}/SUMMARY.md — single-doc artifact (NOT 3-layer split per R1a)."
+        },
+        "summary_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA256 of SUMMARY.md, computed AFTER atomic mv. Orchestrator re-hashes and rejects mismatch."
+        },
+        "build_log_path": {
+          "type": "string",
+          "description": "${PHASE_DIR}/BUILD-LOG.md — Layer 3 flat concat."
+        },
+        "build_log_index_path": {
+          "type": "string",
+          "description": "${PHASE_DIR}/BUILD-LOG/index.md — Layer 2 TOC."
+        },
+        "build_log_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA256 of BUILD-LOG.md. Orchestrator re-hashes post-return and rejects mismatch."
+        },
+        "build_log_sub_files": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Per-task BUILD-LOG/task-*.md paths (Layer 1) used by Layer 3 concat."
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "description": "Error return (any procedure-step failure)",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "string",
+          "description": "Machine-readable error code (e.g., input_envelope_missing_field, build_log_concat_failed, design_ref_drift, summary_write_failed)."
+        },
+        "field": {"type": "string"},
+        "task_id": {"type": "string"},
+        "expected": {"type": "string"},
+        "actual": {"type": "string"},
+        "reason": {"type": "string"},
+        "details": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  ]
+}

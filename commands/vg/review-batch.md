@@ -19,6 +19,11 @@ runtime_contract:
 
 Run the v2.40 recursive-lens-probe review across multiple phases sequentially. Wraps `scripts/review_batch.py` with bash arg parsing + user-facing docs.
 
+> **Operator recommendation (Tier 2 C — runaway-cost safety net):** invoke this skill from a Claude Code session launched with `--max-budget-usd 10` (or higher for large milestones). Multi-phase sweeps with retry loops can occasionally hit pathological pattern → unbounded fix loop → $10+ in a single run. The `--max-budget-usd` flag is operator-side only (the harness cannot self-cap); see `CLAUDE.md > Performance — --max-budget-usd runaway-cost safety net`. Example:
+> ```bash
+> claude --print --max-budget-usd 10 --exclude-dynamic-system-prompt-sections -p '/vg:review-batch --milestone M2'
+> ```
+
 ## When to use
 
 - **Sandbox sweep**: every Phase 2b-2.5 lens probe end-to-end against a freshly seeded sandbox VPS, before promoting to staging.

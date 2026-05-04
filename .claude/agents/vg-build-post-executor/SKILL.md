@@ -2,7 +2,12 @@
 name: vg-build-post-executor
 description: "Verify L2/L3/L5/L6 gates per task + API truthcheck + write SUMMARY.md + concat BUILD-LOG (3-layer split). Read-only verifier — does NOT modify task implementations. ONLY this verification pass — do not call other agents."
 tools: [Read, Write, Edit, Bash, Glob, Grep]
-model: opus
+model: sonnet  # 2026-05-04 audit (Tier 2 Fix #109): downgraded from opus.
+               # Post-executor = gate verification (L2 fingerprint, L3 SSIM,
+               # L5 design fidelity, L6 truthcheck) + SUMMARY.md generation +
+               # BUILD-LOG concat. JSON parsing + threshold checks + template
+               # rendering, not creative architecture. Bounded read-only
+               # verification work; opus reasoning depth wasted.
 ---
 
 <HARD-GATE>
@@ -247,6 +252,27 @@ Mismatch → error JSON `{"error": "input_envelope_length_mismatch"}`.
    orchestrator re-hashes post-return and rejects mismatch. Also
    compute it AFTER the atomic `mv` so the hash matches the on-disk
    file the validator opens.
+
+### JSON Schema enforcement (Tier 2 D — soft rollout)
+
+The success + error shapes above are formalized in
+`schemas/vg-build-post-executor-return.v1.json` (mirror at
+`.claude/schemas/vg-build-post-executor-return.v1.json`). The schema is
+draft-07 with a `oneOf` between the success object and the error object.
+
+**Spawn site MAY pass `--json-schema=.claude/schemas/vg-build-post-executor-return.v1.json`**
+when invoking this subagent via `claude --print`. Claude Code 2.0+ honors
+this flag and rejects subagent output that does not validate against the
+schema (subagent retries automatically). Soft rollout — current spawn
+site in `commands/vg/_shared/build/post-execution-overview.md` uses the
+Claude `Agent(...)` syntax which may not yet expose this flag;
+documentation references the file path so a future spawn-site update is
+mechanical.
+
+Future versions will require the flag (hard enforcement). Until then,
+the orchestrator's post-spawn validators continue to catch shape drift
+(e.g., `build_log_sha256` re-hash mismatch, missing `gates_passed`
+superset of `{L2, L5, truthcheck}`).
 
 ## Failure modes
 

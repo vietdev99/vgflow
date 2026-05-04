@@ -28,6 +28,11 @@ contract_exempt_reason: "read-only in --report-only mode: scans prior phase test
 </rules>
 
 <objective>
+> **Operator recommendation (Tier 2 C — runaway-cost safety net):** when running with `--fix` (default), launch the wrapping Claude Code session with `--max-budget-usd 15`. Full-suite replay + auto-fix loop is the most expensive VG flow (max 3 fix iterations × N regressions × full re-run). The `--max-budget-usd` flag is operator-side only; see `CLAUDE.md > Performance — --max-budget-usd runaway-cost safety net`. Example:
+> ```bash
+> claude --print --max-budget-usd 15 --exclude-dynamic-system-prompt-sections -p '/vg:regression --fix'
+> ```
+
 Cuối milestone hoặc on-demand: replay toàn bộ test suite, so sánh với baseline, fix regression.
 
 Dùng khi:

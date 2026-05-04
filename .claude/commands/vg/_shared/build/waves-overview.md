@@ -570,6 +570,17 @@ then calls (one Agent tool per task, all in the same assistant turn):
 Agent(subagent_type="vg-build-task-executor", prompt=<rendered from waves-delegation.md template>)
 ```
 
+> **Tier 2 D — JSON Schema soft enforcement (future):** when the Claude
+> Code Agent tool exposes `--json-schema` for subagent invocation, the
+> spawn above SHOULD pass
+> `--json-schema=.claude/schemas/vg-build-task-executor-return.v1.json`
+> (the schema is committed today; spawn-site adoption is gated on Agent
+> tool support). The schema enforces the return-JSON contract at the
+> subagent layer — invalid output triggers automatic retry instead of
+> falling through to the orchestrator's post-spawn validators. Hard
+> enforcement deferred to a follow-up; current spawn sites continue to
+> rely on post-spawn output validation.
+
 After each subagent returns, the orchestrator narrates the outcome:
 
 ```bash

@@ -27,3 +27,34 @@ alias claude-vg='claude --exclude-dynamic-system-prompt-sections'
 ```
 
 See `docs/audits/2026-05-05-tier1-107-exclude-dynamic.md` for adoption notes.
+
+## Performance — `--max-budget-usd` runaway-cost safety net (Tier 2 C)
+
+**Recommended pattern for batch flows:**
+
+```bash
+claude --print --max-budget-usd 5 --exclude-dynamic-system-prompt-sections
+```
+
+**Why:** the `--max-budget-usd <amount>` flag (Claude Code 2.0+, only works with `--print`) caps total dollar spend on API calls per session. R6 #7 caps retry iterations at the workflow layer, but a runaway loop in `/vg:review-batch` (10+ phases) or `/vg:regression` (full suite sweep with `--fix`) can still burn through $10+ if a phase hits an unexpected pathological pattern (e.g., flaky test → retry → re-fix → flaky again). The dollar cap is a hard ceiling that the harness cannot override.
+
+**Recommended for batch flows specifically:**
+
+```bash
+# /vg:review-batch — sweeping multiple phases sequentially
+claude --print --max-budget-usd 10 --exclude-dynamic-system-prompt-sections -p '/vg:review-batch --milestone M2'
+
+# /vg:regression — full suite + --fix
+claude --print --max-budget-usd 15 --exclude-dynamic-system-prompt-sections -p '/vg:regression --fix'
+```
+
+**Scope discipline:** this is operator-side flag adoption (like `--exclude-dynamic-system-prompt-sections` above). No harness enforcement — the VG harness IS the running session and cannot impose a budget cap on itself. Document, recommend, leave to the operator. Suggested defaults: `5` for single phase, `10` for batch sweep, `15` for full regression with fix loop.
+
+**Optional zsh aliases** for unattended runs:
+
+```bash
+alias claude-vg-batch='claude --print --max-budget-usd 10 --exclude-dynamic-system-prompt-sections'
+alias claude-vg-regression='claude --print --max-budget-usd 15 --exclude-dynamic-system-prompt-sections'
+```
+
+See `commands/vg/review-batch.md` + `commands/vg/regression.md` top-of-file recommendations.

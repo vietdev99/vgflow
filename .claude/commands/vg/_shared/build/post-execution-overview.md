@@ -727,6 +727,17 @@ then calls (single Agent tool call, NOT parallel):
 Agent(subagent_type="vg-build-post-executor", prompt=<rendered from post-execution-delegation.md template>)
 ```
 
+> **Tier 2 D — JSON Schema soft enforcement (future):** when the Claude
+> Code Agent tool exposes `--json-schema` for subagent invocation, the
+> spawn above SHOULD pass
+> `--json-schema=.claude/schemas/vg-build-post-executor-return.v1.json`
+> (the schema is committed today; spawn-site adoption is gated on Agent
+> tool support). The schema enforces the gates_passed/gates_failed
+> structure + SHA256 patterns at the subagent layer — invalid output
+> triggers automatic retry instead of falling through to the
+> orchestrator's post-spawn re-hash validators. Hard enforcement deferred
+> to a follow-up.
+
 After the subagent returns, the orchestrator narrates the outcome:
 
 ```bash

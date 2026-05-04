@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "vg-build-task-executor-return.v1.json",
+  "title": "vg-build-task-executor return contract (v1)",
+  "description": "Return JSON shape for the vg-build-task-executor subagent. Mirrors agents/vg-build-task-executor/SKILL.md > Output JSON contract. Tier 2 D — soft rollout: spawn sites MAY pass --json-schema=<this-path> to enforce shape at the subagent layer. Hard enforcement deferred to Tier 2 follow-up.",
+  "oneOf": [
+    {
+      "type": "object",
+      "description": "Success return (no error key)",
+      "required": [
+        "task_id",
+        "artifacts_written",
+        "commit_sha",
+        "bindings_satisfied",
+        "fingerprint_path",
+        "build_log_path"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^task-[\\w\\d-]+$",
+          "description": "Full task ID (e.g., task-04). MUST match input task_id exactly."
+        },
+        "artifacts_written": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Repo-relative paths created or modified. Each MUST exist on disk."
+        },
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$",
+          "description": "Full or short git SHA. Orchestrator validates with git rev-parse."
+        },
+        "bindings_satisfied": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Subset of input binding_requirements satisfied via // vg-binding: markers."
+        },
+        "fingerprint_path": {
+          "type": "string",
+          "description": "Path written in step 13 — ${PHASE_DIR}/.fingerprints/task-${id}.fingerprint.md."
+        },
+        "read_evidence_path": {
+          "type": ["string", "null"],
+          "description": "Path written in step 14. NULL when no design_ref_path was passed."
+        },
+        "build_log_path": {
+          "type": "string",
+          "description": "Path written in step 15 — ${PHASE_DIR}/BUILD-LOG/task-${id}.md (R1a UX baseline Req 1)."
+        },
+        "test_red_evidence_path": {
+          "type": ["string", "null"],
+          "description": "TDD red evidence path (step 7a). REQUIRED when input tdd_required=true; NULL otherwise. R6 Task 9."
+        },
+        "test_green_evidence_path": {
+          "type": ["string", "null"],
+          "description": "TDD green evidence path (step 7c). REQUIRED when input tdd_required=true; NULL otherwise. R6 Task 9."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Non-blocking issues (flaky test re-tried, deprecated API used)."
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "description": "Error return (any procedure-step failure)",
+      "required": ["error", "task_id"],
+      "properties": {
+        "error": {
+          "type": "string",
+          "description": "Machine-readable error code (e.g., capsule_field_missing, typecheck_failed, tdd_test_passes_before_fix)."
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^task-[\\w\\d-]+$"
+        },
+        "field": {"type": "string"},
+        "details": {"type": "string"},
+        "stderr": {"type": "string"},
+        "stderr_tail": {"type": "string"},
+        "test_path": {"type": "string"},
+        "exit_code": {"type": "integer"},
+        "path": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  ]
+}
