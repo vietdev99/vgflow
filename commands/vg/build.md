@@ -161,6 +161,8 @@ runtime_contract:
     - "--skip-rcrurd-implementation-audit"
     # R7 Task 4 (G2) — heuristic workflow implementation audit (state literal grep)
     - "--skip-workflow-implementation-audit"
+    # R7 Task 7 (G3) — edge-case coverage audit (vg-edge-case: marker grep)
+    - "--skip-edge-case-coverage-audit"
     - "--skip-uimap-injection-audit"
     - "--allow-verify-divergence"
     # Task 18 (pre-test gate) — escape hatch for STEP 6.5 (T1+T2+deploy+smoke)

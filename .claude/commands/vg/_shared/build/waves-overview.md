@@ -1141,6 +1141,72 @@ if [ -x "$WFIMPL_VAL" ]; then
 fi
 ```
 
+### 8d.5e — Edge-case implementation coverage audit (R7 Task 7 — G3)
+
+Build-time gate verifying executor honored the `// vg-edge-case: <variant_id>`
+marker contract from `waves-delegation.md` lines 152-159. Sister to 8d.5c
+(RCRURD) and 8d.5d (workflow) — same canonical override pattern.
+
+Codex audit failure mode (G3): Blueprint generated EDGE-CASES per profile
+(e.g. `G-04-b1` empty-domain → 400, `G-04-a1` tenant-boundary). The
+delegation prompt instructed the executor to add `// vg-edge-case:
+<variant_id>` comments at the relevant code site so coverage is auditable.
+But before R7 Task 7 there was NO build-side gate verifying these markers
+landed — `verify-edge-cases-contract.py` validates the artifact STRUCTURE
+(variant_id format, count budget), NOT implementation coverage.
+
+The validator scans each task capsule with non-empty `edge_cases_for_goals[]`,
+parses the per-goal EDGE-CASES variant table (variant_id + priority), and
+grep-audits the modified files in BUILD-LOG/task-NN.md:
+
+  - PASS: every critical variant has a `vg-edge-case:` marker, AND
+    high-priority coverage ≥ 80%.
+  - WARN: high-priority coverage < 80% (commonly framework-handled edges)
+    OR stale capsule referencing a pruned per-goal file (graceful
+    degradation, no crash).
+  - BLOCK: any critical variant has no marker in any modified file.
+    Critical-only-on-BLOCK is intentional: critical variants are auth /
+    data-integrity / cross-tenant boundary cases — a missing marker
+    means the executor likely skipped a security-relevant code path.
+
+Static analysis cannot prove edge coverage without symbolic execution —
+this gate is heuristic. WARN does NOT stop the wave; only BLOCK rc=1 halts.
+
+```bash
+EDGEV_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-edge-case-coverage.py"
+if [ -x "$EDGEV_VAL" ]; then
+  ${PYTHON_BIN} "$EDGEV_VAL" --phase "${PHASE_NUMBER}" --wave-id "${N}" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/edge-case-coverage-w${N}.json" 2>&1 || true
+  EDGEV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/edge-case-coverage-w${N}.json" 2>/dev/null)
+  case "$EDGEV" in
+    PASS|WARN) echo "✓ R7 Task 7 edge-case coverage audit: $EDGEV" ;;
+    BLOCK)
+      echo "⛔ R7 Task 7 edge-case coverage audit: BLOCK — critical edge-case variant has no \`// vg-edge-case: <variant_id>\` marker in modified files (likely missing code path for auth / data-integrity edge)" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-edge-case-coverage-audit ]]; then exit 1; fi
+      OVERRIDE_REASON=""
+      if [[ "${ARGUMENTS:-}" =~ --override-reason=([^[:space:]]+) ]]; then
+        OVERRIDE_REASON="${BASH_REMATCH[1]}"
+      fi
+      if [ -z "$OVERRIDE_REASON" ]; then
+        echo "⛔ --skip-edge-case-coverage-audit requires --override-reason=<ticket-or-URL-or-SHA>." >&2
+        echo "   Re-run: /vg:build ${PHASE_NUMBER} --skip-edge-case-coverage-audit --override-reason=\"<issue-id>: R7 Task 7 wave-${N} BLOCK accepted\"" >&2
+        exit 1
+      fi
+      if ! "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--skip-edge-case-coverage-audit \
+        --reason="build.edge-case-coverage wave-${N} ${OVERRIDE_REASON} — R7 Task 7 BLOCK accepted: missing critical edge-case marker tolerated ts=$(date -u +%FT%TZ); see ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/edge-case-coverage-w${N}.json"; then
+        echo "⛔ vg-orchestrator override emit FAILED for --skip-edge-case-coverage-audit — refusing silent skip." >&2
+        exit 1
+      fi
+      type -t log_override_debt >/dev/null 2>&1 && log_override_debt \
+        "--skip-edge-case-coverage-audit" "$PHASE_NUMBER" "build.edge-case-coverage.wave-${N}" "$OVERRIDE_REASON" "build-edge-case-coverage-audit-skipped"
+      ;;
+    *) echo "ℹ R7 Task 7 edge-case coverage audit: $EDGEV" ;;
+  esac
+fi
+```
+
 ### 8d.6 — Post-wave gate matrix (typecheck/build/test/contract/goals/utility)
 
 Run gates 1-5 in order, BLOCK on first failure. Adaptive typecheck
