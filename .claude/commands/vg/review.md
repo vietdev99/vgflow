@@ -284,6 +284,7 @@ runtime_contract:
     - "--allow-no-bugref"
     - "--allow-empty-bugfix"
     - "--skip-crossai"
+    - "--allow-build-crossai-deferred"  # R7-A Task 1 (G5) — carry forward build CrossAI deferred findings into review backlog
 ---
 
 

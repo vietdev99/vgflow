@@ -147,6 +147,7 @@ Flags:
 - `--full-scan` — disable sidebar suppression. Haiku agents see full page (sidebar/header/footer) in every snapshot. Use when: app has non-standard layout, geometry detection fails, or debugging suppression issues.
 - `--with-probes` — enable mutation probe variations (edit/boundary/repeat) in step 2b-3 step 9. Adds 1 Haiku per mutation goal. Default OFF — let /vg:test handle variations via Playwright codegen (deterministic, cheaper).
 - `--allow-no-crud-surface` — last-resort waiver for legacy phases missing CRUD-SURFACES.md. Logs debt via validator output; do not use for new CRUD work.
+- `--allow-build-crossai-deferred` — R7-A Task 1 (G5) override. Acknowledge that build CrossAI loop exhausted (5/5) and the user chose `(b) defer` so remaining BLOCK findings carry forward into review's backlog. **Gated**: must pair with `--override-reason="<text, ≥50ch>"`. Listed in `forbidden_without_override`. Logs HARD debt + emits `review.build_crossai_deferred_acknowledged`. Without this flag the carryover validator BLOCKs review preflight.
 
 **Flag parsing (v2.46-wave3.2 — explicit env vars used downstream):**
 ```bash
@@ -165,6 +166,7 @@ FULL_SCAN=""
 WITH_PROBES=""
 SKIP_CROSSAI=""
 ALLOW_NO_CRUD_SURFACE=""
+ALLOW_BUILD_CROSSAI_DEFERRED=""
 NON_INTERACTIVE=""
 FORCE_RERUN=""
 
@@ -182,13 +184,14 @@ for tok in $ARGS_RAW; do
     --with-probes)             WITH_PROBES=1 ;;
     --skip-crossai)            SKIP_CROSSAI=1 ;;
     --allow-no-crud-surface)   ALLOW_NO_CRUD_SURFACE=1 ;;
+    --allow-build-crossai-deferred) ALLOW_BUILD_CROSSAI_DEFERRED=1 ;;
     --non-interactive)         NON_INTERACTIVE=1 ;;
   esac
 done
 
 export RETRY_FAILED RE_SCAN_GOALS DOGFOOD SKIP_SCAN SKIP_DISCOVERY FIX_ONLY \
        EVALUATE_ONLY FULL_SCAN WITH_PROBES SKIP_CROSSAI ALLOW_NO_CRUD_SURFACE \
-       NON_INTERACTIVE FORCE_RERUN
+       ALLOW_BUILD_CROSSAI_DEFERRED NON_INTERACTIVE FORCE_RERUN
 ```
 
 **Phase profile detection (P5, v1.9.2) — FIRST ACTION before any blanket check:**
@@ -374,6 +377,57 @@ if extra:
     --actor "llm-claimed" \
     --outcome "INFO" \
     --payload "$FORCE_RESET_JSON" >/dev/null 2>&1 || true
+fi
+```
+
+**Build CrossAI carryover audit — R7-A Task 1 (G5 from codex audit 2026-05-05)**
+
+Closes silent leak: build CrossAI defer path emits
+`build.crossai_loop_exhausted` event + `${PHASE_DIR}/crossai-build-verify/findings-iter5.json`
+with remaining BLOCK findings. Pre-fix, /vg:review preflight ignored both →
+deferred findings vanished, accept passed clean, ship bug.
+
+Validator `verify-build-crossai-carryover.py` reads the latest terminal
+event for this phase from `events.db` + checks the findings file:
+- terminal=clean → PASS
+- terminal=exhausted + findings present → BLOCK (override: `--allow-build-crossai-deferred` + `--override-reason`)
+- terminal=user_override + findings → WARN (already acknowledged at build time)
+- no terminal + findings → BLOCK (corrupted state)
+- no terminal + no findings → PASS (CrossAI never ran or completed clean)
+
+```bash
+CROSSAI_CARRYOVER_VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-build-crossai-carryover.py"
+[ -f "$CROSSAI_CARRYOVER_VALIDATOR" ] || \
+  CROSSAI_CARRYOVER_VALIDATOR="${REPO_ROOT}/scripts/validators/verify-build-crossai-carryover.py"
+
+if [ -f "$CROSSAI_CARRYOVER_VALIDATOR" ]; then
+  "${PYTHON_BIN:-python3}" "$CROSSAI_CARRYOVER_VALIDATOR" \
+    --phase-dir "${PHASE_DIR}"
+  CROSSAI_CARRYOVER_RC=$?
+
+  if [ "$CROSSAI_CARRYOVER_RC" -ne 0 ]; then
+    if [ -n "$ALLOW_BUILD_CROSSAI_DEFERRED" ]; then
+      if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+        echo "⛔ --allow-build-crossai-deferred requires --override-reason='<ticket URL or commit SHA, ≥50ch>'" >&2
+        exit 1
+      fi
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag "--allow-build-crossai-deferred" \
+        --reason "Build CrossAI deferred findings carry forward into review backlog (phase ${PHASE_NUMBER})" \
+        >/dev/null 2>&1 || true
+      type -t log_override_debt >/dev/null 2>&1 && \
+        log_override_debt "review-build-crossai-deferred" "${PHASE_NUMBER}" \
+          "Build CrossAI findings carried into review backlog" "$PHASE_DIR" 2>/dev/null || true
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+        "review.build_crossai_deferred_acknowledged" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+      echo "⚠ --allow-build-crossai-deferred set — review will append findings to its backlog (HARD debt logged)"
+    else
+      exit 1
+    fi
+  fi
+else
+  echo "⚠ verify-build-crossai-carryover.py not found — skipping G5 carryover audit (re-sync vgflow)." >&2
 fi
 ```
 

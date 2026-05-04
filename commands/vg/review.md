@@ -293,6 +293,7 @@ runtime_contract:
     - "--allow-empty-bugfix"
     - "--skip-crossai"
     - "--skip-lens-plan-gate"  # NEW R3 audit FAIL #13 (Codex review)
+    - "--allow-build-crossai-deferred"  # R7-A Task 1 (G5) — carry forward build CrossAI deferred findings into review backlog
 ---
 
 
