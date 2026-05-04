@@ -148,6 +148,7 @@ Flags:
 - `--with-probes` — enable mutation probe variations (edit/boundary/repeat) in step 2b-3 step 9. Adds 1 Haiku per mutation goal. Default OFF — let /vg:test handle variations via Playwright codegen (deterministic, cheaper).
 - `--allow-no-crud-surface` — last-resort waiver for legacy phases missing CRUD-SURFACES.md. Logs debt via validator output; do not use for new CRUD work.
 - `--allow-build-crossai-deferred` — R7-A Task 1 (G5) override. Acknowledge that build CrossAI loop exhausted (5/5) and the user chose `(b) defer` so remaining BLOCK findings carry forward into review's backlog. **Gated**: must pair with `--override-reason="<text, ≥50ch>"`. Listed in `forbidden_without_override`. Logs HARD debt + emits `review.build_crossai_deferred_acknowledged`. Without this flag the carryover validator BLOCKs review preflight.
+- `--allow-missing-build-provenance` — R7-D Task 6 (G6+G8) override. Bypass the build provenance audit for legacy phases predating R2 (per-task BUILD-LOG split) or R6 (post-executor single-spawn evidence). Required when `BUILD-LOG/index.md` is absent or `build.completed` event is missing from `events.db`. **Gated**: must pair with `--override-reason="<text>"`. Listed in `forbidden_without_override`. Logs override debt + emits `review.build_provenance_skipped`. Without this flag the provenance audit BLOCKs review preflight when build did not finish or used a legacy flat BUILD-LOG.md format.
 
 **Flag parsing (v2.46-wave3.2 — explicit env vars used downstream):**
 ```bash
@@ -167,6 +168,7 @@ WITH_PROBES=""
 SKIP_CROSSAI=""
 ALLOW_NO_CRUD_SURFACE=""
 ALLOW_BUILD_CROSSAI_DEFERRED=""
+ALLOW_MISSING_BUILD_PROVENANCE=""
 NON_INTERACTIVE=""
 FORCE_RERUN=""
 
@@ -185,13 +187,15 @@ for tok in $ARGS_RAW; do
     --skip-crossai)            SKIP_CROSSAI=1 ;;
     --allow-no-crud-surface)   ALLOW_NO_CRUD_SURFACE=1 ;;
     --allow-build-crossai-deferred) ALLOW_BUILD_CROSSAI_DEFERRED=1 ;;
+    --allow-missing-build-provenance) ALLOW_MISSING_BUILD_PROVENANCE=1 ;;
     --non-interactive)         NON_INTERACTIVE=1 ;;
   esac
 done
 
 export RETRY_FAILED RE_SCAN_GOALS DOGFOOD SKIP_SCAN SKIP_DISCOVERY FIX_ONLY \
        EVALUATE_ONLY FULL_SCAN WITH_PROBES SKIP_CROSSAI ALLOW_NO_CRUD_SURFACE \
-       ALLOW_BUILD_CROSSAI_DEFERRED NON_INTERACTIVE FORCE_RERUN
+       ALLOW_BUILD_CROSSAI_DEFERRED ALLOW_MISSING_BUILD_PROVENANCE \
+       NON_INTERACTIVE FORCE_RERUN
 ```
 
 **Phase profile detection (P5, v1.9.2) — FIRST ACTION before any blanket check:**
@@ -428,6 +432,79 @@ if [ -f "$CROSSAI_CARRYOVER_VALIDATOR" ]; then
   fi
 else
   echo "⚠ verify-build-crossai-carryover.py not found — skipping G5 carryover audit (re-sync vgflow)." >&2
+fi
+```
+
+**Build provenance audit — R7-D Task 6 (G6+G8 from codex audit 2026-05-05)**
+
+Closes review preflight blind spot: REQUIRED_ARTIFACTS (line ~218) lists
+`SPECS CONTEXT PLAN API-CONTRACTS API-DOCS TEST-GOALS SUMMARY` but NEVER
+checks:
+
+- **G8** `BUILD-LOG/index.md` — Layer 2 TOC produced by R2 per-task split.
+  Absence means build used legacy flat `BUILD-LOG.md` format (or
+  post-executor crashed mid-run) → no per-task provenance to audit.
+- **G6** `build.completed` event in `events.db` — terminal signal from
+  `/vg:build` close step (`12_run_complete`). Absence means build pipeline
+  did NOT finish: post-execution validation may have aborted, CrossAI loop
+  may have been killed, or close step crashed → review running against
+  partial/corrupted state.
+
+Failure mode without this gate: review proceeds, UNREACHABLE goals get
+false-PASS or stale data drives the wrong verdict, accept passes clean,
+ship bug.
+
+```bash
+PROVENANCE_FAILED=""
+
+# G8 — BUILD-LOG/index.md must exist (R2 per-task split required)
+if [ ! -f "${PHASE_DIR}/BUILD-LOG/index.md" ]; then
+  PROVENANCE_FAILED="${PROVENANCE_FAILED}\n  - BUILD-LOG/index.md missing (R2 per-task split required — legacy flat BUILD-LOG.md not accepted)"
+fi
+
+# G6 — build.completed event must be in events.db (terminal pipeline signal)
+BUILD_COMPLETED=$("${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator query-events \
+  --event-type "build.completed" --phase "${PHASE_NUMBER}" --limit 1 2>/dev/null \
+  | "${PYTHON_BIN:-python3}" -c "import json,sys
+try:
+    rows = json.load(sys.stdin)
+    print('1' if rows else '0')
+except Exception:
+    print('0')
+" 2>/dev/null)
+if [ "$BUILD_COMPLETED" != "1" ]; then
+  PROVENANCE_FAILED="${PROVENANCE_FAILED}\n  - build.completed event missing in events.db for phase ${PHASE_NUMBER} (build pipeline didn't finish or close step crashed)"
+fi
+
+if [ -n "$PROVENANCE_FAILED" ]; then
+  if [ -n "$ALLOW_MISSING_BUILD_PROVENANCE" ]; then
+    if [[ ! "$ARGUMENTS" =~ --override-reason ]]; then
+      echo "⛔ --allow-missing-build-provenance requires --override-reason='<text>'" >&2
+      exit 1
+    fi
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "--allow-missing-build-provenance" \
+      --reason "Review proceeds without build provenance (phase ${PHASE_NUMBER})" \
+      >/dev/null 2>&1 || true
+    type -t log_override_debt >/dev/null 2>&1 && \
+      log_override_debt "review-missing-build-provenance" "${PHASE_NUMBER}" \
+        "0_parse_and_validate" \
+        "Review proceeded without BUILD-LOG/index or build.completed event" \
+        "review-build-provenance" 2>/dev/null || true
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.build_provenance_skipped" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    echo "⚠ --allow-missing-build-provenance set — proceeding (HARD debt logged)"
+  else
+    echo "⛔ Build provenance audit failed:" >&2
+    printf "$PROVENANCE_FAILED\n" >&2
+    echo "" >&2
+    echo "  Required: BUILD-LOG/index.md (R2 split) + build.completed event in events.db" >&2
+    echo "  Run /vg:build ${PHASE_NUMBER} to complete the build, or pass" >&2
+    echo "    --allow-missing-build-provenance --override-reason=\"<text>\"" >&2
+    echo "  for legacy phases predating R2/R6." >&2
+    exit 1
+  fi
 fi
 ```
 
