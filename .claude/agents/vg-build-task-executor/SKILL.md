@@ -72,7 +72,9 @@ design ref).
   "binding_requirements": [
     "binding-CONTEXT-D-02",
     "binding-INTERFACE-error-shape"
-  ]
+  ],
+  "tdd_required": true,
+  "test_path": "apps/web/e2e/sites-list.spec.ts"
 }
 ```
 
@@ -91,6 +93,8 @@ design ref).
 | `typecheck_cmd` | yes | From `vg.config.md > build_gates.typecheck_cmd`. |
 | `build_cmd` | maybe | From `vg.config.md > build_gates.build_cmd`. May be empty. |
 | `binding_requirements` | yes | Citations the commit MUST satisfy via `// vg-binding: <id>` + commit-msg cite. |
+| `tdd_required` | maybe | Boolean. Defaults `false` when absent. Planner sets `true` for tasks that touch BOTH src + a `.spec.ts`/`.test.ts` file. When `true`, executor MUST capture red+green test evidence per steps 7a/7c (R6 Task 9). When `false`/missing, evidence steps are skipped and the two `test_*_evidence_path` return fields are NULL. |
+| `test_path` | maybe | Repo-relative path to the test file targeted by this task (e.g., `apps/web/e2e/sites-list.spec.ts`). REQUIRED when `tdd_required=true`. When absent + `tdd_required=true`, executor derives via `apps/**/e2e/${slug}.spec.ts` heuristic; on derive failure, returns `{"error": "tdd_test_path_unresolved", ...}`. |
 
 ## Step-by-step procedure
 
@@ -121,34 +125,105 @@ design ref).
    L1 design-pixel gate already verified the PNG exists on disk before
    spawn.
 
-6. **Implement the task** per `plan_task_slice` + contract slices. Edit
-   or create only the files listed in the task's `<file-path>` /
-   `<edits-*>` attributes. Do NOT refactor unrelated code.
+6. **(Conditional) Step 7a — TDD red capture** — execute ONLY when
+   input `tdd_required == true`; otherwise skip directly to step 7
+   ("Implement the task") with `test_red_evidence_path = NULL` in the
+   return JSON. R6 Task 9.
+   - Resolve the test file: prefer input `task.test_path`; on absence,
+     derive via `apps/**/e2e/${slug}.spec.ts`. If neither resolves,
+     return `{"error": "tdd_test_path_unresolved", "task_id": "${task_id}"}`
+     (no commit).
+   - Run the test command (e.g. `npx playwright test ${test_path} --reporter=line`,
+     or `pnpm test ${test_path}` per `vg.config.md > build_gates.test_unit_cmd`).
+     Capture stdout/stderr.
+   - **Assert `exit_code != 0`**. The test MUST FAIL before the src change —
+     it is the failing case the fix exists to satisfy. If `exit_code == 0`,
+     the test trivially passes and TDD discipline is broken; return:
+     ```json
+     {"error": "tdd_test_passes_before_fix", "task_id": "${task_id}",
+      "test_path": "${test_path}",
+      "details": "Test passed before src change — not red, no failure to drive fix"}
+     ```
+     and DO NOT commit.
+   - Write evidence to `${phase_dir}/.test-evidence/task-${task_id}.red.json`:
+     ```json
+     {
+       "task_id": "${task_id}",
+       "phase": "tdd_red",
+       "captured_at": "<ISO-8601 UTC, e.g. 2026-05-05T12:34:56Z>",
+       "test_command": "<exact command run>",
+       "exit_code": <int>,
+       "test_output_tail": "<last 30 lines of combined stdout+stderr>",
+       "expected_outcome": "FAIL_BEFORE_FIX"
+     }
+     ```
+   - Continue to step 7 (apply src changes).
 
-7. **Add binding markers** — for each modified source file, add a
+7. **Step 7b — Implement the task** per `plan_task_slice` + contract
+   slices. Edit or create only the files listed in the task's
+   `<file-path>` / `<edits-*>` attributes. Do NOT refactor unrelated
+   code.
+
+8. **Add binding markers** — for each modified source file, add a
    `// vg-binding: <id>` comment (or language-appropriate equivalent:
    `# vg-binding:` for Python/shell, `<!-- vg-binding: -->` for
    HTML/Markdown) covering each entry in `binding_requirements`.
 
-8. **Run typecheck** via `${typecheck_cmd}`. On non-zero exit, return
-   error JSON immediately — DO NOT commit:
-   `{"error": "typecheck_failed", "stderr": "<tail>", "task_id": "${task_id}"}`.
+9. **(Conditional) Step 7c — TDD green capture** — execute ONLY when
+   input `tdd_required == true`; otherwise skip with
+   `test_green_evidence_path = NULL` in return JSON. R6 Task 9.
+   - Re-run the SAME test command from step 7a. Capture stdout/stderr.
+   - **Assert `exit_code == 0`**. Src change MUST make the test pass.
+     If `exit_code != 0`, the fix did not satisfy the failing case;
+     return:
+     ```json
+     {"error": "tdd_test_still_fails_after_fix", "task_id": "${task_id}",
+      "test_path": "${test_path}", "exit_code": <int>,
+      "stderr_tail": "<last 30 lines>"}
+     ```
+     and DO NOT commit.
+   - Write evidence to `${phase_dir}/.test-evidence/task-${task_id}.green.json`:
+     ```json
+     {
+       "task_id": "${task_id}",
+       "phase": "tdd_green",
+       "captured_at": "<ISO-8601 UTC strictly AFTER red.captured_at>",
+       "test_command": "<same command as red>",
+       "exit_code": 0,
+       "test_output_tail": "<last 30 lines>",
+       "expected_outcome": "PASS_AFTER_FIX"
+     }
+     ```
+   - Continue to typecheck (next step). The post-spawn validator
+     `verify-tdd-evidence.py` later asserts `red.captured_at <
+     green.captured_at` and that both files are bundled in this task's
+     single commit.
 
-9. **(Optional) Run build** via `${build_cmd}` if non-empty. On non-zero
-   exit, return error JSON — DO NOT commit:
-   `{"error": "build_failed", "stderr": "<tail>", "task_id": "${task_id}"}`.
+10. **Run typecheck** via `${typecheck_cmd}`. On non-zero exit, return
+    error JSON immediately — DO NOT commit:
+    `{"error": "typecheck_failed", "stderr": "<tail>", "task_id": "${task_id}"}`.
 
-10. **Stage and commit** all task changes in EXACTLY ONE commit:
+11. **(Optional) Run build** via `${build_cmd}` if non-empty. On non-zero
+    exit, return error JSON — DO NOT commit:
+    `{"error": "build_failed", "stderr": "<tail>", "task_id": "${task_id}"}`.
+
+12. **Stage and commit** all task changes in EXACTLY ONE commit:
     ```
     git add <listed-files>
+    # When tdd_required=true, also stage the evidence files written
+    # in steps 7a + 7c so they ride in the SAME single commit (R6 Task 9):
+    git add ${phase_dir}/.test-evidence/task-${task_id}.red.json \
+            ${phase_dir}/.test-evidence/task-${task_id}.green.json
     git commit -m "<type>(${phase_number}-${task_num}): <subject>"
     ```
     where `type ∈ {feat, fix, refactor, test, chore}`. Commit body MUST
     cite each binding (e.g. `Per CONTEXT.md D-02`,
     `Per INTERFACE-STANDARDS § error-shape`). Multiple commits = R5
-    budget violation → task rejected.
+    budget violation → task rejected. The "ONE commit per task"
+    constraint is preserved — TDD evidence files are bundled into the
+    SAME commit as src + test changes (NEVER a follow-up commit).
 
-11. **Write fingerprint** at
+13. **Write fingerprint** at
     `${phase_dir}/.fingerprints/task-${task_id}.fingerprint.md`
     summarizing files touched, line-count delta, gate evidence
     (typecheck exit code, test count). Format per
@@ -157,7 +232,7 @@ design ref).
     helper exists; otherwise inline `sha256sum <file>` per artifact and
     record the commit SHA.
 
-12. **(Conditional) Write read-evidence** at
+14. **(Conditional) Write read-evidence** at
     `${phase_dir}/.read-evidence/task-${task_id}.json` IF
     `design_ref_path` was non-NULL in input. Format:
     ```json
@@ -172,7 +247,7 @@ design ref).
     `design_ref_path` was NULL, DO NOT create this file — the post-spawn
     validator checks both directions.
 
-13. **Write BUILD-LOG entry** at
+15. **Write BUILD-LOG entry** at
     `${phase_dir}/BUILD-LOG/task-${task_id}.md` (R1a UX baseline Req 1).
     Format:
     ```markdown
@@ -201,7 +276,7 @@ design ref).
     the canonical `BUILD-LOG.md` (Layer 3) and writes `BUILD-LOG/index.md`
     (Layer 2). Missing this file breaks aggregation.
 
-14. **Return JSON** to the orchestrator (see Output JSON contract below).
+16. **Return JSON** to the orchestrator (see Output JSON contract below).
 
 ## Output JSON contract
 
@@ -220,6 +295,8 @@ design ref).
   "fingerprint_path": "${PHASE_DIR}/.fingerprints/task-04.fingerprint.md",
   "read_evidence_path": "${PHASE_DIR}/.read-evidence/task-04.json",
   "build_log_path": "${PHASE_DIR}/BUILD-LOG/task-04.md",
+  "test_red_evidence_path": "${PHASE_DIR}/.test-evidence/task-04.red.json",
+  "test_green_evidence_path": "${PHASE_DIR}/.test-evidence/task-04.green.json",
   "warnings": []
 }
 ```
@@ -230,9 +307,11 @@ design ref).
 | `artifacts_written` | yes | Repo-relative paths created or modified. Each MUST exist on disk. |
 | `commit_sha` | yes | Full or short SHA. Orchestrator validates `git rev-parse <sha>`. |
 | `bindings_satisfied` | yes | Subset of input `binding_requirements`. Empty = task plan binding requirements not met. |
-| `fingerprint_path` | yes | Path written in step 11. Must exist on disk. |
-| `read_evidence_path` | maybe | Path written in step 12. NULL when no `design_ref_path` was passed. |
-| `build_log_path` | yes | Path written in step 13. Must exist on disk (R1a UX baseline Req 1). |
+| `fingerprint_path` | yes | Path written in step 13. Must exist on disk. |
+| `read_evidence_path` | maybe | Path written in step 14. NULL when no `design_ref_path` was passed. |
+| `build_log_path` | yes | Path written in step 15. Must exist on disk (R1a UX baseline Req 1). |
+| `test_red_evidence_path` | maybe | Path to red evidence JSON written in step 7a. REQUIRED when input `tdd_required=true`; NULL when `tdd_required=false`. R6 Task 9. |
+| `test_green_evidence_path` | maybe | Path to green evidence JSON written in step 7c. REQUIRED when input `tdd_required=true`; NULL when `tdd_required=false`. R6 Task 9. |
 | `warnings` | optional | Non-blocking issues (flaky test re-tried, deprecated API used). |
 
 **Error return format** (any procedure step failure):
@@ -257,6 +336,10 @@ design ref).
 | multiple commits | R5 catches via `git log --oneline ${prev_sha}..HEAD \| wc -l > 1` (orchestrator post-spawn) | subagent should never produce multiple commits; if it does, returns error noting accidental split |
 | binding missing in modified file | post-spawn output validator greps modified files for `// vg-binding:` markers | return error JSON listing unsatisfied bindings |
 | design-ref read but no read-evidence written | post-spawn validator: `design_ref_path` in input + `read_evidence_path` NULL in return | return `{"error": "design_evidence_missing", "task_id": "<id>"}` |
+| TDD red test trivially passes (R6 Task 9) | step 7a — `exit_code == 0` from pre-fix test run | return `{"error": "tdd_test_passes_before_fix", "task_id": "<id>", "test_path": "..."}`; DO NOT commit |
+| TDD green test still fails after fix (R6 Task 9) | step 7c — `exit_code != 0` from post-fix test run | return `{"error": "tdd_test_still_fails_after_fix", "task_id": "<id>", "exit_code": <rc>, "stderr_tail": "..."}`; DO NOT commit |
+| TDD test path unresolved (R6 Task 9) | step 7a — `task.test_path` absent + slug-derive yields no file | return `{"error": "tdd_test_path_unresolved", "task_id": "<id>"}`; DO NOT commit |
+| TDD evidence missing in commit (R6 Task 9) | post-spawn `verify-tdd-evidence.py` — capsule `tdd_required=true` + missing `.red.json` or `.green.json`, or wrong exit codes / temporal order | wave-complete BLOCKed; override via `--skip-tdd-evidence --override-reason=<ticket>` |
 | commit-msg hook rejection (binding cite missing) | `git commit` exit code 1, hook stderr contains "binding" | return error JSON; orchestrator routes to gap-recovery |
 | BUILD-LOG write failure | step 13 `Write` returns I/O error or path not writable | return `{"error": "build_log_write_failed", "path": "<phase_dir>/BUILD-LOG/task-<id>.md", "task_id": "<id>", "details": "<errno>"}`; DO NOT commit (reverse step 10 if already committed) |
 | `subagent_type` typo in spawn | spawn-guard PreToolUse hook denies | (orchestrator sees deny; re-spawn with correct `vg-build-task-executor`) |
@@ -264,7 +347,7 @@ design ref).
 
 ## Constraints (do not violate)
 
-- ONE commit per task. Multiple commits → R5 budget violation → task rejected.
+- ONE commit per task. Multiple commits → R5 budget violation → task rejected. R6 Task 9 TDD evidence files (`.test-evidence/task-${id}.red.json` + `.green.json`) MUST be staged into the SAME single commit alongside src+test changes — never a follow-up commit.
 - `// vg-binding:` citation in EVERY modified file (language-appropriate
   comment syntax). Output validator rejects on missing markers.
 - typecheck MUST pass. No commit on typecheck failure.

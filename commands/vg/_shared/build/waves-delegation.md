@@ -52,6 +52,8 @@ files (capsule, plan slice, contract slices, design ref).
     "binding-CONTEXT-D-02",
     "binding-INTERFACE-error-shape"
   ],
+  "tdd_required": true,
+  "test_path": "apps/web/e2e/sites-list.spec.ts",
   "edge_cases_for_goals": [
     "G-04",
     "G-12"
@@ -98,6 +100,8 @@ files (capsule, plan slice, contract slices, design ref).
 | `typecheck_cmd` | yes | From `vg.config.md > build_gates.typecheck_cmd`. Subagent runs before commit. |
 | `build_cmd` | maybe | From `vg.config.md > build_gates.build_cmd`. May be empty. |
 | `binding_requirements` | yes | Citations the subagent's commit MUST satisfy via `// vg-binding: <id>` comments + commit-msg cite. |
+| `tdd_required` | maybe | Boolean. Defaults `false` when absent. Planner sets `true` for tasks that touch BOTH src + a `.spec.ts`/`.test.ts` file. When `true`, executor MUST run target test BEFORE src change (assert FAIL) + AFTER (assert PASS), capture both runs as evidence files in `${PHASE_DIR}/.test-evidence/`, and bundle both files into the SAME single commit. Post-spawn `verify-tdd-evidence.py` BLOCKs wave on missing/wrong evidence. R6 Task 9. |
+| `test_path` | maybe | Repo-relative path to the target test file (e.g. `apps/web/e2e/sites-list.spec.ts`). REQUIRED when `tdd_required=true`. Subagent derives via `apps/**/e2e/${slug}.spec.ts` heuristic when omitted; `tdd_test_path_unresolved` error when neither resolves. |
 | `edge_cases_for_goals` | maybe | List of goal IDs (G-NN) whose EDGE-CASES this task implements. Subagent MUST load via `vg-load --artifact edge-cases --goal G-NN` and handle each variant_id in code. Empty list = task touches no goals (rare, e.g., infra/migration tasks). |
 | `crud_surfaces_slice_path` | maybe | Pre-resolved CRUD-SURFACES slice for resources this task touches. NULL when task has no API endpoints OR phase predates Task 37. Subagent reads via `cat $crud_surfaces_slice_path` (file is concatenation of per-resource slices). |
 | `lens_walk_slice_path` | maybe | Pre-resolved LENS-WALK slice for goals this task implements. NULL when task touches no goals OR phase has no `LENS-WALK/`. Subagent loads to understand bug-class probe variants. |
@@ -233,6 +237,33 @@ ${BINDING_REQUIREMENTS_LIST}
    required field is missing or empty, return error JSON immediately:
    `{"error": "capsule_field_missing", "field": "<name>", "task_id": "${task_id}"}`.
 
+2a. **(Conditional) TDD red capture (R6 Task 9)** — execute ONLY when
+    input `tdd_required == true`; otherwise skip with
+    `test_red_evidence_path = NULL` in return JSON.
+    - Resolve test file: prefer input `test_path`; else derive
+      `apps/**/e2e/${slug}.spec.ts`. Unresolvable → return
+      `{"error": "tdd_test_path_unresolved", "task_id": "${task_id}"}`.
+    - Run test command (e.g. `npx playwright test ${test_path} --reporter=line`
+      or `pnpm test ${test_path}`). Capture stdout/stderr.
+    - Assert `exit_code != 0`. If `exit_code == 0`, return
+      `{"error": "tdd_test_passes_before_fix", "task_id": "${task_id}",
+        "test_path": "${test_path}",
+        "details": "Test passed before src change — not red, no failure to drive fix"}`
+      and DO NOT commit.
+    - Write evidence to
+      `${phase_dir}/.test-evidence/task-${task_id}.red.json`:
+      ```json
+      {
+        "task_id": "${task_id}",
+        "phase": "tdd_red",
+        "captured_at": "<ISO-8601 UTC>",
+        "test_command": "<exact command>",
+        "exit_code": <int>,
+        "test_output_tail": "<last 30 lines>",
+        "expected_outcome": "FAIL_BEFORE_FIX"
+      }
+      ```
+
 2. **Implement** per the `<task_plan_slice>` body. Touch ONLY the files
    listed in the task's `<file-path>` / `<edits-*>` attributes. Do not
    refactor unrelated code.
@@ -242,12 +273,38 @@ ${BINDING_REQUIREMENTS_LIST}
    `# vg-binding:` for Python, `<!-- vg-binding: -->` for HTML/MD)
    covering each entry in `binding_requirements`.
 
+3a. **(Conditional) TDD green capture (R6 Task 9)** — execute ONLY when
+    input `tdd_required == true`; otherwise skip with
+    `test_green_evidence_path = NULL` in return JSON.
+    - Re-run the SAME test command from step 2a. Capture stdout/stderr.
+    - Assert `exit_code == 0`. If `exit_code != 0`, return
+      `{"error": "tdd_test_still_fails_after_fix", "task_id": "${task_id}",
+        "test_path": "${test_path}", "exit_code": <int>,
+        "stderr_tail": "<last 30 lines>"}`
+      and DO NOT commit.
+    - Write evidence to
+      `${phase_dir}/.test-evidence/task-${task_id}.green.json`:
+      ```json
+      {
+        "task_id": "${task_id}",
+        "phase": "tdd_green",
+        "captured_at": "<ISO-8601 UTC strictly AFTER red.captured_at>",
+        "test_command": "<same as red>",
+        "exit_code": 0,
+        "test_output_tail": "<last 30 lines>",
+        "expected_outcome": "PASS_AFTER_FIX"
+      }
+      ```
+
 4. **Run typecheck**: `${typecheck_cmd}`. If exit code != 0, return
    error JSON: `{"error": "typecheck_failed", "stderr": "<tail>", "task_id": "${task_id}"}`.
    Do NOT commit on typecheck failure.
 
 5. **Stage + commit** — exactly ONE commit. Multiple commits are caught
    by post-spawn R5 check (`git log --oneline ${prev_sha}..HEAD | wc -l > 1`).
+   When `tdd_required=true`, the SAME commit MUST stage both
+   `${phase_dir}/.test-evidence/task-${task_id}.red.json` and
+   `.green.json` alongside src+test changes. NEVER a follow-up commit.
    Commit message format:
      `<type>(${phase_number}-${task_num}): <subject>`
      where type ∈ {feat, fix, refactor, test, chore}
@@ -313,6 +370,8 @@ for the D-06 task-fidelity audit (post-spawn 3-way hash compare).
   "fingerprint_path": "${PHASE_DIR}/.fingerprints/task-04.fingerprint.md",
   "read_evidence_path": "${PHASE_DIR}/.read-evidence/task-04.json",
   "build_log_path": "${PHASE_DIR}/BUILD-LOG/task-04.md",
+  "test_red_evidence_path": "${PHASE_DIR}/.test-evidence/task-04.red.json",
+  "test_green_evidence_path": "${PHASE_DIR}/.test-evidence/task-04.green.json",
   "warnings": []
 }
 ```
@@ -328,6 +387,8 @@ for the D-06 task-fidelity audit (post-spawn 3-way hash compare).
 | `fingerprint_path` | yes | Path written in step 6 of procedure. Must exist on disk. |
 | `read_evidence_path` | maybe | Path written in step 7. NULL when no `design_ref_path` was passed. |
 | `build_log_path` | yes | Path written by subagent procedure step 13 — `${PHASE_DIR}/BUILD-LOG/task-${task_id}.md`. R1a UX baseline Req 1 layer 1 (per-task split). Orchestrator validates the file exists on disk before marking task complete. Post-executor (Task 11) concats every `BUILD-LOG/task-*.md` into Layer 3 `BUILD-LOG.md`; missing this file breaks aggregation. |
+| `test_red_evidence_path` | maybe | Path to red evidence JSON written in step 2a. REQUIRED when input `tdd_required=true`; NULL when `tdd_required=false`/missing. R6 Task 9. |
+| `test_green_evidence_path` | maybe | Path to green evidence JSON written in step 3a. REQUIRED when input `tdd_required=true`; NULL when `tdd_required=false`/missing. R6 Task 9. |
 | `warnings` | optional | Non-blocking issues the subagent surfaces (e.g., flaky test re-tried, deprecated API used). |
 
 **Error return format** (any procedure step failure):
@@ -359,6 +420,10 @@ bash scripts/vg-narrate-spawn.sh vg-build-task-executor failed "task-${N}: <erro
 | multiple commits | R5 catches via `git log --oneline ${prev_sha}..HEAD \| wc -l > 1` (orchestrator post-spawn) | subagent should never produce multiple commits; if it does, returns error noting accidental split |
 | binding missing in modified file | post-spawn output validator greps modified files for `// vg-binding:` markers | return error JSON listing unsatisfied bindings |
 | design-ref read but no read-evidence written | post-spawn output validator: `design_ref_path` in input + `read_evidence_path` NULL in return | return error JSON `{"error": "design_evidence_missing", ...}` |
+| TDD red trivially passes (R6 Task 9) | step 2a — `exit_code == 0` from pre-fix test | return `{"error": "tdd_test_passes_before_fix", ...}`; DO NOT commit |
+| TDD green still fails after fix (R6 Task 9) | step 3a — `exit_code != 0` from post-fix test | return `{"error": "tdd_test_still_fails_after_fix", ...}`; DO NOT commit |
+| TDD test path unresolved (R6 Task 9) | step 2a — `test_path` absent + slug-derive yields no file | return `{"error": "tdd_test_path_unresolved", ...}`; DO NOT commit |
+| TDD evidence missing in commit (R6 Task 9) | post-spawn `verify-tdd-evidence.py` — capsule `tdd_required=true` + missing red/green file, wrong exit codes, or wrong temporal order | wave-complete BLOCKed; override via `--skip-tdd-evidence --override-reason=<ticket>` |
 | commit-msg hook rejection (binding cite missing) | `git commit` exit code 1, hook stderr contains "binding" | return error JSON; orchestrator routes to gap-recovery |
 | `subagent_type` typo in spawn | spawn-guard PreToolUse hook denies | (orchestrator sees deny; re-spawn with correct `vg-build-task-executor`) |
 | `task_id` not in `remaining[]` | spawn-guard PreToolUse hook denies (Task 1, commit `6135701`) | (orchestrator sees deny; either typo in task_id or already spawned this task) |

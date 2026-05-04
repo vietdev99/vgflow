@@ -930,6 +930,47 @@ if [ -x "$TF_VAL" ] && [ -d "$WAVE_PROMPT_DIR" ]; then
 fi
 ```
 
+### 8d.5b — TDD evidence audit (R6 Task 9)
+
+Post-spawn TDD discipline check: for each task with capsule
+`tdd_required=true`, verify both red + green test-evidence files exist
+under `${PHASE_DIR}/.test-evidence/`, with red.exit_code != 0,
+green.exit_code == 0, and red.captured_at < green.captured_at.
+Tasks with `tdd_required` false/missing are skipped (back-compat).
+
+```bash
+TDD_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-tdd-evidence.py"
+if [ -x "$TDD_VAL" ]; then
+  ${PYTHON_BIN} "$TDD_VAL" --phase "${PHASE_NUMBER}" --wave-id "${N}" \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/tdd-evidence-w${N}.json" 2>&1 || true
+  TDDV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" \
+       "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/tdd-evidence-w${N}.json" 2>/dev/null)
+  case "$TDDV" in
+    PASS|WARN) echo "✓ R6 Task 9 TDD evidence audit: $TDDV" ;;
+    BLOCK)
+      echo "⛔ R6 Task 9 TDD evidence audit: BLOCK — task with tdd_required=true is missing red/green evidence, has wrong exit codes, or wrong temporal order" >&2
+      if [[ ! "$ARGUMENTS" =~ --skip-tdd-evidence ]]; then exit 1; fi
+      OVERRIDE_REASON=""
+      if [[ "${ARGUMENTS:-}" =~ --override-reason=([^[:space:]]+) ]]; then
+        OVERRIDE_REASON="${BASH_REMATCH[1]}"
+      fi
+      if [ -z "$OVERRIDE_REASON" ]; then
+        echo "⛔ --skip-tdd-evidence requires --override-reason=<ticket-or-URL-or-SHA>." >&2
+        echo "   Re-run: /vg:build ${PHASE_NUMBER} --skip-tdd-evidence --override-reason=\"<issue-id>: R6 Task 9 wave-${N} BLOCK accepted\"" >&2
+        exit 1
+      fi
+      if ! "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+        --flag=--skip-tdd-evidence \
+        --reason="build.tdd-evidence wave-${N} ${OVERRIDE_REASON} — R6 Task 9 BLOCK accepted: TDD red/green evidence gap tolerated ts=$(date -u +%FT%TZ); see ${VG_TMP:-${PHASE_DIR}/.vg-tmp}/tdd-evidence-w${N}.json"; then
+        echo "⛔ vg-orchestrator override emit FAILED for --skip-tdd-evidence — refusing silent skip." >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ℹ R6 Task 9 TDD evidence audit: $TDDV" ;;
+  esac
+fi
+```
+
 ### 8d.6 — Post-wave gate matrix (typecheck/build/test/contract/goals/utility)
 
 Run gates 1-5 in order, BLOCK on first failure. Adaptive typecheck
