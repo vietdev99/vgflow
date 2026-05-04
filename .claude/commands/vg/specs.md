@@ -52,6 +52,10 @@ runtime_contract:
       severity: "warn"
   forbidden_without_override:
     - "--override-reason"
+    # R8-F (codex audit 2026-05-05): SPECS→FOUNDATION trace gate.
+    # Skipping requires --override-reason; emits specs.foundation_trace_skipped
+    # event + HARD debt entry. See scripts/validators/verify-foundation-to-specs.py.
+    - "--skip-foundation-trace"
 ---
 
 <objective>

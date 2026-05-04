@@ -79,6 +79,40 @@ fi
 
 export PHASE_DIR
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+
+# R8-F (codex audit 2026-05-05): FOUNDATION→SPECS goal trace audit.
+# Closes silent gap where /vg:specs ignored FOUNDATION.md entirely — phase
+# SPECS could declare goals that don't link back to any project milestone.
+# Validator: PASS if SPECS cites ≥1 F-XX (or "FOUNDATION.md" textual cite,
+# or "Milestone goal:" quote). WARN if FOUNDATION absent (legacy bootstrap).
+# BLOCK if FOUNDATION has goals BUT SPECS has 0 cites.
+# Skip via --skip-foundation-trace + --override-reason=<text> (logs HARD debt).
+# Allowlist: --skip-foundation-trace, --override-reason (recognized below).
+"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-foundation-to-specs.py \
+  --phase-dir "${PHASE_DIR}" 2>&1
+TRACE_RC=$?
+if [ "$TRACE_RC" -ne 0 ]; then
+  if [[ "${ARGUMENTS:-}" =~ --skip-foundation-trace ]]; then
+    if [[ ! "${ARGUMENTS:-}" =~ --override-reason ]]; then
+      echo "⛔ --skip-foundation-trace requires --override-reason=<text>" >&2
+      exit 1
+    fi
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag "--skip-foundation-trace" \
+      --reason "Specs proceed without foundation goal trace (phase ${PHASE_NUMBER})" \
+      >/dev/null 2>&1 || true
+    type -t log_override_debt >/dev/null 2>&1 && \
+      log_override_debt "specs-foundation-trace-skipped" "${PHASE_NUMBER}" \
+        "Phase SPECS does not cite FOUNDATION goal" "$PHASE_DIR"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "specs.foundation_trace_skipped" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+    echo "⚠ --skip-foundation-trace set — proceeding"
+  else
+    exit 1
+  fi
+fi
+
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "parse_args" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/parse_args.done"
 ```
 </step>
