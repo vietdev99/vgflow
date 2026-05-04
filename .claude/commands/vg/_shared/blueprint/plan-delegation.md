@@ -241,6 +241,40 @@ Then return JSON to main agent (shape MUST match SKILL.md "Example return"):
 
 ---
 
+## Task 41 — Multi-actor + workflow tags (M1)
+
+Tasks that participate in cross-actor workflows MUST declare these
+optional tags within the task body. Missing tags = single-actor /
+non-workflow task (legacy default, backward-compat).
+
+| Tag | Values | Required when |
+|---|---|---|
+| `<actor>` | `user`, `admin`, `system`, or other custom role | Task is one half of a cross-role workflow (e.g., user-side `Create` paired with admin-side `Approve`). Subagent uses for cred fixture selection. |
+| `<workflow>` | `WF-NN` (3-digit) | Task is referenced in `WORKFLOW-SPECS/WF-NN.md`. Must match the file ID exactly. |
+| `<workflow-step>` | integer | Step index within the workflow. Matches `steps[].step_id` in the WF spec. |
+| `<write-phase>` | `create` / `update` / `delete` | Task implements a single write op. Used by Task 41 capsule + Task 42 wave-context cross-wave references. (Distinct from Task 39 RCRURDR `lifecycle_phases[]` — that schema covers 7 ops in one cycle.) |
+
+### Example
+
+```markdown
+## Task 03: Add POST /api/sites handler (user-side create)
+
+<file-path>apps/api/src/modules/sites/routes.ts</file-path>
+<actor>user</actor>
+<workflow>WF-001</workflow>
+<workflow-step>2</workflow-step>
+<write-phase>create</write-phase>
+<goal>G-04</goal>
+```
+
+### Validator behavior
+
+- Unknown `<actor>` value: stored as-is (validator does not enforce a closed enum — projects may add custom roles).
+- Unknown `<write-phase>` value: parser returns `None`; capsule `write_phase` is null. Plan-checker emits warn-tier event `plan.unknown_write_phase`.
+- `<workflow>` references a non-existent `WF-NN.md`: validator BLOCKs at blueprint close (`WORKFLOW-SPECS` consistency check).
+
+---
+
 ## Output (subagent returns)
 
 Shape MUST match `agents/vg-blueprint-planner/SKILL.md` "Example return"

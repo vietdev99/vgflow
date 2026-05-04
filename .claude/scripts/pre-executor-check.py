@@ -646,6 +646,37 @@ def build_per_task_slices(
     }
 
 
+# Task 41 — actor + workflow + write_phase tag-extraction helpers (M1)
+_ACTOR_ROLE_RE = re.compile(r"<actor>\s*([\w-]+)\s*</actor>")
+_WORKFLOW_RE = re.compile(r"<workflow>\s*(WF-\d{1,3})\s*</workflow>")
+_WORKFLOW_STEP_RE = re.compile(r"<workflow-step>\s*(\d{1,3})\s*</workflow-step>")
+_WRITE_PHASE_RE = re.compile(r"<write-phase>\s*(create|update|delete)\s*</write-phase>")
+
+
+def extract_actor_role(task_body: str) -> str | None:
+    """Parse `<actor>...</actor>` from a PLAN task body. Returns None if absent."""
+    m = _ACTOR_ROLE_RE.search(task_body)
+    return m.group(1) if m else None
+
+
+def extract_workflow_id(task_body: str) -> str | None:
+    """Parse `<workflow>WF-NN</workflow>` from a PLAN task body. Returns None if absent."""
+    m = _WORKFLOW_RE.search(task_body)
+    return m.group(1) if m else None
+
+
+def extract_workflow_step(task_body: str) -> int | None:
+    """Parse `<workflow-step>N</workflow-step>` → int. Returns None if absent."""
+    m = _WORKFLOW_STEP_RE.search(task_body)
+    return int(m.group(1)) if m else None
+
+
+def extract_write_phase(task_body: str) -> str | None:
+    """Parse `<write-phase>create|update|delete</write-phase>`. Other values return None."""
+    m = _WRITE_PHASE_RE.search(task_body)
+    return m.group(1) if m else None
+
+
 def _context_status(value: str, missing_markers: tuple[str, ...] = ("not found",)) -> str:
     lowered = (value or "").lower()
     if not value.strip():
@@ -697,10 +728,15 @@ def build_task_context_capsule(
         cache_dir=phase_dir.parent.parent.parent / ".task-capsules",
     )
 
+    # Task 41 (Bug I, M1) — actor + workflow + write_phase awareness
+    actor_role = extract_actor_role(task_context)
+    workflow_id = extract_workflow_id(task_context)
+    workflow_step = extract_workflow_step(task_context)
+    write_phase = extract_write_phase(task_context)
+    must_match_workflow_state = workflow_id is not None
+
     capsule = {
-        # PRESERVE existing capsule_version verbatim — Task 41 bumps it to "2";
-        # if Task 41 already merged, leave the existing "2". Do NOT downgrade.
-        "capsule_version": "1",
+        "capsule_version": "2",          # Task 41 schema bump: "1" → "2"
         "phase": build_config.get("phase"),
         "task_num": task_num,
         "task_title": next((line.strip("# ").strip() for line in task_context.splitlines() if line.strip()), ""),
@@ -709,6 +745,11 @@ def build_task_context_capsule(
         "goals": _extract_goal_ids(task_context, goals_context),
         "endpoints": endpoints,
         "file_paths": _extract_file_paths(task_context),
+        # Task 41 — actor + workflow + write_phase awareness (M1)
+        "actor_role": actor_role,
+        "workflow_id": workflow_id,
+        "workflow_step": workflow_step,
+        "write_phase": write_phase,
         "required_context": {
             "task_context": _context_status(task_context),
             "contract_context": _context_status(
@@ -734,12 +775,18 @@ def build_task_context_capsule(
             "must_follow_crud_surface": source_artifacts["crud_surfaces"] and crud_surface_context.strip().lower() != "none",
             "must_follow_api_contract": bool(endpoints),
             "must_preserve_context_refs": bool(_extract_context_refs(task_context)),
+            # Task 41 additions
+            "must_match_workflow_state": must_match_workflow_state,
+            "actor_role_hint": actor_role or "",
         },
         "anti_lazy_read_rules": [
             "Read this capsule first; it is the minimum task contract.",
             "Do not implement outside file_paths unless the task body explicitly requires it.",
             "Do not ignore goals/endpoints/crud_surface_context when present.",
             "If a required_context value is missing, stop and report the missing artifact instead of guessing.",
+            # Task 41 — 2 new workflow-aware rules
+            "If workflow_id is set, read WORKFLOW-SPECS/<workflow_id>.md slice and verify your code matches the state_after declaration for your step_id.",
+            "Do NOT invent state names — use exact strings from state_machine.states[].",
         ],
         # Task 37 (Bug E) — per-task artifact slice paths for build envelope.
         # Non-required: null/empty when phase predates Task 37 or task has no endpoints/goals.
