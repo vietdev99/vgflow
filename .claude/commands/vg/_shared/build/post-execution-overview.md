@@ -26,11 +26,11 @@ JSON, marker emission.
 You MUST spawn ONE `vg-build-post-executor` subagent (NOT parallel —
 this verifier walks all task results sequentially). You MUST NOT
 verify inline. Single Agent() call in this step. The spawn-guard
-(`scripts/vg-agent-spawn-guard.py`, Task 1 commit `6135701`) does NOT
-enforce subagent count for `vg-build-post-executor` — count enforcement
-applies only to `vg-build-task-executor`. The single-spawn constraint
-for THIS step is enforced by the prompt structure (one Agent() call
-in this step body).
+(`scripts/vg-agent-spawn-guard.py`) enforces single-spawn for
+`vg-build-post-executor` (R6 Task 3): a 2nd
+`Agent(subagent_type="vg-build-post-executor")` call in the same run
+is hard-denied. Counter persisted at
+`.vg/runs/<run_id>/.post-executor-spawns.json`.
 
 You MUST narrate the spawn via `bash scripts/vg-narrate-spawn.sh`
 (green pill per R1a UX baseline Req 2) — `spawning` before the

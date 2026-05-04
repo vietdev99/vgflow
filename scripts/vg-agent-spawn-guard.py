@@ -65,6 +65,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR")
@@ -81,6 +82,12 @@ ALLOWED_GSD_SUBAGENTS = {"gsd-debugger"}
 # R2 build pilot — only this subagent type is subject to wave-plan
 # spawn-count enforcement. Others fall through unchanged.
 BUILD_TASK_EXECUTOR = "vg-build-task-executor"
+
+# R6 Task 3 — single-spawn-per-run enforcement target. The build pipeline
+# allows exactly ONE vg-build-post-executor verifier pass per phase; a 2nd
+# Agent() call within the same run is hard-denied via this guard. Counter
+# persisted at .vg/runs/<run_id>/.post-executor-spawns.json.
+BUILD_POST_EXECUTOR = "vg-build-post-executor"
 
 
 def allow() -> int:
@@ -417,6 +424,88 @@ def _enforce_spawn_count(hook_input: dict, run_id: str,
     return None  # allow
 
 
+def _enforce_post_executor_single_spawn(
+    hook_input: dict, run_id: str,
+    hook_session: str | None = None,
+) -> int | None:
+    """R6 Task 3 — vg-build-post-executor must be spawned exactly ONCE per run.
+
+    Returns:
+      int  — deny rc when a 2nd Agent(subagent_type='vg-build-post-executor')
+             fires within the same run.
+      None — fall-through (caller proceeds with normal allow()).
+
+    Pass-through cases (return None):
+      - subagent_type is not vg-build-post-executor (only this verifier
+        is bound to the single-spawn-per-run constraint).
+
+    Persists .vg/runs/<run_id>/.post-executor-spawns.json with shape
+    `{"count": N, "first_spawn_ts": "<ISO timestamp>"}` on first allow so a
+    future 2nd spawn fires the deny. Sibling to `_enforce_spawn_count`
+    (wave-plan attribution for vg-build-task-executor).
+
+    Rationale: the build pipeline's post-execution step ('9_post_execution')
+    runs L2/L3/L5/L6 + truthcheck gates, aggregates per-task fingerprints,
+    writes SUMMARY.md, and emits the BUILD-LOG layer artifacts. Re-running
+    the post-executor mid-run would double-write SUMMARY.md and corrupt
+    the gate-pass record consumed by /vg:review and /vg:test downstream.
+    Previously enforced via prompt prose only ('DO NOT spawn more than
+    once'); v2.41 R6 promotes the rule to a hook-level hard gate.
+    """
+    tool_input = hook_input.get("tool_input") or {}
+    subagent = tool_input.get("subagent_type", "")
+    if subagent != BUILD_POST_EXECUTOR:
+        return None
+
+    counter_path = REPO_ROOT / ".vg" / "runs" / run_id / ".post-executor-spawns.json"
+
+    existing_count = 0
+    if counter_path.exists():
+        try:
+            data = json.loads(counter_path.read_text(encoding="utf-8"))
+            existing_count = int(data.get("count", 0) or 0)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            # Corrupt counter: treat as 0 so we don't permanently lock out
+            # a wave on a parse error. The fresh write below will replace it.
+            existing_count = 0
+
+    if existing_count >= 1:
+        return deny(
+            "\033[38;5;208mvg-build-post-executor spawn rejected — phase already "
+            f"invoked the post-executor verifier once in run_id={run_id[:12]}.\033[0m\n"
+            "The build pipeline allows EXACTLY ONE post-executor pass per phase "
+            "(step 9_post_execution runs L2/L3/L5/L6 + truthcheck gates, writes "
+            "SUMMARY.md, and emits BUILD-LOG layer artifacts). Re-running it would "
+            "double-write SUMMARY.md and corrupt the gate-pass record consumed by "
+            "/vg:review and /vg:test downstream — a workflow violation.\n"
+            "Fix: pause and read the existing SUMMARY.md (the post-executor's "
+            "result already on disk). If the orchestrator marked the wave "
+            "incomplete, invoke `/vg:build N --resume` instead of re-spawning "
+            "the verifier.\n"
+            f"Counter: .vg/runs/{run_id[:12]}/.post-executor-spawns.json",
+            hook_session=hook_session,
+            gate_id="PreToolUse-Agent-spawn-guard-post-executor-overspawn",
+        )
+
+    # Allow path — persist counter so a future 2nd spawn fires the deny above.
+    fresh = {
+        "count": 1,
+        "first_spawn_ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    try:
+        counter_path.parent.mkdir(parents=True, exist_ok=True)
+        counter_path.write_text(json.dumps(fresh, indent=2), encoding="utf-8")
+    except OSError:
+        # Persistence failure shouldn't block the spawn — log to stderr
+        # so users notice, but allow the spawn to proceed (matches the
+        # _enforce_spawn_count fail-soft policy on persist errors).
+        sys.stderr.write(
+            f"\033[33mvg-agent-spawn-guard: failed to persist post-executor counter for "
+            f"run {run_id}; continuing (non-fatal).\033[0m\n"
+        )
+    return None  # allow
+
+
 def _safe_session_filename(sid: str) -> str:
     if not sid:
         return "unknown"
@@ -533,12 +622,21 @@ def main() -> int:
     # ── R2 build pilot — wave-plan spawn-count enforcement ──────────────
     # Only fires for vg-build-task-executor when an active VG run has a
     # .wave-spawn-plan.json. All other paths fall through to allow().
+    #
+    # R6 Task 3 (sibling) — vg-build-post-executor single-spawn-per-run
+    # enforcement. Same is_active/run_id gate; runs after wave-plan check
+    # so an unrelated subagent_type still falls straight through.
     is_active, _ = in_active_vg_run(hook_session=hook_session)
     if is_active:
         run_id = _resolve_run_id(hook_session)
         if run_id:
             rc = _enforce_spawn_count(hook_input, run_id,
                                       hook_session=hook_session)
+            if rc is not None:
+                return rc
+            rc = _enforce_post_executor_single_spawn(
+                hook_input, run_id, hook_session=hook_session,
+            )
             if rc is not None:
                 return rc
 
