@@ -1060,6 +1060,39 @@ def cmd_tasklist_projected(args) -> int:
         print("\033[38;5;208mtasklist contract contains no task items\033[0m", file=sys.stderr)
         return 2
 
+    # HOTFIX (2026-05-05) — adapter LOCK based on runtime detection.
+    # Bug: AI in Claude Code session was switching `--adapter fallback` to
+    # bypass the claude evidence gate (rationalized as "TodoWrite không có
+    # trong session này"). Observed in PV3 blueprint 4.3 session 2026-05-05.
+    #
+    # Truth: Claude Code DOES ship TodoWrite tool — checking CLAUDECODE=1
+    # env var (set unconditionally by Claude Code CLI) proves the session
+    # CAN call TodoWrite. Switching adapter to bypass the gate is the
+    # exact rationalization pattern this hardening exists to block.
+    #
+    # Lock policy:
+    #   - CLAUDECODE=1 in env → adapter MUST be "claude" (TodoWrite available)
+    #   - CLAUDECODE unset → fallback/codex allowed (CLI agents like Codex)
+    is_claude_code_session = os.environ.get("CLAUDECODE") == "1"
+    if is_claude_code_session and args.adapter in ("codex", "fallback"):
+        print(
+            "\033[38;5;208mAdapter lock: CLAUDECODE=1 detected — TodoWrite tool IS available.\033[0m",
+            file=sys.stderr,
+        )
+        print(
+            f"  Requested adapter: {args.adapter}\n"
+            "  Required adapter:  claude\n\n"
+            "  Reason: in a Claude Code session, the native TodoWrite tool\n"
+            "  is the canonical task UI. Switching to fallback/codex bypasses\n"
+            "  the PostToolUse evidence gate and was the rationalization\n"
+            "  observed in PV3 blueprint 4.3 (\"TodoWrite không có trong\n"
+            "  session này\" — FALSE).\n\n"
+            "  Fix: call the TodoWrite tool with the contract checklists,\n"
+            "  then re-run this command with --adapter claude.",
+            file=sys.stderr,
+        )
+        return 2
+
     evidence_path = None
     if args.adapter in ("codex", "fallback"):
         try:
