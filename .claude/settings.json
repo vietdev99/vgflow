@@ -37,7 +37,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Write|Edit"
+        "matcher": "Write|Edit|NotebookEdit"
       },
       {
         "hooks": [

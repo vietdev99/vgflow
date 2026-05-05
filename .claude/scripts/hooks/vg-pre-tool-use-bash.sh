@@ -549,6 +549,41 @@ case "$depth_check_result" in
   *) emit_block "depth check failed: ${depth_check_result}" ;;
 esac
 
+# HOTFIX session 2 (2026-05-05) — Codex insight #2: verify TodoWrite items
+# COVER all contract checklists (match=true), not just "TodoWrite happened".
+# Without this, AI could call TodoWrite with a subset of group headers
+# (or fake single-item) and satisfy depth_valid (each present group has
+# ≥1 ↳ child) while leaving most contract items unprojected.
+match_check_result="$(python3 - "$evidence_path" <<'PY'
+import json, sys
+ev = json.loads(open(sys.argv[1]).read())
+payload = ev.get("payload", {}) if isinstance(ev, dict) else {}
+if "match" not in payload:
+    print("match_missing", end="")
+    sys.exit(0)
+if payload.get("match") is True:
+    print("ok", end="")
+    sys.exit(0)
+todo_ids = payload.get("todo_ids", []) or []
+contract_ids = payload.get("contract_ids", []) or []
+missing = sorted(set(contract_ids) - set(todo_ids))
+extra = sorted(set(todo_ids) - set(contract_ids))
+print(f"match_invalid|missing={','.join(missing)}|extra={','.join(extra)}", end="")
+PY
+)"
+
+case "$match_check_result" in
+  ok) ;;
+  match_invalid*)
+    detail="${match_check_result#match_invalid|}"
+    emit_block "tasklist coverage incomplete — TodoWrite items do not match all contract checklists. ${detail}. Rewrite TodoWrite with one group header per contract checklist (use exact id or title from tasklist-contract.json), then re-run vg-orchestrator tasklist-projected."
+    ;;
+  match_missing)
+    emit_block "evidence missing match field — pre-coverage-check evidence rejected; re-run TodoWrite + tasklist-projected to refresh."
+    ;;
+  *) emit_block "match check failed: ${match_check_result}" ;;
+esac
+
 # Bug L P6 (Codex round-4 follow-on, sếp dogfood discovery 2026-05-04):
 # evidence adapter spoofing. AI was passing `--adapter fallback` to satisfy
 # the evidence-file gate without ever calling Claude Code's TodoWrite tool —
