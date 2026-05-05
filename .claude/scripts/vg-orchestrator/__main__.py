@@ -1060,7 +1060,7 @@ def cmd_tasklist_projected(args) -> int:
         print("\033[38;5;208mtasklist contract contains no task items\033[0m", file=sys.stderr)
         return 2
 
-    # HOTFIX (2026-05-05) — adapter LOCK based on runtime detection.
+    # HOTFIX (2026-05-05) — adapter LOCK + AUTO-DETECT based on runtime.
     # Bug: AI in Claude Code session was switching `--adapter fallback` to
     # bypass the claude evidence gate (rationalized as "TodoWrite không có
     # trong session này"). Observed in PV3 blueprint 4.3 session 2026-05-05.
@@ -1070,10 +1070,14 @@ def cmd_tasklist_projected(args) -> int:
     # CAN call TodoWrite. Switching adapter to bypass the gate is the
     # exact rationalization pattern this hardening exists to block.
     #
-    # Lock policy:
-    #   - CLAUDECODE=1 in env → adapter MUST be "claude" (TodoWrite available)
-    #   - CLAUDECODE unset → fallback/codex allowed (CLI agents like Codex)
+    # Lock + auto-detect policy:
+    #   - CLAUDECODE=1 in env → adapter resolved to "claude" (TodoWrite available)
+    #   - CLAUDECODE unset → adapter resolved to "fallback" (CLI agents)
+    #   - --adapter auto (default) → resolved by runtime, no rationalization
+    #   - --adapter explicit → validated against runtime, conflict rejected
     is_claude_code_session = os.environ.get("CLAUDECODE") == "1"
+    if args.adapter == "auto":
+        args.adapter = "claude" if is_claude_code_session else "fallback"
     if is_claude_code_session and args.adapter in ("codex", "fallback"):
         print(
             "\033[38;5;208mAdapter lock: CLAUDECODE=1 detected — TodoWrite tool IS available.\033[0m",
@@ -5029,9 +5033,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument(
         "--adapter",
-        required=True,
-        choices=["claude", "codex", "fallback"],
-        help="Runtime surface used to project the tasklist contract",
+        required=False,
+        default="auto",
+        choices=["auto", "claude", "codex", "fallback"],
+        help=(
+            "Runtime surface used to project the tasklist contract. "
+            "Default 'auto' detects from CLAUDECODE env (=1 → claude, "
+            "else fallback). Explicit values are validated against runtime — "
+            "passing --adapter fallback in a Claude Code session is rejected."
+        ),
     )
     s.set_defaults(func=cmd_tasklist_projected)
 

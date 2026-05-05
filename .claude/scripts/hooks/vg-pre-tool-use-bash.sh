@@ -267,28 +267,39 @@ emit_codex_pretasklist_scope_block() {
   exit 2
 }
 
-if [[ ! "$cmd_text" =~ vg-orchestrator[[:space:]]+step-active ]]; then
+# HOTFIX session 2 (2026-05-05) — extend gate from step-active to ALSO
+# cover mark-step. Bug: AI could skip step-active entirely and call
+# mark-step directly to fake step completion without ever projecting
+# the tasklist. Both commands now require evidence file before they fire
+# (with same bootstrap-step exemption).
+if [[ ! "$cmd_text" =~ vg-orchestrator[[:space:]]+(step-active|mark-step) ]]; then
   if codex_before_first_step && is_broad_codex_prestep_scan; then
     emit_codex_prestep_scope_block
   fi
   if codex_before_tasklist_projection && is_broad_codex_prestep_scan; then
     emit_codex_pretasklist_scope_block
   fi
+  exit 0
+fi
 
-  # HOTFIX A (2026-05-05) — TodoWrite UI auto-sync reminder.
-  # When AI calls `vg-orchestrator mark-step <ns> <step>`, marker filesystem
-  # is updated automatically but TodoWrite UI doesn't auto-refresh — AI must
-  # re-call TodoWrite tool. AI dispatchers frequently forget mid-flow → UI
-  # shows stale state. Inject additionalContext reminder so model knows to
-  # update TodoWrite after the mark-step succeeds.
-  #
-  # This is non-blocking — exit 0 with hookSpecificOutput.additionalContext
-  # only. Model sees reminder in next turn but bash proceeds.
-  if [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+mark-step[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]+([A-Za-z0-9_.:-]+) ]]; then
-    mark_step_ns="${BASH_REMATCH[1]}"
-    mark_step_name="${BASH_REMATCH[2]}"
-    if [ -f "$run_file" ]; then
-      VG_MS_NS="$mark_step_ns" VG_MS_NAME="$mark_step_name" python3 -c '
+# HOTFIX A (2026-05-05) — TodoWrite UI auto-sync reminder for mark-step.
+# When AI calls `vg-orchestrator mark-step <ns> <step>`, marker filesystem
+# is updated automatically but TodoWrite UI doesn't auto-refresh — AI must
+# re-call TodoWrite tool. AI dispatchers frequently forget mid-flow → UI
+# shows stale state. Inject additionalContext reminder so model knows to
+# update TodoWrite after the mark-step succeeds.
+#
+# HOTFIX session 2: only emit reminder when evidence file ALREADY exists
+# (i.e. mark-step is PROCEEDING). When evidence is missing, fall through
+# silently to the evidence gate below — its deny JSON would conflict with
+# this reminder JSON on stdout if both fired (Claude Code reads single
+# JSON object, not concatenation).
+if [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+mark-step[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]+([A-Za-z0-9_.:-]+) ]]; then
+  mark_step_ns="${BASH_REMATCH[1]}"
+  mark_step_name="${BASH_REMATCH[2]}"
+  _early_evidence_path=".vg/runs/${run_id}/.tasklist-projected.evidence.json"
+  if [ -f "$run_file" ] && [ -f "$_early_evidence_path" ]; then
+    VG_MS_NS="$mark_step_ns" VG_MS_NAME="$mark_step_name" python3 -c '
 import json, os, sys
 ns = os.environ.get("VG_MS_NS", "")
 step = os.environ.get("VG_MS_NAME", "")
@@ -311,11 +322,10 @@ sys.stdout.write(json.dumps({
   }
 }))
 ' 2>/dev/null || true
-    fi
     exit 0
   fi
-
-  exit 0
+  # Evidence missing — do NOT exit here, fall through to evidence gate
+  # below so unprojected tasklist blocks mark-step too.
 fi
 
 if [ ! -f "$run_file" ]; then
@@ -327,6 +337,10 @@ contract_path=".vg/runs/${run_id}/tasklist-contract.json"
 key_path="${VG_EVIDENCE_KEY_PATH:-.vg/.evidence-key}"
 step_name=""
 if [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+step-active[[:space:]]+([A-Za-z0-9_.:-]+) ]]; then
+  step_name="${BASH_REMATCH[1]}"
+elif [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+mark-step[[:space:]]+[A-Za-z0-9_-]+[[:space:]]+([A-Za-z0-9_.:-]+) ]]; then
+  # HOTFIX session 2 (2026-05-05) — mark-step uses `<ns> <step>` format;
+  # extract the step (2nd arg) for bootstrap exemption matching.
   step_name="${BASH_REMATCH[1]}"
 fi
 is_bootstrap_before_tasklist() {

@@ -18,13 +18,25 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK = REPO_ROOT / "scripts" / "hooks" / "vg-pre-tool-use-bash.sh"
 
 
-def _run_hook(tmp_path, cmd_text, session_id="test-sess"):
-    """Invoke hook with tool_input.command = cmd_text. Stage minimal active run."""
+def _run_hook(tmp_path, cmd_text, session_id="test-sess", with_evidence=True):
+    """Invoke hook with tool_input.command = cmd_text. Stage minimal active run.
+
+    HOTFIX session 2: hook now also gates mark-step on evidence file. To test
+    the reminder injection (HOTFIX A behavior) we must stage the evidence file
+    so the hook proceeds past the gate to the reminder block. with_evidence=False
+    exercises the new gate path (mark-step blocks when tasklist unprojected).
+    """
+    run_id = "test-run"
     (tmp_path / ".vg/active-runs").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".vg/active-runs" / f"{session_id}.json").write_text(
-        json.dumps({"run_id": "test-run", "command": "vg:build",
+        json.dumps({"run_id": run_id, "command": "vg:build",
                     "session_id": session_id})
     )
+    if with_evidence:
+        (tmp_path / f".vg/runs/{run_id}").mkdir(parents=True, exist_ok=True)
+        (tmp_path / f".vg/runs/{run_id}/.tasklist-projected.evidence.json").write_text(
+            "{}"  # presence-only check at the early-out
+        )
     payload = json.dumps({"tool_input": {"command": cmd_text}})
     proc = subprocess.run(
         ["bash", str(HOOK)],
