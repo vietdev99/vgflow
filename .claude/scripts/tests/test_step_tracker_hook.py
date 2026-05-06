@@ -201,6 +201,40 @@ def test_stale_context_does_not_update_state(tmp_path, capsys, monkeypatch):
     assert ctx["step_history"] == []
 
 
+def test_per_session_context_wins_over_foreign_legacy_context(
+    tmp_path, capsys, monkeypatch
+):
+    initial = {
+        "run_id": "run-s1", "session_id": "s1",
+        "command": "vg:test", "phase": "4.2",
+        "started_at": "2026-05-05T18:31:31Z",
+        "current_step": None, "step_history": [], "telemetry_emitted": [],
+    }
+    repo = _setup_repo(tmp_path, ctx=initial)
+    (repo / ".vg" / ".session-context.json").write_text(
+        json.dumps({
+            "run_id": "run-s2", "session_id": "s2",
+            "command": "vg:review", "phase": "9.9",
+            "current_step": None, "step_history": [], "telemetry_emitted": [],
+        }),
+        encoding="utf-8",
+    )
+    ctx_dir = repo / ".vg" / "session-contexts"
+    ctx_dir.mkdir(parents=True, exist_ok=True)
+    (ctx_dir / "s1.json").write_text(json.dumps(initial), encoding="utf-8")
+
+    mod = _load_hook(repo)
+    rc = _drive(mod, {
+        "session_id": "s1",
+        "tool_name": "Bash",
+        "tool_input": {"command": "touch /x/.step-markers/0_parse_and_validate.done"},
+    }, capsys, monkeypatch)
+    assert rc == 0
+    ctx = json.loads((ctx_dir / "s1.json").read_text(encoding="utf-8"))
+    assert ctx["current_step"] == "0_parse_and_validate"
+    assert ctx["step_history"][-1]["step"] == "0_parse_and_validate"
+
+
 def test_history_dedup(tmp_path, capsys, monkeypatch):
     """Touching same step twice → single history entry."""
     initial = {

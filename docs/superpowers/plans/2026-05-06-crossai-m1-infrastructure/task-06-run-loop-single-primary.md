@@ -1,6 +1,6 @@
-# Task 06: Implement `run_loop()` single-primary passthrough
+# Task 06: Implement build-legacy orchestration parity in `crossai_loop.py`
 
-**Goal:** Fill in `run_loop()` body with the single-primary passthrough behavior. Invokes the first CLI in `stage_config.primary_clis`, writes brief + raw output + parsed verdict, returns exit code matching parsed `<verdict>` field. Mirrors existing `vg-build-crossai-loop.py` per-iteration logic so Task 07 refactor is behavior-preserving.
+**Goal:** Fill in `run_loop()` body by extracting the CURRENT build behavior into the library without semantic drift. That means parallel Codex+Gemini execution, current build events, current `crossai-build-verify` output path, current findings JSON shape, current parse/error semantics, and brief handling that still receives the same build context as before refactor.
 
 **Files:**
 - Modify: `scripts/lib/crossai_loop.py` (replace `NotImplementedError` body)
@@ -182,11 +182,24 @@ cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 python3 -m pytest scripts/tests/test_crossai_loop_library.py -v
 ```
 
-Expected: 5 new failures (skeleton raises NotImplementedError or AttributeError on `_invoke_cli`).
+Expected: failures because the build-parity helpers do not exist yet.
 
 - [ ] **Step 3: Implement body in `scripts/lib/crossai_loop.py`**
 
-Replace the `NotImplementedError` body. Final file content:
+Replace the `NotImplementedError` body by extracting the CURRENT build loop logic into the library. Do not invent a simplified single-primary path for M1.
+
+Implementation constraints:
+
+- Preserve parallel Codex+Gemini execution from the current script.
+- Preserve current output directory naming (`crossai-build-verify`).
+- Preserve current event emission (`build.crossai_iteration_started`, `build.crossai_iteration_complete`, `build.crossai_loop_complete`).
+- Preserve current findings JSON structure and `<crossai-build-verdict>` parsing contract.
+- Preserve current parse-failure and infra-failure exit-2 behavior.
+- Preserve `--max-iterations` threading; do not hardcode a new internal default path that changes runtime semantics.
+
+If the extracted API becomes awkward, prefer a build-specific helper such as
+`run_build_legacy_iteration(...)` internally. Generic multi-stage cleanup can
+wait for M3.
 
 ```python
 """CrossAI orchestration library — shared by scope/blueprint/build wrappers.
@@ -359,7 +372,7 @@ cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 python3 -m pytest scripts/tests/test_crossai_loop_library.py -v
 ```
 
-Expected: 8 passed (3 from Task 05 + 5 from Task 06).
+Expected: tests from Tasks 05-06 pass, including build-parity assertions.
 
 - [ ] **Step 5: Sync mirror + commit**
 
@@ -369,22 +382,18 @@ cp scripts/lib/crossai_loop.py .claude/scripts/lib/crossai_loop.py
 git add scripts/lib/crossai_loop.py \
         .claude/scripts/lib/crossai_loop.py \
         scripts/tests/test_crossai_loop_library.py
-git commit -m "feat(crossai-loop): single-primary passthrough body
+git commit -m "refactor(crossai-loop): extract build-legacy runtime with parity
 
-M1 Task 06 — fills run_loop() body with single-primary passthrough,
-preserving existing vg-build-crossai-loop.py per-iter behavior:
-  1. brief_packer() → write BRIEF-iter\${N}.md
-  2. _invoke_cli(primary) → write \${name}-iter\${N}.md raw output
-  3. _parse_verdict_xml() → write findings-iter\${N}.json
-  4. exit 0/1/2 by BLOCK count + subprocess rc
+M1 Task 06 — moves the current build CrossAI runtime into the shared
+library without changing semantics: parallel Codex+Gemini execution,
+current build event names, current findings JSON shape, current
+crossai-build-verify path, current parse/infra-fail handling.
 
-Helpers added: _invoke_cli (subprocess.run with stdin pipe + timeout),
-_parse_verdict_xml (lenient regex), _find_phase_dir (NN.M pattern match).
+This is an extraction seam, not a behavior redesign. M3 can generalize
+later from a frozen baseline.
 
-M3 will extend run_loop() to parallel multi-primary + Sonnet adjudicator.
-
-Tests: 5 new (clean verdict, brief+raw written, BLOCK findings exit 1,
-subprocess fail exit 2, default out_dir resolution).
+Tests: build-parity focused (dual invocation, current output paths,
+BLOCK handling, infra-fail handling, default output dir parity).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```

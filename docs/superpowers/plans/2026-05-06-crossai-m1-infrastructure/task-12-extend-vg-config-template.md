@@ -1,16 +1,16 @@
 # Task 12: Extend `tests/fixtures/.../vg.config.md` template
 
-**Goal:** Add commented default crossai sections (policy, heuristic_thresholds, role field, stages) to the canonical fixture used by tests + as project template. Sections are commented-out so existing fixture-based tests don't break; init-crossai/migrate-crossai uncomment them on real projects.
+**Goal:** Add commented default crossai sections (policy, heuristic_thresholds, role field, stages) to the canonical fixture used by tests + as project template. Sections are commented-out so existing fixture-based tests don't break; `/vg:project --init-only` or `migrate-crossai` will materialize them on real projects.
 
 **Files:**
 - Modify: `tests/fixtures/phase0-diagnostic-smoke/vg.config.md`
-- Test: `scripts/tests/test_crossai_init_wizard.py` (extend with template-parity test)
+- Test: `scripts/tests/test_crossai_project_init_crossai.py` (extend with template-parity test)
 
 ---
 
 - [ ] **Step 1: Append failing test**
 
-Append to `scripts/tests/test_crossai_init_wizard.py`:
+Append to `scripts/tests/test_crossai_project_init_crossai.py`:
 
 ```python
 
@@ -43,7 +43,7 @@ def test_template_fixture_has_commented_crossai_sections():
 
 def test_template_fixture_resolve_skips_commented_sections(tmp_path, monkeypatch):
     """resolve_stage_config() on the fixture-as-is should raise (sections
-    commented out, so effectively missing). This proves init-crossai is
+    commented out, so effectively missing). This proves `/vg:project --init-only` is
     needed on a fresh project copy."""
     fixture = REPO_ROOT / "tests/fixtures/phase0-diagnostic-smoke/vg.config.md"
     (tmp_path / ".claude").mkdir()
@@ -59,8 +59,8 @@ def test_template_fixture_resolve_skips_commented_sections(tmp_path, monkeypatch
 
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
-python3 -m pytest scripts/tests/test_crossai_init_wizard.py::test_template_fixture_has_commented_crossai_sections \
-                  scripts/tests/test_crossai_init_wizard.py::test_template_fixture_resolve_skips_commented_sections \
+python3 -m pytest scripts/tests/test_crossai_project_init_crossai.py::test_template_fixture_has_commented_crossai_sections \
+                  scripts/tests/test_crossai_project_init_crossai.py::test_template_fixture_resolve_skips_commented_sections \
                   -v
 ```
 
@@ -73,8 +73,8 @@ Append to `tests/fixtures/phase0-diagnostic-smoke/vg.config.md`:
 ```markdown
 
 # === CrossAI configuration (commented examples — uncomment + customize) ===
-# Operators: run `vg-orchestrator init-crossai --write` to auto-detect CLIs
-# and emit a populated config. Or `migrate-crossai --write` on existing
+# Operators: run `/vg:project --init-only` to derive a populated config
+# through the canonical generator path. Or `migrate-crossai --write` on existing
 # projects to append missing fields without touching what's already set.
 #
 # Schema (Q6/Q7/Q23 of M1 spec):
@@ -117,24 +117,24 @@ Append to `tests/fixtures/phase0-diagnostic-smoke/vg.config.md`:
 
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
-python3 -m pytest scripts/tests/test_crossai_init_wizard.py -v
+python3 -m pytest scripts/tests/test_crossai_project_init_crossai.py -v
 ```
 
-Expected: all init-wizard tests pass (Tasks 10 + 12 = 8 total).
+Expected: all project-init CrossAI tests pass (Tasks 10 + 12).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 git add tests/fixtures/phase0-diagnostic-smoke/vg.config.md \
-        scripts/tests/test_crossai_init_wizard.py
+        scripts/tests/test_crossai_project_init_crossai.py
 git commit -m "feat(template): commented crossai sections in canonical fixture
 
 M1 Task 12 — extend tests/fixtures/phase0-diagnostic-smoke/vg.config.md
 with commented examples of all new crossai sections (Q6/Q7/Q23 schema).
-Operators uncomment + customize, or run init-crossai --write to
-auto-populate. Existing tests using the fixture are not broken because
-sections are commented.
+Operators uncomment + customize, or run `/vg:project --init-only` to
+auto-populate through the canonical generator path. Existing tests using
+the fixture are not broken because sections are commented.
 
 Tests: 2 (template has commented markers; resolve still errors on
 commented sections — proves migration is needed for real projects).

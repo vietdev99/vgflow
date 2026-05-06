@@ -323,7 +323,7 @@ def cmd_merge(args):
       "conflict"       — markers present, caller parks
     """
     res = three_way_merge(Path(args.ancestor), Path(args.current), Path(args.upstream))
-    Path(args.output).write_text(res.content, encoding="utf-8")
+    Path(args.output).write_bytes(res.content.encode("utf-8"))
     print(res.status)
     return 0 if res.status in ("clean", "force-upstream") else 1
 

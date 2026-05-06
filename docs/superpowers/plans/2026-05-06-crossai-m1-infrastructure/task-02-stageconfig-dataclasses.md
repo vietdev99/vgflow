@@ -146,9 +146,10 @@ class StageConfig:
 
     Attributes:
         stage: One of "scope", "blueprint", "build".
-        primary_clis: Ordered list of CLISpec with role="primary". M1 only
-            invokes the first element (single-primary passthrough). M3
-            invokes all primaries in parallel for consensus.
+        primary_clis: Ordered list of CLISpec with role="primary". M1 uses
+            this as a typed config boundary while preserving current build
+            runtime behavior. M3 invokes all primaries in parallel for
+            consensus.
         verifier_cli: Optional CLISpec with role="verifier". Used by M3 to
             adjudicate disagreements; ignored in M1.
     """

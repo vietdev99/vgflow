@@ -1,6 +1,6 @@
 # Task 07: Refactor `vg-build-crossai-loop.py` to use library
 
-**Goal:** Convert existing `scripts/vg-build-crossai-loop.py` (656 lines) into a thin wrapper that imports `crossai_loop.run_loop()`. Preserve CLI signature (`--phase X --iteration N --max-iterations M`) and existing behavior. Define `pack_review_brief()` for build-stage artifacts as the wrapper's main responsibility.
+**Goal:** Convert existing `scripts/vg-build-crossai-loop.py` (656 lines) into a thinner wrapper only after Task 06 has frozen current build behavior in the library. Preserve CLI signature (`--phase X --iteration N --max-iterations M`) AND preserve current behavior at the observable boundary: events, output paths, findings shape, diff-aware brief content, and infra-fail semantics.
 
 **Files:**
 - Modify: `scripts/vg-build-crossai-loop.py`
@@ -21,7 +21,12 @@ python3 -m pytest scripts/tests/test_codex_blueprint_plan_contract.py \
                   -v 2>&1 | tail -10
 ```
 
-Record passed count. Goal: number unchanged after refactor.
+Record passed count. Goal: number unchanged after refactor. Also record the current build-loop output contract so the new parity test can compare:
+
+- output dir name: `crossai-build-verify`
+- raw outputs: `codex-iterN.md`, `gemini-iterN.md`
+- findings JSON keys
+- event names `build.crossai_*`
 
 - [ ] **Step 2: Read existing wrapper**
 
@@ -30,168 +35,19 @@ cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 wc -l scripts/vg-build-crossai-loop.py
 ```
 
-Expected: 656 lines. Inspect `pack_review_brief()` (around line 123-247), `invoke_codex()` (250-285), `invoke_gemini()` (287-315), and `main()` (around 470+).
+Expected: 656 lines. Inspect `pack_review_brief()` (around line 123-247), `invoke_codex()` (250-285), `invoke_gemini()` (287-315), `parse_verdict()` helpers, and `main()` (around 470+). These are the behaviors Task 06 must preserve.
 
-- [ ] **Step 3: Refactor — replace existing main with library call**
+- [ ] **Step 3: Refactor — delegate to library without changing observable behavior**
 
-Rewrite `scripts/vg-build-crossai-loop.py` to this thin form:
+Do not rewrite the wrapper into a simplified prompt packer. Instead:
 
-```python
-#!/usr/bin/env python3
-"""Build CrossAI loop wrapper — invokes shared library with build-stage
-brief packer.
+1. Move only orchestration internals that are already covered by the new build-parity tests into `crossai_loop.py`.
+2. Keep `pack_review_brief()` functionally identical, including git diff and commit evidence.
+3. Keep current `<crossai-build-verdict>` parsing contract and current `crossai-build-verify` output directory.
+4. Keep `--max-iterations` threaded through the library path; do not hardcode `5` inside extracted code.
+5. If needed, prefer a build-specific extracted runner such as `run_build_legacy_iteration(...)` over forcing a prematurely generic `run_loop(...)` contract.
 
-CLI: vg-build-crossai-loop.py --phase X --iteration N [--max-iterations M]
-
-Refactored M1 Task 07: previously contained orchestration logic (650+
-lines); now delegates to scripts/lib/crossai_loop.run_loop(). Brief
-packer for build-stage artifacts (4 source-of-truth: API-CONTRACTS,
-TEST-GOALS, CONTEXT, PLAN) lives here. M3 will extend brief to include
-new artifacts (UI-MAP, WORKFLOW-SPECS, CRUD-SURFACES, BLOCK 5 FE).
-
-Exit codes preserved: 0 CLEAN, 1 BLOCKS_FOUND, 2 INFRA_FAIL.
-"""
-from __future__ import annotations
-
-import argparse
-import os
-import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "lib"))
-
-from crossai_config import resolve_stage_config  # noqa: E402
-from crossai_loop import run_loop  # noqa: E402
-
-# Re-export for tests + callers that import these directly.
-from crossai_loop import EXIT_CLEAN, EXIT_BLOCKS_FOUND, EXIT_INFRA_FAIL  # noqa: E402,F401
-
-
-def pack_review_brief(
-    phase_dir: Path,
-    phase_num: str,
-    iteration: int,
-    max_iter: int,
-) -> str:
-    """Pack the 4 source-of-truth artifacts for build-stage CrossAI review.
-
-    M1: same artifacts as pre-refactor (API-CONTRACTS / TEST-GOALS /
-    CONTEXT / PLAN, capped per-section). M3 Task TBD will extend to
-    include UI-MAP / VIEW-COMPONENTS / WORKFLOW-SPECS / CRUD-SURFACES /
-    BLOCK 5 FE-contracts.
-    """
-    def read(rel: str, cap: int) -> str:
-        p = phase_dir / rel
-        if not p.is_file():
-            return f"({rel} missing)"
-        text = p.read_text(encoding="utf-8", errors="replace")
-        return text[:cap] + ("\n... [truncated]" if len(text) > cap else "")
-
-    contracts = read("API-CONTRACTS.md", 8000)
-    goals = read("TEST-GOALS.md", 8000)
-    context = read("CONTEXT.md", 6000)
-    plan = read("PLAN.md", 4000)
-
-    return f"""# OHOK-7 Build Verification — Phase {phase_num} iteration {iteration}/{max_iter}
-
-## Your task
-
-Determine whether the build is COMPLETE against the four source-of-truth
-artifacts below. This is NOT a generic code review. Check specifically:
-
-1. **Every endpoint/schema in API-CONTRACTS.md** has a matching handler +
-   types + validation in the code diff. Missing endpoint → BLOCK finding.
-2. **Every goal with priority=critical in TEST-GOALS.md** has real test
-   coverage (NOT just unit; runtime/E2E for UI goals). Uncovered → BLOCK.
-3. **Every decision D-XX in CONTEXT.md** is honored by code patterns.
-4. **Every task in PLAN.md** has a matching commit (feat/fix/refactor/test/
-   docs/style/perf/chore/revert/build/ci prefixes accepted).
-
-## Output format
-
-Respond ONLY with:
-
-<crossai-verdict>
-  <verdict>PASS|FAIL</verdict>
-  <findings>
-    <finding severity="BLOCK"><message>...</message></finding>
-    <!-- one finding per BLOCK -->
-  </findings>
-</crossai-verdict>
-
-## Artifacts (source of truth)
-
-### API-CONTRACTS.md
-{contracts}
-
-### TEST-GOALS.md
-{goals}
-
-### CONTEXT.md (decisions)
-{context}
-
-### PLAN.md (tasks)
-{plan}
-"""
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", required=True)
-    ap.add_argument("--iteration", type=int, required=True)
-    ap.add_argument("--max-iterations", type=int, default=5)
-    args = ap.parse_args()
-
-    repo_root = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
-
-    # Resolve build stage config — fall back to single-CLI mode if
-    # crossai_stages block missing (legacy project before M2 migrate).
-    try:
-        stage_cfg = resolve_stage_config("build", repo_root)
-    except ValueError as exc:
-        # Legacy fallback: try parsing crossai_clis directly and use first
-        # entry as primary. Emit warning.
-        from crossai_config import _parse_crossai_clis_full, _find_config
-        cfg_file = _find_config(repo_root)
-        if cfg_file is None:
-            print(
-                f"\033[38;5;208mvg.config.md missing; cannot run "
-                f"CrossAI loop: {exc}\033[0m",
-                file=sys.stderr,
-            )
-            return EXIT_INFRA_FAIL
-        text = cfg_file.read_text(encoding="utf-8")
-        clis = _parse_crossai_clis_full(text)
-        if not clis:
-            print(
-                "\033[33mlegacy vg.config.md has no crossai_clis; "
-                "cannot run CrossAI loop\033[0m",
-                file=sys.stderr,
-            )
-            return EXIT_INFRA_FAIL
-        from crossai_config import StageConfig
-        stage_cfg = StageConfig(
-            stage="build", primary_clis=clis, verifier_cli=None,
-        )
-        print(
-            "\033[33mLegacy mode: crossai_stages missing, using first "
-            "crossai_clis entry. Run `vg-orchestrator migrate-crossai` "
-            "to upgrade config.\033[0m",
-            file=sys.stderr,
-        )
-
-    return run_loop(
-        phase=args.phase,
-        iteration=args.iteration,
-        brief_packer=pack_review_brief,
-        stage_config=stage_cfg,
-    )
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-```
+At the end of this step, the wrapper should be materially smaller, but it must still behave exactly like the current script from the caller's point of view.
 
 - [ ] **Step 4: Run regression suite**
 
@@ -200,7 +56,7 @@ cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 python3 -m pytest scripts/tests/ -v -x 2>&1 | tail -20
 ```
 
-Expected: count from Step 1 unchanged. If any test fails, the refactor changed behavior — investigate before committing.
+Expected: count from Step 1 unchanged. If any test fails, or if the new build-parity test detects drift, the refactor is not acceptable for M1.
 
 - [ ] **Step 5: Sync mirror + commit**
 
@@ -209,17 +65,16 @@ cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 cp scripts/vg-build-crossai-loop.py .claude/scripts/vg-build-crossai-loop.py
 git add scripts/vg-build-crossai-loop.py \
         .claude/scripts/vg-build-crossai-loop.py
-git commit -m "refactor(build-crossai): thin wrapper using crossai_loop library
+git commit -m "refactor(build-crossai): extract wrapper internals with parity
 
-M1 Task 07 — replace 650+ lines of orchestration in
-vg-build-crossai-loop.py with delegation to crossai_loop.run_loop().
-Wrapper now contains only: argparse, pack_review_brief() for build-stage
-4 source-of-truth artifacts, legacy fallback when crossai_stages block
-missing.
+M1 Task 07 — extract current build orchestration behind crossai_loop.py
+without changing observable behavior. Wrapper still owns build-specific
+brief semantics and any glue needed to preserve current events, output
+paths, and findings schema.
 
 CLI signature preserved: --phase --iteration --max-iterations.
 Exit codes preserved: 0/1/2 (CLEAN/BLOCKS/INFRA).
-Existing test suite passes unchanged.
+Existing test suite and build-parity suite pass unchanged.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```

@@ -92,13 +92,15 @@ python3 -m pytest \
   scripts/tests/test_crossai_skip_validation_compat.py \
   scripts/tests/test_crossai_config_resolve.py \
   scripts/tests/test_crossai_loop_library.py \
-  scripts/tests/test_crossai_init_wizard.py \
-  scripts/tests/test_crossai_lazy_migrate.py \
+  scripts/tests/test_crossai_project_init_crossai.py \
+  scripts/tests/test_crossai_migrate_plan.py \
   scripts/tests/test_crossai_m1_mirror_parity.py \
   -v 2>&1 | tail -10
 ```
 
-Expected: ~33 tests pass total (5 compat + 16 config_resolve + 8 loop_library + 8 init_wizard + 5 lazy_migrate + 2 mirror_parity = 44; rough estimate with task overlap).
+Expected: full M1-targeted test set passes. Exact count may move as parity
+coverage grows; use green status, not the historical rough estimate, as
+the merge gate.
 
 - [ ] **Step 4: Run full project regression suite**
 
@@ -109,15 +111,15 @@ python3 -m pytest scripts/tests/ 2>&1 | tail -5
 
 Expected: same passed count as before M1 + the new tests added in Tasks 01–13. Failures here = M1 broke an existing test, must fix before commit.
 
-- [ ] **Step 5: Sanity check `init-crossai --dry-run` end-to-end**
+- [ ] **Step 5: Sanity check canonical project-init CrossAI generation**
 
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 mkdir -p /tmp/vg-m1-smoke && cd /tmp/vg-m1-smoke
-python3 "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/.claude/scripts/vg-orchestrator" init-crossai --dry-run 2>&1 | head -30
+python3 "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix/.claude/scripts/vg_generate_config.py" 2>&1 | head -30
 ```
 
-Expected: prints valid YAML-ish block with crossai_clis + crossai_stages + crossai.policy + heuristic_thresholds. No errors on stderr.
+Expected: output includes valid CrossAI config sections from the canonical generator path. No errors on stderr.
 
 - [ ] **Step 6: Sanity check `migrate-crossai --dry-run` on legacy fixture**
 
@@ -154,7 +156,7 @@ M1 acceptance criteria all met:
   5 migrate + 2 parity)
 - Existing build CrossAI tests pass unchanged (Task 07 refactor was
   behavior-preserving)
-- init-crossai --dry-run produces valid config snippet
+- `/vg:project --init-only` generator path produces valid CrossAI config sections
 - migrate-crossai --dry-run additive on legacy fixture
 
 Ready to merge M1 → branch → PR. M2 (gating policy) starts next.
@@ -183,7 +185,7 @@ After Task 13 completes, the branch should have:
 - [ ] 6 test files (~44 tests passing)
 - [ ] 13 atomic commits (1 per task)
 - [ ] No regressions in existing test suite
-- [ ] `init-crossai` + `migrate-crossai` commands functional
+- [ ] canonical project-init CrossAI generation + optional `migrate-crossai` helper functional
 - [ ] PR mergeable + clean
 
 **Next milestone:** M2 (gating policy) — see follow-up plan in

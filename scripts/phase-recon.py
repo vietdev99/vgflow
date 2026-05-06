@@ -242,6 +242,29 @@ def scan_phase_dir(phase_dir: Path, phase_num: str) -> dict[str, Any]:
     if not phase_dir.exists() or not phase_dir.is_dir():
         raise FileNotFoundError(f"Phase dir not found: {phase_dir}")
 
+    def _marker_meta(marker_dir: Path) -> dict[str, Any]:
+        marker_paths: list[str] = []
+        marker_records: list[dict[str, str]] = []
+        for marker in sorted(marker_dir.rglob("*")):
+            if not marker.is_file() or marker.suffix not in {".done", ".skipped"}:
+                continue
+            rel = marker.relative_to(marker_dir).as_posix()
+            stem = marker.stem
+            parent = Path(rel).parent.as_posix()
+            qualified = stem if parent == "." else f"{parent}/{stem}"
+            marker_paths.append(qualified)
+            marker_records.append({
+                "marker": qualified,
+                "file": rel,
+                "mtime": datetime.fromtimestamp(
+                    marker.stat().st_mtime, tz=timezone.utc
+                ).isoformat(),
+            })
+        return {
+            "markers": marker_paths,
+            "marker_records": marker_records,
+        }
+
     entries = []
     for p in sorted(phase_dir.iterdir()):
         if p.is_dir():
@@ -256,12 +279,13 @@ def scan_phase_dir(phase_dir: Path, phase_num: str) -> dict[str, Any]:
                     "meta": {"reason": "wave-level scratch space"},
                 })
             elif name == ".step-markers":
+                marker_meta = _marker_meta(p)
                 entries.append({
                     "name": name,
                     "path": str(p.relative_to(phase_dir)),
                     "is_dir": True,
                     "bucket": "v6_marker",
-                    "meta": {"markers": sorted(f.stem for f in p.glob("*.done"))},
+                    "meta": marker_meta,
                 })
             elif name == ".archive":
                 entries.append({
@@ -288,6 +312,13 @@ def scan_phase_dir(phase_dir: Path, phase_num: str) -> dict[str, Any]:
         except OSError:
             continue
         bucket, meta = classify_file(p.name, phase_num)
+        if p.name == "PIPELINE-STATE.json":
+            try:
+                state = json.loads(p.read_text(encoding="utf-8"))
+                meta["pipeline_step"] = state.get("pipeline_step")
+                meta["pipeline_status"] = state.get("status")
+            except Exception:
+                meta["pipeline_parse_error"] = True
         entries.append({
             "name": p.name,
             "path": str(p.relative_to(phase_dir)),
@@ -330,10 +361,20 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
     """Returns per-step: status + v6_artifact + legacy_sources + marker."""
     # Marker presence
     marker_entry = next((e for e in entries if e["is_dir"] and e["name"] == ".step-markers"), None)
-    markers = set(marker_entry["meta"].get("markers", [])) if marker_entry else set()
+    marker_paths = set(marker_entry["meta"].get("markers", [])) if marker_entry else set()
 
-    def marker_has(*patterns):
-        return any(any(pat in m for pat in patterns) for m in markers)
+    def marker_exact(name: str, *namespaces: str | None) -> bool:
+        if not namespaces:
+            namespaces = (None,)
+        for namespace in namespaces:
+            candidate = name if namespace in (None, "", "shared") else f"{namespace}/{name}"
+            if candidate in marker_paths:
+                return True
+        return False
+
+    def marker_namespace_has(namespace: str) -> bool:
+        prefix = f"{namespace}/"
+        return any(marker.startswith(prefix) for marker in marker_paths)
 
     # Specs: SPECS.md
     specs = _find_first_canonical(entries, "SPECS.md")
@@ -377,16 +418,57 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
     else:
         bp_status = "missing"
 
-    # Build: SUMMARY + build markers
+    # Build: SUMMARY + late-stage build evidence
     summary = _find_first_canonical(entries, "SUMMARY.md")
+    pre_test = _find_first_with_name(entries, {"PRE-TEST-REPORT.md"})
+    build_progress = _find_first_with_name(entries, {".build-progress.json"})
+    pipeline_state = _find_first_with_name(entries, {"PIPELINE-STATE.json"})
+    pipeline_step = pipeline_state.get("meta", {}).get("pipeline_step") if pipeline_state else None
+    pipeline_status = pipeline_state.get("meta", {}).get("pipeline_status") if pipeline_state else None
+    build_complete_marker = marker_exact("12_run_complete", None, "build")
+    build_close_cluster = all(
+        marker_exact(step, None, "build")
+        for step in ("9_post_execution", "10_postmortem_sanity", "11_crossai_build_verify_loop")
+    )
+    build_pipeline_advanced = pipeline_step in {
+        "build-complete",
+        "review",
+        "review-complete",
+        "test",
+        "test-complete",
+        "accepted",
+    } or pipeline_status in {
+        "executed",
+        "reviewing",
+        "reviewed",
+        "testing",
+        "tested",
+        "accepted",
+        "complete",
+    }
+    build_marker_present = any(
+        marker_exact(step, None, "build")
+        for step in (
+            "8_execute_waves",
+            "9_post_execution",
+            "10_postmortem_sanity",
+            "11_crossai_build_verify_loop",
+            "12_5_pre_test_gate",
+            "12_run_complete",
+        )
+    ) or marker_namespace_has("build")
     numbered_summaries = _find_all_matching(entries, RE_V5_NUMBERED_SUMMARY)
     b_legacy = [e["name"] for e in numbered_summaries]
     b_legacy += [e["name"] for e in entries
                  if not e["is_dir"]
                  and e["name"] in {"GAP-SUMMARY.md", "GAP-SUMMARY-ROUND2.md"}]
-    if summary and marker_has("build"):
+    if summary and (
+        build_complete_marker
+        or build_pipeline_advanced
+        or (pre_test and build_progress and build_close_cluster)
+    ):
         b_status = "done"
-    elif summary:
+    elif summary or pre_test or build_progress or build_marker_present:
         b_status = "partial"
     elif b_legacy:
         b_status = "legacy_only"
@@ -445,7 +527,11 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
                 and (e["name"] == "HUMAN-UAT.md"
                      or (e.get("bucket") == "versioned_rot"
                          and e.get("meta", {}).get("canonical_target", "").startswith("UAT")))]
-    if uat and marker_has("accept"):
+    accept_marker_present = marker_namespace_has("accept") or any(
+        marker_exact(step)
+        for step in ("5_interactive_uat", "5_uat_quorum_gate", "6_write_uat_md", "7_post_accept_actions")
+    )
+    if uat and accept_marker_present:
         a_status = "done"
     elif uat:
         a_status = "partial"
@@ -467,19 +553,27 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
         "build":     {"status": b_status,
                       "v6_artifacts": [summary["name"]] if summary else [],
                       "legacy_sources": b_legacy,
-                      "marker_present": marker_has("build")},
+                      "marker_present": build_marker_present,
+                      "evidence": {
+                          "summary": bool(summary),
+                          "pre_test_report": bool(pre_test),
+                          "build_progress": bool(build_progress),
+                          "pipeline_step": pipeline_step,
+                          "pipeline_status": pipeline_status,
+                          "complete_marker": build_complete_marker,
+                      }},
         "review":    {"status": r_status,
                       "v6_artifacts": [e["name"] for e in (runtime, coverage) if e],
                       "legacy_sources": r_legacy,
-                      "marker_present": marker_has("review")},
+                      "marker_present": marker_namespace_has("review")},
         "test":      {"status": t_status,
                       "v6_artifacts": [sandbox["name"]] if sandbox else [],
                       "legacy_sources": t_legacy,
-                      "marker_present": marker_has("test")},
+                      "marker_present": marker_namespace_has("test")},
         "accept":    {"status": a_status,
                       "v6_artifacts": [uat["name"]] if uat else [],
                       "legacy_sources": a_legacy,
-                      "marker_present": marker_has("accept")},
+                      "marker_present": accept_marker_present},
     }
 
 
@@ -709,7 +803,10 @@ def compute_fingerprint(entries: list[dict]) -> str:
     """Hash of (name, size, mtime) tuples — detects phase dir mutations."""
     h = hashlib.sha256()
     for e in sorted(entries, key=lambda x: x["path"]):
-        h.update(f"{e['path']}|{e.get('size', '')}|{e.get('mtime', '')}".encode())
+        meta_json = json.dumps(e.get("meta", {}), sort_keys=True, ensure_ascii=False)
+        h.update(
+            f"{e['path']}|{e.get('size', '')}|{e.get('mtime', '')}|{meta_json}".encode("utf-8")
+        )
     return h.hexdigest()[:16]
 
 

@@ -1,20 +1,20 @@
-# Task 11: Orchestrator `cmd_migrate_crossai_config()`
+# Task 11: Add additive migration planner + optional `migrate-crossai` helper
 
-**Goal:** Add a `migrate-crossai` subcommand that detects legacy `vg.config.md` (has `crossai_clis:` but missing `crossai_stages:` or `crossai.policy`) and appends the missing fields with sensible defaults. Idempotent. Emits `crossai.config_migrated` telemetry event. Used by lazy migration at first CrossAI invocation (Q22 design).
+**Goal:** Add a shared migration planner that detects legacy `vg.config.md` (has `crossai_clis:` but missing `crossai_stages:` or `crossai.policy`) and computes an additive patch with sensible defaults. An optional `migrate-crossai` helper command may expose that planner, but M1 does NOT wire auto-migration into first invocation yet. The activation path is deferred until build/scope/blueprint can all consume the same helper consistently.
 
 **Files:**
-- Modify: `scripts/vg-orchestrator/__main__.py` (add subparser + cmd function)
+- Modify: `scripts/vg-orchestrator/__main__.py` (shared helper + optional subparser)
 - Mirror: `.claude/scripts/vg-orchestrator/__main__.py`
-- Test: `scripts/tests/test_crossai_lazy_migrate.py` (new)
+- Test: `scripts/tests/test_crossai_migrate_plan.py` (new)
 
 ---
 
 - [ ] **Step 1: Create the failing test file**
 
-Create `scripts/tests/test_crossai_lazy_migrate.py`:
+Create `scripts/tests/test_crossai_migrate_plan.py`:
 
 ```python
-"""Tests for `vg-orchestrator migrate-crossai` (M1 Task 11)."""
+"""Tests for CrossAI additive migration planning (M1 Task 11)."""
 import subprocess
 import sys
 from pathlib import Path
@@ -88,10 +88,10 @@ crossai_stages:
 
 
 def test_migrate_no_config_errors(tmp_path):
-    """No vg.config.md → exit 2 with actionable hint to run init-crossai."""
+    """No vg.config.md → exit 2 with actionable hint to run `/vg:project --init-only`."""
     proc = _run_orch(["migrate-crossai", "--dry-run"], cwd=tmp_path)
     assert proc.returncode == 2
-    assert "init-crossai" in proc.stderr.lower() or "init-crossai" in proc.stdout.lower()
+    assert "/vg:project --init-only" in proc.stderr or "/vg:project --init-only" in proc.stdout
 
 
 def test_migrate_uses_existing_clis_for_stages(tmp_path):
@@ -113,14 +113,14 @@ def test_migrate_uses_existing_clis_for_stages(tmp_path):
 
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
-python3 -m pytest scripts/tests/test_crossai_lazy_migrate.py -v
+python3 -m pytest scripts/tests/test_crossai_migrate_plan.py -v
 ```
 
-Expected: 5 failures (`migrate-crossai` subcommand doesn't exist).
+Expected: failures because the planner/helper does not exist yet.
 
 - [ ] **Step 3: Add subparser + cmd in `scripts/vg-orchestrator/__main__.py`**
 
-Append after Task 10's subparser registration:
+Append after Task 10's subparser registration only if you expose a helper CLI:
 
 ```python
     s = sub.add_parser(
@@ -136,12 +136,12 @@ Append after Task 10's subparser registration:
     s.set_defaults(func=cmd_migrate_crossai_config)
 ```
 
-Add the function:
+Add a shared helper first, then optionally wrap it with `cmd_migrate_crossai_config()`:
 
 ```python
 def cmd_migrate_crossai_config(args) -> int:
     """Append crossai_stages + crossai.policy + heuristic_thresholds blocks
-    to existing vg.config.md (legacy project upgrade per Q22 spec).
+    to existing vg.config.md (legacy project upgrade helper).
     Reuses CLI names from existing crossai_clis registry. Idempotent.
 
     --dry-run: print to stdout
@@ -151,7 +151,7 @@ def cmd_migrate_crossai_config(args) -> int:
     if not target.exists():
         print(
             "\033[38;5;208mvg.config.md missing. Run "
-            "`vg-orchestrator init-crossai --write` first.\033[0m",
+            "`/vg:project --init-only` first.\033[0m",
             file=sys.stderr,
         )
         return 2
@@ -170,7 +170,7 @@ def cmd_migrate_crossai_config(args) -> int:
     if not clis:
         print(
             "\033[38;5;208mNo crossai_clis declared in vg.config.md. "
-            "Run `vg-orchestrator init-crossai --write` to populate.\033[0m",
+            "Run `/vg:project --init-only` to regenerate config.\033[0m",
             file=sys.stderr,
         )
         return 2
@@ -248,7 +248,7 @@ def cmd_migrate_crossai_config(args) -> int:
 ```bash
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 cp scripts/vg-orchestrator/__main__.py .claude/scripts/vg-orchestrator/__main__.py
-python3 -m pytest scripts/tests/test_crossai_lazy_migrate.py -v
+python3 -m pytest scripts/tests/test_crossai_migrate_plan.py -v
 ```
 
 Expected: 5 passed.
@@ -259,21 +259,22 @@ Expected: 5 passed.
 cd "/Users/dzungnguyen/Vibe Code/Code/vgflow-bugfix"
 git add scripts/vg-orchestrator/__main__.py \
         .claude/scripts/vg-orchestrator/__main__.py \
-        scripts/tests/test_crossai_lazy_migrate.py
-git commit -m "feat(orchestrator): cmd_migrate_crossai_config + migrate-crossai subcommand
+        scripts/tests/test_crossai_migrate_plan.py
+git commit -m "feat(orchestrator): additive crossai migration planner
 
-M1 Task 11 — append missing crossai_stages + crossai.policy +
-heuristic_thresholds blocks to existing vg.config.md. Idempotent
-(skip if blocks already present). Reuses CLI names from existing
-crossai_clis registry; falls back gracefully when no role field.
+M1 Task 11 — compute and optionally apply additive crossai migration
+patches for legacy vg.config.md. Idempotent (skip if blocks already
+present). Reuses CLI names from existing crossai_clis registry; falls
+back gracefully when no role field.
 
-Per Q22 spec: lazy migration at first CrossAI invocation. M2/M3
-slim entries will call this on missing-block error paths.
+M1 only ships the shared planner/helper. First-invocation lazy migration
+activation stays deferred until build/scope/blueprint all share the same
+entry path in M2.
 
 Emits crossai.config_migrated telemetry event for audit trail.
 
-Tests: 5 (dry-run, write append, idempotent, no config error,
-stage uses existing CLIs).
+Tests: additive migration planner/helper coverage (dry-run, write append,
+idempotent, no config error, stage uses existing CLIs).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```

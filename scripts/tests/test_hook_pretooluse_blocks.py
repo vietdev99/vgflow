@@ -218,6 +218,30 @@ def test_codex_blocks_broad_rg_files_before_first_step(tmp_path, monkeypatch):
     assert "rg --files" in block_file.read_text()
 
 
+def test_codex_foreign_session_context_does_not_block_current_session(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".vg/active-runs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".vg/active-runs/sess-2.json").write_text(json.dumps({
+        "run_id": "r2", "command": "vg:blueprint", "phase": "2",
+        "session_id": "sess-2",
+    }))
+    (tmp_path / ".vg").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".vg/.session-context.json").write_text(json.dumps({
+        "session_id": "sess-2",
+        "run_id": "r2",
+        "command": "vg:blueprint",
+        "phase": "2",
+        "current_step": None,
+        "step_history": [],
+    }))
+
+    result = _run_hook("rg --files", env={"VG_RUNTIME": "codex"})
+    assert result.returncode == 0, result.stderr
+    assert "PreToolUse-codex-prestep-scope" not in result.stderr
+
+
 def test_codex_blocks_broad_workflow_find_before_first_step(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _seed_active_run(tmp_path)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from _repo_root import find_repo_root
@@ -30,9 +31,128 @@ ACTIVE_RUNS_DIR = REPO_ROOT / ".vg" / "active-runs"
 LEGACY_CURRENT_RUN = REPO_ROOT / ".vg" / "current-run.json"
 CURRENT_RUN_FILE = LEGACY_CURRENT_RUN  # back-compat alias
 SESSION_CONTEXT = REPO_ROOT / ".vg" / ".session-context.json"
+SESSION_CONTEXTS_DIR = REPO_ROOT / ".vg" / "session-contexts"
 
 
-def _session_id_from_session_context() -> str | None:
+def _session_context_path(session_id: str) -> Path:
+    return SESSION_CONTEXTS_DIR / f"{_safe_session_filename(session_id)}.json"
+
+
+def _normalize_command_hint(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("/vg:"):
+        raw = raw[1:]
+    if raw.startswith("vg:"):
+        return raw
+    if re.fullmatch(r"[a-z][a-z0-9_-]*", raw):
+        return f"vg:{raw}"
+    return raw
+
+
+def _intent_hints_from_env(
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+    run_id_hint: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    command = _normalize_command_hint(
+        command_hint
+        or os.environ.get("VG_CURRENT_COMMAND")
+        or os.environ.get("VG_SESSION_CMD")
+    )
+    phase_raw = (
+        phase_hint
+        or os.environ.get("VG_CURRENT_PHASE")
+        or os.environ.get("VG_SESSION_PHASE")
+        or os.environ.get("PHASE_NUMBER")
+    )
+    run_id_raw = run_id_hint or os.environ.get("VG_RUN_ID")
+    phase = str(phase_raw).strip() if phase_raw and str(phase_raw).strip() else None
+    run_id = str(run_id_raw).strip() if run_id_raw and str(run_id_raw).strip() else None
+    return run_id, command, phase
+
+
+def _run_matches_intent(
+    run: dict | None,
+    *,
+    session_id: str | None = None,
+    run_id: str | None = None,
+    command: str | None = None,
+    phase: str | None = None,
+) -> bool:
+    if not _has_run_id(run):
+        return False
+    run_sid = run.get("session_id")
+    if session_id and run_sid and run_sid != session_id:
+        return False
+    if run_id and run.get("run_id") != run_id:
+        return False
+    if command:
+        run_cmd = _normalize_command_hint(run.get("command"))
+        if run_cmd and run_cmd != command:
+            return False
+    if phase and run.get("phase") and str(run.get("phase")) != str(phase):
+        return False
+    return True
+
+
+def _select_matching_active_run(
+    *,
+    session_id: str | None = None,
+    run_id_hint: str | None = None,
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+    allow_ambiguous_latest: bool = False,
+) -> dict | None:
+    run_id, command, phase = _intent_hints_from_env(
+        command_hint=command_hint,
+        phase_hint=phase_hint,
+        run_id_hint=run_id_hint,
+    )
+
+    candidates: list[dict] = []
+    seen: set[str] = set()
+
+    def _add_candidate(run: dict | None) -> None:
+        if not _run_matches_intent(
+            run,
+            session_id=session_id,
+            run_id=run_id,
+            command=command,
+            phase=phase,
+        ):
+            return
+        rid = str(run.get("run_id") or "")
+        if not rid or rid in seen or _is_run_terminal(rid):
+            return
+        seen.add(rid)
+        candidates.append(run)
+
+    if session_id:
+        _add_candidate(_read_json(_active_run_path(session_id)))
+
+    if ACTIVE_RUNS_DIR.exists():
+        for f in sorted(ACTIVE_RUNS_DIR.glob("*.json")):
+            _add_candidate(_read_json(f))
+
+    _add_candidate(_read_json(LEGACY_CURRENT_RUN))
+
+    if not candidates:
+        return None
+
+    if len(candidates) > 1 and not allow_ambiguous_latest and not run_id:
+        return None
+
+    candidates.sort(key=lambda r: (r.get("started_at") or "", r.get("run_id") or ""))
+    return candidates[-1]
+
+
+def _session_id_from_session_context(
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+    run_id_hint: str | None = None,
+) -> str | None:
     """Best-effort session recovery for Codex command-body shells.
 
     Codex hooks receive `session_id` and write per-session active-run state,
@@ -41,9 +161,20 @@ def _session_id_from_session_context() -> str | None:
     `.vg/.session-context.json` so `run-start` reconciles with the hook-seeded
     run instead of creating a synthetic `session-unknown-*` run.
     """
-    ctx = _read_json(SESSION_CONTEXT)
-    if not isinstance(ctx, dict):
-        return None
+    run_id_hint, command_hint, phase_hint = _intent_hints_from_env(
+        command_hint=command_hint,
+        phase_hint=phase_hint,
+        run_id_hint=run_id_hint,
+    )
+
+    direct_match = _select_matching_active_run(
+        run_id_hint=run_id_hint,
+        command_hint=command_hint,
+        phase_hint=phase_hint,
+        allow_ambiguous_latest=False,
+    )
+    if direct_match and isinstance(direct_match.get("session_id"), str) and direct_match.get("session_id"):
+        return direct_match["session_id"]
 
     def _ctx_matches_run(run: dict | None) -> bool:
         if not _has_run_id(run):
@@ -69,41 +200,72 @@ def _session_id_from_session_context() -> str | None:
                 return False
         return True
 
-    ctx_sid = ctx.get("session_id")
-    if isinstance(ctx_sid, str) and ctx_sid:
-        run = _read_json(_active_run_path(ctx_sid))
-        if _ctx_matches_run(run):
-            return ctx_sid
+    def _ctx_matches_intent(ctx: dict | None) -> bool:
+        if not isinstance(ctx, dict):
+            return False
+        if run_id_hint and ctx.get("run_id") and ctx.get("run_id") != run_id_hint:
+            return False
+        ctx_cmd = _normalize_command_hint(ctx.get("command"))
+        if command_hint and ctx_cmd and ctx_cmd != command_hint:
+            return False
+        if phase_hint and ctx.get("phase") and str(ctx.get("phase")) != str(phase_hint):
+            return False
+        return bool(ctx.get("run_id") or ctx.get("session_id"))
 
-    ctx_run_id = ctx.get("run_id")
-    if not isinstance(ctx_run_id, str) or not ctx_run_id:
-        return None
+    context_candidates: list[dict] = []
+    if SESSION_CONTEXTS_DIR.exists():
+        for f in sorted(SESSION_CONTEXTS_DIR.glob("*.json")):
+            ctx = _read_json(f)
+            if _ctx_matches_intent(ctx):
+                context_candidates.append(ctx)
+    legacy_ctx = _read_json(SESSION_CONTEXT)
+    if _ctx_matches_intent(legacy_ctx):
+        context_candidates.append(legacy_ctx)
 
-    if ACTIVE_RUNS_DIR.exists():
-        for f in sorted(ACTIVE_RUNS_DIR.glob("*.json")):
-            run = _read_json(f)
-            if _ctx_matches_run(run) and isinstance(run.get("session_id"), str) and run.get("session_id"):
-                return run["session_id"]
-
-    legacy = _read_json(LEGACY_CURRENT_RUN)
-    if _ctx_matches_run(legacy) and isinstance(legacy.get("session_id"), str) and legacy.get("session_id"):
-        return legacy["session_id"]
+    for ctx in context_candidates:
+        ctx_sid = ctx.get("session_id")
+        if isinstance(ctx_sid, str) and ctx_sid:
+            run = _select_matching_active_run(
+                session_id=ctx_sid,
+                run_id_hint=ctx.get("run_id") or run_id_hint,
+                command_hint=ctx.get("command") or command_hint,
+                phase_hint=ctx.get("phase") or phase_hint,
+                allow_ambiguous_latest=False,
+            )
+            if _ctx_matches_run(run):
+                return ctx_sid
 
     return None
 
 
-def _session_id_from_env() -> str | None:
+def _session_id_from_env(
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+    run_id_hint: str | None = None,
+) -> str | None:
     return (
         os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("CLAUDE_CODE_SESSION_ID")
         or os.environ.get("CODEX_SESSION_ID")
-        or _session_id_from_session_context()
+        or _session_id_from_session_context(
+            command_hint=command_hint,
+            phase_hint=phase_hint,
+            run_id_hint=run_id_hint,
+        )
         or None
     )
 
 
-def current_session_id() -> str | None:
-    return _session_id_from_env()
+def current_session_id(
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+    run_id_hint: str | None = None,
+) -> str | None:
+    return _session_id_from_env(
+        command_hint=command_hint,
+        phase_hint=phase_hint,
+        run_id_hint=run_id_hint,
+    )
 
 
 def _safe_session_filename(sid: str) -> str:
@@ -191,7 +353,12 @@ def _has_run_id(run: dict | None) -> bool:
 # ─── Per-session API (v2.28.0+) ────────────────────────────────────────────
 
 
-def read_active_run(session_id: str | None = None) -> dict | None:
+def read_active_run(
+    session_id: str | None = None,
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+    run_id_hint: str | None = None,
+) -> dict | None:
     """Read active run for the given session.
 
     Resolution order:
@@ -207,7 +374,11 @@ def read_active_run(session_id: str | None = None) -> dict | None:
               real session_id).
       3. None.
     """
-    sid = session_id or _session_id_from_env() or "unknown"
+    sid = session_id or _session_id_from_env(
+        command_hint=command_hint,
+        phase_hint=phase_hint,
+        run_id_hint=run_id_hint,
+    ) or "unknown"
 
     run = _read_json(_active_run_path(sid))
     if _has_run_id(run):

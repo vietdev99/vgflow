@@ -44,6 +44,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 SESSION_CONTEXT = REPO_ROOT / ".vg" / ".session-context.json"
+SESSION_CONTEXTS_DIR = REPO_ROOT / ".vg" / "session-contexts"
 ORCHESTRATOR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
 LOG = REPO_ROOT / ".vg" / "hook-step-tracker.log"
 
@@ -116,23 +117,52 @@ def _detect_step_transition(command: str) -> tuple[str, str] | None:
     return None
 
 
-def _read_session_context() -> dict | None:
-    if not SESSION_CONTEXT.exists():
+def _session_context_path(session_id: str | None) -> Path | None:
+    if not session_id:
         return None
+    return SESSION_CONTEXTS_DIR / f"{_safe_session_filename(session_id)}.json"
+
+def _read_session_context(hook_session_id: str | None = None) -> dict | None:
+    candidates: list[Path] = []
+    per_session = _session_context_path(hook_session_id)
+    if per_session is not None:
+        candidates.append(per_session)
+    candidates.append(SESSION_CONTEXT)
+
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            ctx = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log(f"session-context parse error ({path}): {e}")
+            continue
+        if (
+            hook_session_id
+            and isinstance(ctx, dict)
+            and ctx.get("session_id")
+            and str(ctx.get("session_id")) != str(hook_session_id)
+        ):
+            continue
+        return ctx if isinstance(ctx, dict) else None
+    return None
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
     try:
-        return json.loads(SESSION_CONTEXT.read_text(encoding="utf-8"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(str(tmp), str(path))
     except Exception as e:
-        log(f"session-context parse error: {e}")
-        return None
+        log(f"session-context write error ({path}): {e}")
 
 
 def _write_session_context(ctx: dict) -> None:
-    try:
-        SESSION_CONTEXT.write_text(
-            json.dumps(ctx, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        log(f"session-context write error: {e}")
+    _atomic_write_json(SESSION_CONTEXT, ctx)
+    per_session = _session_context_path(str(ctx.get("session_id") or ""))
+    if per_session is not None:
+        _atomic_write_json(per_session, ctx)
 
 
 def _safe_session_filename(sid: str) -> str:
@@ -229,10 +259,10 @@ def main() -> int:
 
     # Skip if no active /vg:* run — session-context only exists during
     # an active run (Layer 1 vg-entry-hook seeds it).
-    ctx = _read_session_context()
+    hook_session_id = hook_input.get("session_id")
+    ctx = _read_session_context(str(hook_session_id) if hook_session_id else None)
     if not ctx:
         return 0
-    hook_session_id = hook_input.get("session_id")
     if not _context_matches_active_run(ctx, hook_session_id):
         return 0
 

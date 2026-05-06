@@ -1,6 +1,6 @@
-# Task 09: New `vg-blueprint-crossai-loop.py` wrapper
+# Task 09: Blueprint wrapper helper (not activated in M1)
 
-**Goal:** Thin wrapper for blueprint-stage CrossAI loop. Defines blueprint-specific brief packer with FULL BODY of PLAN + API-CONTRACTS + TEST-GOALS + CONTEXT + UI-MAP + WORKFLOW-SPECS + CRUD-SURFACES + VIEW-COMPONENTS + BLOCK 5 FE-contracts (per Q8=B spec). Uses split-file artifacts (PLAN/task-NN.md, API-CONTRACTS/<endpoint>.md) when available.
+**Goal:** Add a blueprint-stage helper wrapper only as preparation work. In M1 this file is not wired into the mainline `/vg:blueprint` flow, not covered by runtime-contract validators, and not allowed to trigger lazy migration side effects. Its job is limited to preserving the intended blueprint brief-packing shape so M2 can activate it safely later.
 
 **Files:**
 - Create: `scripts/vg-blueprint-crossai-loop.py`

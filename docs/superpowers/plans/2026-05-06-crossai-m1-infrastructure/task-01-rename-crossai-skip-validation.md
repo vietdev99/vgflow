@@ -1,6 +1,6 @@
 # Task 01: Rename `crossai_skip_validation.py` → `crossai_config.py` + import shim
 
-**Goal:** Rename the file with `git mv` to preserve history, then add a thin re-export shim at the old path so existing imports keep working until M2 deletes the shim.
+**Goal:** Rename the file with `git mv` to preserve history, then add a thin re-export shim at the old path so existing imports keep working throughout M1. Do not schedule shim removal in M1/M2 until every current validator/orchestrator import and CLI-availability assumption has been migrated safely.
 
 **Files:**
 - Rename: `scripts/lib/crossai_skip_validation.py` → `scripts/lib/crossai_config.py`
@@ -131,7 +131,9 @@ Create `scripts/lib/crossai_skip_validation.py`:
 Renamed in M1 (2026-05-06) to make room for stage-config helpers
 (`resolve_stage_config`, `StageConfig`, `CLISpec`). External callers that
 import from this old path keep working but should migrate to
-`crossai_config`. Removal target: M2 (2026-05-?) once all callers updated.
+`crossai_config`. Removal target is intentionally deferred beyond M1 until
+all validator/orchestrator callers and installed-CLI probing paths have
+been migrated together.
 """
 from crossai_config import (  # noqa: F401  (re-export)
     SkipValidationResult,

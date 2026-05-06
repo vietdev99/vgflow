@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT_REAL = Path(__file__).resolve().parents[4]
+REPO_ROOT_REAL = Path(__file__).resolve().parents[3]
 VALIDATOR = REPO_ROOT_REAL / ".claude" / "scripts" / "validators" / \
     "verify-clean-failure-state.py"
 

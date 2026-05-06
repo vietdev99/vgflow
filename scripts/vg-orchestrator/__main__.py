@@ -342,9 +342,16 @@ def cmd_run_start(args) -> int:
     as a WARN, never blocking — prevents user-perceived "lock" when one
     window runs /vg:scope while another runs /vg:build.
     """
-    session_id = state_mod.current_session_id()
+    session_id = state_mod.current_session_id(
+        command_hint=args.command,
+        phase_hint=args.phase,
+    )
 
-    active = state_mod.read_active_run(session_id)
+    active = state_mod.read_active_run(
+        session_id,
+        command_hint=args.command,
+        phase_hint=args.phase,
+    )
     if active:
         # OHOK-FIX (2026-05-03): UserPromptSubmit hook
         # (vg-user-prompt-submit.sh) writes .vg/active-runs/{sid}.json with a
@@ -466,24 +473,44 @@ def cmd_run_start(args) -> int:
                   file=sys.stderr)
             return 1
 
-    # v2.28.0: cross-session active runs from OTHER sessions are surfaced as a
-    # warning, not a block. Two windows on the same project doing different
-    # phases is a legitimate workflow. Stop hook (vg-verify-claim) handles
-    # the cross-session case via session_id matching, so safety is preserved.
-    if session_id:
-        for other in state_mod.list_active_runs():
-            other_sid = other.get("session_id")
-            if other_sid and other_sid != session_id and not _is_run_stale(other):
-                print(
-                    f"⚠ Another session is running {other.get('command')} "
-                    f"phase={other.get('phase')} (session "
-                    f"{other_sid[:12]}…). Starting concurrent run in this "
-                    f"session is allowed but git index + commit-queue mutex "
-                    f"are shared — sequence build steps if they touch the "
-                    f"same files.",
-                    file=sys.stderr,
-                )
-                break
+    # Cross-session policy:
+    #   - same phase in another live session => BLOCK (shared phase artifacts)
+    #   - different phase => WARN only (allowed concurrent work)
+    same_phase_conflict = None
+    different_phase_other = None
+    for other in state_mod.list_active_runs():
+        other_sid = other.get("session_id")
+        if session_id and other_sid == session_id:
+            continue
+        if _is_run_stale(other):
+            continue
+        if str(other.get("phase") or "") == str(args.phase or ""):
+            same_phase_conflict = other
+            break
+        if different_phase_other is None:
+            different_phase_other = other
+
+    if same_phase_conflict is not None:
+        owner_sid = str(same_phase_conflict.get("session_id") or "unknown")
+        print(
+            f"⛔ Another session already owns phase {args.phase}: "
+            f"{same_phase_conflict.get('command')} "
+            f"(session {owner_sid[:12]}…).\n"
+            f"   This phase shares .vg phase artifacts + hook/runtime state.\n"
+            f"   Finish or abort that session before starting {args.command} "
+            f"on the same phase.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if different_phase_other is not None:
+        other_sid = str(different_phase_other.get("session_id") or "unknown")
+        print(
+            f"⚠ Another session is running {different_phase_other.get('command')} "
+            f"phase={different_phase_other.get('phase')} (session "
+            f"{other_sid[:12]}…). Different phases are allowed concurrently.",
+            file=sys.stderr,
+        )
     extra_str = " ".join(args.extra) if isinstance(args.extra, list) else (args.extra or "")
 
     # OHOK v2 Day 2 — reject --override-reason < 50 chars or obvious placeholders.
@@ -1404,10 +1431,35 @@ def _is_reserved_event(event_type: str) -> bool:
     return any(event_type.startswith(p) for p in RESERVED_EVENT_PREFIXES)
 
 
-def cmd_emit_event(args) -> int:
+def _resolve_emit_event_target(args) -> dict | None:
+    """Resolve emit-event target from active run or explicit --run-id."""
+    if args.run_id:
+        run = db.get_run(args.run_id)
+        if not run:
+            print(
+                f"\033[38;5;208mUnknown run_id '{args.run_id}' for emit-event.\033[0m",
+                file=sys.stderr,
+            )
+            return None
+        return {
+            "run_id": run["run_id"],
+            "phase": run["phase"],
+            "command": run["command"],
+        }
+
     current = state_mod.read_current_run()
     if not current:
-        print("\033[38;5;208mNo active run. Call run-start first.\033[0m", file=sys.stderr)
+        print(
+            "\033[38;5;208mNo active run. Call run-start first or pass --run-id.\033[0m",
+            file=sys.stderr,
+        )
+        return None
+    return current
+
+
+def cmd_emit_event(args) -> int:
+    current = _resolve_emit_event_target(args)
+    if not current:
         return 1
 
     # OHOK-8: block forgery of gate-relevant event types via CLI
@@ -4682,6 +4734,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("event_type")
     s.add_argument("--payload", default=None,
                    help="JSON payload (or use stdin with --stdin)")
+    s.add_argument("--run-id", default=None,
+                   help="Target run_id when there is no active run (for example after run-abort)")
     s.add_argument("--step", default=None)
     s.add_argument("--actor", default="orchestrator",
                    choices=["orchestrator", "hook", "validator",

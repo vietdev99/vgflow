@@ -12,12 +12,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ORCH = REPO_ROOT / "scripts" / "vg-orchestrator" / "__main__.py"
 
 
-def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(
+    repo: Path,
+    *args: str,
+    session_id: str | None = None,
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["VG_REPO_ROOT"] = str(repo)
     env["VG_SYNC_CHECK_DISABLED"] = "true"
     env.pop("CLAUDE_SESSION_ID", None)
     env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.pop("CODEX_SESSION_ID", None)
+    if session_id:
+        env["CLAUDE_SESSION_ID"] = session_id
     orch_dir = str(REPO_ROOT / "scripts" / "vg-orchestrator")
     env["PYTHONPATH"] = (
         orch_dir + os.pathsep + env["PYTHONPATH"]
@@ -51,7 +58,63 @@ def test_run_start_backfills_synthetic_session_in_db(tmp_path: Path) -> None:
     assert "other_sessions_active" not in payload
 
 
-def test_run_start_rejects_stale_session_context_mismatch(
+def test_run_start_allows_other_session_on_different_phase(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    started_a = _run(
+        repo,
+        "run-start",
+        "vg:review",
+        "3.2",
+        "3.2",
+        session_id="sess-a",
+    )
+    assert started_a.returncode == 0, started_a.stderr
+
+    started_b = _run(
+        repo,
+        "run-start",
+        "vg:build",
+        "4.1",
+        "4.1",
+        session_id="sess-b",
+    )
+    assert started_b.returncode == 0, started_b.stderr
+    assert "Different phases are allowed concurrently" in started_b.stderr
+
+
+def test_run_start_blocks_other_session_on_same_phase(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    started_a = _run(
+        repo,
+        "run-start",
+        "vg:review",
+        "3.2",
+        "3.2",
+        session_id="sess-a",
+    )
+    assert started_a.returncode == 0, started_a.stderr
+
+    started_b = _run(
+        repo,
+        "run-start",
+        "vg:build",
+        "3.2",
+        "3.2",
+        session_id="sess-b",
+    )
+    assert started_b.returncode == 1
+    assert "already owns phase 3.2" in started_b.stderr
+
+
+def test_run_start_ignores_stale_session_context_when_other_phase_active(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -61,7 +124,7 @@ def test_run_start_rejects_stale_session_context_mismatch(
     active = {
         "run_id": "new-deploy-run",
         "command": "vg:deploy",
-        "phase": "4.2",
+        "phase": "4.3",
         "args": "",
         "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "session_id": session_id,

@@ -10,10 +10,15 @@ cmd_text="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(
 
 session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
 run_file=".vg/active-runs/${session_id}.json"
+session_context_file=".vg/session-contexts/${session_id}.json"
+if [ ! -f "$session_context_file" ]; then
+  session_context_file=".vg/.session-context.json"
+fi
 if [ ! -f "$run_file" ] && [ "${VG_RUNTIME:-}" = "codex" ]; then
   ctx_run_file="$(
-    python3 - <<'PY' 2>/dev/null || true
+    VG_SESSION_CONTEXT_FILE="$session_context_file" VG_EXPECT_SESSION_ID="$session_id" python3 - <<'PY' 2>/dev/null || true
 import json
+import os
 from pathlib import Path
 
 def safe(s):
@@ -37,12 +42,15 @@ def matches(ctx, run):
             return False
     return True
 
-p = Path(".vg/.session-context.json")
+p = Path(os.environ.get("VG_SESSION_CONTEXT_FILE") or ".vg/.session-context.json")
 if not p.exists():
     raise SystemExit(0)
 try:
     ctx = json.loads(p.read_text(encoding="utf-8")) or {}
 except Exception:
+    raise SystemExit(0)
+expected = os.environ.get("VG_EXPECT_SESSION_ID") or ""
+if expected and ctx.get("session_id") and str(ctx.get("session_id")) != expected:
     raise SystemExit(0)
 paths = []
 sid = ctx.get("session_id")
@@ -105,15 +113,19 @@ raise SystemExit(0 if row else 1)
 PY
     return 1
   fi
-  python3 - <<'PY' 2>/dev/null
+  VG_SESSION_CONTEXT_FILE="$session_context_file" VG_EXPECT_SESSION_ID="$session_id" python3 - <<'PY' 2>/dev/null
 import json
+import os
 from pathlib import Path
-p = Path(".vg/.session-context.json")
+p = Path(os.environ.get("VG_SESSION_CONTEXT_FILE") or ".vg/.session-context.json")
 if not p.exists():
     raise SystemExit(1)
 try:
     ctx = json.loads(p.read_text(encoding="utf-8"))
 except Exception:
+    raise SystemExit(1)
+expected = os.environ.get("VG_EXPECT_SESSION_ID") or ""
+if expected and ctx.get("session_id") and str(ctx.get("session_id")) != expected:
     raise SystemExit(1)
 if ctx.get("current_step") or ctx.get("step_history"):
     raise SystemExit(1)

@@ -1332,16 +1332,30 @@ if [ -n "${WAVE_FILTER:-}" ]; then
   fi
 
   if [ "$IS_FINAL_WAVE" = "true" ]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/build-continuation.py clear \
+      --phase-dir "${PHASE_DIR}" >/dev/null 2>&1 || true
     echo "▸ wave ${WAVE_FILTER} is the FINAL wave — proceeding to STEP 5 post-execution"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.final_wave_detected" \
       --phase "${PHASE_NUMBER}" \
       --payload "{\"wave\":${WAVE_FILTER},\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
   else
-    echo "▸ wave ${WAVE_FILTER} is NOT the final wave (max_wave=$(echo "$detect_json" | "${PYTHON_BIN:-python3}" -c 'import json,sys;print(json.load(sys.stdin).get("max_wave"))')) — partial-wave run, skipping STEP 5/6/7"
+    MAX_WAVE=$(echo "$detect_json" | "${PYTHON_BIN:-python3}" -c 'import json,sys;print(json.load(sys.stdin).get("max_wave"))')
+    NEXT_BUILD_COMMAND=$("${PYTHON_BIN:-python3}" .claude/scripts/build-continuation.py write \
+      --phase-dir "${PHASE_DIR}" \
+      --phase "${PHASE_NUMBER}" \
+      --current-wave "${WAVE_FILTER}" \
+      --max-wave "${MAX_WAVE}" \
+      --run-id "${RUN_ID:-}" \
+      --session-id "${CLAUDE_SESSION_ID:-${CLAUDE_HOOK_SESSION_ID:-}}" 2>/dev/null || true)
+    echo "▸ wave ${WAVE_FILTER} is NOT the final wave (max_wave=${MAX_WAVE}) — partial-wave run, skipping STEP 5/6/7"
+    [ -n "$NEXT_BUILD_COMMAND" ] && echo "  Continuation token written. User may type 'tiếp tục' or run: ${NEXT_BUILD_COMMAND}"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.partial_wave_complete" \
       --phase "${PHASE_NUMBER}" \
-      --payload "{\"wave\":${WAVE_FILTER},\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
+      --payload "{\"wave\":${WAVE_FILTER},\"phase\":\"${PHASE_NUMBER}\",\"next_command\":\"${NEXT_BUILD_COMMAND}\"}" 2>/dev/null || true
   fi
+else
+  "${PYTHON_BIN:-python3}" .claude/scripts/build-continuation.py clear \
+    --phase-dir "${PHASE_DIR}" >/dev/null 2>&1 || true
 fi
 
 # Persist for subsequent steps (slim entry STEP 5 reads this)
@@ -1356,7 +1370,10 @@ After step 8 + 8.5 markers touched for ALL waves (or for the FINAL wave when
   (`9_post_execution` → `10_postmortem_sanity` → `11_crossai_build_verify_loop`
   → `12_run_complete`). Contract validator expects all post-execution markers.
 - **`IS_FINAL_WAVE=false`** (mid-wave) → emit `build.partial_wave_complete`
-  and `run-complete` with `--partial-wave` flag. Contract validator's
+  and write `${PHASE_DIR}/.build-continuation.json` with the canonical next
+  command (`/vg:build {phase} --wave {next} --resume`) so natural-language
+  prompts like `tiếp tục` can resume the next wave. Then `run-complete` with
+  `--partial-wave` flag. Contract validator's
   `is_partial_wave` exemption (in `vg-orchestrator/__main__.py` line ~4071+)
   waives the post-execution markers + `build.completed` event.
 

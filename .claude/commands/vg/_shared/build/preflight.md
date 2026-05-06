@@ -258,28 +258,22 @@ Reads `${PHASE_DIR}/.recon-state.json` (or runs `phase-recon.py` if missing) to 
 vg-orchestrator step-active 1b_recon_gate
 
 RECON_STATE="${PHASE_DIR}/.recon-state.json"
-if [ -f "$RECON_STATE" ]; then
-  PHASE_TYPE=$(${PYTHON_BIN} -c "
+
+# Always refresh through phase-recon.py here. The script keeps its own
+# fingerprint cache and re-scans when artifacts or nested marker state changed.
+# Reading .recon-state.json directly can trust a stale snapshot from before
+# build/review/test advanced the phase.
+${PYTHON_BIN} .claude/scripts/phase-recon.py \
+  --phase-dir "${PHASE_DIR}" --profile "${PROFILE}" --quiet
+
+PHASE_TYPE=$(${PYTHON_BIN} -c "
 import json; s=json.load(open('${PHASE_DIR}/.recon-state.json', encoding='utf-8'))
 print(s['phase_type'])
 ")
-  if [ "$PHASE_TYPE" = "legacy_gsd" ]; then
-    echo "⛔ Phase ${PHASE_NUMBER} is legacy_gsd — V6 contracts missing."
-    echo "   Run /vg:phase ${PHASE_NUMBER} first to migrate legacy artifacts."
-    exit 1
-  fi
-else
-  # No recon state — run quick recon to classify
-  ${PYTHON_BIN} .claude/scripts/phase-recon.py \
-    --phase-dir "${PHASE_DIR}" --profile "${PROFILE}" --quiet
-  PHASE_TYPE=$(${PYTHON_BIN} -c "
-import json; s=json.load(open('${PHASE_DIR}/.recon-state.json', encoding='utf-8'))
-print(s['phase_type'])
-")
-  if [ "$PHASE_TYPE" = "legacy_gsd" ]; then
-    echo "⛔ Phase ${PHASE_NUMBER} is legacy_gsd — run /vg:phase ${PHASE_NUMBER} to migrate first."
-    exit 1
-  fi
+if [ "$PHASE_TYPE" = "legacy_gsd" ]; then
+  echo "⛔ Phase ${PHASE_NUMBER} is legacy_gsd — V6 contracts missing."
+  echo "   Run /vg:phase ${PHASE_NUMBER} first to migrate legacy artifacts."
+  exit 1
 fi
 echo "✓ Phase type: ${PHASE_TYPE}"
 

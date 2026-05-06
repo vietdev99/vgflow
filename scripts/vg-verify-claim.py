@@ -420,6 +420,7 @@ Then retry Stop. Hook will re-evaluate against current state.
 ## After fix
 ```
 vg-orchestrator emit-event vg.block.handled \\
+  --run-id {run_id} \\
   --gate {gate_id} \\
   --resolution "stale run aborted/repaired, Stop retried"
 ```
@@ -436,7 +437,7 @@ something is preventing run-abort/run-repair from succeeding.
     sys.stderr.write(
         f"\033[38;5;208m{gate_id}: {cause}\033[0m\n"
         f"→ Read {block_file} for fix\n"
-        f"→ After fix: vg-orchestrator emit-event vg.block.handled --gate {gate_id}\n"
+        f"→ After fix: vg-orchestrator emit-event vg.block.handled --run-id {run_id} --gate {gate_id}\n"
     )
 
     # Emit vg.block.fired so Stop hook's diagnostic-pairing gate sees it.

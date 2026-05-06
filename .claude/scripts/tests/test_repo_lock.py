@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 ORCH_DIR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
 VALIDATOR = REPO_ROOT / ".claude" / "scripts" / "validators" / \
     "verify-clean-failure-state.py"

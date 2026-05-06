@@ -34,11 +34,27 @@ from pathlib import Path
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 FILTER_STEPS = REPO_ROOT / ".claude" / "scripts" / "filter-steps.py"
 ORCHESTRATOR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
+SESSION_CONTEXTS_DIR = REPO_ROOT / ".vg" / "session-contexts"
 
 
 def _safe_session_filename(sid: str) -> str:
     safe = "".join(c for c in sid if c.isalnum() or c in "-_")
     return safe or "unknown"
+
+def _session_context_path(session_id: str) -> Path:
+    return SESSION_CONTEXTS_DIR / f"{_safe_session_filename(session_id)}.json"
+
+def _normalize_command_hint(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("/vg:"):
+        raw = raw[1:]
+    if raw.startswith("vg:"):
+        return raw
+    if re.fullmatch(r"[a-z][a-z0-9_-]*", raw):
+        return f"vg:{raw}"
+    return raw
 
 def _read_json(path: Path) -> dict | None:
     try:
@@ -60,6 +76,57 @@ def _context_matches_run(ctx: dict, run: dict | None) -> bool:
         if ctx.get(key) and run.get(key) and str(ctx.get(key)) != str(run.get(key)):
             return False
     return True
+
+
+def _iter_active_runs() -> list[dict]:
+    runs: list[dict] = []
+    active_dir = REPO_ROOT / ".vg" / "active-runs"
+    if active_dir.exists():
+        for path in sorted(active_dir.glob("*.json")):
+            data = _read_json(path)
+            if isinstance(data, dict) and data.get("run_id"):
+                runs.append(data)
+    legacy = _read_json(REPO_ROOT / ".vg" / "current-run.json")
+    if isinstance(legacy, dict) and legacy.get("run_id"):
+        runs.append(legacy)
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for run in runs:
+        rid = str(run.get("run_id") or "")
+        if rid and rid not in seen:
+            seen.add(rid)
+            deduped.append(run)
+    return deduped
+
+
+def _find_matching_active_run(
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+    run_id_hint: str | None = None,
+    session_id: str | None = None,
+) -> dict | None:
+    command = _normalize_command_hint(command_hint)
+    phase = str(phase_hint).strip() if phase_hint and str(phase_hint).strip() else None
+    run_id = str(run_id_hint).strip() if run_id_hint and str(run_id_hint).strip() else None
+    candidates: list[dict] = []
+    for run in _iter_active_runs():
+        if session_id and run.get("session_id") and str(run.get("session_id")) != str(session_id):
+            continue
+        if run_id and run.get("run_id") != run_id:
+            continue
+        run_cmd = _normalize_command_hint(run.get("command"))
+        if command and run_cmd and run_cmd != command:
+            continue
+        if phase and run.get("phase") and str(run.get("phase")) != phase:
+            continue
+        candidates.append(run)
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1 and run_id:
+        for run in candidates:
+            if run.get("run_id") == run_id:
+                return run
+    return None
 
 
 def _resolve_command_file(command: str) -> Path:
@@ -455,7 +522,10 @@ def _emit_event(
         return False
 
 
-def _read_active_run() -> dict | None:
+def _read_active_run(
+    command_hint: str | None = None,
+    phase_hint: str | None = None,
+) -> dict | None:
     sid = (
         os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("CLAUDE_CODE_SESSION_ID")
@@ -463,11 +533,25 @@ def _read_active_run() -> dict | None:
         or os.environ.get("CLAUDE_HOOK_SESSION_ID")
         or None
     )
+    run_id_hint = os.environ.get("VG_RUN_ID") or None
     candidates: list[Path] = []
     if sid:
         candidates.append(REPO_ROOT / ".vg" / "active-runs" / f"{_safe_session_filename(sid)}.json")
 
-    ctx = _read_json(REPO_ROOT / ".vg" / ".session-context.json")
+    direct = _find_matching_active_run(
+        command_hint=command_hint or os.environ.get("VG_CURRENT_COMMAND") or os.environ.get("VG_SESSION_CMD"),
+        phase_hint=phase_hint or os.environ.get("VG_CURRENT_PHASE") or os.environ.get("VG_SESSION_PHASE") or os.environ.get("PHASE_NUMBER"),
+        run_id_hint=run_id_hint,
+        session_id=sid,
+    )
+    if isinstance(direct, dict):
+        return direct
+
+    ctx: dict | None = None
+    if sid:
+        ctx = _read_json(_session_context_path(sid))
+    if not isinstance(ctx, dict):
+        ctx = _read_json(REPO_ROOT / ".vg" / ".session-context.json")
     if isinstance(ctx, dict):
         ctx_sid = ctx.get("session_id")
         if ctx_sid:
@@ -494,7 +578,7 @@ def _write_contract(
     steps: list[str],
     checklists: list[dict],
 ) -> Path | None:
-    active = _read_active_run()
+    active = _read_active_run(command, phase)
     run_id = active.get("run_id") if active else None
     if not run_id:
         return None

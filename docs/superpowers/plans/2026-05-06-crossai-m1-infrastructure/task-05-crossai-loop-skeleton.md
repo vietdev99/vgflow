@@ -1,6 +1,6 @@
-# Task 05: Skeleton `scripts/lib/crossai_loop.py` + `run_loop()` signature
+# Task 05: Skeleton `scripts/lib/crossai_loop.py` + build-legacy extraction seam
 
-**Goal:** Create the new `crossai_loop.py` library file with the `run_loop()` public entry point. M1 ships only the skeleton + signature contract; Task 06 fills in the single-primary passthrough body.
+**Goal:** Create the new `crossai_loop.py` library file as an extraction seam for the CURRENT build loop. M1 ships only the public surface + parity contract; Task 06 fills in the existing build behavior behind this seam.
 
 **Files:**
 - Create: `scripts/lib/crossai_loop.py`
@@ -14,10 +14,9 @@
 Create `scripts/tests/test_crossai_loop_library.py`:
 
 ```python
-"""crossai_loop library — orchestration entry point used by all 3 stages
-(scope/blueprint/build). M1 Tasks 05-06 implement the public API +
-single-primary passthrough; M3 will extend run_loop() to parallel
-multi-primary consensus.
+"""crossai_loop library — extraction seam for CrossAI orchestration.
+M1 Tasks 05-06 preserve the CURRENT build runtime behavior behind a
+library boundary; M3 later generalizes this into multi-stage consensus.
 """
 import sys
 from pathlib import Path
@@ -69,7 +68,7 @@ Expected: 3 failures (`ModuleNotFoundError: No module named 'crossai_loop'`).
 Create `scripts/lib/crossai_loop.py`:
 
 ```python
-"""CrossAI orchestration library — shared by scope/blueprint/build wrappers.
+"""CrossAI orchestration library — extraction seam for current build loop.
 
 Public API:
     run_loop(phase, iteration, brief_packer, stage_config, out_dir=None) -> int
@@ -79,11 +78,10 @@ Exit codes (preserve existing vg-build-crossai-loop.py semantics):
     EXIT_BLOCKS_FOUND   = 1  -- BLOCK findings present, fix loop should iterate
     EXIT_INFRA_FAIL     = 2  -- CLI subprocess failed (network/quota/parse error)
 
-M1 (Task 06) ships single-primary passthrough: invokes the FIRST CLI in
-stage_config.primary_clis and ignores the rest. M3 will extend to parallel
-multi-primary consensus + Sonnet adjudicator. The single-primary M1 path
-preserves exact existing build CrossAI behavior so Task 07 refactor of
-vg-build-crossai-loop.py is a behavior-preserving change.
+M1 (Task 06) preserves the CURRENT build loop semantics: parallel Codex +
+Gemini invocation, build-specific events, findings shape, and output path.
+M3 will later add generic multi-stage/multi-primary orchestration on top
+of that preserved baseline.
 """
 from __future__ import annotations
 
@@ -121,13 +119,13 @@ def run_loop(
         stage_config: resolved StageConfig from
             crossai_config.resolve_stage_config().
         out_dir: optional override for findings + raw CLI output directory.
-            Default is `<phase_dir>/<stage>-crossai-verify/`.
+            Build parity path in M1 stays `<phase_dir>/crossai-build-verify/`.
 
     Returns:
         Exit code: EXIT_CLEAN | EXIT_BLOCKS_FOUND | EXIT_INFRA_FAIL.
 
-    M1 implementation: single-primary passthrough (Task 06).
-    M3 will extend to parallel multi-primary consensus.
+    M1 implementation: build-legacy behavior extraction (Task 06).
+    M3 will extend to generic multi-primary consensus.
     """
     raise NotImplementedError(
         "run_loop body added in M1 Task 06. This skeleton ships in Task 05 "

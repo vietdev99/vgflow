@@ -88,6 +88,27 @@ if [ "$TOTAL_IN_SCOPE" -gt 0 ]; then
     #   writes: code edits (within phase ownership), commit per fix
     #   returns: {"status":"FIXED|UNRESOLVED|OUT_OF_SCOPE", "iterations":N, "summary":"..."}
 
+    # Persist exact subagent verdict for downstream block counts + SUMMARY.md
+    # reconciliation. The controller MUST capture the child JSON into
+    # SUBAGENT_OUTPUT:
+    #   - Claude path: Agent() return value
+    #   - Codex path:  SUBAGENT_OUTPUT="$(cat "$OUT_FILE")"
+    FIX_RESULT_PATH="${EVIDENCE_DIR}/classified/$(basename "$ev").fixed.json"
+    printf '%s\n' "$SUBAGENT_OUTPUT" > "${FIX_RESULT_PATH}.tmp"
+    "${PYTHON_BIN:-python3}" - "${FIX_RESULT_PATH}.tmp" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+status = str(data.get("status") or "").upper()
+if status not in {"FIXED", "UNRESOLVED", "OUT_OF_SCOPE"}:
+    raise SystemExit(f"invalid fix-loop status: {status or '(missing)'}")
+path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+    mv "${FIX_RESULT_PATH}.tmp" "${FIX_RESULT_PATH}"
+
     bash scripts/vg-narrate-spawn.sh general-purpose returned "$(basename "$ev")"
 
     # B7 regression smoke after fix

@@ -1,6 +1,6 @@
-# Task 08: New `vg-scope-crossai-loop.py` wrapper
+# Task 08: Scope wrapper helper (not activated in M1)
 
-**Goal:** Thin wrapper for scope-stage CrossAI loop. Defines scope-specific brief packer (SPECS + CONTEXT full body, plus DISCUSSION-LOG if present). Imports library, delegates orchestration. Mirrors structure of Task 07 build wrapper.
+**Goal:** Add a scope-stage helper wrapper only as preparation work. In M1 this file is not wired into the mainline `/vg:scope` flow, not covered by runtime-contract validators, and not allowed to trigger lazy migration side effects. Its job is limited to preserving the intended brief-packing shape so M2 can activate it safely later.
 
 **Files:**
 - Create: `scripts/vg-scope-crossai-loop.py`
@@ -70,7 +70,7 @@ python3 -m pytest scripts/tests/test_crossai_loop_library.py -v -k "scope"
 
 Expected: 3 failures (file doesn't exist).
 
-- [ ] **Step 3: Create `scripts/vg-scope-crossai-loop.py`**
+- [ ] **Step 3: Create `scripts/vg-scope-crossai-loop.py` as helper-only**
 
 ```python
 #!/usr/bin/env python3
@@ -199,8 +199,9 @@ M1 Task 08 — scope-stage CrossAI loop wrapper. Brief packs SPECS +
 CONTEXT (+ DISCUSSION-LOG if present) full body, focused on
 SPECS↔CONTEXT drift / contradiction / out-of-scope sneak detection.
 
-Delegates orchestration to crossai_loop.run_loop(). CLI signature
-matches existing build wrapper.
+Delegates orchestration to the shared library, but this file remains
+helper-only in M1. Do not wire it into `/vg:scope`, validators, or any
+auto-run path yet.
 
 Tests: 3 (importable, brief content, missing-artifact placeholder).
 

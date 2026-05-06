@@ -289,7 +289,7 @@ def resolve_stage_config(stage: str, repo_root: Path) -> StageConfig:
     if cfg is None:
         raise ValueError(
             f"vg.config.md not found under {repo_root}. Run "
-            "`vg-orchestrator init-crossai` to generate one."
+            "`/vg:project --init-only` to generate one."
         )
     text = cfg.read_text(encoding="utf-8", errors="replace")
     clis = _parse_crossai_clis_full(text)
@@ -349,7 +349,7 @@ git commit -m "feat(crossai-config): resolve_stage_config(stage, repo_root)
 M1 Task 03 — read vg.config.md crossai_clis + crossai_stages blocks,
 return validated StageConfig for the requested stage. Validates CLI
 name references; raises ValueError with actionable hints (run
-init-crossai or migrate-crossai) on missing config/sections.
+`/vg:project --init-only` or migrate-crossai) on missing config/sections.
 
 New helpers: _parse_crossai_clis_full (extends Task 01 _parse_crossai_clis
 with command/label/role fields), _parse_crossai_stages (nested block).

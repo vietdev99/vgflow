@@ -1,4 +1,5 @@
 """Unit tests for vg_update.py helper."""
+import argparse
 import sys
 import shutil
 from pathlib import Path
@@ -7,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
+import vg_update
 from vg_update import (
     compare_versions,
     verify_sha256,
@@ -181,6 +183,34 @@ def test_merge_missing_ancestor_fallback(tmp_path):
     result = three_way_merge(tmp_path / "missing.md", current, upstream)
     assert result.status == "force-upstream"
     assert result.content == "upstream\n"
+
+
+def test_cmd_merge_writes_bytes_not_text(tmp_path, monkeypatch):
+    """Windows path must not reintroduce CRLF via text-mode write_text()."""
+    output = tmp_path / "merged.md"
+
+    monkeypatch.setattr(
+        vg_update,
+        "three_way_merge",
+        lambda *_args, **_kwargs: MergeResult("clean", "line1\nline2\n"),
+    )
+
+    def _fail_write_text(self, *args, **kwargs):
+        raise AssertionError("cmd_merge must not use write_text()")
+
+    monkeypatch.setattr(Path, "write_text", _fail_write_text)
+
+    rc = vg_update.cmd_merge(
+        argparse.Namespace(
+            ancestor="ancestor.md",
+            current="current.md",
+            upstream="upstream.md",
+            output=str(output),
+        )
+    )
+
+    assert rc == 0
+    assert output.read_bytes() == b"line1\nline2\n"
 
 
 # ---- Task C4: PatchesManifest ------------------------------------------------

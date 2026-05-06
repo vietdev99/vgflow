@@ -44,6 +44,7 @@ def _setup_repo(tmp: Path) -> dict:
         env=env, capture_output=True, text=True, cwd=str(tmp), timeout=15,
     )
     assert rs.returncode == 0, f"run-start failed: {rs.stderr}"
+    env["VG_TEST_RUN_ID"] = rs.stdout.strip()
     return env
 
 
@@ -192,3 +193,56 @@ def test_fail_outcome_is_accepted(tmp_path):
     fired = _events(tmp_path, "vg.block.fired")
     assert len(fired) == 1
     assert fired[0]["outcome"] == "FAIL"
+
+
+def test_emit_event_with_run_id_after_abort(tmp_path):
+    """Post-abort diagnostics must still append to the aborted run."""
+    env = _setup_repo(tmp_path)
+    run_id = env["VG_TEST_RUN_ID"]
+
+    abort = subprocess.run(
+        [sys.executable, ORCH, "run-abort", "--reason", "stale run smoke"],
+        env=env, capture_output=True, text=True, cwd=str(tmp_path), timeout=15,
+    )
+    assert abort.returncode == 0, f"run-abort failed: {abort.stderr}"
+
+    rc = subprocess.run(
+        [sys.executable, ORCH, "emit-event",
+         "vg.block.handled",
+         "--run-id", run_id,
+         "--actor", "user",
+         "--outcome", "PASS",
+         "--gate", "Stop-stale-run",
+         "--resolution", "stale run aborted/repaired, Stop retried"],
+        env=env, capture_output=True, text=True, cwd=str(tmp_path), timeout=15,
+    )
+    assert rc.returncode == 0, f"post-abort emit-event failed: {rc.stderr}"
+
+    handled = _events(tmp_path, "vg.block.handled")
+    assert len(handled) == 1
+    assert handled[0]["payload"]["gate"] == "Stop-stale-run"
+    assert handled[0]["payload"]["resolution"] == "stale run aborted/repaired, Stop retried"
+
+
+def test_emit_event_unknown_run_id_fails(tmp_path):
+    """Explicit --run-id must fail closed when the target run does not exist."""
+    env = _setup_repo(tmp_path)
+
+    abort = subprocess.run(
+        [sys.executable, ORCH, "run-abort", "--reason", "cleanup"],
+        env=env, capture_output=True, text=True, cwd=str(tmp_path), timeout=15,
+    )
+    assert abort.returncode == 0, f"run-abort failed: {abort.stderr}"
+
+    rc = subprocess.run(
+        [sys.executable, ORCH, "emit-event",
+         "vg.block.handled",
+         "--run-id", "does-not-exist",
+         "--actor", "user",
+         "--outcome", "PASS",
+         "--gate", "Stop-stale-run",
+         "--resolution", "should fail"],
+        env=env, capture_output=True, text=True, cwd=str(tmp_path), timeout=15,
+    )
+    assert rc.returncode != 0, "expected non-zero for unknown --run-id"
+    assert "unknown run_id" in rc.stderr.lower()
