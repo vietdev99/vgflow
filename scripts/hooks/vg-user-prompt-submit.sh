@@ -58,7 +58,20 @@ if [[ ! "$prompt" =~ ^/vg:([a-z][a-z0-9_-]*)([[:space:]]+(.*))?$ ]]; then
       fi
       printf "Slim entry: commands/vg/%s.md\n" "${active_cmd#vg:}" >&2
       printf "</vg-flow-context>\n" >&2
+      exit 0
     fi
+  fi
+
+  # Natural-language continuation after `/vg:build X --wave N` partial runs.
+  # Partial-wave run-complete clears active-run state, so the normal active-run
+  # reminder above has nothing to read. The continuation token carries the
+  # canonical next command.
+  continuation_context="$(python3 .claude/scripts/build-continuation.py resolve \
+    --root "." \
+    --prompt "$prompt" \
+    --adapter "$required_adapter" 2>/dev/null || true)"
+  if [ -n "$continuation_context" ]; then
+    printf "%s\n" "$continuation_context" >&2
   fi
   exit 0
 fi

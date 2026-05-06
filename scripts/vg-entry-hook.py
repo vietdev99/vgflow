@@ -26,8 +26,9 @@ Hook input (stdin JSON, Claude Code UserPromptSubmit contract):
   }
 
 Hook output (stdout):
-  {"decision": "approve"}  — always (we never block input)
-  Optionally with `additionalContext` to inform Claude the run was registered.
+  Claude: {"decision": "approve"}  — always (we never block input)
+  Codex:  {"continue": true}
+  Optionally with `additionalContext` / `systemMessage` to inform the runtime.
 """
 from __future__ import annotations
 
@@ -43,13 +44,15 @@ REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 CURRENT_RUN = REPO_ROOT / ".vg" / "current-run.json"
 SESSION_CONTEXT = REPO_ROOT / ".vg" / ".session-context.json"
 SESSION_CONTEXTS = REPO_ROOT / ".vg" / "session-contexts"
-ORCH = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
 LOG = REPO_ROOT / ".vg" / "hook-entry.log"
 
 # Match /vg:command followed by optional args. Phase is usually first
 # positional numeric token; capture it when present.
 VG_CMD_RE = re.compile(
     r"/vg:([a-z][a-z-]*)(?:\s+(\S+))?"
+)
+CODEX_SKILL_RE = re.compile(
+    r"\$vg-([a-z][a-z0-9_-]*)(?:\s+(\S+))?"
 )
 
 
@@ -63,6 +66,13 @@ def log(msg: str) -> None:
 
 
 def approve(context: str | None = None) -> None:
+    if _is_codex_runtime():
+        resp: dict[str, object] = {"continue": True}
+        if context:
+            resp["systemMessage"] = context
+        print(json.dumps(resp))
+        sys.exit(0)
+
     resp = {"decision": "approve"}
     if context:
         resp["hookSpecificOutput"] = {
@@ -71,6 +81,20 @@ def approve(context: str | None = None) -> None:
         }
     print(json.dumps(resp))
     sys.exit(0)
+
+
+def _is_codex_runtime() -> bool:
+    return os.environ.get("VG_RUNTIME") == "codex" or bool(os.environ.get("CODEX_SESSION_ID"))
+
+
+def _orchestrator_dir() -> Path | None:
+    for candidate in (
+        REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator",
+        REPO_ROOT / "scripts" / "vg-orchestrator",
+    ):
+        if (candidate / "__main__.py").exists():
+            return candidate
+    return None
 
 
 def _session_context_path(session_id: str | None) -> Path | None:
@@ -233,9 +257,9 @@ def _vg_cmd_at_first_nonempty_line(prompt: str):
         stripped = line.lstrip()
         if not stripped:
             continue
-        # Found the first non-empty line. Check if it's a /vg:cmd.
-        m = VG_CMD_RE.match(stripped)
-        return m  # None if first line isn't /vg:cmd, match obj if it is
+        # Found the first non-empty line. Check if it's a VG invocation.
+        m = VG_CMD_RE.match(stripped) or CODEX_SKILL_RE.match(stripped)
+        return m  # None if first line isn't VG invocation, match obj if it is
     return None
 
 
@@ -246,10 +270,50 @@ def _vg_cmd_at_line_start(prompt: str):
     """
     for line in prompt.splitlines():
         stripped = line.lstrip()
-        m = VG_CMD_RE.match(stripped)  # match (not search) — anchored to line start
+        m = VG_CMD_RE.match(stripped) or CODEX_SKILL_RE.match(stripped)
         if m:
             return m
     return None
+
+
+def _resolve_build_continuation(prompt: str, session_id: str | None) -> str | None:
+    """Resolve short natural-language "continue" prompts for Codex/Claude."""
+    if session_id:
+        active = REPO_ROOT / ".vg" / "active-runs" / f"{_safe_session_filename(session_id)}.json"
+        if active.exists():
+            return None
+
+    candidates = (
+        REPO_ROOT / ".claude" / "scripts" / "build-continuation.py",
+        REPO_ROOT / "scripts" / "build-continuation.py",
+    )
+    script = next((p for p in candidates if p.exists()), None)
+    if script is None:
+        return None
+    adapter = "codex" if os.environ.get("VG_RUNTIME") == "codex" else "auto"
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "resolve",
+                "--root",
+                str(REPO_ROOT),
+                "--prompt",
+                prompt,
+                "--adapter",
+                adapter,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(REPO_ROOT),
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return proc.stdout.strip()
 
 
 def main() -> int:
@@ -261,8 +325,11 @@ def main() -> int:
     prompt = hook_input.get("prompt") or ""
     session_id = hook_input.get("session_id") or None
 
-    # Fast path: non-VG messages
-    if "/vg:" not in prompt:
+    # Fast path: non-VG messages, except short build-continuation prompts.
+    if "/vg:" not in prompt and "$vg-" not in prompt:
+        context = _resolve_build_continuation(prompt, session_id)
+        if context:
+            approve(context=context)
         approve()
 
     # v2.5.2.5: reject paste-back text from Stop-hook feedback loops
@@ -299,9 +366,9 @@ def main() -> int:
         approve(context=f"VG run {command} phase={phase_token} already "
                         f"registered (orchestrator idempotent).")
 
-    # Orchestrator must exist
-    if not (ORCH / "__main__.py").exists():
-        log(f"orchestrator missing at {ORCH} — approve degraded")
+    orch = _orchestrator_dir()
+    if orch is None:
+        log("orchestrator missing at .claude/scripts/vg-orchestrator or scripts/vg-orchestrator — approve degraded")
         approve()
 
     # Fire run-start. v2.28.0: pass session_id via env so orchestrator
@@ -313,7 +380,7 @@ def main() -> int:
         if session_id:
             env["CLAUDE_SESSION_ID"] = session_id
         r = subprocess.run(
-            [sys.executable, str(ORCH), "run-start", command, phase_token],
+            [sys.executable, str(orch), "run-start", command, phase_token],
             capture_output=True, text=True, timeout=10,
             cwd=str(REPO_ROOT),
             env=env,
