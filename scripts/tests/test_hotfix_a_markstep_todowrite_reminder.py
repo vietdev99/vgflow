@@ -10,11 +10,19 @@ stale tasklist (observed PV3 build 4.2 dogfood 2026-05-05).
 Fix: hook fires non-blocking on mark-step bash and writes a stderr reminder.
 PreToolUse stdout JSON cannot include additionalContext on current runtimes.
 """
+import hashlib
+import hmac
 import json
 import subprocess
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts").is_dir() and (parent / "commands").is_dir() and (parent / "codex-skills").is_dir():
+            return parent
+    return Path(__file__).resolve().parents[2]
+
+REPO_ROOT = _repo_root()
 HOOK = REPO_ROOT / "scripts" / "hooks" / "vg-pre-tool-use-bash.sh"
 
 
@@ -33,15 +41,40 @@ def _run_hook(tmp_path, cmd_text, session_id="test-sess", with_evidence=True):
                     "session_id": session_id})
     )
     if with_evidence:
+        key = b"test-key-32-bytes-aaaaaaaaaaaaaaa"
+        key_path = tmp_path / ".vg/.evidence-key"
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.write_bytes(key)
+        key_path.chmod(0o600)
         (tmp_path / f".vg/runs/{run_id}").mkdir(parents=True, exist_ok=True)
+        contract_path = tmp_path / f".vg/runs/{run_id}/tasklist-contract.json"
+        contract_path.write_text(
+            json.dumps({"checklists": [{"id": "build_execute", "items": ["8_execute_waves"]}]}),
+            encoding="utf-8",
+        )
+        payload = {
+            "run_id": run_id,
+            "contract_sha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(),
+            "depth_valid": True,
+            "match": True,
+            "adapter": "claude",
+            "todo_ids": ["build_execute"],
+            "contract_ids": ["build_execute"],
+        }
+        sig = hmac.new(key, json.dumps(payload, sort_keys=True).encode(), hashlib.sha256).hexdigest()
         (tmp_path / f".vg/runs/{run_id}/.tasklist-projected.evidence.json").write_text(
-            "{}"  # presence-only check at the early-out
+            json.dumps({"payload": payload, "hmac_sha256": sig}),
+            encoding="utf-8",
         )
     payload = json.dumps({"tool_input": {"command": cmd_text}})
     proc = subprocess.run(
         ["bash", str(HOOK)],
         input=payload, cwd=tmp_path, capture_output=True, text=True,
-        env={"CLAUDE_HOOK_SESSION_ID": session_id, "PATH": "/usr/bin:/bin"},
+        env={
+            "CLAUDE_HOOK_SESSION_ID": session_id,
+            "VG_EVIDENCE_KEY_PATH": str(tmp_path / ".vg/.evidence-key"),
+            "PATH": "/usr/bin:/bin",
+        },
     )
     return proc.returncode, proc.stdout, proc.stderr
 

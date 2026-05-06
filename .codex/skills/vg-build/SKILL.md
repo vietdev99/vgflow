@@ -11,6 +11,19 @@ metadata:
 This skill body is generated from VGFlow's canonical source. Claude Code and
 Codex use the same workflow contracts, but their orchestration primitives differ.
 
+### Runtime lock
+
+When this skill is running inside Codex, DO NOT switch to Claude CLI to execute
+the workflow entrypoint. Keep the current Codex runtime, export
+`VG_RUNTIME=codex`, use Codex `update_plan` for the compact visible task
+window, and bind it with `vg-orchestrator tasklist-projected --adapter codex`.
+
+`.claude/scripts/*` and `.claude/commands/*` are canonical VGFlow source
+paths shared by both adapters; those paths do not mean the runtime changed to
+Claude. References below to "Claude CLI", `TodoWrite`, or Haiku describe the
+Claude adapter only. Codex must map them through this adapter contract instead
+of aborting the current run and relaunching Claude.
+
 ### Tool mapping
 
 | Claude Code concept | Codex-compatible pattern | Notes |
@@ -266,7 +279,13 @@ if [ "$IS_FINAL_WAVE" != "true" ]; then
   echo "  Post-execution markers (9_post_execution, 10_postmortem_sanity,"
   echo "  11_crossai_build_verify_loop, 12_run_complete) waived by"
   echo "  is_partial_wave exemption in contract validator."
-  echo "  Run \`/vg:build ${PHASE_NUMBER}\` (no --wave) for the FINAL wave to fire post-execution."
+  NEXT_BUILD_COMMAND=$("${PYTHON_BIN:-python3}" .claude/scripts/build-continuation.py show \
+    --phase-dir "${PHASE_DIR}" --field canonical_command 2>/dev/null || true)
+  if [ -n "$NEXT_BUILD_COMMAND" ]; then
+    echo "  Type 'tiếp tục' to resume, or run: ${NEXT_BUILD_COMMAND}"
+  else
+    echo "  Run \`/vg:build ${PHASE_NUMBER}\` (no --wave) for the FINAL wave to fire post-execution."
+  fi
   # Mark partial-wave run-complete (orchestrator emits run.completed with partial flag)
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete --partial-wave 2>/dev/null || \
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete 2>/dev/null || true

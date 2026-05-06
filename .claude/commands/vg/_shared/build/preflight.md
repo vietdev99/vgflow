@@ -340,6 +340,10 @@ Per sub-step lifecycle:
 - BEFORE sub-step work: set its sub-step todo `in_progress`. Group header
   stays `in_progress` while ANY of its sub-steps is pending/active.
 - AFTER `mark-step` writes marker: set sub-step todo `completed`.
+- AFTER any `vg-orchestrator mark-step`: refresh the runtime-native task UI
+  before the next `step-active`, `mark-step`, `run-complete`, or code edit.
+  Claude must call TodoWrite again; Codex must update compact `update_plan`
+  and re-run `tasklist-projected --adapter codex`.
 - When ALL sub-steps in a group are `completed`: set group header todo `completed`.
 - On run-complete: clear projected tasklist per `close-on-complete`.
 

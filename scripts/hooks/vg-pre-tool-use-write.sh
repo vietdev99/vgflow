@@ -40,7 +40,55 @@ if [ -f "$run_file" ]; then
   run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file" 2>/dev/null || echo "")"
   if [ -n "$run_id" ]; then
     evidence_path=".vg/runs/${run_id}/.tasklist-projected.evidence.json"
+    tasklist_gate_cause=""
     if [ ! -f "$evidence_path" ]; then
+      tasklist_gate_cause="mutating tool blocked: tasklist not yet projected for run ${run_id}"
+    elif [ -f ".vg/events.db" ]; then
+      tasklist_sync_result="$(VG_RUN_ID="${run_id}" VG_EV_PATH="$evidence_path" VG_DB_PATH=".vg/events.db" python3 - <<'PY'
+import json, os, sqlite3, sys
+from pathlib import Path
+
+run_id = os.environ["VG_RUN_ID"]
+ev_path = Path(os.environ["VG_EV_PATH"])
+db_path = Path(os.environ["VG_DB_PATH"])
+
+try:
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute(
+        "SELECT step, ts FROM events "
+        "WHERE run_id = ? AND event_type = 'step.marked' AND step IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    conn.close()
+except Exception:
+    row = None
+
+if not row:
+    print("ok", end="")
+    sys.exit(0)
+
+latest_step, latest_ts = row
+try:
+    payload = json.loads(ev_path.read_text(encoding="utf-8")).get("payload", {})
+except Exception as exc:
+    print(f"unreadable:{exc}", end="")
+    sys.exit(0)
+
+if payload.get("latest_marked_step") != latest_step or payload.get("latest_marked_at") != latest_ts:
+    print(f"stale after mark-step {latest_step}@{latest_ts}", end="")
+    sys.exit(0)
+if payload.get("adapter") == "claude" and payload.get("latest_marked_status_valid") is not True:
+    print(f"TodoWrite status stale for {latest_step}", end="")
+    sys.exit(0)
+print("ok", end="")
+PY
+)"
+      if [ "$tasklist_sync_result" != "ok" ]; then
+        tasklist_gate_cause="mutating tool blocked: task UI not refreshed (${tasklist_sync_result})"
+      fi
+    fi
+    if [ -n "$tasklist_gate_cause" ]; then
       # Whitelist: only allow writes under .vg/ when tasklist not yet projected.
       # AI can still run emit-tasklist.py preflight (writes contract under .vg/runs/)
       # and orchestrator state, but cannot edit code/specs/anything outside .vg/.
@@ -48,7 +96,7 @@ if [ -f "$run_file" ]; then
         gate_id="PreToolUse-Write-tasklist-required"
         block_dir=".vg/blocks/${run_id}"
         block_file="${block_dir}/${gate_id}.md"
-        cause="mutating tool blocked: tasklist not yet projected for run ${run_id}"
+        cause="$tasklist_gate_cause"
         mkdir -p "$block_dir" 2>/dev/null
         cat > "$block_file" <<EOF
 # Block diagnostic — ${gate_id}

@@ -20,13 +20,15 @@ fi
 # Build evidence payload from TodoWrite input + contract.
 # NOTE: pass hook input via env var (VG_HOOK_INPUT) — heredoc consumes stdin.
 payload="$(VG_HOOK_INPUT="$input" python3 - "$contract_path" "$run_id" <<'PY'
-import hashlib, json, os, sys
+import hashlib, json, os, sqlite3, sys
+from pathlib import Path
 from datetime import datetime, timezone
 contract_path, run_id = sys.argv[1:]
 hook_input = json.loads(os.environ.get("VG_HOOK_INPUT", "{}"))
 todos = hook_input.get("tool_input", {}).get("todos", [])
 contract = json.loads(open(contract_path).read())
 checklists = contract.get("checklists", [])
+projection_items = contract.get("projection_items", []) or []
 
 # Tolerant match: each contract checklist matched if any group-header todo
 # content contains its id or its title. Allows AI to format group content
@@ -73,8 +75,44 @@ flat_groups = [gid for gid, n in sub_counts.items() if n == 0]
 groups_with_subs_count = sum(1 for n in sub_counts.values() if n >= 1)
 depth_valid = (len(matched_ids) > 0) and (len(flat_groups) == 0)
 
+latest_marked_step = None
+latest_marked_at = None
+latest_marked_status = None
+latest_marked_status_valid = True
+db_path = Path(".vg/events.db")
+if db_path.exists():
+    try:
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT step, ts FROM events "
+            "WHERE run_id = ? AND event_type = 'step.marked' "
+            "ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        conn.close()
+    except Exception:
+        row = None
+    if row and row[0]:
+        latest_marked_step = row[0]
+        latest_marked_at = row[1]
+        accepted = {latest_marked_step}
+        for item in projection_items:
+            if item.get("kind") == "step" and item.get("id") == latest_marked_step:
+                title = str(item.get("title") or "").strip()
+                if title:
+                    accepted.add(title)
+                    accepted.add(title.lstrip(" ↳").strip())
+        latest_marked_status_valid = False
+        for todo in todos:
+            content = str(todo.get("content") or "")
+            if any(token and token in content for token in accepted):
+                latest_marked_status = str(todo.get("status") or "")
+                latest_marked_status_valid = latest_marked_status == "completed"
+                break
+
 payload = {
     "run_id": run_id,
+    "adapter": "claude",
     "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "todo_count": len(todos),
     "contract_sha256": hashlib.sha256(open(contract_path, "rb").read()).hexdigest(),
@@ -84,6 +122,10 @@ payload = {
     "depth_valid": depth_valid,
     "groups_with_subs_count": groups_with_subs_count,
     "flat_groups": sorted(flat_groups),
+    "latest_marked_step": latest_marked_step,
+    "latest_marked_at": latest_marked_at,
+    "latest_marked_status": latest_marked_status,
+    "latest_marked_status_valid": latest_marked_status_valid,
 }
 print(json.dumps(payload))
 PY

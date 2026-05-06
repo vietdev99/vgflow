@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-VALIDATOR = REPO_ROOT / ".claude" / "scripts" / "validators" / "secrets-scan.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR = REPO_ROOT / "scripts" / "validators" / "secrets-scan.py"
 
 
 def _git_available() -> bool:
