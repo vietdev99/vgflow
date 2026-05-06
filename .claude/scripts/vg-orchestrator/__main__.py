@@ -859,6 +859,51 @@ def _ensure_evidence_key() -> bytes:
         raise ValueError(f"evidence key too short at {key_path}")
     return key
 
+def _latest_marked_step_event(run_id: str) -> dict | None:
+    """Return latest durable step marker event for this run, if any."""
+    events = db.query_events(run_id=run_id, event_type="step.marked", limit=10000)
+    if not events:
+        return None
+    for event in reversed(events):
+        if event.get("step"):
+            return event
+    return None
+
+def _tasklist_evidence_sync_verdict(
+    evidence_path: Path,
+    run_id: str,
+    *,
+    require_claude_status: bool = False,
+) -> tuple[bool, str]:
+    """Check task UI evidence is synced after the latest marked step."""
+    latest = _latest_marked_step_event(run_id)
+    if not latest:
+        return True, "ok"
+    try:
+        evidence_record = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"tasklist evidence unreadable: {exc}"
+    payload = evidence_record.get("payload", {}) if isinstance(evidence_record, dict) else {}
+    latest_step = latest.get("step")
+    latest_ts = latest.get("ts")
+    if (
+        payload.get("latest_marked_step") != latest_step
+        or payload.get("latest_marked_at") != latest_ts
+    ):
+        return (
+            False,
+            "tasklist evidence stale after latest mark-step "
+            f"{latest_step}@{latest_ts}; update the native task UI, then "
+            "re-run tasklist-projected",
+        )
+    if require_claude_status and payload.get("latest_marked_status_valid") is not True:
+        return (
+            False,
+            "TodoWrite evidence does not show latest marked step as completed: "
+            f"{latest_step} status={payload.get('latest_marked_status')!r}",
+        )
+    return True, "ok"
+
 
 def _write_tasklist_projection_evidence(
     run_id: str,
@@ -890,6 +935,9 @@ def _write_tasklist_projection_evidence(
         1 for c in checklists_in_contract if (c.get("items") or [])
     )
     depth_valid = (len(checklists_in_contract) > 0) and (len(flat_groups) == 0)
+    latest_marked = _latest_marked_step_event(run_id)
+    latest_marked_step = latest_marked.get("step") if latest_marked else None
+    latest_marked_at = latest_marked.get("ts") if latest_marked else None
     payload = {
         "run_id": run_id,
         "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -902,6 +950,10 @@ def _write_tasklist_projection_evidence(
         "depth_valid": depth_valid,
         "groups_with_subs_count": groups_with_subs_count,
         "flat_groups": flat_groups,
+        "latest_marked_step": latest_marked_step,
+        "latest_marked_at": latest_marked_at,
+        "latest_marked_status": "projected_after_mark" if latest_marked else None,
+        "latest_marked_status_valid": True,
     }
     key = _ensure_evidence_key()
     canonical = json.dumps(payload, sort_keys=True).encode()
@@ -1184,6 +1236,21 @@ def cmd_tasklist_projected(args) -> int:
                 "  Fix: call the TodoWrite tool with one item per checklists[]\n"
                 "  row from tasklist-contract.json (with `↳` sub-items per\n"
                 "  group). Then re-run this command.",
+                file=sys.stderr,
+            )
+            return 2
+        sync_ok, sync_reason = _tasklist_evidence_sync_verdict(
+            evidence_path,
+            run_id,
+            require_claude_status=True,
+        )
+        if not sync_ok:
+            print("\033[38;5;208mTodoWrite evidence is stale.\033[0m", file=sys.stderr)
+            print(
+                f"  Reason: {sync_reason}\n\n"
+                "  Fix: call TodoWrite again from tasklist-contract.json, mark\n"
+                "  the latest completed sub-step as completed, set the next\n"
+                "  sub-step in_progress, then re-run this command.",
                 file=sys.stderr,
             )
             return 2

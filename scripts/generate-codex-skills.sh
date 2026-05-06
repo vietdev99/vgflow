@@ -75,6 +75,19 @@ write_generic_adapter() {
 This skill body is generated from VGFlow's canonical source. Claude Code and
 Codex use the same workflow contracts, but their orchestration primitives differ.
 
+### Runtime lock
+
+When this skill is running inside Codex, DO NOT switch to Claude CLI to execute
+the workflow entrypoint. Keep the current Codex runtime, export
+\`VG_RUNTIME=codex\`, use Codex \`update_plan\` for the compact visible task
+window, and bind it with \`vg-orchestrator tasklist-projected --adapter codex\`.
+
+\`.claude/scripts/*\` and \`.claude/commands/*\` are canonical VGFlow source
+paths shared by both adapters; those paths do not mean the runtime changed to
+Claude. References below to "Claude CLI", \`TodoWrite\`, or Haiku describe the
+Claude adapter only. Codex must map them through this adapter contract instead
+of aborting the current run and relaunching Claude.
+
 ### Tool mapping
 
 | Claude Code concept | Codex-compatible pattern | Notes |

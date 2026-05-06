@@ -16,7 +16,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts").is_dir() and (parent / "commands").is_dir() and (parent / "codex-skills").is_dir():
+            return parent
+    return Path(__file__).resolve().parents[2]
+
+REPO_ROOT = _repo_root()
 ORCH = REPO_ROOT / "scripts" / "vg-orchestrator" / "__main__.py"
 
 

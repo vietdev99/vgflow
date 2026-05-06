@@ -46,6 +46,28 @@ def _seed_step_active_event(repo: Path):
     conn.commit()
     conn.close()
 
+def _seed_step_marked_event(repo: Path, step="2a_plan", ts="2026-05-04T00:01:00Z"):
+    db_path = repo / ".vg/events.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY,
+        run_id TEXT,
+        command TEXT,
+        event_type TEXT,
+        step TEXT,
+        ts TEXT,
+        payload_json TEXT,
+        actor TEXT,
+        outcome TEXT
+    )""")
+    conn.execute(
+        "INSERT INTO events(run_id, command, event_type, step, ts, payload_json, actor, outcome) VALUES (?,?,?,?,?,?,?,?)",
+        ("r1", "vg:blueprint", "step.marked", step, ts, "{}", "orchestrator", "INFO"),
+    )
+    conn.commit()
+    conn.close()
+
 
 def _run_hook(command: str, env=None):
     cmd_input = json.dumps({
@@ -142,6 +164,112 @@ def test_passes_when_evidence_signed_and_matches(tmp_path, monkeypatch):
     cmd_input = json.dumps({
         "tool_name": "Bash",
         "tool_input": {"command": "vg-orchestrator step-active 2a_plan"},
+    })
+    result = subprocess.run(
+        ["bash", str(HOOK)],
+        input=cmd_input, capture_output=True, text=True,
+        env={**os.environ, "CLAUDE_HOOK_SESSION_ID": "sess-1"},
+    )
+    assert result.returncode == 0, result.stderr
+
+def test_blocks_when_tasklist_evidence_stale_after_mark_step(tmp_path, monkeypatch):
+    """Latest step.marked must be reflected in tasklist evidence before next step."""
+    monkeypatch.chdir(tmp_path)
+    key = b"test-key-32-bytes-aaaaaaaaaaaaaaa"
+    key_path = tmp_path / ".vg/.evidence-key"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_bytes(key)
+    key_path.chmod(0o600)
+    monkeypatch.setenv("VG_EVIDENCE_KEY_PATH", str(key_path))
+    _seed_active_run(tmp_path)
+    contract_path = _seed_contract(tmp_path)
+    contract_sha = hashlib.sha256(contract_path.read_bytes()).hexdigest()
+    _seed_signed_evidence(
+        tmp_path,
+        {
+            "contract_sha256": contract_sha,
+            "latest_marked_step": "old_step",
+            "latest_marked_at": "2026-05-04T00:00:00Z",
+            "latest_marked_status_valid": True,
+        },
+        key,
+    )
+    _seed_step_marked_event(tmp_path, step="2a_plan", ts="2026-05-04T00:01:00Z")
+    cmd_input = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "vg-orchestrator step-active 2b_contracts"},
+    })
+    result = subprocess.run(
+        ["bash", str(HOOK)],
+        input=cmd_input, capture_output=True, text=True,
+        env={**os.environ, "CLAUDE_HOOK_SESSION_ID": "sess-1"},
+    )
+    assert result.returncode == 2
+    assert "task UI is stale" in result.stderr
+
+def test_blocks_when_claude_todowrite_latest_step_not_completed(tmp_path, monkeypatch):
+    """Claude evidence must show the latest marked sub-step as completed."""
+    monkeypatch.chdir(tmp_path)
+    key = b"test-key-32-bytes-aaaaaaaaaaaaaaa"
+    key_path = tmp_path / ".vg/.evidence-key"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_bytes(key)
+    key_path.chmod(0o600)
+    monkeypatch.setenv("VG_EVIDENCE_KEY_PATH", str(key_path))
+    _seed_active_run(tmp_path)
+    contract_path = _seed_contract(tmp_path)
+    contract_sha = hashlib.sha256(contract_path.read_bytes()).hexdigest()
+    _seed_step_marked_event(tmp_path, step="2a_plan", ts="2026-05-04T00:01:00Z")
+    _seed_signed_evidence(
+        tmp_path,
+        {
+            "contract_sha256": contract_sha,
+            "latest_marked_step": "2a_plan",
+            "latest_marked_at": "2026-05-04T00:01:00Z",
+            "latest_marked_status": "in_progress",
+            "latest_marked_status_valid": False,
+        },
+        key,
+    )
+    cmd_input = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "vg-orchestrator step-active 2b_contracts"},
+    })
+    result = subprocess.run(
+        ["bash", str(HOOK)],
+        input=cmd_input, capture_output=True, text=True,
+        env={**os.environ, "CLAUDE_HOOK_SESSION_ID": "sess-1"},
+    )
+    assert result.returncode == 2
+    assert "did not mark the latest completed step" in result.stderr
+
+def test_passes_when_tasklist_evidence_synced_after_mark_step(tmp_path, monkeypatch):
+    """Fresh evidence can proceed after mark-step."""
+    monkeypatch.chdir(tmp_path)
+    key = b"test-key-32-bytes-aaaaaaaaaaaaaaa"
+    key_path = tmp_path / ".vg/.evidence-key"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_bytes(key)
+    key_path.chmod(0o600)
+    monkeypatch.setenv("VG_EVIDENCE_KEY_PATH", str(key_path))
+    _seed_active_run(tmp_path)
+    contract_path = _seed_contract(tmp_path)
+    contract_sha = hashlib.sha256(contract_path.read_bytes()).hexdigest()
+    _seed_step_marked_event(tmp_path, step="2a_plan", ts="2026-05-04T00:01:00Z")
+    _seed_signed_evidence(
+        tmp_path,
+        {
+            "contract_sha256": contract_sha,
+            "latest_marked_step": "2a_plan",
+            "latest_marked_at": "2026-05-04T00:01:00Z",
+            "latest_marked_status": "completed",
+            "latest_marked_status_valid": True,
+        },
+        key,
+    )
+    cmd_input = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "vg-orchestrator step-active 2b_contracts"},
     })
     result = subprocess.run(
         ["bash", str(HOOK)],
@@ -328,4 +456,22 @@ def test_codex_prestep_scope_guard_does_not_affect_non_codex(tmp_path, monkeypat
     _seed_active_run(tmp_path)
     _seed_session_context(tmp_path)
     result = _run_hook("rg --files")
+    assert result.returncode == 0, result.stderr
+
+def test_codex_runtime_lock_blocks_claude_vg_entrypoint(tmp_path, monkeypatch):
+    """Codex active run must not relaunch /vg:* through Claude CLI."""
+    monkeypatch.chdir(tmp_path)
+    _seed_active_run(tmp_path)
+    _seed_session_context(tmp_path, current_step="phase2_browser_discovery")
+    result = _run_hook("claude -p '/vg:review 4.2 --scanner=haiku-only'", env={"VG_RUNTIME": "codex"})
+    assert result.returncode == 2
+    assert "PreToolUse-codex-runtime-lock" in result.stderr
+    assert (tmp_path / ".vg/blocks/r1/PreToolUse-codex-runtime-lock.md").exists()
+
+def test_codex_runtime_lock_allows_claude_crossai_non_vg_prompt(tmp_path, monkeypatch):
+    """CrossAI Claude CLI prompts remain allowed if they are not /vg entrypoints."""
+    monkeypatch.chdir(tmp_path)
+    _seed_active_run(tmp_path)
+    _seed_session_context(tmp_path, current_step="phase2_browser_discovery")
+    result = _run_hook("claude -p 'review this RUNTIME-MAP for gaps'", env={"VG_RUNTIME": "codex"})
     assert result.returncode == 0, result.stderr

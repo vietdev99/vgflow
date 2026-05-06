@@ -276,12 +276,65 @@ emit_codex_pretasklist_scope_block() {
   exit 2
 }
 
+is_codex_claude_vg_entrypoint() {
+  [ "${VG_RUNTIME:-}" = "codex" ] || return 1
+  [ -n "${run_id:-}" ] || return 1
+  case "$command_from_run" in
+    vg:*) ;;
+    *) return 1 ;;
+  esac
+  [[ "$cmd_text" =~ (^|[[:space:];|&])claude([[:space:]]|$) ]] || return 1
+  [[ "$cmd_text" =~ /vg: ]] || return 1
+  return 0
+}
+
+emit_codex_claude_entrypoint_block() {
+  local gate_id="PreToolUse-codex-runtime-lock"
+  local cause="Codex active VG run attempted to switch workflow entrypoint to Claude CLI"
+  local block_dir=".vg/blocks/${run_id:-unknown}"
+  local block_file="${block_dir}/${gate_id}.md"
+  mkdir -p "$block_dir" 2>/dev/null
+  {
+    echo "# Block diagnostic — ${gate_id}"
+    echo ""
+    echo "## Cause"
+    echo "$cause"
+    echo ""
+    echo "## Blocked command"
+    echo '```bash'
+    echo "$cmd_text"
+    echo '```'
+    echo ""
+    echo "## Required fix"
+    echo ""
+    echo "Do not abort a Codex VG run and relaunch /vg:* through Claude CLI."
+    echo ".claude/scripts and .claude/commands are canonical source paths, not"
+    echo "runtime ownership. Continue in Codex with:"
+    echo ""
+    echo '```bash'
+    echo "export VG_RUNTIME=codex"
+    echo "python3 .claude/scripts/vg-orchestrator run-status --pretty"
+    echo "python3 .claude/scripts/vg-orchestrator tasklist-projected --adapter codex"
+    echo '```'
+    echo ""
+    echo "Claude CLI remains allowed only as a configured CrossAI reviewer, not as"
+    echo "the primary /vg:* workflow entrypoint for this Codex session."
+  } > "$block_file"
+
+  printf "\033[38;5;208m%s: %s\033[0m\n→ Read %s for fix\n→ Continue current Codex run; do not relaunch /vg through Claude\n" \
+    "$gate_id" "$cause" "$block_file" >&2
+  exit 2
+}
+
 # HOTFIX session 2 (2026-05-05) — extend gate from step-active to ALSO
 # cover mark-step. Bug: AI could skip step-active entirely and call
 # mark-step directly to fake step completion without ever projecting
-# the tasklist. Both commands now require evidence file before they fire
-# (with same bootstrap-step exemption).
-if [[ ! "$cmd_text" =~ vg-orchestrator[[:space:]]+(step-active|mark-step) ]]; then
+# the tasklist. run-complete is covered too so a stale visible task UI
+# cannot be hidden at workflow close.
+if [[ ! "$cmd_text" =~ vg-orchestrator[[:space:]]+(step-active|mark-step|run-complete) ]]; then
+  if is_codex_claude_vg_entrypoint; then
+    emit_codex_claude_entrypoint_block
+  fi
   if codex_before_first_step && is_broad_codex_prestep_scan; then
     emit_codex_prestep_scope_block
   fi
@@ -309,10 +362,9 @@ if [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+mark-step[[:space:]]+([A-Za-z0-9
   _early_evidence_path=".vg/runs/${run_id}/.tasklist-projected.evidence.json"
   if [ -f "$run_file" ] && [ -f "$_early_evidence_path" ]; then
     printf "VG TodoWrite reminder: after mark-step %s/%s succeeds, update native task UI: complete this step, set next pending in_progress, keep active group first.\\n" "$mark_step_ns" "$mark_step_name" >&2
-    exit 0
   fi
-  # Evidence missing — do NOT exit here, fall through to evidence gate
-  # below so unprojected tasklist blocks mark-step too.
+  # Do NOT exit here. Fall through to the evidence gate so mark-step still
+  # verifies HMAC/depth/adapter/run binding before it proceeds.
 fi
 
 if [ ! -f "$run_file" ]; then
@@ -694,6 +746,91 @@ case "$run_id_check_result" in
     emit_block "evidence missing run_id field — re-run TodoWrite + tasklist-projected to refresh signed evidence (additive Task 44b field)."
     ;;
   *) emit_block "run_id check failed: ${run_id_check_result}" ;;
+esac
+
+# HOTFIX task UI recency (2026-05-07) — evidence must reflect the latest
+# `mark-step`. Earlier hook behavior only printed a reminder after mark-step,
+# then allowed the next step to proceed with stale TodoWrite/update_plan UI.
+# This gate requires a fresh tasklist-projected evidence payload after the
+# latest step.marked event. Claude additionally proves TodoWrite marked that
+# sub-step completed via latest_marked_status_valid=true.
+tasklist_sync_check_result="ok"
+if [ -f ".vg/events.db" ]; then
+  tasklist_sync_check_result="$(VG_RUN_ID="${run_id}" VG_EV_PATH="$evidence_path" VG_DB_PATH=".vg/events.db" python3 - <<'PY'
+import json, os, sqlite3, sys
+from pathlib import Path
+
+run_id = os.environ["VG_RUN_ID"]
+ev_path = Path(os.environ["VG_EV_PATH"])
+db_path = Path(os.environ["VG_DB_PATH"])
+
+if not ev_path.exists() or not db_path.exists():
+    print("ok", end="")
+    sys.exit(0)
+
+conn = sqlite3.connect(str(db_path))
+try:
+    row = conn.execute(
+        "SELECT step, ts FROM events "
+        "WHERE run_id = ? AND event_type = 'step.marked' AND step IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+finally:
+    conn.close()
+
+if not row:
+    print("ok", end="")
+    sys.exit(0)
+
+latest_step, latest_ts = row
+try:
+    ev = json.loads(ev_path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"sync_unreadable|{exc}", end="")
+    sys.exit(0)
+
+payload = ev.get("payload", {}) if isinstance(ev, dict) else {}
+if (
+    payload.get("latest_marked_step") != latest_step
+    or payload.get("latest_marked_at") != latest_ts
+):
+    print(
+        "sync_stale|"
+        f"latest={latest_step}@{latest_ts}|"
+        f"evidence={payload.get('latest_marked_step')}@{payload.get('latest_marked_at')}",
+        end="",
+    )
+    sys.exit(0)
+
+if payload.get("adapter") == "claude" and payload.get("latest_marked_status_valid") is not True:
+    print(
+        "sync_status_invalid|"
+        f"step={latest_step}|status={payload.get('latest_marked_status')}",
+        end="",
+    )
+    sys.exit(0)
+
+print("ok", end="")
+PY
+)"
+fi
+
+case "$tasklist_sync_check_result" in
+  ok) ;;
+  sync_stale*)
+    detail="${tasklist_sync_check_result#sync_stale|}"
+    emit_block "task UI is stale after latest mark-step (${detail}). Update TodoWrite/update_plan from tasklist-contract.json, then re-run tasklist-projected before continuing."
+    ;;
+  sync_status_invalid*)
+    detail="${tasklist_sync_check_result#sync_status_invalid|}"
+    emit_block "TodoWrite did not mark the latest completed step as completed (${detail}). Re-run TodoWrite with that sub-step completed, next sub-step in_progress, then re-run tasklist-projected."
+    ;;
+  sync_unreadable*)
+    detail="${tasklist_sync_check_result#sync_unreadable|}"
+    emit_block "tasklist evidence unreadable during sync check: ${detail}"
+    ;;
+  *) emit_block "tasklist sync check failed: ${tasklist_sync_check_result}" ;;
 esac
 
 # Task 44b — Rule V4: block.handled counter-check. Closes audit P1 (15+ PV3
