@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# PostToolUse on TodoWrite — capture payload, diff vs contract,
-# write signed evidence via vg-orchestrator-emit-evidence-signed.py.
+# PostToolUse on TodoWrite | TaskCreate | TaskUpdate — capture payload,
+# diff vs contract, write signed evidence via
+# vg-orchestrator-emit-evidence-signed.py.
+#
+# v2.51+ — TaskCreate/TaskUpdate compatibility (newer Claude Code runtimes
+# expose TaskCreate instead of TodoWrite). Per-call appends are aggregated
+# into .vg/runs/{run_id}/.taskcreate-trace.jsonl and reconstructed into a
+# todos[] shape so the existing matching logic works unchanged.
 
 set -euo pipefail
 
@@ -25,8 +31,73 @@ from pathlib import Path
 from datetime import datetime, timezone
 contract_path, run_id = sys.argv[1:]
 hook_input = json.loads(os.environ.get("VG_HOOK_INPUT", "{}"))
-todos = hook_input.get("tool_input", {}).get("todos", [])
 contract = json.loads(open(contract_path).read())
+
+# v2.51+ tool dispatch: TodoWrite is legacy; TaskCreate/TaskUpdate are the
+# native task UI on newer Claude Code runtimes. TaskCreate fires once per
+# todo; aggregate via per-run trace file so a single 37-call sequence
+# reconstructs the same {todos: [...]} shape TodoWrite would have produced.
+tool_name = hook_input.get("tool_name") or "TodoWrite"
+trace_path = Path(f".vg/runs/{run_id}/.taskcreate-trace.jsonl")
+
+if tool_name == "TodoWrite":
+    todos = hook_input.get("tool_input", {}).get("todos", []) or []
+elif tool_name == "TaskCreate":
+    tool_input = hook_input.get("tool_input", {}) or {}
+    subject = (tool_input.get("subject") or "").strip()
+    # Optional task_id captured from response so TaskUpdate can match later
+    task_id = ""
+    tr = hook_input.get("tool_response") or hook_input.get("tool_result") or {}
+    if isinstance(tr, dict):
+        task_id = str(tr.get("task_id") or tr.get("id") or "")
+    if subject:
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        with trace_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "action": "create",
+                "task_id": task_id,
+                "subject": subject,
+                "status": "pending",
+            }) + "\n")
+elif tool_name == "TaskUpdate":
+    tool_input = hook_input.get("tool_input", {}) or {}
+    upd_id = str(tool_input.get("taskId") or "")
+    upd_status = str(tool_input.get("status") or "")
+    if upd_id and upd_status and trace_path.exists():
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        with trace_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "action": "update",
+                "task_id": upd_id,
+                "status": upd_status,
+            }) + "\n")
+# else: unknown tool — leave trace untouched
+
+# Reconstruct todos[] from trace when this is a TaskCreate/TaskUpdate run.
+if tool_name in ("TaskCreate", "TaskUpdate"):
+    items_by_id = {}        # task_id -> {content, status}
+    items_no_id = []        # entries without task_id (degraded fallback)
+    if trace_path.exists():
+        for line in trace_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            act = rec.get("action")
+            tid = rec.get("task_id") or ""
+            if act == "create":
+                entry = {"content": rec.get("subject", ""), "status": rec.get("status", "pending")}
+                if tid:
+                    items_by_id[tid] = entry
+                else:
+                    items_no_id.append(entry)
+            elif act == "update":
+                if tid in items_by_id and rec.get("status"):
+                    items_by_id[tid]["status"] = rec["status"]
+    todos = list(items_by_id.values()) + items_no_id
 checklists = contract.get("checklists", [])
 projection_items = contract.get("projection_items", []) or []
 
@@ -113,6 +184,7 @@ if db_path.exists():
 payload = {
     "run_id": run_id,
     "adapter": "claude",
+    "tool_name": tool_name,
     "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "todo_count": len(todos),
     "contract_sha256": hashlib.sha256(open(contract_path, "rb").read()).hexdigest(),

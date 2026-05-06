@@ -514,12 +514,22 @@ def normalize_telemetry(items: list) -> list[dict]:
     v2.5 extension (anti-forge patch):
     - required_unless_flag: str — check waived when flag appears in run_args.
       Closes gap where AI touched marker but skipped actual CrossAI invoke.
+
+    v2.51+ severity preservation: skill-MD frontmatter declares
+    `severity: warn` for fail-only events (e.g. review.matrix_staleness_blocked,
+    review.api_precheck_blocked) so missing emission warns instead of
+    blocking run-complete on clean-PASS phases. Normalizer previously
+    dropped severity → all 25 declared warn-events treated as block →
+    review run-complete BLOCKed on clean phases. Fix: preserve severity
+    through normalize pipeline; downstream check_telemetry already routes
+    by severity.
     """
     result = []
     for item in items or []:
         if isinstance(item, str):
             result.append({"event_type": item, "min_count": 1,
-                           "required_unless_flag": None})
+                           "required_unless_flag": None,
+                           "severity": "block"})
         elif isinstance(item, dict) and "event_type" in item:
             result.append({
                 "event_type": item["event_type"],
@@ -527,5 +537,6 @@ def normalize_telemetry(items: list) -> list[dict]:
                 "min_count": int(item.get("min_count", 1)),
                 "must_pair_with": item.get("must_pair_with"),
                 "required_unless_flag": item.get("required_unless_flag"),
+                "severity": item.get("severity", "block"),
             })
     return result

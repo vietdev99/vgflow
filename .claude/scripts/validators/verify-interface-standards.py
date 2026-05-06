@@ -59,6 +59,25 @@ def _import_interface_generator():
 
 
 def _infer_surfaces(phase_dir: Path, profile: str) -> dict[str, bool]:
+    # Honor explicit INTERFACE-STANDARDS.json `surfaces` declaration as
+    # authoritative when present. Closes the false-positive where backend-
+    # only phases (e.g. PrintwayV3 4.4 — 0 FE files in 8 wave commits) had
+    # API-CONTRACTS error specs mention "toast"/"frontend" → text-grep
+    # heuristic over-inferred FE need → verify-interface-standards
+    # contradicted verify-error-message-runtime (after the latter learned
+    # to read declared surfaces authoritatively). Both validators must
+    # agree, so the upstream inference must also defer to the artifact
+    # whenever the artifact explicitly declares surfaces.
+    json_path = phase_dir / "INTERFACE-STANDARDS.json"
+    if json_path.exists():
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            declared = data.get("surfaces")
+            if isinstance(declared, dict):
+                return {k: bool(v) for k, v in declared.items()}
+        except Exception:
+            pass
+
     try:
         infer_surfaces = _import_interface_generator()
         return infer_surfaces(phase_dir, profile)

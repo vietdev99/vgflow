@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.51.3 - PrintwayV3 dogfood patches (PR #121)
+
+Patch release. Merges PR #121 (`fix/printway-dogfood-2026-05-07`) bundling 4 surgical workflow fixes uncovered while running `/vg:review 4.4` on the **PrintwayV3** dogfood project. Smoke-tested end-to-end on Phase 4.4 (57 goals, all READY post-patch, run-complete PASS).
+
+### Fixed
+
+- `probe_data` (`commands/vg/_shared/lib/surface-probe.sh`) now scans Mongoose models + case variants. Backend-only Mongoose-stack phases no longer false-block on `no_migration_for_table:X` when collections have real Mongoose schemas but no SQL migrations directory.
+- Tasklist hook (`scripts/hooks/vg-post-tool-use-todowrite.sh`) supports the newer Claude Code `TaskCreate` / `TaskUpdate` schema in addition to legacy `TodoWrite`. Each call now correctly populates the projected tasklist evidence file so the `tasklist-projected` validator no longer false-blocks `run-complete` on TaskCreate-only runtimes.
+- Validators honor explicit `surfaces` declarations and tolerant goal headers:
+  - `verify-interface-standards.py` and `verify-error-message-runtime.py` now consume the `surfaces` dict from `INTERFACE-STANDARDS.json` (when present) instead of re-inferring from text-grep heuristics in API-CONTRACTS.
+  - `verify-runtime-map-coverage.py` matches both `## Goal G-XX` and `## G-XX:` runtime-map headers (no longer requires the literal "Goal " prefix).
+- `normalize_telemetry` in `scripts/vg-orchestrator/contracts.py` preserves the `severity` field for dict-form telemetry items. The 25 fail-only `severity: warn` events declared in skill-MDs are no longer silently treated as block-severity, so `/vg:review` run-complete no longer blocks clean phases on missing fail-only emissions.
+
+### Verified
+
+- `python -m pytest scripts/tests/test_interface_standards.py scripts/tests/test_review_backend_contract_issue120.py scripts/tests/test_runtime_map_crud_depth.py scripts/tests/test_codex_mirror_equivalence.py -q` (27 passed)
+- `python scripts/verify-codex-mirror-equivalence.py --json` (71 checked, 0 drift)
+- Canonical → `.claude/` mirrors hash-identical for the 6 changed files.
+
+### Triage
+
+- Closes issue #111 (already fixed in v2.51.1 commit `208f704` — `cmd_merge` writes via `write_bytes` to bypass Windows text-mode CRLF translation).
+- Closes issue #115 (already fixed in v2.51.2 commit `1b506e2` — `scripts/reconcile-build-summary.py` reconciles SUMMARY.md vs PRE-TEST-REPORT.md after in-scope fix loop).
+
 ## v2.51.2 - Review backend-only contract parity
 
 Patch release. Merges PR #119 (`fix/codex-task-ui-runtime-lock`) and closes issue #120 by keeping backend-only `/vg:review` runs compatible with the review runtime contract.

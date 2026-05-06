@@ -41,8 +41,11 @@ REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import find_phase_dir  # noqa: E402
 
-# Markdown goal header: `## Goal G-12: title (P3.D-46)`
-GOAL_HEADER_RE = re.compile(r"^##\s+Goal\s+(G-[A-Z0-9-]+)\s*:?\s*(.*)$", re.IGNORECASE)
+# Markdown goal header — both formats observed in vgflow projects:
+#   `## Goal G-12: title (P3.D-46)`     (vgflow canonical)
+#   `## G-12: title (P4.D-200)`         (PrintwayV3 4.4 format — "Goal" word omitted)
+# Tolerant match: optional "Goal " prefix + various separators (: - —).
+GOAL_HEADER_RE = re.compile(r"^##\s+(?:Goal\s+)?(G-[A-Z0-9-]+)\s*[:\-—]?\s*(.*)$", re.IGNORECASE)
 # Field line: `**Surface:** ui`
 FIELD_LINE_RE = re.compile(r"^\*\*([A-Za-z][A-Za-z _-]*?)\s*:\*\*\s*(.*)$")
 

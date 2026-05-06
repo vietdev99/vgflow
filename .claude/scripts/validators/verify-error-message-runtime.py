@@ -43,11 +43,20 @@ def _surfaces_require_probe(phase_dir: Path) -> bool:
     if standards_path.exists():
         try:
             standards = json.loads(standards_path.read_text(encoding="utf-8"))
-            surfaces = standards.get("surfaces") or {}
-            if surfaces.get("api") and (surfaces.get("frontend") or surfaces.get("mobile")):
-                return True
+            surfaces = standards.get("surfaces")
+            # When INTERFACE-STANDARDS.json declares a surfaces dict, treat
+            # it as authoritative — do NOT fall through to text-grep
+            # heuristic. Closes the false-positive where backend-only phases
+            # (e.g. PrintwayV3 4.4) had API-CONTRACTS error specs mention
+            # "toast" but no FE files in any wave commit → validator
+            # over-triggered the UI-error gate.
+            if isinstance(surfaces, dict):
+                return bool(surfaces.get("api") and (
+                    surfaces.get("frontend") or surfaces.get("mobile")
+                ))
         except Exception:
             pass
+    # Fallback heuristic only when INTERFACE-STANDARDS missing/unparseable.
     text = "\n".join(_read(phase_dir / name).lower() for name in (
         "API-CONTRACTS.md", "TEST-GOALS.md", "UI-MAP.md", "UI-SPEC.md",
     ))

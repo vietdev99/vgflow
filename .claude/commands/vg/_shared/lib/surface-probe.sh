@@ -74,8 +74,10 @@ probe_api() {
   local gid="$1"
   local block="$2"
   local phase_dir="${3:-}"
-  local criteria
+  local criteria mutation persistence
   criteria=$(_surface_probe_get_criteria "$block")
+  mutation=$(echo "$block" | awk '/^\*\*Mutation evidence:\*\*/{inside=1; next} inside && /^\*\*/{exit} inside{print}')
+  persistence=$(echo "$block" | awk '/^\*\*Persistence check:\*\*/{inside=1; next} inside && /^\*\*/{exit} inside{print}')
 
   # Extract HTTP method + path from criteria
   # Patterns: "GET /api/v1/xxx", "POST pixel.vollx.com/yyy", "PUT /foo"
@@ -92,6 +94,26 @@ probe_api() {
       # Synthesize a method-agnostic endpoint_line; downstream grep treats
       # path as the discriminator anyway (frag extraction starts from path).
       endpoint_line="ANY ${path_only}"
+    fi
+  fi
+
+  # Fallback 3: parse yaml-rcrurd block when prose criteria omit a direct route line.
+  if [ -z "$endpoint_line" ]; then
+    local yaml_endpoint
+    yaml_endpoint=$(printf '%s\n%s\n%s\n' "$criteria" "$mutation" "$persistence" | \
+      awk '
+        /endpoint:/ && !found {
+          if (match($0, /(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)[[:space:]]+\/[A-Za-z0-9._:\/{}-]+/)) {
+            print substr($0, RSTART, RLENGTH)
+            found=1
+          } else if (match($0, /\/(api|internal|public)\/[A-Za-z0-9._:\/{}-]+/)) {
+            print "ANY " substr($0, RSTART, RLENGTH)
+            found=1
+          }
+        }
+      ' | head -1)
+    if [ -n "$yaml_endpoint" ]; then
+      endpoint_line="$yaml_endpoint"
     fi
   fi
 
@@ -212,15 +234,69 @@ ${mutation}"
   fi
 
   # Search migrations + schema files
-  local scan_paths="infra/clickhouse/migrations infra/clickhouse/schema apps/api/src/db/migrations packages/db/migrations migrations db/migrations schema"
+  # SQL paths first (existing behavior for ClickHouse / SQL projects)
+  local scan_paths="infra/clickhouse/migrations infra/clickhouse/schema apps/api/src/db/migrations packages/db/migrations migrations db/migrations schema apps/api/src/migrations"
+
+  # Mongoose / NoSQL data-model paths from config.code_patterns.data_models
+  # Falls back to common project layouts so projects using Mongoose (no SQL
+  # migrations) don't false-negative every data-surface goal. Workflow does
+  # NOT assume stack — config-driven with sensible default.
+  local mongoose_paths
+  mongoose_paths=$(${PYTHON_BIN:-python3} -c "
+import re
+try:
+    cfg = open('.claude/vg.config.md', encoding='utf-8').read()
+    m = re.search(r'^\s*data_models:\s*[\"\\'']?([^\"\\''\n#]+)', cfg, re.M)
+    print(m.group(1).strip() if m else '')
+except Exception: print('')
+" 2>/dev/null)
+  [ -z "$mongoose_paths" ] && \
+    mongoose_paths="apps/api/src/modules apps/api/src/db/models packages/db/src/models"
+
+  scan_paths="${scan_paths} ${mongoose_paths}"
+
+  # Generate case variants of the table name so snake_case criteria match
+  # kebab-case filenames + camelCase / PascalCase Mongoose model names.
+  # vendor_capacity → vendor-capacity, vendorCapacity, VendorCapacity
+  local table_kebab table_camel table_pascal
+  table_kebab=$(echo "$table" | tr '_' '-')
+  table_camel=$(echo "$table" | ${PYTHON_BIN:-python3} -c "
+import sys
+s = sys.stdin.read().strip()
+parts = s.split('_')
+print(parts[0] + ''.join(p.capitalize() for p in parts[1:]))
+" 2>/dev/null)
+  table_pascal=$(echo "$table" | ${PYTHON_BIN:-python3} -c "
+import sys
+s = sys.stdin.read().strip()
+print(''.join(p.capitalize() for p in s.split('_')))
+" 2>/dev/null)
+
   local hit=""
+  # Pass 1: SQL CREATE TABLE / createCollection (existing behavior)
   for dir in $scan_paths; do
     [ -d "$dir" ] || continue
     hit=$(grep -rEnl "(CREATE TABLE|CREATE COLLECTION|create_table|createCollection)\s+[\"\`]?${table}[\"\`]?\b" "$dir" 2>/dev/null | head -1)
     [ -n "$hit" ] && break
   done
 
-  # If not found via CREATE, try schema literal references
+  # Pass 2: Mongoose Schema() / model() definitions matching any case variant
+  # Patterns: `new Schema(`, `new mongoose.Schema(`, `mongoose.model('Name'`,
+  # `model('name'`, `Schema.from(...)`. File basename match also counts.
+  if [ -z "$hit" ]; then
+    for dir in $scan_paths; do
+      [ -d "$dir" ] || continue
+      # 2a: file basename match (kebab-case file like vendor-capacity.model.ts)
+      hit=$(find "$dir" -type f \( -name "*${table_kebab}*.model.ts" -o -name "*${table_kebab}*.schema.ts" -o -name "*${table_kebab}*.model.js" -o -name "*${table}*.model.ts" -o -name "${table_pascal}.ts" \) 2>/dev/null | head -1)
+      [ -n "$hit" ] && break
+      # 2b: content match — Mongoose model/schema declaration with any case variant
+      hit=$(grep -rEl "(new\s+(mongoose\.)?Schema|mongoose\.model|^\s*export\s+(default\s+)?(const|class)\s+${table_pascal}\b)" "$dir" 2>/dev/null | \
+            xargs grep -lE "\b(${table}|${table_kebab}|${table_camel}|${table_pascal})\b" 2>/dev/null | head -1)
+      [ -n "$hit" ] && break
+    done
+  fi
+
+  # Pass 3: bare schema literal references (existing fallback, snake form)
   if [ -z "$hit" ]; then
     for dir in $scan_paths; do
       [ -d "$dir" ] || continue
@@ -289,6 +365,11 @@ probe_integration() {
   # Extract service/hook keyword from goal block (e.g. "postback", "webhook", "Kafka")
   local keyword
   keyword=$(echo "$block" | grep -oiE '\b(postback|webhook|callback|kafka|pubsub|sns|sqs|producer|consumer)\b' | head -1 | tr '[:upper:]' '[:lower:]')
+
+  # Fallback: use workflow/API references when prose does not contain the generic keyword list.
+  if [ -z "$keyword" ]; then
+    keyword=$(printf '%s\n' "$block" | grep -oiE '\b(routeItem|route_item|vendor-routing|assignment|suspend|resume|ship-confirm|earnings|escalat(e|or)|auto-cancel|back-order|transition)\b' | head -1 | tr '[:upper:]' '[:lower:]')
+  fi
 
   if [ -z "$keyword" ]; then
     echo "SKIPPED|no_integration_keyword"
