@@ -30,9 +30,22 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT_REAL = Path(__file__).resolve().parents[3]
-VALIDATOR = REPO_ROOT_REAL / ".claude" / "scripts" / "validators" / \
-    "verify-clean-failure-state.py"
+
+def _find_repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".claude" / "scripts" / "validators" / "verify-clean-failure-state.py").exists():
+            return parent
+        if (parent / "scripts" / "validators" / "verify-clean-failure-state.py").exists():
+            return parent
+    raise AssertionError("repo root not found")
+
+
+REPO_ROOT_REAL = _find_repo_root()
+SCRIPT_ROOT = REPO_ROOT_REAL / ".claude" / "scripts"
+if not (SCRIPT_ROOT / "validators" / "verify-clean-failure-state.py").exists():
+    SCRIPT_ROOT = REPO_ROOT_REAL / "scripts"
+VALIDATOR = SCRIPT_ROOT / "validators" / "verify-clean-failure-state.py"
 
 
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:

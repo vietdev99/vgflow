@@ -163,6 +163,28 @@ def test_interface_validator_blocks_raw_error_message_toast(tmp_path: Path) -> N
     assert any(e["type"] == "interface_bad_toast_error_message" for e in payload["evidence"])
 
 
+def test_interface_validator_uses_generator_surface_inference_before_fallback(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    phase = _phase(repo, "43-backend")
+    _write_contract_with_interface_rule(phase)
+    _write_standard(phase)
+    (phase / "SPECS.md").write_text(
+        "Backend-only webhook processing.\nClient wording here is descriptive only.\n",
+        encoding="utf-8",
+    )
+
+    result = _run([
+        sys.executable, str(VALIDATOR),
+        "--phase-dir", str(phase),
+        "--profile", "web-backend-only",
+        "--no-scan-source",
+    ], repo)
+
+    payload = _payload(result)
+    assert result.returncode == 0, payload
+    assert payload["verdict"] == "PASS"
+
+
 def test_error_message_runtime_passes_when_api_message_visible(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     phase = _phase(repo)
@@ -215,16 +237,16 @@ def test_workflow_commands_wire_interface_standard_and_error_lens() -> None:
     specs = (commands / "specs.md").read_text(encoding="utf-8")
     blueprint = (commands / "blueprint.md").read_text(encoding="utf-8")
     build = (commands / "build.md").read_text(encoding="utf-8")
+    waves_delegation = (commands / "_shared" / "build" / "waves-delegation.md").read_text(encoding="utf-8")
     review = (commands / "review.md").read_text(encoding="utf-8")
-    test = (commands / "test.md").read_text(encoding="utf-8")
     tasklist = (SCRIPT_ROOT / "emit-tasklist.py").read_text(encoding="utf-8")
 
     assert "write_interface_standards" in specs
     assert "INTERFACE-STANDARDS.md" in blueprint
-    assert "<interface_standards_context>" in build
+    assert "_shared/build/waves-delegation.md" in build
+    assert "<interface_standards_context>" in waves_delegation
     assert "phase2_9_error_message_runtime" in review
     assert "verify-error-message-runtime.py" in review
-    assert "verify-interface-standards.py" in test
     assert "Specs And Interface Standards" in tasklist
     assert "phase2_9_error_message_runtime" in tasklist
 

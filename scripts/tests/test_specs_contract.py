@@ -60,15 +60,15 @@ def test_specs_must_write_includes_SPECS_and_interface_standards(specs_text):
     )
 
 
-def test_specs_contract_lists_all_8_markers(specs_text):
+def test_specs_contract_lists_all_9_markers(specs_text):
     """Every step in body must appear in must_touch_markers."""
     contract = contracts.parse("vg:specs")
     markers = contracts.normalize_markers(contract.get("must_touch_markers") or [])
     names = [m["name"] for m in markers]
 
-    # Step body declares these 8 steps (after removing load_context A1)
+    # Step body declares these 9 steps (after removing load_context A1).
     expected = {
-        "parse_args", "check_existing", "choose_mode",
+        "parse_args", "create_task_tracker", "check_existing", "choose_mode",
         "guided_questions", "generate_draft", "write_specs",
         "write_interface_standards", "commit_and_next",
     }

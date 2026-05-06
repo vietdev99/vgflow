@@ -34,10 +34,33 @@ def _resolve_phase_dir(args: argparse.Namespace) -> Path | None:
     return None
 
 
-def _infer_surfaces(phase_dir: Path, profile: str) -> dict[str, bool]:
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+def _import_interface_generator():
+    search_roots = [
+        REPO_ROOT / "scripts",
+        REPO_ROOT / ".claude" / "scripts",
+    ]
+    original_sys_path = list(sys.path)
     try:
-        from generate_interface_standards import infer_surfaces  # type: ignore
+        for root in search_roots:
+            if not (root / "generate-interface-standards.py").is_file():
+                continue
+            root_str = str(root)
+            if root_str not in sys.path:
+                sys.path.insert(0, root_str)
+            try:
+                from generate_interface_standards import infer_surfaces  # type: ignore
+
+                return infer_surfaces
+            except Exception:
+                continue
+    finally:
+        sys.path[:] = original_sys_path
+    raise ImportError("generate_interface_standards.infer_surfaces not importable")
+
+
+def _infer_surfaces(phase_dir: Path, profile: str) -> dict[str, bool]:
+    try:
+        infer_surfaces = _import_interface_generator()
         return infer_surfaces(phase_dir, profile)
     except Exception:
         text = "\n".join(_read(phase_dir / name) for name in (

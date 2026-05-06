@@ -30,10 +30,23 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-ORCH_DIR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
-VALIDATOR = REPO_ROOT / ".claude" / "scripts" / "validators" / \
-    "verify-clean-failure-state.py"
+
+def _find_repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".claude" / "scripts" / "vg-orchestrator").exists():
+            return parent
+        if (parent / "scripts" / "vg-orchestrator").exists():
+            return parent
+    raise AssertionError("repo root not found")
+
+
+REPO_ROOT = _find_repo_root()
+SCRIPT_ROOT = REPO_ROOT / ".claude" / "scripts"
+if not (SCRIPT_ROOT / "vg-orchestrator").exists():
+    SCRIPT_ROOT = REPO_ROOT / "scripts"
+ORCH_DIR = SCRIPT_ROOT / "vg-orchestrator"
+VALIDATOR = SCRIPT_ROOT / "validators" / "verify-clean-failure-state.py"
 
 
 @pytest.fixture

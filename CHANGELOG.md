@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.51.1 - PR #117 merge follow-ups and interface standards fix
+
+Patch release. Merges PR #117 (`fix/codex-session-state-test-parity`) into `main` and adds the post-merge fixes needed to close issue #118 and keep the Windows/source-checkout regression suite green.
+
+### Fixed
+
+- `verify-interface-standards.py` now imports `generate-interface-standards.py` from either `scripts/` or `.claude/scripts/`, so backend-only phases no longer fall back to false `cli=true` detection when the canonical helper lives under `.claude` (#118).
+- Canonical and `.claude` regression tests now resolve repo roots and validator/orchestrator paths correctly when run from the source checkout, fixing doubled `.claude/.claude/...` paths in the emit-event, repo-lock, and clean-failure-state suites.
+- Orchestrator run-status regression tests now force UTF-8 subprocess decoding on Windows, removing locale-driven `UnicodeDecodeError` noise and preserving stderr assertions for concurrent-session cases.
+- Interface-standards and specs contract tests were updated to reflect the current orchestrator/task-tracker wiring after PR #117.
+
+### Verified
+
+- `python -m pytest scripts/tests/test_interface_standards.py scripts/tests/test_orchestrator_run_status.py scripts/tests/test_emit_event_block_flags.py scripts/tests/test_repo_lock.py scripts/tests/root_verifiers/test_clean_failure_state.py scripts/tests/test_specs_contract.py scripts/tests/test_review_lens_plan.py scripts/tests/test_vg_update.py -q`
+- `python -m pytest .claude/scripts/tests/test_interface_standards.py .claude/scripts/tests/test_orchestrator_run_status.py .claude/scripts/tests/test_emit_event_block_flags.py .claude/scripts/tests/test_repo_lock.py .claude/scripts/tests/root_verifiers/test_clean_failure_state.py .claude/scripts/tests/test_specs_contract.py .claude/scripts/tests/test_review_lens_plan.py .claude/scripts/tests/test_vg_update.py -q`
+- `python scripts/verify-codex-mirror-equivalence.py --json`
+- `git diff --check`
+
 ## v2.51.0 - Codex runtime parity and uninstall workflow
 
 Minor release. Ships PR #112, merged into `main` on 2026-05-06, plus the post-merge Windows/runtime test fixes needed to keep the release train green.
