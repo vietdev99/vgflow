@@ -213,6 +213,14 @@ fi
   --t3-note "$T3_NOTE" \
   --output "${PHASE_DIR}/PRE-TEST-REPORT.md"
 
+# ─── Reconcile SUMMARY.md after fix-loop + pre-test ───────────────────
+"${PYTHON_BIN:-python3}" .claude/scripts/reconcile-build-summary.py \
+  --phase-dir "${PHASE_DIR}" \
+  --pre-test-report "${PHASE_DIR}/PRE-TEST-REPORT.md" || {
+  echo "⛔ STEP 6.5 failed to reconcile SUMMARY.md with fix-loop/pre-test artifacts"
+  exit 1
+}
+
 # ─── Telemetry ─────────────────────────────────────────────────────────
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
   "build.pre_test_complete" \

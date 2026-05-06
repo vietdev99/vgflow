@@ -54,3 +54,8 @@ attempts.
 ## Output
 
 Return JSON to orchestrator. Orchestrator handles regression smoke + commit.
+The orchestrator MUST persist the exact verdict atomically to:
+
+`${phase_dir}/.evidence/classified/in-scope.<warning-file>.fixed.json`
+
+before counting unresolved warnings or reconciling `SUMMARY.md` in STEP 6.5.
