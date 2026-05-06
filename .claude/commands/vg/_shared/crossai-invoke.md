@@ -98,8 +98,8 @@ mkdir -p "$OUTPUT_DIR"
 PROMPT="Review artifacts and output crossai_review XML per format specified"
 
 # For each CLI in the spawn set:
-#   1. Substitute {prompt} → $PROMPT and {context} → $CONTEXT_FILE in cli.command
-#   2. Run via .claude/scripts/crossai-runner.py so cwd is isolated from repo hooks/config
+#   1. Pass cli.command template to .claude/scripts/crossai-runner.py.
+#   2. Runner shell-quotes {prompt}/{context} and isolates cwd from repo hooks/config.
 #   3. Runner writes "$OUTPUT_DIR/result-${cli.name}.xml|.err|.exit|.meta.json"
 #   4. Run as background process, capture PID
 #
@@ -119,7 +119,7 @@ CROSSAI_TIMEOUT=120  # seconds — kill CLI if it hangs
 declare -A CLI_STATUS  # name -> "ok|timeout|malformed|crash"
 
 for cli in "${CROSSAI_CLIS[@]}"; do
-  CMD=$(echo "${cli.command}" | sed "s|{prompt}|${PROMPT}|g" | sed "s|{context}|${CONTEXT_FILE}|g")
+  CMD="${cli.command}"
   # Run with explicit exit-code capture via isolated runner
   (
     "${PYTHON_BIN:-python3}" .claude/scripts/crossai-runner.py \

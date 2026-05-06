@@ -96,8 +96,12 @@ if [[ "$ARGUMENTS" =~ --pre-test ]]; then
     --payload "{\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
 fi
 
-# Existing build_complete gate, now skipped when PRE_TEST_MODE=true:
-if [ "$PRE_TEST_MODE" = "false" ] && [ ! -f "${PHASE_DIR}/.step-markers/12_run_complete.done" ]; then
+# Existing build_complete gate, now skipped when PRE_TEST_MODE=true. Accept
+# both legacy flat marker path and namespaced build marker path.
+BUILD_DONE_MARKER=false
+[ -f "${PHASE_DIR}/.step-markers/12_run_complete.done" ] && BUILD_DONE_MARKER=true
+[ -f "${PHASE_DIR}/.step-markers/build/12_run_complete.done" ] && BUILD_DONE_MARKER=true
+if [ "$PRE_TEST_MODE" = "false" ] && [ "$BUILD_DONE_MARKER" != "true" ]; then
   if [[ ! "$ARGUMENTS" =~ --allow-build-incomplete ]]; then
     echo "⛔ /vg:deploy: build not complete. Run /vg:build first or pass --allow-build-incomplete + --override-reason"
     exit 1
@@ -115,4 +119,3 @@ deployed_entry = {
     "mode": "pre-test" if pre_test_mode else "post-close",
 }
 ```
-

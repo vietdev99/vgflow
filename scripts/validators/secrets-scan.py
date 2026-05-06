@@ -29,6 +29,7 @@ Usage:
   secrets-scan.py --mode pre-push [--base origin/main]
   secrets-scan.py --mode staged
   secrets-scan.py --mode full  (scan all tracked files — slow)
+  secrets-scan.py --phase <N>  (VG validator dispatcher compatibility; implies --mode full unless --mode is set)
 """
 from __future__ import annotations
 
@@ -286,15 +287,17 @@ def _scan_file(path: Path, allowlist: list[dict]) -> list[tuple[SecretPattern, s
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["pre-push", "staged", "full"],
-                    default="pre-push")
+    ap.add_argument("--mode", choices=["pre-push", "staged", "full"])
     ap.add_argument("--base", default="origin/main",
                     help="Base ref for pre-push diff (default origin/main)")
+    ap.add_argument("--phase", default="",
+                    help="Accepted for VG validator dispatch compatibility")
     args = ap.parse_args()
+    mode = args.mode or ("full" if args.phase else "pre-push")
 
     out = Output(validator="secrets-scan")
     with timer(out):
-        files = _resolve_file_list(args.mode, args.base)
+        files = _resolve_file_list(mode, args.base)
         if not files:
             # Empty diff — nothing to scan → PASS silently.
             emit_and_exit(out)

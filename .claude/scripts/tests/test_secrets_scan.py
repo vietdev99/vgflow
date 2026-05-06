@@ -231,3 +231,17 @@ def test_secret_value_redacted_in_output(tmp_path):
     assert secret not in r.stdout, (
         f"full secret leaked in output:\n{r.stdout}"
     )
+
+
+def test_phase_flag_is_vg_dispatch_compatible(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _stage_file(repo, "apps/api/src/aws.ts",
+                "const key = 'AKIAIOSFODNN7EXAMPLE';\n")
+    env = os.environ.copy()
+    env["VG_REPO_ROOT"] = str(repo)
+    r = subprocess.run(
+        [sys.executable, str(VALIDATOR), "--phase", "4.3"],
+        cwd=repo, capture_output=True, text=True, timeout=30, env=env,
+    )
+    assert r.returncode == 1
+    assert "aws_access_key_id" in r.stdout

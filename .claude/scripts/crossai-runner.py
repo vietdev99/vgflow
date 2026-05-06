@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,56 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", errors="replace")
 
 
+def _escape_for_quote(value: str, quote: str) -> str:
+    if quote == "'":
+        return value.replace("'", "'\"'\"'")
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("`", "\\`")
+    )
+
+
+def _replace_shell_placeholder(template: str, placeholder: str, value: str) -> str:
+    """Replace shell placeholders safely whether template quotes them or not."""
+    def quote_at(pos: int) -> str:
+        quote = ""
+        escaped = False
+        for ch in template[:pos]:
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if quote:
+                if ch == quote:
+                    quote = ""
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+        return quote
+
+    out: list[str] = []
+    idx = 0
+    plen = len(placeholder)
+    while True:
+        pos = template.find(placeholder, idx)
+        if pos < 0:
+            out.append(template[idx:])
+            break
+        out.append(template[idx:pos])
+        quote = quote_at(pos)
+        after_pos = pos + plen
+        if quote:
+            out.append(_escape_for_quote(value, quote))
+        else:
+            out.append(shlex.quote(value))
+        idx = after_pos
+    return "".join(out)
+
+
 def run_one(
     *,
     name: str,
@@ -67,9 +118,9 @@ def run_one(
     exit_file = output_dir / f"result-{name}.exit"
     meta_file = output_dir / f"result-{name}.meta.json"
 
-    command = command_template.replace("{prompt}", prompt).replace(
-        "{context}", str(context_file)
-    )
+    context_value = str(context_file.resolve())
+    command = _replace_shell_placeholder(command_template, "{prompt}", prompt)
+    command = _replace_shell_placeholder(command, "{context}", context_value)
     shell = _shell_binary()
     isolated_cwd = Path(
         tempfile.mkdtemp(prefix="vg-crossai-run-", dir=os.environ.get("VG_TMP"))

@@ -63,7 +63,7 @@ the PreToolUse depth gate).
 </HARD-GATE>
 
 <rules>
-1. **Build must be complete** — PIPELINE-STATE.steps.build.status ∈ {accepted, tested, reviewed, built-with-debt, built-complete}. Otherwise BLOCK (override: `--allow-build-incomplete` logs override-debt).
+1. **Build must be complete** — accept PIPELINE-STATE build status OR durable build evidence (`build/12_run_complete.done` + SUMMARY/PRE-TEST artifacts). Otherwise BLOCK (override: `--allow-build-incomplete` logs override-debt).
 2. **Multi-env supported, sequential execution** — each env runs after the previous completes. Parallel would risk infrastructure contention (shared SSH connection, same DB seed, etc).
 3. **Prod requires explicit confirmation** — separate AskUserQuestion 3-option danger gate (PROCEED / NON-PROD-ONLY / ABORT). For non-interactive runs, `--prod-confirm-token=DEPLOY-PROD-{phase}` must match exactly.
 4. **Per-env failure handling** — DOES NOT auto-abort remaining envs. Ask user continue/skip-failed/abort-all. Failed env writes `health: "failed"` + error log.
@@ -116,28 +116,61 @@ if [ -z "$PHASE_DIR" ] || [ ! -d "$PHASE_DIR" ]; then
   exit 1
 fi
 
-# Build-complete check (override: --allow-build-incomplete)
-BUILD_STATUS=$(${PYTHON_BIN:-python3} -c "
+# Build-complete check (override: --allow-build-incomplete). Prefer
+# PIPELINE-STATE when present, but do not false-block if state drifted while
+# durable build artifacts prove completion.
+BUILD_CHECK=$(PHASE_DIR="$PHASE_DIR" "${PYTHON_BIN:-python3}" - <<'PY' 2>/dev/null || true
 import json
-try:
-  d = json.load(open('${PHASE_DIR}/PIPELINE-STATE.json'))
-  print(d.get('steps', {}).get('build', {}).get('status', 'unknown'))
-except Exception:
-  print('missing')" 2>/dev/null)
+import os
+from pathlib import Path
 
-case "$BUILD_STATUS" in
-  accepted|tested|reviewed|built-with-debt|built-complete|complete)
-    echo "✓ Build status OK: ${BUILD_STATUS}"
+phase_dir = Path(os.environ["PHASE_DIR"])
+ok_statuses = {"accepted", "tested", "reviewed", "built-with-debt", "built-complete", "complete"}
+status = "missing"
+evidence = "none"
+ok = False
+
+try:
+    d = json.loads((phase_dir / "PIPELINE-STATE.json").read_text(encoding="utf-8"))
+    status = d.get("steps", {}).get("build", {}).get("status", "unknown")
+except Exception:
+    status = "missing"
+
+if status in ok_statuses:
+    ok = True
+    evidence = "pipeline-state"
+else:
+    marker = (
+        phase_dir / ".step-markers" / "build" / "12_run_complete.done"
+    ).exists() or (
+        phase_dir / ".step-markers" / "12_run_complete.done"
+    ).exists()
+    summary = (phase_dir / "SUMMARY.md").exists()
+    pretest = (phase_dir / "PRE-TEST-REPORT.md").exists()
+    build_log = (phase_dir / "BUILD-LOG.md").exists() or (phase_dir / "BUILD-LOG" / "index.md").exists()
+    if marker and summary and (pretest or build_log):
+        ok = True
+        status = "evidence-complete"
+        evidence = "marker+summary+pretest/build-log"
+
+print(f"{1 if ok else 0}\t{status}\t{evidence}")
+PY
+)
+IFS=$'\t' read -r BUILD_OK BUILD_STATUS BUILD_EVIDENCE <<< "${BUILD_CHECK:-0	missing	none}"
+
+case "$BUILD_OK" in
+  1)
+    echo "✓ Build complete OK: ${BUILD_STATUS} (${BUILD_EVIDENCE})"
     ;;
-  *)
+  0|*)
     if [[ "$ARGUMENTS" =~ --allow-build-incomplete ]]; then
       echo "⚠ Build status '${BUILD_STATUS}' but --allow-build-incomplete set — proceeding (override-debt logged)"
       source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
       type -t log_override_debt >/dev/null 2>&1 && \
         log_override_debt "--allow-build-incomplete" "${PHASE_NUMBER}" "deploy.0-prereq" \
-          "deploy with build_status=${BUILD_STATUS}" "deploy-build-required"
+          "deploy with build_status=${BUILD_STATUS}, evidence=${BUILD_EVIDENCE}" "deploy-build-required"
     else
-      echo "⛔ Build not complete (status: ${BUILD_STATUS}). Run /vg:build ${PHASE_NUMBER} first."
+      echo "⛔ Build not complete (status: ${BUILD_STATUS}, evidence: ${BUILD_EVIDENCE}). Run /vg:build ${PHASE_NUMBER} first."
       echo "   Override (NOT recommended): --allow-build-incomplete"
       exit 1
     fi

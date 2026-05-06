@@ -69,3 +69,40 @@ def test_runner_writes_exit_and_meta_files(tmp_path: Path) -> None:
     assert Path(report["result_file"]).exists()
     assert Path(report["err_file"]).exists()
     assert Path(tmp_path / "out" / "result-Codex.exit").read_text(encoding="utf-8").strip() == "0"
+
+
+def test_runner_quotes_context_placeholder_with_spaces(tmp_path: Path) -> None:
+    spaced = tmp_path / "dir with spaces"
+    spaced.mkdir()
+    context_file = spaced / "ctx file.md"
+    context_file.write_text("context ok\n", encoding="utf-8")
+    output_dir = tmp_path / "out"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(RUNNER),
+            "--name",
+            "Gemini",
+            "--command",
+            "cat {context}; printf '%s' \"|{prompt}\"",
+            "--prompt",
+            "hello world",
+            "--context-file",
+            str(context_file),
+            "--output-dir",
+            str(output_dir),
+            "--timeout",
+            "10",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert proc.returncode == 0, proc.stderr
+    report = json.loads(proc.stdout)
+    stdout = Path(report["result_file"]).read_text(encoding="utf-8")
+    assert stdout == "context ok\n|hello world"
