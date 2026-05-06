@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.51.2 - Review backend-only contract parity
+
+Patch release. Merges PR #119 (`fix/codex-task-ui-runtime-lock`) and closes issue #120 by keeping backend-only `/vg:review` runs compatible with the review runtime contract.
+
+### Fixed
+
+- Backend-only `vg:review` fast-path now emits a synthetic root `scan-backend-surface-probes.json` artifact when browser discovery is legitimately skipped, so `run-complete` no longer false-blocks on the contract's `scan-*.json` requirement (#120).
+- Canonical, `.claude`, and Codex `vg-review` mirrors are back in sync for the backend-only review path.
+
+### Added
+
+- Added regression coverage for issue #120 in canonical and `.claude` review test suites, including a contract-level check that reproduces the missing `scan-*.json` failure mode and verifies the synthetic backend scan artifact fixes it.
+
+### Verified
+
+- `python -m pytest scripts/tests/test_review_backend_contract_issue120.py scripts/tests/test_review_lens_plan.py scripts/tests/test_runtime_map_crud_depth.py scripts/tests/test_phaseP_real_verification.py scripts/tests/test_codex_mirror_equivalence.py -q`
+- `python -m pytest .claude/scripts/tests/test_review_backend_contract_issue120.py -q`
+- `python scripts/verify-codex-mirror-equivalence.py --json`
+- `git diff --check`
+
 ## v2.51.1 - PR #117 merge follow-ups and interface standards fix
 
 Patch release. Merges PR #117 (`fix/codex-session-state-test-parity`) into `main` and adds the post-merge fixes needed to close issue #118 and keep the Windows/source-checkout regression suite green.

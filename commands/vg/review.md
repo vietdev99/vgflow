@@ -6217,6 +6217,31 @@ if [ "$UI_GOAL_COUNT" -eq 0 ]; then
   echo "🧭 Pure-backend phase (không có goal UI) — bỏ qua browser discovery (khám phá trình duyệt), dùng surface probes." >&2
   # Emit empty RUNTIME-MAP if not written yet, skip to 4b
   [ -f "${PHASE_DIR}/RUNTIME-MAP.json" ] || echo '{"views":{},"goal_sequences":{}}' > "${PHASE_DIR}/RUNTIME-MAP.json"
+  # Issue #120: runtime_contract still requires one root scan-*.json artifact
+  # even when backend-only review legitimately skips browser discovery. Emit a
+  # synthetic backend scan so run-complete does not false-block on must_write.
+  BACKEND_SCAN_JSON="${PHASE_DIR}/scan-backend-surface-probes.json"
+  if [ ! -f "$BACKEND_SCAN_JSON" ]; then
+    "${PYTHON_BIN:-python3}" - "$BACKEND_SCAN_JSON" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+payload = {
+    "view": "backend://surface-probes",
+    "surface": "backend",
+    "generated_by": "phase4_goal_comparison.pure_backend_fastpath",
+    "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "results": [],
+    "forms": [],
+    "tables": [],
+    "modal_triggers": [],
+    "sub_views_discovered": [],
+}
+Path(sys.argv[1]).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+  fi
 fi
 ```
 
