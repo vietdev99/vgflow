@@ -64,6 +64,23 @@ settings.setdefault("hooks", {})
 #                           (legacy/escape hatch via VG_HOOKS_PATH_MODE=absolute).
 def _cmd(script_name: str) -> str:
     runner_name = "vg-run-bash-hook.py"
+    # Issue #129: on Windows, Claude Code spawns hooks via `bash <argv>`
+    # without `-c`. Bash treats argv[0] as a script file path. When argv[0]
+    # is "python" / "python3" (binary), bash opens python.exe, reads PE
+    # header bytes, and rejects with "cannot execute binary file" — every
+    # hook fails on the first message after install. Empirically verified
+    # on find_location + super_com_hub, 2026-05-07; substituting `python3`
+    # → `python` does NOT help (both are binaries).
+    #
+    # On Windows, emit the .sh path directly. argv[0] becomes a shell
+    # script — bash reads its shebang and runs it. The python wrapper's
+    # WSL-bash protection is sacrificed; modern Claude Code on Windows
+    # already prefers Git Bash, and users with WSL-only bash are rare.
+    if os.name == "nt":
+        if mode == "absolute":
+            return shlex.quote(f"{hooks_dir}/{script_name}")
+        return f'"${{CLAUDE_PROJECT_DIR}}/.claude/scripts/hooks/{script_name}"'
+
     if mode == "absolute":
         # CRITICAL: hooks_dir may contain spaces (e.g., "Vibe Code") — shell word-splits
         # unquoted command. Use shlex.quote to wrap each path.

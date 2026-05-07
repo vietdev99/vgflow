@@ -20,9 +20,16 @@ def test_install_creates_hooks_block(tmp_path, monkeypatch):
     assert "SessionStart" in settings["hooks"]
     assert "PostToolUse" in settings["hooks"]
     user_prompt_cmd = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
-    assert "vg-run-bash-hook.py" in user_prompt_cmd
     assert "vg-user-prompt-submit.sh" in user_prompt_cmd
     assert not user_prompt_cmd.startswith("bash ")
+    # Issue #129: on Windows the python wrapper is bypassed (argv[0] must
+    # be a shell script, not a binary, because Claude Code spawns hooks
+    # via `bash <argv>` without `-c`). On POSIX the wrapper is retained
+    # for its WSL-bash protection.
+    if os.name == "nt":
+        assert "vg-run-bash-hook.py" not in user_prompt_cmd
+    else:
+        assert "vg-run-bash-hook.py" in user_prompt_cmd
 
 
 def test_install_idempotent_no_duplicates(tmp_path, monkeypatch):
