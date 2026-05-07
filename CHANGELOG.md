@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.51.6 - Python session resolver hook-env parity (PR #124)
+
+Patch release. Sister patch to v2.51.4 (PR #122 — bash resolver). Bash `_lib.sh::vg_resolve_session_id` already checked `CLAUDE_HOOK_SESSION_ID` first; python `state._session_id_from_env` did NOT. When Claude Code injected ONLY `CLAUDE_HOOK_SESSION_ID` into the hook subprocess (typical inside a hook fire) but not into bash subprocesses spawned later in the same session, bash resolved to the hook session id while python fell through to `.vg/.session-context.json`. Two different `session_id`s → tasklist contract written under one run dir while trace landed in another → run-complete contract validator failed with "evidence missing" even though `TaskCreate` calls had fired.
+
+### Fixed
+
+- `scripts/vg-orchestrator/state.py::_session_id_from_env` now prepends `CLAUDE_HOOK_SESSION_ID` to its env priority list, matching bash `_lib.sh::vg_resolve_session_id`. Hook subprocesses on both sides now resolve to the same `session_id`, so contract write (python `tasklist-projected`) and trace write (bash hook) target the same run dir.
+
+### Verified
+
+- `python -m pytest tests/hooks/test_session_resolve.py -q` (12 passed — 10 existing + 2 new parity cases).
+- `python scripts/verify-codex-mirror-equivalence.py --json` (71 checked, 0 drift).
+- Canonical `scripts/vg-orchestrator/state.py` ↔ `.claude/scripts/vg-orchestrator/state.py` byte-identical.
+
 ## v2.51.5 - Sweep orphan default.json on session-start (#113 followup)
 
 Patch release. Surfaced during PrintwayV3 sync of v2.51.4: a leftover `.vg/active-runs/default.json` written by the **pre-fix** bash hooks could remain alongside its session-keyed twin even after the v2.51.4 helper migrated `.session-context.json`. The migration only fired when context's `run_id` matched the orphan; a pre-fix run that finished BEFORE the upgrade left an orphan keyed to a different run.

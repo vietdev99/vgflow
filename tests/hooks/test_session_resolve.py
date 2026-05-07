@@ -202,6 +202,70 @@ def test_sweep_preserves_default_when_twin_run_id_diverges(tmp_path):
         "divergent run_id → preserve default.json (cautious)"
 
 
+def test_python_resolver_matches_bash_when_hook_env_set(tmp_path, monkeypatch):
+    """Regression: python state._session_id_from_env honours CLAUDE_HOOK_SESSION_ID
+    so trace writes from bash hooks land on the same run_id slot as state writes
+    from python (run-start, mark-step, tasklist-projected). Pre-fix the bash
+    resolver checked CLAUDE_HOOK_SESSION_ID first while python skipped it; the
+    mismatch caused tasklist-projected evidence and TaskCreate trace to land in
+    different run dirs, failing the run-complete contract validator with
+    'evidence missing'.
+    """
+    import importlib.util
+    import sys
+
+    orchestrator_dir = REPO_ROOT / "scripts" / "vg-orchestrator"
+    monkeypatch.syspath_prepend(str(orchestrator_dir))
+    spec = importlib.util.spec_from_file_location(
+        "vg_state_parity", orchestrator_dir / "state.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["vg_state_parity"] = mod
+    spec.loader.exec_module(mod)
+
+    # Clear all session env vars, then set ONLY CLAUDE_HOOK_SESSION_ID.
+    for v in (
+        "CLAUDE_HOOK_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CODEX_SESSION_ID",
+    ):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("CLAUDE_HOOK_SESSION_ID", "hook-only-sid-42")
+
+    py_sid = mod._session_id_from_env()
+    bash_sid = _resolve(tmp_path, env_extra={"CLAUDE_HOOK_SESSION_ID": "hook-only-sid-42"})
+    assert py_sid == "hook-only-sid-42", f"python skipped CLAUDE_HOOK_SESSION_ID: {py_sid!r}"
+    assert bash_sid == "hook-only-sid-42"
+    assert py_sid == bash_sid, "python+bash resolvers must agree on session_id"
+
+
+def test_python_resolver_prefers_hook_env_over_session_env(monkeypatch):
+    """When BOTH CLAUDE_HOOK_SESSION_ID and CLAUDE_SESSION_ID are set, hook env
+    wins — matches bash priority order. Edge case: Claude Code populates
+    CLAUDE_SESSION_ID from a stale prior session while CLAUDE_HOOK_SESSION_ID
+    reflects the live hook fire. Hook env is canonical inside hook context.
+    """
+    import importlib.util
+    import sys
+
+    orchestrator_dir = REPO_ROOT / "scripts" / "vg-orchestrator"
+    monkeypatch.syspath_prepend(str(orchestrator_dir))
+    spec = importlib.util.spec_from_file_location(
+        "vg_state_priority", orchestrator_dir / "state.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["vg_state_priority"] = mod
+    spec.loader.exec_module(mod)
+
+    monkeypatch.setenv("CLAUDE_HOOK_SESSION_ID", "hook-sid-WIN")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "claude-sid-LOSE")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "code-sid-LOSE")
+    monkeypatch.setenv("CODEX_SESSION_ID", "codex-sid-LOSE")
+
+    assert mod._session_id_from_env() == "hook-sid-WIN"
+
+
 def test_state_safe_filename_treats_default_as_unknown(monkeypatch):
     """Python state._safe_session_filename folds 'default' into 'unknown'."""
     import importlib.util
