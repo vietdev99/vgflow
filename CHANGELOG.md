@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.51.8 - /vg:update no longer touches global ~/.codex by default
+
+Patch release. Bug surfaced during user audit: `/vg:update` step `8_sync_codex` deployed VG skills + agents into **global** `~/.codex/skills` and `~/.codex/agents` whenever `~/.codex` directory existed (i.e., user has Codex CLI installed for any reason). No env var or flag — silent global side effect. Inconsistent with `install.sh` (default project-only, opt-in via `--global-codex`) and `sync.sh` (`SKIP_GLOBAL=true` default, opt-in via `--global-codex`).
+
+### Fixed
+
+- `commands/vg/update.md` step `8_sync_codex`: gate global `~/.codex` deploy behind `VG_UPDATE_GLOBAL_CODEX=1`. Default behavior is now project-only (`${REPO_ROOT}/.codex` always refreshed, global skipped). Users who want global Codex install run `VG_UPDATE_GLOBAL_CODEX=1 /vg:update`.
+- Banner echoes the chosen path: either `Codex global deploy: VG_UPDATE_GLOBAL_CODEX=1 — refreshed ~/.codex skills/agents` or `Codex global deploy: skipped (default; set VG_UPDATE_GLOBAL_CODEX=1 to opt in)`.
+- Updated `success_criteria` in `update.md` to document the new opt-in convention.
+
+### Convention summary (now consistent)
+
+| Tool                | Default       | Opt-in                              |
+|---------------------|---------------|-------------------------------------|
+| `install.sh`        | project only  | `--global-codex` flag               |
+| `sync.sh`           | project only  | `--global-codex` flag               |
+| `/vg:update`        | project only  | `VG_UPDATE_GLOBAL_CODEX=1` env var  |
+
+### Verified
+
+- Mirror parity: `commands/vg/update.md` ↔ `.claude/commands/vg/update.md` ↔ `codex-skills/vg-update/SKILL.md` ↔ `.codex/skills/vg-update/SKILL.md` all carry the env var guard (5 occurrences each).
+- `python scripts/verify-codex-mirror-equivalence.py --json` (71 checked, 0 drift after regen).
+
 ## v2.51.7 - macOS bash 3.2 portability + codex skill resync (#126, PR #125)
 
 Patch release. Closes issue #126 (real bug on current v2.51.6) + PR #125 (codex skill mirror drift).

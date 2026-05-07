@@ -667,7 +667,10 @@ EOF
   fi
 }
 
-if [ -d "$HOME/.codex" ]; then
+# Project-local Codex deploy is unconditional (handled above into
+# ${REPO_ROOT}/.codex). Global ~/.codex deploy is OFF by default to match
+# install.sh + sync.sh convention; opt in via VG_UPDATE_GLOBAL_CODEX=1.
+if [ "${VG_UPDATE_GLOBAL_CODEX:-0}" = "1" ] && [ -d "$HOME/.codex" ]; then
   mkdir -p "$HOME/.codex/skills" "$HOME/.codex/agents"
   if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
     while IFS= read -r skill_dir; do
@@ -686,6 +689,9 @@ if [ -d "$HOME/.codex" ]; then
   register_codex_agent "$CODEX_CONFIG" "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
   register_codex_agent "$CODEX_CONFIG" "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
   register_codex_agent "$CODEX_CONFIG" "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+  echo "Codex global deploy: VG_UPDATE_GLOBAL_CODEX=1 — refreshed ~/.codex skills/agents"
+else
+  echo "Codex global deploy: skipped (default; set VG_UPDATE_GLOBAL_CODEX=1 to opt in)"
 fi
 
 echo "Codex mirror: skills=${CODEX_SKILLS_UPDATED} agents=${CODEX_AGENTS_UPDATED}"
@@ -781,7 +787,7 @@ echo "NOTE: Restart Claude Code session to load updated commands/skills."
 - Major-version bump blocked unless `--accept-breaking` is passed AND migration doc displayed.
 - `.claude/VGFLOW-VERSION` bumped to `${LATEST}`; old `vgflow-ancestor/v{INSTALLED}` removed; new `vgflow-ancestor/v{LATEST}` populated.
 - Claude Code hooks are installed/repaired after update (`UserPromptSubmit`, `Stop`, `PostToolUse` edit warning, `PostToolUse` Bash step tracker).
-- Codex mirrors in `.codex/skills`, `.codex/agents`, and global `~/.codex` are refreshed directly from the updated release assets.
+- Project-local Codex mirrors in `.codex/skills` and `.codex/agents` are refreshed directly from the updated release assets. Global `~/.codex` deploy is OFF by default (matches `install.sh` + `sync.sh` convention); opt in via `VG_UPDATE_GLOBAL_CODEX=1 /vg:update` when global Codex install is desired.
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Playwright MCP workers are verified/repaired after update for both Claude and Codex (`playwright1`..`playwright5`) and stale hardcoded lock scripts are replaced.
 - Graphify tooling is verified/repaired after update when `graphify.enabled=true`; missing package installs `graphifyy[mcp]`, `.mcp.json` is repaired, and `.graphifyignore` / `.gitignore` are maintained.
