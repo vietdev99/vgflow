@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.51.7 - macOS bash 3.2 portability + codex skill resync (#126, PR #125)
+
+Patch release. Closes issue #126 (real bug on current v2.51.6) + PR #125 (codex skill mirror drift).
+
+### Fixed
+
+- `commands/vg/_shared/lib/override-debt.sh::log_override_debt` no longer uses Bash 4 `${var^^}` uppercase expansion, which fails on macOS `/bin/bash 3.2` with "bad substitution" at line 53. Replaced with portable `printf | tr '[:lower:]' '[:upper:]'` so advisory debt logging works on darwin (#126). Surfaced when `/vg:review 4.5 --sandbox` advisory goal coverage gate aborted after `verify-goal-coverage-phase.py` returned `rc=2`.
+- `.codex/skills/vg-review/SKILL.md` byte drift fixed via `scripts/generate-codex-skills.sh --force` resync against canonical `codex-skills/` (PR #125 — issue #120 backend-only contract fix had landed in canonical but `sync.sh` hadn't been re-run).
+
+### Triage
+
+- Closes #126 — bash 3.2 fix above.
+- Closes #127 — already fixed in v2.47.2+ (`review.md` resolves helpers via `${VG_SCRIPT_ROOT}` with `.claude/scripts` fallback at line 7460).
+- Closes #128 — already fixed in v2.47.2 (`scripts/validators/verify-no-no-verify.py` allowlist patterns at lines 96-97 cover `tests/test_no_no_verify.py` + `scripts/tests/test_no_no_verify.py`; comment at line 82 references Issue #87).
+
+### Verified
+
+- Smoke: `bash -c 'sev_upper=$(printf "%s" "critical" | tr "[:lower:]" "[:upper:]"); echo "$sev_upper"'` → `CRITICAL`.
+- Canonical `commands/vg/_shared/lib/override-debt.sh` ↔ `.claude/commands/vg/_shared/lib/override-debt.sh` byte-identical.
+- `diff -rq codex-skills/ .codex/skills/` clean (PR #125).
+
 ## v2.51.6 - Python session resolver hook-env parity (PR #124)
 
 Patch release. Sister patch to v2.51.4 (PR #122 — bash resolver). Bash `_lib.sh::vg_resolve_session_id` already checked `CLAUDE_HOOK_SESSION_ID` first; python `state._session_id_from_env` did NOT. When Claude Code injected ONLY `CLAUDE_HOOK_SESSION_ID` into the hook subprocess (typical inside a hook fire) but not into bash subprocesses spawned later in the same session, bash resolved to the hook session id while python fell through to `.vg/.session-context.json`. Two different `session_id`s → tasklist contract written under one run dir while trace landed in another → run-complete contract validator failed with "evidence missing" even though `TaskCreate` calls had fired.

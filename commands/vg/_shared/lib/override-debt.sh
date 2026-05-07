@@ -47,10 +47,12 @@ forever until resolved by event OR explicitly marked `--wont-fix`. Legacy entrie
 HEADER
   fi
 
-  # Derive severity from config
+  # Derive severity from config (portable — macOS bash 3.2 has no ${var^^})
   local severity="medium"
+  local sev sev_upper flags_var
   for sev in critical high medium; do
-    local flags_var="CONFIG_DEBT_SEVERITIES_${sev^^}"
+    sev_upper=$(printf '%s' "$sev" | tr '[:lower:]' '[:upper:]')
+    flags_var="CONFIG_DEBT_SEVERITIES_${sev_upper}"
     if grep -qF "$flag" <<<"${!flags_var:-}"; then severity="$sev"; break; fi
   done
 
