@@ -447,6 +447,19 @@ def read_active_run(
             legacy_rid = legacy.get("run_id")
             if _is_run_terminal(legacy_rid):
                 return None
+            # Issue #134 (2026-05-08): honor command/phase hints when caller
+            # provided them. Without this, a Codex run-start for `vg:review
+            # 4.6` would silently inherit a legacy snapshot from `vg:build 5`
+            # (different command + phase), causing namespace mismatch and FK
+            # failures. The hints are advisory: only filter when caller
+            # explicitly supplied them AND the legacy snapshot disagrees.
+            if command_hint and legacy.get("command") and \
+                    _normalize_command_hint(command_hint) != \
+                    _normalize_command_hint(legacy.get("command")):
+                return None
+            if phase_hint and legacy.get("phase") and \
+                    str(phase_hint) != str(legacy.get("phase")):
+                return None
             return legacy
 
     # No-env callers read as sid="unknown", while run-start stores them under

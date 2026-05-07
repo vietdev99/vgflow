@@ -84,3 +84,32 @@ indent will NOT satisfy the depth check.
   evidence still missing — next step-active blocks again. Telemetry event
   `<command>.tasklist_projection_skipped` (warn-tier) records each bypass
   attempt for `/vg:gate-stats` analysis.
+
+## Post-AskUserQuestion sync (RULE — v2.51.12+)
+
+When the AI asks the user via `AskUserQuestion` (or the Codex equivalent
+main-thread Q&A) and the answer **branches a step, scopes the work, or
+adds/removes items in the active phase**, the AI MUST call `TaskUpdate`
+(or `TodoWrite` on legacy runtime) to reflect the chosen branch BEFORE
+running the next bash/edit. Pattern:
+
+- Keep the active group header.
+- Edit the in-flight step's `↳` sub-item to mention the chosen branch
+  (e.g. `↳ 0a_env_mode_gate: pick env from DEPLOY-STATE → user chose sandbox`).
+- Append new `↳` sub-items if the answer expands scope (e.g. user typed
+  Other / custom branch text and the AI now plans 3 follow-up sub-tasks).
+- Mark `completed` if the answer closes the step.
+
+Hook enforcement (advisory): PostToolUse-AskUserQuestion (`vg-post-tool-use-askuserquestion.sh`)
+emits a `hookSpecificOutput.additionalContext` reminder after every answer
+when an active VG run + tasklist contract exist. The reminder is non-blocking —
+it surfaces the rule to the AI in the tool result. Skipping the sync still
+costs operator visibility; downstream `tasklist-projected --adapter auto`
+re-checks evidence on subsequent step transitions and may BLOCK if the
+projected hierarchy drifts from the contract.
+
+Why interactive answers historically drift: pre-v2.51.12, no PostToolUse
+hook fired on `AskUserQuestion`, so the AI had no harness signal to update
+the task UI after a custom-text answer. AI received the answer, made a
+decision, ran the next bash — and the task UI silently stayed on the old
+branch. Bug class user-reported (sếp Dũng), 2026-05-08.

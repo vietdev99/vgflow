@@ -101,7 +101,10 @@ VG_ENTRIES = {
         {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": _cmd("vg-pre-tool-use-write.sh")}]},
         {"matcher": "Agent", "hooks": [{"type": "command", "command": _cmd("vg-pre-tool-use-agent.sh")}]},
     ],
-    "PostToolUse": [{"matcher": "TodoWrite|TaskCreate|TaskUpdate", "hooks": [{"type": "command", "command": _cmd("vg-post-tool-use-todowrite.sh")}]}],
+    "PostToolUse": [
+        {"matcher": "TodoWrite|TaskCreate|TaskUpdate", "hooks": [{"type": "command", "command": _cmd("vg-post-tool-use-todowrite.sh")}]},
+        {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": _cmd("vg-post-tool-use-askuserquestion.sh")}]},
+    ],
     "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": _cmd("vg-stop.sh")}]}],
 }
 

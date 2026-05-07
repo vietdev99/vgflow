@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.51.12 - Tasklist sync after AskUserQuestion + #134 cross-session legacy run filter
+
+Patch release. Closes a tasklist-drift gap reported by sếp Dũng (2026-05-08) and **issue #134** (Codex orchestrator legacy `current-run.json` cross-session leak).
+
+### Tasklist drift after AskUserQuestion (sếp Dũng's bug)
+
+**Symptom:** AI runs `/vg:review`, asks user a 1-2-3 question (option 3 = Other / custom text). User types a custom branch. AI receives the answer, makes a decision, executes the next bash/edit — but **does not call `TaskUpdate`** to reflect the chosen branch in the native task UI. The task UI silently stays on the old branch; user loses real-time visibility into the AI's actual decisions.
+
+**Root cause:** Pre-v2.51.12, no PostToolUse hook fired on `AskUserQuestion`. `install-hooks.sh` only registered PostToolUse for `TodoWrite|TaskCreate|TaskUpdate`, so an `AskUserQuestion` answer landed in the AI's tool-result with zero harness signal to update the task UI. Skill prompts didn't contain a "post-AskUserQuestion sync" rule either.
+
+**Fix:**
+- New hook `scripts/hooks/vg-post-tool-use-askuserquestion.sh` — non-blocking advisory. Fires AFTER every `AskUserQuestion` answer when an active VG run + tasklist contract exist. Emits `hookSpecificOutput.additionalContext` reminder telling the AI to call `TaskUpdate` (or `TodoWrite` on legacy runtime) to mirror the chosen branch BEFORE running the next bash/edit. Silent no-op when no VG run is active (context guard) or no contract yet (e.g. early in run-start).
+- `scripts/hooks/install-hooks.sh::VG_ENTRIES` registers a 2nd PostToolUse matcher: `{"matcher": "AskUserQuestion", "hooks": [{...}]}`. Existing `TodoWrite|TaskCreate|TaskUpdate` matcher unchanged.
+- `commands/vg/_shared/lib/tasklist-projection-instruction.md` adds a new section **"Post-AskUserQuestion sync (RULE — v2.51.12+)"** with the explicit pattern: keep group header, edit active step's `↳` sub-item to mention the chosen branch, append new `↳` sub-items if the answer expands scope, mark `completed` if it closes the step.
+
+### Issue #134 — Codex orchestrator legacy current-run cross-session leak
+
+**Symptom:** `vg-orchestrator run-start` in Codex with explicit `CLAUDE_SESSION_ID` still read legacy `.vg/current-run.json` from another session (e.g. `/vg:build 5`), blocking `/vg:review 4.6` and causing namespace mismatch + FK failures.
+
+**Fix (`scripts/vg-orchestrator/state.py::read_active_run`):** when caller supplied `command_hint` and/or `phase_hint`, the legacy fallback now checks them against the snapshot's `command` / `phase` fields and returns `None` on mismatch. Hints stay advisory — only applied when caller explicitly supplied them AND the legacy snapshot disagrees. No regression for unhinted callers (`run-status`, default Stop hook).
+
+### Verified
+
+- Hook smoke (no active run) → silent exit 0.
+- Hook smoke (active run + contract) → emits proper JSON `additionalContext` + exit 0.
+- Real install: `bash scripts/hooks/install-hooks.sh --target /tmp/test/.claude/settings.json` produces 2 PostToolUse entries (TodoWrite|TaskCreate|TaskUpdate + AskUserQuestion), commands properly quoted.
+- `python -m pytest tests/hooks/test_session_resolve.py scripts/tests/test_orchestrator_run_status.py -q` (19 passed).
+- `python scripts/verify-codex-mirror-equivalence.py --json` (71 checked, 0 drift).
+- Canonical ↔ `.claude/` mirror byte-identical for `state.py`, `install-hooks.sh`, `vg-post-tool-use-askuserquestion.sh`, `tasklist-projection-instruction.md`.
+
+### Triage
+
+- Closes #134 (Codex cross-session legacy run leak — `read_active_run` honours hints).
+
 ## v2.51.11 - /vg:update auto-chains /vg:reapply-patches when conflicts parked
 
 Patch release. UX improvement — `/vg:update` no longer leaves the user to manually type `/vg:reapply-patches` after a release with merge or gate conflicts. The terminal banner now emits a runtime-agnostic AI assistant directive that triggers the assistant (Claude Code or Codex) to chain into `/vg:reapply-patches` in the very next turn, so the per-conflict interactive prompts run in one continuous session.
