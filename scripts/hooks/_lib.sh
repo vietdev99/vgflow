@@ -18,6 +18,15 @@
 #
 # vg_session_run_file <session_id>
 #   Echo the canonical active-run state file path for a session id.
+#
+# vg_sweep_orphan_default
+#   Best-effort cleanup: if .vg/active-runs/default.json exists AND its
+#   embedded session_id points to a real (non-default) sibling state file
+#   with the SAME run_id, the default.json copy is provably an orphan
+#   left over from the pre-fix bash hooks. Archive it as
+#   default.json.orphan-bak-<epoch>. No-op when default.json is absent or
+#   when the sibling is missing/divergent (preserve cautious — avoid
+#   nuking a real run during a rollback).
 
 vg_resolve_session_id() {
   local sid="${CLAUDE_HOOK_SESSION_ID:-${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${CODEX_SESSION_ID:-}}}}"
@@ -74,4 +83,44 @@ PY
 vg_session_run_file() {
   local sid="${1:-unknown}"
   printf '%s\n' ".vg/active-runs/${sid}.json"
+}
+
+vg_sweep_orphan_default() {
+  [ -f ".vg/active-runs/default.json" ] || return 0
+  python3 - <<'PY' 2>/dev/null || true
+import json, time
+from pathlib import Path
+
+runs = Path(".vg/active-runs")
+default_p = runs / "default.json"
+if not default_p.exists():
+    raise SystemExit(0)
+try:
+    d = json.loads(default_p.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+rid = d.get("run_id") or ""
+sid = d.get("session_id") or ""
+
+# Only sweep when default.json names a real sibling that already
+# carries the same run_id. Anything else -- divergent run_id, missing
+# sibling, default-as-content-sid -- is preserved so a rollback or an
+# in-flight write race does not vaporise live state.
+if not rid or not sid or sid in ("default", "unknown"):
+    raise SystemExit(0)
+
+sibling = runs / f"{sid}.json"
+if not sibling.exists():
+    raise SystemExit(0)
+try:
+    s = json.loads(sibling.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+if s.get("run_id") != rid:
+    raise SystemExit(0)
+
+bak = runs / f"default.json.orphan-bak-{int(time.time())}"
+default_p.replace(bak)
+PY
 }

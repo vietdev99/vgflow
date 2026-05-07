@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.51.5 - Sweep orphan default.json on session-start (#113 followup)
+
+Patch release. Surfaced during PrintwayV3 sync of v2.51.4: a leftover `.vg/active-runs/default.json` written by the **pre-fix** bash hooks could remain alongside its session-keyed twin even after the v2.51.4 helper migrated `.session-context.json`. The migration only fired when context's `run_id` matched the orphan; a pre-fix run that finished BEFORE the upgrade left an orphan keyed to a different run.
+
+### Fixed
+
+- Add `vg_sweep_orphan_default` to `scripts/hooks/_lib.sh`. Called from `vg-session-start.sh` (resume / compact / startup matchers). Archives `default.json` to `default.json.orphan-bak-<epoch>` only when `default.json` names a real (non-default / non-unknown) sibling that already carries the same `run_id`. Divergent run_id, missing twin, or default-as-content-sid → preserved (cautious vs partial rollback).
+
+### Verified
+
+- `python3 -m pytest tests/hooks/test_session_resolve.py -v` (10 tests, +3 new for sweep happy path / no-twin / divergent-run_id).
+- `python3 -m pytest tests/hooks/ scripts/tests/test_universal_mutating_tool_gate.py scripts/tests/test_codex_mirror_equivalence.py` (38 passed).
+- Hand-tested on PrintwayV3: live `vg:build 4.5` session with leftover `default.json` from pre-fix run — sweep archived to `default.json.orphan-bak-1778113538`, live `a7e38c21-...json` preserved.
+
 ## v2.51.4 - Bash hook session resolution (issue #113)
 
 Patch release. Fixes the orphan `default.json` slot that surfaced in PrintwayV3 dogfood: parallel Claude Code sessions with `CLAUDE_HOOK_SESSION_ID` unset all wrote to the shared `.vg/active-runs/default.json` slot, clobbering each other and stranding stale state files alongside the per-session ones.

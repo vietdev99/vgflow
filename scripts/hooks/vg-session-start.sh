@@ -16,6 +16,10 @@ EVENTS_DB="${VG_EVENTS_DB:-.vg/events.db}"
 SESSION_ID="$(vg_resolve_session_id)"
 ACTIVE_RUN_PATH=".vg/active-runs/${SESSION_ID}.json"
 
+# Issue #113 followup: sweep orphan default.json that has a session-keyed
+# twin carrying the same run_id (provable leftover from pre-fix bash hooks).
+vg_sweep_orphan_default || true
+
 if [ ! -f "$META_SKILL_PATH" ]; then
   # Graceful degrade — VG meta-skill missing, no context to inject.
   # Log once per invocation for diagnostics; do NOT block session.
