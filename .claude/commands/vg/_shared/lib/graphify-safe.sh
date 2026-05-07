@@ -15,9 +15,12 @@
 # went undetected. This wrapper closes the observability gap.
 
 # Get current mtime of a file (cross-platform)
+# NOTE: avoid `local path=...` — zsh treats `path` as a special tied alias of
+# `$PATH` (array), so `local path="$1"` rebinds PATH to a single string and
+# breaks subsequent `stat` lookups on macOS zsh. Use a non-special name.
 _vg_graphify_mtime() {
-  local path="$1"
-  stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || echo "0"
+  local target="$1"
+  stat -c %Y "$target" 2>/dev/null || stat -f %m "$target" 2>/dev/null || echo "0"
 }
 
 # Run rebuild command, return 0 if graph.json mtime advanced.

@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.51.10 - Windows hook wrapper bypass (PR #132) + zsh `local path` fix (#133)
+
+Patch release. Closes #129 (PR #132 — Windows + Git Bash hooks fail with `cannot execute binary file`) and #133 (zsh `local path` collision in `graphify-safe.sh::_vg_graphify_mtime`).
+
+### Fixed
+
+- `scripts/hooks/install-hooks.sh::_cmd()` platform-detects Windows (`os.name == 'nt'`) and emits the `.sh` path **without** the `python vg-run-bash-hook.py` wrapper. Root cause: Claude Code on Windows spawns hooks via `bash <argv>` (no `-c`); `bash` treats `argv[0]` as a script file path. When `argv[0]` is `python` / `python3` (a binary), bash opens the EXE, reads PE header, rejects with `cannot execute binary file`. Symptom user-side: every hook fails on first message; Windows then resolves `python3` through the App Execution Alias and pops the Microsoft Store dialog. POSIX path unchanged — wrapper retained for WSL-bash protection logic. Trade-off: Windows path drops WSL-bash protection (rare; current state fails 100% on Windows so no protection in practice). Closes #129.
+- `commands/vg/_shared/lib/graphify-safe.sh::_vg_graphify_mtime` renamed `local path="$1"` → `local target="$1"`. Reason: zsh treats `path` as a special tied alias of `$PATH` (array), so `local path=...` rebinds `$PATH` to a single string and breaks subsequent `stat` lookups on macOS zsh. Symptom: `vg_graphify_rebuild_safe` reports rebuild failed even though graph.json was rebuilt successfully. Closes #133.
+
+### Verified
+
+- `bash -c 'source commands/vg/_shared/lib/graphify-safe.sh; _vg_graphify_mtime VERSION'` returns numeric mtime; `$PATH` intact after function call.
+- Mirror parity: `commands/vg/_shared/lib/graphify-safe.sh` ↔ `.claude/commands/vg/_shared/lib/graphify-safe.sh` byte-identical.
+- PR #132 CI pass (POSIX `pytest scripts/tests/test_install_hooks_idempotent.py`).
+
 ## v2.51.9 - Windows bug-reporter body-file hardening + regression coverage
 
 Patch release. Ships the `bug-reporter.sh` Windows fix from PR #131 and adds regression coverage so future refactors cannot silently fall back to argv-based issue bodies again.
