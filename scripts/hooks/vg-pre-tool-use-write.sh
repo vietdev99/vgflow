@@ -37,7 +37,15 @@ protected_patterns=(
 #   - run-active && evidence file missing && file_path NOT in whitelist → DENY
 # Whitelist (allowed when evidence missing): paths under .vg/ (orchestrator
 # state, blocks, contracts) so the harness itself can write its own files.
-session_id="$(vg_resolve_session_id)"
+#
+# Issue #135 (v2.51.13+) — use hook stdin's session_id first. Subagent
+# hooks (vg-build-task-executor, etc.) get a distinct session_id from
+# Claude Code via stdin; if env var leaks the parent's CLAUDE_HOOK_SESSION_ID
+# (or .session-context.json fallback returns parent), the gate fires for
+# the subagent against the parent's run-file. Subagent has no TodoWrite
+# tool → can't satisfy → all builds blocked. Routing via stdin sid sends
+# the subagent to its own slot (which doesn't exist) → hook early-exits.
+session_id="$(vg_resolve_session_id_from_input "$input")"
 run_file=".vg/active-runs/${session_id}.json"
 if [ -f "$run_file" ]; then
   run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file" 2>/dev/null || echo "")"

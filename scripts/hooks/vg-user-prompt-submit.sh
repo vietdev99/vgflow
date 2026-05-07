@@ -10,7 +10,15 @@ set -euo pipefail
 
 input="$(cat)"
 prompt="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true)"
-session_id="$(vg_resolve_session_id)"
+# Issue #136 (v2.51.13+) — prefer hook stdin's session_id over env. When
+# Claude Code spawns a subagent (Agent tool), its hooks fire with a
+# distinct session_id in stdin; env CLAUDE_HOOK_SESSION_ID may be unset
+# and .session-context.json still holds the PARENT's session_id. Resolving
+# via env first would route the subagent's UserPromptSubmit hook to the
+# parent's slot — and a multi-line subagent prompt envelope that contains
+# "/vg:<cmd>" anywhere on line 1 would silently overwrite the parent's
+# active-runs lock. Stdin sid routes each hook to the correct slot.
+session_id="$(vg_resolve_session_id_from_input "$input")"
 required_adapter="claude"
 if [ "${VG_RUNTIME:-${VG_PROVIDER:-}}" = "codex" ]; then
   required_adapter="codex"
@@ -83,8 +91,9 @@ cmd="vg:${BASH_REMATCH[1]}"
 args="${BASH_REMATCH[3]:-}"
 phase="$(printf '%s' "$args" | awk '{print $1}')"
 # Re-resolve in slash branch (helper is idempotent; re-run picks up any
-# context migration that fired earlier in this hook).
-session_id="$(vg_resolve_session_id)"
+# context migration that fired earlier in this hook). Issue #136 — prefer
+# stdin sid over env so subagent hooks don't write to parent's slot.
+session_id="$(vg_resolve_session_id_from_input "$input")"
 run_file=".vg/active-runs/${session_id}.json"
 
 mkdir -p ".vg/active-runs"
@@ -173,6 +182,19 @@ except Exception:
     # Soft-warn (yellow); fall through to overwrite the dead run-file.
     printf "\033[33mvg-cross-run: previous %s on phase %s is dead (%s); continuing with %s\033[0m\n" \
       "$existing_cmd" "$existing_phase" "$death_reason" "$cmd" >&2
+  elif [ -n "$existing_cmd" ] && [ "$existing_cmd" != "$cmd" ] && [ -n "$existing_phase" ] && [ "$existing_phase" != "$phase" ]; then
+    # Issue #136 (v2.51.13+) — defense in depth: cross-PHASE mainline
+    # overwrite of a fresh+alive run-file is almost always a bug. The
+    # historical fall-through (any cross-phase silently overwrites) lets
+    # a rogue subagent prompt that happens to start with `/vg:<other> N`
+    # stomp on the parent's lock. Refuse when BOTH commands are mainline.
+    case "$MAINLINE_CMDS" in *" $existing_cmd "*) is_existing_mainline=1 ;; *) is_existing_mainline=0 ;; esac
+    case "$MAINLINE_CMDS" in *" $cmd "*) is_new_mainline=1 ;; *) is_new_mainline=0 ;; esac
+    if [ "$is_existing_mainline" -eq 1 ] && [ "$is_new_mainline" -eq 1 ]; then
+      printf "\033[38;5;208mvg-cross-phase: active %s on phase %s (run_id %s); refusing to overwrite with %s phase %s — finish or abort the active run first\033[0m\n" \
+        "$existing_cmd" "$existing_phase" "$existing_run_id" "$cmd" "$phase" >&2
+      exit 2
+    fi
   elif [ -n "$existing_cmd" ] && [ "$existing_cmd" != "$cmd" ] && [ "$existing_phase" = "$phase" ]; then
     case "$MAINLINE_CMDS" in *" $existing_cmd "*) is_existing_mainline=1 ;; *) is_existing_mainline=0 ;; esac
     case "$MAINLINE_CMDS" in *" $cmd "*) is_new_mainline=1 ;; *) is_new_mainline=0 ;; esac

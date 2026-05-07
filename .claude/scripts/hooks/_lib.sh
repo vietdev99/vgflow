@@ -28,6 +28,45 @@
 #   when the sibling is missing/divergent (preserve cautious — avoid
 #   nuking a real run during a rollback).
 
+# vg_resolve_session_id_from_input
+#   Issue #135 / #136 fix (v2.51.13+) — when a hook fires for a SUBAGENT
+#   (Claude Code Agent tool spawned `vg-build-task-executor`, etc.), the
+#   subagent process may not have CLAUDE_HOOK_SESSION_ID set in its env.
+#   Plain `vg_resolve_session_id` then falls back to `.vg/.session-context.json`
+#   which still records the PARENT's session_id — so the subagent's hook
+#   incorrectly resolves to the parent's slot, fires the parent's tasklist
+#   gate (subagent has no TodoWrite tool to satisfy it), and may even
+#   overwrite the parent's `.vg/active-runs/<parent_sid>.json` lock.
+#
+#   Claude Code DOES pass the firing context's `session_id` in the hook
+#   stdin JSON. Subagent hooks receive the SUBAGENT's session_id there;
+#   parent hooks receive the PARENT's. Using stdin first routes each hook
+#   to the correct slot — subagent slot doesn't exist → hook early-exits
+#   on the active-runs check → no false gate, no overwrite.
+#
+#   Pass the raw stdin (the same string each hook reads with `input="$(cat)"`)
+#   as $1. Empty/missing falls back to the env+context resolver.
+vg_resolve_session_id_from_input() {
+  local input="${1:-}"
+  if [ -n "$input" ]; then
+    local sid_from_input
+    sid_from_input="$(printf '%s' "$input" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    s = d.get("session_id", "") or ""
+    if s and s != "default":
+        print(s)
+except Exception:
+    pass
+' 2>/dev/null || true)"
+    if [ -n "$sid_from_input" ]; then
+      printf '%s\n' "$sid_from_input"
+      return 0
+    fi
+  fi
+  vg_resolve_session_id
+}
+
 vg_resolve_session_id() {
   local sid="${CLAUDE_HOOK_SESSION_ID:-${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${CODEX_SESSION_ID:-}}}}"
   if [ -z "$sid" ] && [ -f ".vg/.session-context.json" ]; then

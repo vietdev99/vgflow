@@ -1,5 +1,37 @@
 # Changelog
 
+## v2.51.13 - Subagent session isolation: fixes #135 (Write deadlock) + #136 (rogue run-start)
+
+Patch release. Closes BLOCK-severity issues #135 and #136 — both root-caused to subagent hooks resolving to the PARENT session's state instead of the subagent's own.
+
+### Symptoms
+
+- **#135 (Subagent Write deadlock)**: every `/vg:build` wave-1 task BLOCKED. `vg-build-task-executor` subagent calls `Write`, `vg-pre-tool-use-write.sh` fires, looks up the active-runs file under the parent's session_id (env-derived), demands tasklist evidence the subagent cannot produce (no `TodoWrite` tool in subagent's allow-list). Subagent returns `preflight_gate_unsatisfiable`; build never advances.
+- **#136 (Rogue run-start overwriting parent's lock)**: spawning `vg-build-task-executor` from inside an active `/vg:build` run creates a NEW run in `events.db` + overwrites `.vg/active-runs/<parent_sid>.json`. Parent's `run-status`, progress tracking, and post-spawn `wave.completed` validation all break.
+
+### Root cause
+
+Claude Code passes the firing context's `session_id` in the hook stdin JSON. Subagent hooks receive the SUBAGENT's `session_id` there; parent hooks receive the PARENT's. But the legacy `vg_resolve_session_id` resolver only consulted `CLAUDE_HOOK_SESSION_ID` env var → `.vg/.session-context.json` fallback. Subagent processes often have an empty `CLAUDE_HOOK_SESSION_ID`, so the fallback returned the parent's session_id from the context file. Result: subagent's hooks routed to the parent's slot, fired the parent's gates, and overwrote the parent's lock.
+
+### Fixed
+
+- New helper `vg_resolve_session_id_from_input` in `scripts/hooks/_lib.sh` — prefers hook stdin's `session_id` field, falls back to env+context resolver. Stable contract: empty/missing stdin sid still works for unit tests and offline invocations.
+- `scripts/hooks/vg-pre-tool-use-write.sh` calls the new helper. Subagent Write hooks now resolve to the subagent's own sid; `.vg/active-runs/<subagent_sid>.json` doesn't exist → hook early-exits 0 → Write goes through. Closes #135.
+- `scripts/hooks/vg-user-prompt-submit.sh` calls the new helper for both branches (mid-flow follow-up + slash-command). Subagent envelopes that happen to start with `/vg:<cmd>` (e.g. literal text inside the prompt body) write to `.vg/active-runs/<subagent_sid>.json`, leaving the parent's lock untouched. Closes #136.
+- **Defense in depth**: `vg-user-prompt-submit.sh` now refuses cross-phase mainline overwrite (`vg:build phase=5` → `vg:blueprint phase=6`) when both commands are mainline AND the existing run is fresh+alive. Even if the stdin-sid path failed for some reason, a rogue subagent prompt cannot stomp on the parent's mainline lock — hook exits 2 with an actionable diagnostic.
+
+### Verified
+
+- `python -m pytest tests/hooks/test_subagent_session_isolation.py -q` (4 passed — Write routes via stdin sid, falls back to env when stdin sid absent, subagent prompt does not overwrite parent lock, cross-phase mainline overwrite refused).
+- `python -m pytest tests/hooks/ -q` (30 passed — no regressions in existing hook suite).
+- `python scripts/verify-codex-mirror-equivalence.py --json` (71 checked, 0 drift).
+- Canonical ↔ `.claude/` mirror byte-identical for `_lib.sh`, `vg-pre-tool-use-write.sh`, `vg-user-prompt-submit.sh`.
+
+### Triage
+
+- Closes #135 (subagent Write deadlock).
+- Closes #136 (rogue run-start overwriting parent lock).
+
 ## v2.51.12 - Tasklist sync after AskUserQuestion + #134 cross-session legacy run filter
 
 Patch release. Closes a tasklist-drift gap reported by sếp Dũng (2026-05-08) and **issue #134** (Codex orchestrator legacy `current-run.json` cross-session leak).
