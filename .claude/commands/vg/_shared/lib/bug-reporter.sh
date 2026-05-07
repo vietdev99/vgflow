@@ -487,9 +487,21 @@ print(f"""**Auto-reported via vg bug-reporter** (v{ev.get("version", "?")})
     local assign_args=()
     [ -n "$assignee" ] && assign_args=(--assignee "$assignee")
 
+    # Issue #130: pass body via --body-file to avoid argv truncation on
+    # Windows + Git Bash. Multi-line `--body "$body"` loses content at the
+    # bash → MSYS → cmd.exe → gh.exe boundary; gh creates issue with empty
+    # body but exit 0, so caller marks it sent. --body-file bypasses argv
+    # entirely and works identically on POSIX + Windows.
+    local body_tmp
+    body_tmp=$(mktemp -t vg-bug-body-XXXXXX 2>/dev/null) \
+      || body_tmp="${TMPDIR:-/tmp}/vg-bug-body-$$-${RANDOM}"
+    printf '%s' "$body" > "$body_tmp"
+    # shellcheck disable=SC2064
+    trap "rm -f '$body_tmp'" RETURN
+
     # Try issue create. If fails due to missing labels (404), auto-create + retry.
     local create_err
-    create_err=$(gh issue create --repo "$repo" --title "$title" --body "$body" --label "$labels" "${assign_args[@]}" 2>&1 >/dev/null)
+    create_err=$(gh issue create --repo "$repo" --title "$title" --body-file "$body_tmp" --label "$labels" "${assign_args[@]}" 2>&1 >/dev/null)
     if [ $? -eq 0 ]; then
       bug_reporter_mark_sent "$sig"
       return 0
@@ -498,7 +510,7 @@ print(f"""**Auto-reported via vg bug-reporter** (v{ev.get("version", "?")})
     # Auto-create missing labels (one-time per session) then retry once
     if echo "$create_err" | grep -q "label.*not found"; then
       bug_reporter_ensure_labels "$repo" "$labels" >/dev/null 2>&1
-      if gh issue create --repo "$repo" --title "$title" --body "$body" --label "$labels" "${assign_args[@]}" >/dev/null 2>&1; then
+      if gh issue create --repo "$repo" --title "$title" --body-file "$body_tmp" --label "$labels" "${assign_args[@]}" >/dev/null 2>&1; then
         bug_reporter_mark_sent "$sig"
         return 0
       fi
@@ -508,7 +520,7 @@ print(f"""**Auto-reported via vg bug-reporter** (v{ev.get("version", "?")})
     # External submitters can still report; only assignment is sacrificed.
     if [ ${#assign_args[@]} -gt 0 ] && \
        echo "$create_err" | grep -qE "ReplaceActorsForAssignable|does not have.*permission|Resource not accessible"; then
-      if gh issue create --repo "$repo" --title "$title" --body "$body" --label "$labels" >/dev/null 2>&1; then
+      if gh issue create --repo "$repo" --title "$title" --body-file "$body_tmp" --label "$labels" >/dev/null 2>&1; then
         bug_reporter_mark_sent "$sig"
         return 0
       fi
