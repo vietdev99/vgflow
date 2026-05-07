@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.51.9 - Windows bug-reporter body-file hardening + regression coverage
+
+Patch release. Ships the `bug-reporter.sh` Windows fix from PR #131 and adds regression coverage so future refactors cannot silently fall back to argv-based issue bodies again.
+
+### Fixed
+
+- `commands/vg/_shared/lib/bug-reporter.sh` and `.claude/commands/vg/_shared/lib/bug-reporter.sh` now submit GitHub issues via `gh issue create --body-file ...` instead of `--body "$body"`. This avoids the Windows + Git Bash argv path that created empty-body issues while still returning exit 0 (#130, victim issue #129).
+
+### Verified
+
+- `python -m pytest scripts/tests/test_bug_reporter.py -q` (2 passed).
+- Added regression coverage for both adversarial multi-line quoting and the Windows `--body-file` submission path in `scripts/tests/test_bug_reporter.py` and `.claude/scripts/tests/test_bug_reporter.py`.
+
 ## v2.51.8 - /vg:update no longer touches global ~/.codex by default
 
 Patch release. Bug surfaced during user audit: `/vg:update` step `8_sync_codex` deployed VG skills + agents into **global** `~/.codex/skills` and `~/.codex/agents` whenever `~/.codex` directory existed (i.e., user has Codex CLI installed for any reason). No env var or flag — silent global side effect. Inconsistent with `install.sh` (default project-only, opt-in via `--global-codex`) and `sync.sh` (`SKIP_GLOBAL=true` default, opt-in via `--global-codex`).
