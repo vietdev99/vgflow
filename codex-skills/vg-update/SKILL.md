@@ -767,14 +767,36 @@ echo "  Conflicts parked: ${CONFLICTS}"
 echo "  Skipped (meta):   ${SKIPPED}"
 echo "========================================"
 
+GATE_CONFLICTS_MD="${REPO_ROOT}/${PLANNING_DIR:-.claude}/vgflow-patches/gate-conflicts.md"
+NEEDS_REAPPLY=false
+REAPPLY_ARGS=""
 if [ "$CONFLICTS" -gt 0 ]; then
+  NEEDS_REAPPLY=true
   echo ""
-  echo "Resolve conflicts: /vg:reapply-patches"
-  echo "Parked under:      .claude/vgflow-patches/"
+  echo "Conflicts parked: ${CONFLICTS} under .claude/vgflow-patches/"
+fi
+if [ -f "$GATE_CONFLICTS_MD" ]; then
+  NEEDS_REAPPLY=true
+  REAPPLY_ARGS="--verify-gates"
+  echo ""
+  echo "Gate conflicts parked: ${GATE_CONFLICTS_MD}"
+fi
+
+if [ "$NEEDS_REAPPLY" = "true" ]; then
+  echo ""
+  echo "▶ NEXT_ACTION=/vg:reapply-patches${REAPPLY_ARGS:+ ${REAPPLY_ARGS}}"
+  echo ""
+  echo "===== AI ASSISTANT DIRECTIVE (runtime-agnostic) ====="
+  echo "Conflicts above are interactive — they need a human decision per entry."
+  echo "Do NOT wait for the user to type the next command. In the very next turn,"
+  echo "invoke /vg:reapply-patches${REAPPLY_ARGS:+ ${REAPPLY_ARGS}} directly so the"
+  echo "user can answer the per-conflict prompts in one continuous session."
+  echo "Applies to Claude Code (skill invocation) and Codex (skill invocation)."
+  echo "====================================================="
 fi
 
 echo ""
-echo "NOTE: Restart Claude Code session to load updated commands/skills."
+echo "NOTE: Restart Claude Code / Codex session to load updated commands/skills."
 ```
 </step>
 
@@ -791,6 +813,6 @@ echo "NOTE: Restart Claude Code session to load updated commands/skills."
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Playwright MCP workers are verified/repaired after update for both Claude and Codex (`playwright1`..`playwright5`) and stale hardcoded lock scripts are replaced.
 - Graphify tooling is verified/repaired after update when `graphify.enabled=true`; missing package installs `graphifyy[mcp]`, `.mcp.json` is repaired, and `.graphifyignore` / `.gitignore` are maintained.
-- Final report lists updated / new / conflict counts and suggests `/vg:reapply-patches` when relevant.
+- Final report lists updated / new / conflict counts. When `CONFLICTS > 0` OR `gate-conflicts.md` exists, the report emits a runtime-agnostic AI directive (`▶ NEXT_ACTION=/vg:reapply-patches[ --verify-gates]`) instructing the assistant to chain into `/vg:reapply-patches` in the next turn without waiting for a fresh user prompt. Applies to Claude Code and Codex.
 - Meta files (VERSION, CHANGELOG.md, README.md, LICENSE, install.sh, sync.sh, vg.config.template.md) never written to `.claude/`.
 </success_criteria>

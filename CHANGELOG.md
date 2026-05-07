@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.51.11 - /vg:update auto-chains /vg:reapply-patches when conflicts parked
+
+Patch release. UX improvement — `/vg:update` no longer leaves the user to manually type `/vg:reapply-patches` after a release with merge or gate conflicts. The terminal banner now emits a runtime-agnostic AI assistant directive that triggers the assistant (Claude Code or Codex) to chain into `/vg:reapply-patches` in the very next turn, so the per-conflict interactive prompts run in one continuous session.
+
+### Why interactive must stay interactive
+
+`/vg:reapply-patches` cannot be auto-decided — each parked conflict needs a human judgment from 4 options (`edit` / `keep upstream` / `restore local` / `skip`). Same for `--verify-gates` mode (`use upstream` / `keep merged` / `skip+flag` / `cancel`). So this release does NOT auto-resolve. It only removes the UX friction of typing the next command — the AI assistant is now told to invoke the skill directly, the human still answers each prompt.
+
+### Fixed
+
+- `commands/vg/update.md` step `9_report` reworked. When `CONFLICTS > 0` OR `${PLANNING_DIR}/vgflow-patches/gate-conflicts.md` exists, the banner now prints:
+  - `▶ NEXT_ACTION=/vg:reapply-patches[ --verify-gates]`
+  - A runtime-agnostic `===== AI ASSISTANT DIRECTIVE =====` block telling the assistant to invoke `/vg:reapply-patches` in the next turn without waiting for a fresh user prompt.
+  Auto-detects T8 gate conflicts and appends `--verify-gates` to the suggested command. Applies to Claude Code (skill invocation) and Codex (skill invocation) — no runtime-specific assumptions.
+- `success_criteria` updated to document the new chain behaviour.
+
+### Verified
+
+- Mirror parity: `commands/vg/update.md` ↔ `.claude/commands/vg/update.md` ↔ `codex-skills/vg-update/SKILL.md` ↔ `.codex/skills/vg-update/SKILL.md` all carry the directive (1 occurrence each of `AI ASSISTANT DIRECTIVE`).
+- `python scripts/verify-codex-mirror-equivalence.py --json` (71 checked, 0 drift after regen).
+
 ## v2.51.10 - Windows hook wrapper bypass (PR #132) + zsh `local path` fix (#133)
 
 Patch release. Closes #129 (PR #132 — Windows + Git Bash hooks fail with `cannot execute binary file`) and #133 (zsh `local path` collision in `graphify-safe.sh::_vg_graphify_mtime`).
