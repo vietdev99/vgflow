@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.51.4 - Bash hook session resolution (issue #113)
+
+Patch release. Fixes the orphan `default.json` slot that surfaced in PrintwayV3 dogfood: parallel Claude Code sessions with `CLAUDE_HOOK_SESSION_ID` unset all wrote to the shared `.vg/active-runs/default.json` slot, clobbering each other and stranding stale state files alongside the per-session ones.
+
+### Fixed
+
+- Bash hooks no longer fall back to the literal `default` session id. New shared helper `scripts/hooks/_lib.sh` resolves env vars first, then `.vg/.session-context.json` (with auto-migration of legacy `default` to a per-run synthetic id), then falls back to the `unknown` orphan sentinel — same shape Python state already used (#113).
+- `vg-user-prompt-submit.sh` now synthesizes `session-unknown-<run_id_prefix>` when no real session id is available, mirroring the orchestrator OHOK-9 path so two parallel env-unset sessions land on distinct active-run files.
+- `state.py::_safe_session_filename` and `_is_unknown_orphan_session` now treat the legacy `default` literal as the unknown orphan sentinel — defence in depth for any caller still passing it.
+- Helper auto-renames orphan `.vg/active-runs/default.json` to the per-run synthetic file on first read when its `run_id` matches the poisoned context, cleaning up existing dogfood pollution.
+
+### Verified
+
+- `python3 -m pytest tests/hooks/test_session_resolve.py -v` (7 new regression tests).
+- `python3 -m pytest tests/hooks/ -v` (21 passing, no regressions).
+- `python3 -m pytest scripts/tests/test_universal_mutating_tool_gate.py scripts/tests/test_hotfix_a_markstep_todowrite_reminder.py scripts/tests/test_codex_mirror_equivalence.py` (mirror parity green after `.claude/` sync).
+
 ## v2.51.3 - PrintwayV3 dogfood patches (PR #121)
 
 Patch release. Merges PR #121 (`fix/printway-dogfood-2026-05-07`) bundling 4 surgical workflow fixes uncovered while running `/vg:review 4.4` on the **PrintwayV3** dogfood project. Smoke-tested end-to-end on Phase 4.4 (57 goals, all READY post-patch, run-complete PASS).

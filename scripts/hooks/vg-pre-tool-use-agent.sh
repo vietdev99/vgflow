@@ -4,12 +4,15 @@
 
 set -euo pipefail
 
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
 input="$(cat)"
 
 # ── VG context guard ──
 # Hook is harmless when no VG run is active. Silent exit prevents
 # false blocks on unrelated Claude Code skills (superpowers, gsd, etc).
-session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+session_id="$(vg_resolve_session_id)"
 run_file=".vg/active-runs/${session_id}.json"
 if [ ! -f "$run_file" ]; then
   exit 0
@@ -30,7 +33,8 @@ fi
 emit_block() {
   local cause="$1"
   local gate_id="PreToolUse-Agent-allowlist"
-  local session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+  local session_id
+  session_id="$(vg_resolve_session_id)"
   local run_file=".vg/active-runs/${session_id}.json"
   local run_id
   run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file" 2>/dev/null || echo unknown)"

@@ -3,7 +3,10 @@
 
 set -euo pipefail
 
-session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+session_id="$(vg_resolve_session_id)"
 run_file=".vg/active-runs/${session_id}.json"
 
 # No active VG run — no-op (don't block ordinary work).

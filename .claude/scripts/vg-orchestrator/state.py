@@ -224,7 +224,9 @@ def _session_id_from_session_context(
 
     for ctx in context_candidates:
         ctx_sid = ctx.get("session_id")
-        if isinstance(ctx_sid, str) and ctx_sid:
+        # Issue #113: legacy "default" sentinel must never propagate as a
+        # real session id — it routes back to the shared default.json slot.
+        if isinstance(ctx_sid, str) and ctx_sid and ctx_sid != "default":
             run = _select_matching_active_run(
                 session_id=ctx_sid,
                 run_id_hint=ctx.get("run_id") or run_id_hint,
@@ -269,8 +271,18 @@ def current_session_id(
 
 
 def _safe_session_filename(sid: str) -> str:
-    """Sanitize session_id for filesystem use. Empty/None → 'unknown'."""
-    if not sid:
+    """Sanitize session_id for filesystem use.
+
+    Empty/None → 'unknown'.
+
+    Issue #113: the literal string "default" was a legacy bash-hook
+    fallback that routed every env-unset session to a single shared
+    `default.json` slot, causing parallel sessions to clobber each
+    other's state. Treat it as the unknown sentinel so any leftover
+    caller still passing "default" lands on the orphan path instead
+    of resurrecting the shared slot.
+    """
+    if not sid or sid == "default":
         return "unknown"
     safe = "".join(c for c in sid if c.isalnum() or c in "-_")
     return safe or "unknown"
@@ -282,8 +294,10 @@ def _is_unknown_orphan_session(sid: str | None) -> bool:
     `run-start` tags no-env callers as `session-unknown-{run_id_prefix}`.
     Later subprocesses still have no session env, so they resolve as
     `unknown`; treat the synthetic id as compatible with that orphan reader.
+    Issue #113: legacy "default" sentinel folds in here too — see
+    `_safe_session_filename`.
     """
-    return sid == "unknown" or (
+    return sid in ("unknown", "default") or (
         isinstance(sid, str) and sid.startswith("session-unknown-")
     )
 

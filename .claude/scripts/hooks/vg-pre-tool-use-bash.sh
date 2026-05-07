@@ -5,10 +5,13 @@
 
 set -euo pipefail
 
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
 input="$(cat)"
 cmd_text="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null || true)"
 
-session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+session_id="$(vg_resolve_session_id)"
 run_file=".vg/active-runs/${session_id}.json"
 session_context_file=".vg/session-contexts/${session_id}.json"
 if [ ! -f "$session_context_file" ]; then

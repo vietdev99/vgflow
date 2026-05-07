@@ -5,9 +5,12 @@
 
 set -euo pipefail
 
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
 input="$(cat)"
 prompt="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prompt",""))' 2>/dev/null || true)"
-session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+session_id="$(vg_resolve_session_id)"
 required_adapter="claude"
 if [ "${VG_RUNTIME:-${VG_PROVIDER:-}}" = "codex" ]; then
   required_adapter="codex"
@@ -79,7 +82,9 @@ fi
 cmd="vg:${BASH_REMATCH[1]}"
 args="${BASH_REMATCH[3]:-}"
 phase="$(printf '%s' "$args" | awk '{print $1}')"
-session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+# Re-resolve in slash branch (helper is idempotent; re-run picks up any
+# context migration that fired earlier in this hook).
+session_id="$(vg_resolve_session_id)"
 run_file=".vg/active-runs/${session_id}.json"
 
 mkdir -p ".vg/active-runs"
@@ -192,6 +197,17 @@ fi
 
 run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Issue #113 fix: when no real session id is available, synthesize a
+# per-run sentinel (mirrors vg-orchestrator OHOK-9 path) so two parallel
+# Claude Code sessions with unset CLAUDE_HOOK_SESSION_ID don't collide
+# on the legacy `default.json` slot. Cross-session detection in state.py
+# `_is_unknown_orphan_session` already understands this prefix.
+if [ "$session_id" = "unknown" ]; then
+  session_id="session-unknown-${run_id:0:8}"
+  run_file=".vg/active-runs/${session_id}.json"
+fi
+
 cat > "$run_file" <<JSON
 {
   "run_id": "$run_id",

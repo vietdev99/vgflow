@@ -10,7 +10,11 @@ set -euo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")" && pwd)}"
 META_SKILL_PATH="${PLUGIN_ROOT}/vg-meta-skill.md"
 EVENTS_DB="${VG_EVENTS_DB:-.vg/events.db}"
-ACTIVE_RUN_PATH=".vg/active-runs/${CLAUDE_HOOK_SESSION_ID:-default}.json"
+
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+SESSION_ID="$(vg_resolve_session_id)"
+ACTIVE_RUN_PATH=".vg/active-runs/${SESSION_ID}.json"
 
 if [ ! -f "$META_SKILL_PATH" ]; then
   # Graceful degrade — VG meta-skill missing, no context to inject.
@@ -19,7 +23,7 @@ if [ ! -f "$META_SKILL_PATH" ]; then
   mkdir -p "$(dirname "$warn_log")" 2>/dev/null || true
   printf '%s session=%s meta-skill missing at %s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    "${CLAUDE_HOOK_SESSION_ID:-default}" \
+    "$SESSION_ID" \
     "$META_SKILL_PATH" >> "$warn_log" 2>/dev/null || true
   exit 0
 fi
@@ -32,13 +36,13 @@ diagnostics=""
 # run not in terminal state), report own session first then other sessions.
 # Resume/compact triggers full enumeration; startup/clear stays minimal.
 if [[ "${CLAUDE_HOOK_EVENT:-}" =~ ^(compact|resume|startup)$ ]] && [ -f "$EVENTS_DB" ] && [ -d ".vg/active-runs" ]; then
-  diagnostics="$(VG_OWN_SESSION_ID="${CLAUDE_HOOK_SESSION_ID:-default}" \
+  diagnostics="$(VG_OWN_SESSION_ID="$SESSION_ID" \
     VG_EVENTS_DB="$EVENTS_DB" \
     python3 - <<'PY' 2>/dev/null || true
 import json, os, sqlite3, sys
 from pathlib import Path
 
-own_session = os.environ.get("VG_OWN_SESSION_ID", "default")
+own_session = os.environ.get("VG_OWN_SESSION_ID", "unknown")
 events_db = Path(os.environ.get("VG_EVENTS_DB", ".vg/events.db"))
 active_dir = Path(".vg/active-runs")
 

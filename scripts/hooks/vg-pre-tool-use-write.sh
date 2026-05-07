@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
 input="$(cat)"
 file_path="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("file_path",""))' 2>/dev/null || true)"
 
@@ -34,7 +37,7 @@ protected_patterns=(
 #   - run-active && evidence file missing && file_path NOT in whitelist → DENY
 # Whitelist (allowed when evidence missing): paths under .vg/ (orchestrator
 # state, blocks, contracts) so the harness itself can write its own files.
-session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+session_id="$(vg_resolve_session_id)"
 run_file=".vg/active-runs/${session_id}.json"
 if [ -f "$run_file" ]; then
   run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file" 2>/dev/null || echo "")"
@@ -167,7 +170,7 @@ fi
 for pattern in "${protected_patterns[@]}"; do
   if [[ "$file_path" =~ $pattern ]]; then
     gate_id="PreToolUse-Write-protected"
-    session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+    session_id="$(vg_resolve_session_id)"
     run_file=".vg/active-runs/${session_id}.json"
     run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_file" 2>/dev/null || echo unknown)"
     block_dir=".vg/blocks/${run_id}"

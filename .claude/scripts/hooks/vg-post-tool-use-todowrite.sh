@@ -10,8 +10,11 @@
 
 set -euo pipefail
 
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
 input="$(cat)"
-session_id="${CLAUDE_HOOK_SESSION_ID:-default}"
+session_id="$(vg_resolve_session_id)"
 run_file=".vg/active-runs/${session_id}.json"
 if [ ! -f "$run_file" ]; then
   exit 0
