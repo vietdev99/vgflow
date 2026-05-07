@@ -245,8 +245,29 @@ def _session_id_from_env(
     phase_hint: str | None = None,
     run_id_hint: str | None = None,
 ) -> str | None:
+    # Priority order MUST match bash _lib.sh::vg_resolve_session_id so that
+    # state writes from python (run-start, mark-step, tasklist-projected)
+    # and trace writes from bash hooks (post-tool-use-todowrite.sh) land on
+    # the SAME session_id slot.
+    #
+    # Pre-fix bash checked CLAUDE_HOOK_SESSION_ID first while python skipped
+    # it. When Claude Code injected only CLAUDE_HOOK_SESSION_ID into the
+    # hook subprocess (the typical pattern inside a hook fire) but not into
+    # bash subprocesses spawned later in the same session, bash resolved to
+    # the hook session id while python fell through to
+    # `.vg/.session-context.json` — two different session_ids → tasklist
+    # contract was written under one run dir while the trace landed in
+    # another → run-complete contract validator failed with "evidence
+    # missing" even though TaskCreate calls had fired.
+    #
+    # Adding CLAUDE_HOOK_SESSION_ID at the front of the python priority list
+    # keeps both resolvers in lockstep regardless of which env Claude Code
+    # populates. The hook env always wins when present; the legacy
+    # CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID / CODEX_SESSION_ID order is
+    # preserved for non-Claude-Code runtimes.
     return (
-        os.environ.get("CLAUDE_SESSION_ID")
+        os.environ.get("CLAUDE_HOOK_SESSION_ID")
+        or os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("CLAUDE_CODE_SESSION_ID")
         or os.environ.get("CODEX_SESSION_ID")
         or _session_id_from_session_context(
