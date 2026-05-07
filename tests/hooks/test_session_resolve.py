@@ -136,6 +136,72 @@ def test_resolve_default_with_no_run_id_falls_back_to_unknown(tmp_path):
     assert sid == "unknown"
 
 
+def test_sweep_orphan_default_archives_when_twin_matches(tmp_path):
+    """vg_sweep_orphan_default: default.json archived when sibling has same run_id."""
+    runs = tmp_path / ".vg" / "active-runs"
+    runs.mkdir(parents=True)
+    rid = "9d5314b4-0d19-44db-8882-9b980d1bf31d"
+    sid = "real-session-xyz"
+    (runs / "default.json").write_text(json.dumps({
+        "run_id": rid, "session_id": sid, "command": "vg:build",
+    }))
+    (runs / f"{sid}.json").write_text(json.dumps({
+        "run_id": rid, "session_id": sid, "command": "vg:build",
+        "tasklist_projected": True,
+    }))
+
+    cmd = f'. "{_bash_path(LIB_PATH)}" && vg_sweep_orphan_default'
+    result = subprocess.run(
+        [_bash_exe(), "-c", cmd],
+        capture_output=True, text=True, cwd=tmp_path, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+    assert not (runs / "default.json").exists(), \
+        "orphan default.json should be archived"
+    assert (runs / f"{sid}.json").exists(), "live sibling preserved"
+    baks = list(runs.glob("default.json.orphan-bak-*"))
+    assert len(baks) == 1, f"expected one orphan-bak, got {baks}"
+
+
+def test_sweep_preserves_default_when_no_twin(tmp_path):
+    """vg_sweep_orphan_default: no sibling → no archive (cautious)."""
+    runs = tmp_path / ".vg" / "active-runs"
+    runs.mkdir(parents=True)
+    (runs / "default.json").write_text(json.dumps({
+        "run_id": "abc", "session_id": "lonely-sid",
+    }))
+
+    cmd = f'. "{_bash_path(LIB_PATH)}" && vg_sweep_orphan_default'
+    subprocess.run(
+        [_bash_exe(), "-c", cmd],
+        capture_output=True, text=True, cwd=tmp_path, timeout=10,
+    )
+    assert (runs / "default.json").exists(), \
+        "default.json must be preserved when no sibling exists"
+
+
+def test_sweep_preserves_default_when_twin_run_id_diverges(tmp_path):
+    """vg_sweep_orphan_default: sibling exists but different run_id → preserve."""
+    runs = tmp_path / ".vg" / "active-runs"
+    runs.mkdir(parents=True)
+    sid = "real-session-xyz"
+    (runs / "default.json").write_text(json.dumps({
+        "run_id": "RID-A", "session_id": sid,
+    }))
+    (runs / f"{sid}.json").write_text(json.dumps({
+        "run_id": "RID-B", "session_id": sid,
+    }))
+
+    cmd = f'. "{_bash_path(LIB_PATH)}" && vg_sweep_orphan_default'
+    subprocess.run(
+        [_bash_exe(), "-c", cmd],
+        capture_output=True, text=True, cwd=tmp_path, timeout=10,
+    )
+    assert (runs / "default.json").exists(), \
+        "divergent run_id → preserve default.json (cautious)"
+
+
 def test_state_safe_filename_treats_default_as_unknown(monkeypatch):
     """Python state._safe_session_filename folds 'default' into 'unknown'."""
     import importlib.util
