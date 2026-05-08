@@ -285,7 +285,8 @@ esac
 ```yaml
 - id: L-{PROPOSED_ID}                        # orchestrator finalizes
   draft_source: reflector.{step}.phase-{phase}
-  type: rule | config_override | patch
+  type: rule | config_override | patch | procedural | declarative
+  authority: advisory       # advisory only in v1; reference allowed; executable BLOCKED
   title: "{short, <80 chars}"
 
   scope:
@@ -293,8 +294,34 @@ esac
     any_of:
       - "{predicate using phase.surfaces / step / phase.has_mutation / etc}"
 
-  target_step: {scope|blueprint|build|review|test|accept|global}
+  conditions:
+    # v1.1 conditions DSL — replaces legacy applies_when_all_match
+    all_of:
+      - "{predicate}"
+    any_of:
+      - "{predicate}"
+
+  target_step: {scope|blueprint|build|review|test|accept|deploy|roam|amend|global}
   action: {must_run|add_check|warn|suggest|override}
+
+  # Procedural-only fields (when type == procedural):
+  sequence:
+    - id: step1
+      cmd: "{command string}"
+      expected_signals: ["{signal1}", "{signal2}"]
+  success_signals:
+    - "{event_pattern}"
+  attribution_required: true
+  shadow_evaluator: true
+  shadow_min_samples: 5
+  shadow_min_correctness: 0.8
+
+  fingerprint:
+    repo_id: "{repo}"
+    deploy_target: "{env}"
+    health_cmd: "{cmd}"
+    package_manager: "{npm|yarn|pnpm}"
+    dockerfile_hash: "{sha256}"
 
   proposed:
     # For config_override:

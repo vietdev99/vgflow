@@ -204,7 +204,7 @@ Generate candidate YAML block:
     # - "review với mutation" → step == "review" AND has_mutation == true
     any_of:
       - "{inferred predicate}"
-  target_step: {build | review | scope | blueprint | global}
+  target_step: {build | review | scope | blueprint | test | accept | deploy | roam | amend | global}
   action: {must_run | add_check | warn | suggest}
   proposed:
     # For config_override:
