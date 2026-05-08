@@ -1,8 +1,10 @@
 # Changelog
 
-## v2.51.14 - POSIX hook wrapper bypass: fixes #137 (PrintwayV3 Mac wrapper missing)
+## v2.51.14 - POSIX hook wrapper bypass: fixes #141 (PrintwayV3 Mac wrapper missing)
 
-Patch release. Closes BLOCK-severity issue #137 — POSIX install emits hook command that hard-depends on `vg-run-bash-hook.py`; when the wrapper file is missing (incomplete sync, manual settings copy, etc.), every `UserPromptSubmit` is blocked.
+Patch release. Closes BLOCK-severity issue #141 (initial commit message and notes misattributed to #137 — corrected). POSIX install emits hook command that hard-depends on `vg-run-bash-hook.py`; when the wrapper file is missing (incomplete sync, manual settings copy, etc.), every `UserPromptSubmit` is blocked.
+
+> Note: #137 (`inject-rule-cards-bash-source-strict`) is a separate bash strict-shell intolerance bug, NOT addressed by this release. See https://github.com/vietdev99/vgflow/issues/137.
 
 ### Symptom
 
@@ -41,7 +43,8 @@ Existing POSIX users hit by this issue: re-run `/vg:sync` from inside the affect
 
 ### Triage
 
-- Closes #137 (PrintwayV3 Mac wrapper missing → all prompts blocked).
+- Closes #141 (PrintwayV3 Mac wrapper missing → all prompts blocked).
+- Initial commit + release notes incorrectly cited #137; corrected post-release.
 
 ## v2.51.13 - Subagent session isolation: fixes #135 (Write deadlock) + #136 (rogue run-start)
 
