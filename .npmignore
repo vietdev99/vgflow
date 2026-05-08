@@ -30,3 +30,8 @@ node_modules/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Editor + backup files
+*.bak
+*~
+*.swp
