@@ -1,5 +1,48 @@
 # Changelog
 
+## v2.51.14 - POSIX hook wrapper bypass: fixes #137 (PrintwayV3 Mac wrapper missing)
+
+Patch release. Closes BLOCK-severity issue #137 — POSIX install emits hook command that hard-depends on `vg-run-bash-hook.py`; when the wrapper file is missing (incomplete sync, manual settings copy, etc.), every `UserPromptSubmit` is blocked.
+
+### Symptom
+
+```
+UserPromptSubmit operation blocked by hook:
+[python3 "${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-run-bash-hook.py" "${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-user-prompt-submit.sh"]:
+can't open file '/Users/dzungnguyen/Vibe Code/Code/PrintwayV3/.claude/scripts/hooks/vg-run-bash-hook.py': [Errno 2] No such file or directory
+```
+
+### Root cause
+
+`scripts/hooks/install-hooks.sh::_cmd()` POSIX branch (lines 91-94 pre-fix) emitted a python wrapper command:
+
+```python
+return (
+    f'{python_cmd} "${{CLAUDE_PROJECT_DIR}}/.claude/scripts/hooks/{runner_name}" '
+    f'"${{CLAUDE_PROJECT_DIR}}/.claude/scripts/hooks/{script_name}"'
+)
+```
+
+Wrapper exists to prefer Git Bash over WSL bash on Windows (issue #129). On POSIX it just proxies bash and adds a fragile second-file dependency. If `vg-run-bash-hook.py` is not present in the project (incomplete `/vg:sync`, manual settings.json copy from another project, etc.), python3 errors with Errno 2 BEFORE the bash hook script ever runs → hook exits non-zero → UserPromptSubmit BLOCKED.
+
+### Fixed
+
+- `scripts/hooks/install-hooks.sh::_cmd()` — POSIX now matches Windows behavior (issue #129 path), emitting the `.sh` path directly without wrapper. Bash reads the shebang and runs the script. The wrapper file is no longer a runtime dependency on POSIX. Newly-installed POSIX projects, and any project that re-runs `install-hooks.sh` (or `/vg:sync`), get the wrapper-free hook commands.
+- Wrapper `scripts/hooks/vg-run-bash-hook.py` file is preserved for legacy installs already wired through it; existing settings.json files keep working until the next sync.
+
+### Migration
+
+Existing POSIX users hit by this issue: re-run `/vg:sync` from inside the affected project, or run `bash scripts/hooks/install-hooks.sh --target ~/.claude/settings.json` from the vgflow-repo. Hook entries are rewritten without the wrapper.
+
+### Verified
+
+- `python -m pytest tests/hooks/ -q` (no regressions).
+- Canonical ↔ `.claude/` mirror byte-identical for `install-hooks.sh`.
+
+### Triage
+
+- Closes #137 (PrintwayV3 Mac wrapper missing → all prompts blocked).
+
 ## v2.51.13 - Subagent session isolation: fixes #135 (Write deadlock) + #136 (rogue run-start)
 
 Patch release. Closes BLOCK-severity issues #135 and #136 — both root-caused to subagent hooks resolving to the PARENT session's state instead of the subagent's own.
