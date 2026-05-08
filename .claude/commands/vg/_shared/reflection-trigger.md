@@ -206,3 +206,21 @@ fail. Run: `python .claude/scripts/verify-reflection-coverage.py`
 **Gating:** vg.config.md → meta_memory_mode != "disabled". Default disabled.
 
 **Wiring site:** commands/vg/accept.md.
+
+## post-roam (NEW v1.1, Stage 2 task 4/5)
+
+**Trigger event:** `phase.roam_completed` (any outcome).
+
+**Inputs to reflector:**
+- roam findings JSON
+- state-mismatch report
+
+**Candidate target:** target_step=roam, type=declarative (caught patterns).
+
+**Fingerprint:** hash(lens_set + bug_pattern + repo_id).
+
+**Gating:** vg.config.md → meta_memory_mode != "disabled". Default disabled.
+
+**Wiring site:** commands/vg/roam.md.
+
+Note: roam catches bugs review/test miss → high-signal reflector input (Codex #2).

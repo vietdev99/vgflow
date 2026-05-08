@@ -237,6 +237,33 @@ Read `_shared/roam/close.md`.
 
 Marker: `complete`. Emits `roam.session.completed` + final summary banner.
 
+
+### Post-roam reflector trigger (Section 13.5 / meta-memory v1.1)
+
+After `phase.roam_completed` emits, spawn vg-reflector subagent IF
+`meta_memory_mode != "disabled"`:
+
+```bash
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+
+if [ "$META_MEMORY_MODE" != "disabled" ] && [ "$EVENT_TYPE" = "phase.roam_completed" ]; then
+  bash scripts/vg-narrate-spawn.sh vg-reflector spawning "post-roam candidate draft"
+  ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+    "reflection.trigger_requested" --actor "roam" --outcome "INFO" \
+    --metadata "{\"step\":\"roam\",\"phase\":\"${PHASE_NUMBER}\",\"trigger\":\"post-roam\"}"
+fi
+```
+
+**Inputs to reflector:**
+- roam findings JSON
+- state-mismatch report
+
+**Candidate target:** `target_step=roam`, `type=declarative` (caught patterns).
+
+**Fingerprint:** `hash(lens_set + bug_pattern + repo_id)`.
+
+Note: roam catches bugs review/test miss → high-signal reflector input (Codex #2).
+
 ## Conformance contract for executors
 
 Per `<rules>` 2: every brief MUST inject `vg:_shared:scanner-report-contract`
