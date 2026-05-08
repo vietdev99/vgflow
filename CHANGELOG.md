@@ -1,5 +1,68 @@
 # Changelog
 
+## v2.58.0 - Meta-memory v1.1 IMPLEMENTATION COMPLETE — Stage 6 (rollout flag + E2E + docs)
+
+Minor release. Stage 6 closes meta-memory v1.1 — rollout flag + E2E tests + cross-platform smoke + final docs. **All 6 stages of meta-memory v1.1 SHIPPED.**
+
+### Stage 6 commits (5 atomic)
+
+| Task | Commit | Topic |
+|---|---|---|
+| 6.1 | `3b21aeb` | `meta_memory_mode` flag documented in `config-loader.md` + `vg.config.template.md`. Allowed: `disabled` (default) / `reflect-only` / `inject-as-advice` / `default` |
+| 6.2 | `4e8adf2` | E2E loop test: phase 1 promote → phase 2 loader-visible. Verifies inject sites gated by flag. |
+| 6.3 | `b92e13a` | Causal misattribution regression test: orchestrator rejects procedural outcome with empty `executed_step_ids[]` (Codex #9 cargo-cult prevention end-to-end) |
+| 6.4 | `8d7edc7` | Cross-platform smoke: Windows + POSIX skipif markers, loader + consolidate run without crash |
+| 6.5 | `115f2ea` | Section 14 added to design doc: full implementation status table. Implementation plan annotated. |
+
+### Meta-memory v1.1 cumulative shipment (v2.53.0 → v2.58.0)
+
+| Stage | Version | Tasks | Tests | Hard gate? |
+|---|---|---|---|---|
+| 1 — Schema + validator | v2.53.0 | 2 | 21 | — |
+| 2 — 5 reflector triggers | v2.54.0 | 5 | 20 | — |
+| 3 — Causal attribution | v2.55.0 | 3 | 16 | ✅ HARD GATE |
+| 4 — Loader flags + 4 inject sites | v2.56.0 | 5 | 29 | — |
+| 5 — Dreams 4-phase consolidation | v2.57.0 | 6 | 50+ | — |
+| 6 — Rollout + E2E + docs | v2.58.0 | 5 | 10 | — |
+
+**Total:** ~26 tasks, ~150 pytest cases, 0 regression on existing infra.
+
+### Critical invariants validated end-to-end
+
+- Codex #9 attribution gate (cargo-cult prevention) — 16+ tests across stages 3+5+6
+- Anthropic Auto Dream patterns: MERGE in-place (NOT side-by-side), NEVER auto-retract on contradiction, MEMORY.md ≤200 lines hard cap, lock try/finally release
+- Stage 3 HARD GATE: procedural rules cannot promote without attribution proof
+- Default OFF rollout: `meta_memory_mode=disabled` ships everywhere; opt-in only
+
+### Operator readiness
+
+- `/vg:learn --consolidate [--apply]` — manual dream invocation (default dry-run)
+- `vg.config.md → meta_memory_mode={disabled, reflect-only, inject-as-advice}` — opt-in rollout flag
+- Future: v2.59.0 may flip default to `inject-as-advice` after dogfood validation
+
+### Migration
+
+No breaking changes. Existing rules without `type` field default to `declarative`. Existing 8 `bootstrap-loader.py` callers unchanged. End-users see zero behavior change until they explicitly flip `meta_memory_mode`.
+
+### Out of scope (acknowledged in design Section 14)
+
+- Per-project version pin (planned v3.x via `vg.config.md` field)
+- mem0 MCP cross-project memory (planned but not wired)
+- Plugin marketplace distribution (defer post-v3 layout stable)
+- Phase 2 transcript narrow-grep (placeholder; events.db sufficient for v1)
+- Drift detection beyond 30d window (additional events.db query)
+
+### Verified
+
+- Stage 6: 10 new pytest cases PASS
+- Cumulative meta-memory: 129 pytest assertions PASS + 1 platform-skip
+- 44 pre-existing failures (`test_vg_load_*`, `test_tasklist_depth_enforcement`, Winsock socket env) verified unrelated to meta-memory work
+- All mirrors byte-identical (4 .md mirror pairs across stages)
+
+### Next
+
+v3.0.0 (global install + .vg/ root layout + deploy decouple) per `docs/plans/2026-05-09-vg-global-install-design.md` — separate plan, ~22 days estimate. Meta-memory v1.1 complete unblocks v3.x roadmap.
+
 ## v2.57.0 - Meta-memory v1.1 Stage 5: Anthropic Auto Dream consolidation engine
 
 Minor release. Stage 5 implements Anthropic Auto Dream-style 4-phase consolidation per design Section 13.1. 6 commits — gate + lock + 4 phases + skill mode.
