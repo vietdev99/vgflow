@@ -105,6 +105,89 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ```
 </step>
 
+<step name="0b_meta_memory_inject">
+**Stage 4 task 3/4 — meta-memory v1.1 inject (Section 13.5 accept site).**
+
+After phase context is resolved (PHASE_DIR + PHASE_NUMBER from `0_load_config`),
+load procedural+declarative bootstrap rules matching the accept context.
+Append rendered markdown to `${PHASE_DIR}/.accept-context.md` so accept-flow
+consumers (UAT, audit gates) see relevant rules BEFORE running.
+
+**Default OFF**: `meta_memory_mode=disabled` (the default) skips this step
+entirely — no behavior change vs prior pipeline. Stage 6 flips the flag.
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 0b_meta_memory_inject 2>/dev/null || true
+
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+
+if [ "$META_MEMORY_MODE" = "inject-as-advice" ] || [ "$META_MEMORY_MODE" = "default" ]; then
+  # Resolve phase_type from .recon-state.json if present (best-effort).
+  PHASE_TYPE_FOR_INJECT=$(${PYTHON_BIN:-python3} -c "
+import json, os
+p = (os.environ.get('PHASE_DIR','.') or '.') + '/.recon-state.json'
+try:
+    print(json.load(open(p, encoding='utf-8')).get('phase_type',''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+  PRECONDITIONS_JSON="{\"phase_type\": \"${PHASE_TYPE_FOR_INJECT}\"}"
+
+  RULES_JSON=$(${PYTHON_BIN:-python3} .claude/scripts/bootstrap-loader.py \
+    --target-step accept \
+    --include-procedural \
+    --filter-preconditions "$PRECONDITIONS_JSON" \
+    --max-bytes 8192 \
+    --emit rules 2>/dev/null || echo '{}')
+
+  RENDERED=$(printf '%s' "$RULES_JSON" | ${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or '{}')
+except Exception:
+    data = {}
+parts = []
+decl = data.get('rules_declarative', []) or []
+proc = data.get('rules_procedural', []) or []
+if decl:
+    parts.append('### Declarative Rules (MUST do / MUST NOT do)')
+    parts.append('')
+    for r in decl:
+        title = r.get('title', r.get('id', '?'))
+        prose = (r.get('prose') or '')[:200]
+        parts.append(f'- **{title}**: {prose}')
+    parts.append('')
+if proc:
+    parts.append('### Procedural Recipes (worked previously, ADVISORY)')
+    parts.append('')
+    for r in proc:
+        title = r.get('title', r.get('id', '?'))
+        prose = (r.get('prose') or '')[:200]
+        seq = r.get('sequence', []) or []
+        seq_str = ' -> '.join([s.get('cmd','?') for s in seq][:5])
+        parts.append(f'- **{title}**: {prose}')
+        if seq_str:
+            parts.append(f'  - Sequence: {seq_str}')
+    parts.append('')
+sys.stdout.write('\n'.join(parts))
+" 2>/dev/null || echo "")
+
+  if [ -n "$RENDERED" ] && [ -n "${PHASE_DIR:-}" ]; then
+    {
+      echo
+      echo "## Meta-Memory Rules ($(date -Iseconds 2>/dev/null || date))"
+      echo
+      echo "$RENDERED"
+    } >> "${PHASE_DIR}/.accept-context.md"
+  fi
+fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0b_meta_memory_inject" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0b_meta_memory_inject.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0b_meta_memory_inject 2>/dev/null || true
+```
+</step>
+
 <step name="create_task_tracker">
 **Project `/vg:accept` checklists into the native task UI.**
 
