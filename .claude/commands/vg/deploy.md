@@ -398,11 +398,52 @@ open('${DEPLOY_RESULTS_JSON}', 'w').write(json.dumps(d))"
     continue
   fi
 
+  # ── Stage 4 task 2/4 — pre-spawn meta-memory bootstrap inject (Section 13.5) ──
+  # Loads deploy-specific procedural+declarative rules and exposes them via
+  # BOOTSTRAP_RULES_BLOCK env var so the vg-deploy-executor capsule can read
+  # them. Gated by vg.config.md::meta_memory_mode (default OFF — disabled).
+  META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+  BOOTSTRAP_RULES_BLOCK=""
+  if [ "$META_MEMORY_MODE" = "inject-as-advice" ] || [ "$META_MEMORY_MODE" = "default" ]; then
+    HAS_DOCKERFILE=$([ -f Dockerfile ] && echo "true" || echo "false")
+    PRECONDITIONS_JSON="{\"env\": \"${env}\", \"has_dockerfile\": ${HAS_DOCKERFILE}}"
+
+    RULES_JSON=$(${PYTHON_BIN:-python3} .claude/scripts/bootstrap-loader.py \
+      --target-step deploy \
+      --include-procedural \
+      --filter-preconditions "$PRECONDITIONS_JSON" \
+      --max-bytes 8192 \
+      --emit rules 2>/dev/null || echo '{}')
+
+    BOOTSTRAP_RULES_BLOCK=$(printf '%s' "$RULES_JSON" | ${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or '{}')
+except Exception:
+    data = {}
+parts = []
+for r in (data.get('rules_procedural') or []):
+    title = r.get('title', r.get('id', '?'))
+    prose = (r.get('prose') or '')[:300]
+    seq = r.get('sequence') or []
+    seq_str = ' -> '.join([s.get('cmd','?') for s in seq][:5])
+    parts.append(f'PROCEDURAL RECIPE: {title}\n  Prose: {prose}\n  Sequence: {seq_str}')
+for r in (data.get('rules_declarative') or []):
+    title = r.get('title', r.get('id', '?'))
+    prose = (r.get('prose') or '')[:200]
+    parts.append(f'DECLARATIVE: {title}\n  {prose}')
+sys.stdout.write('\n\n'.join(parts))
+" 2>/dev/null || echo "")
+
+    export BOOTSTRAP_RULES_BLOCK
+  fi
+
   # ── Spawn vg-deploy-executor (input schema: per-env-executor-contract.md §"Spawn site") ──
   bash scripts/vg-narrate-spawn.sh vg-deploy-executor spawning "phase=${PHASE_NUMBER} env=${env}"
   # AI: invoke Agent(subagent_type="vg-deploy-executor", prompt={phase, phase_dir,
   #     env, run_prefix, build_cmd, restart_cmd, health_cmd, seed_cmd, pre_cmd,
-  #     local_sha, previous_sha, dry_run: ${DRY_RUN}, policy_ref}). Capture last
+  #     local_sha, previous_sha, dry_run: ${DRY_RUN}, policy_ref,
+  #     bootstrap_rules_block: $BOOTSTRAP_RULES_BLOCK}). Capture last
   #     stdout line into RESULT_JSON.
 
   # Parse result + narrate (post-spawn validation: contract §"Orchestrator post-spawn handling"):
