@@ -1,0 +1,32 @@
+# Source control + dev metadata
+.git/
+.gitignore
+.gitattributes
+.github/
+.editorconfig
+.vscode/
+.idea/
+
+# Project-local VG state (consumer of package, not part of package)
+.claude/
+.codex/
+.vg/
+.vgflow-cache/
+
+# Tests + dev infrastructure
+tests/
+dev-phases/
+docs/
+.playwright-mcp/
+
+# Build artifacts + tarballs
+*.tar.gz
+*.tar.gz.sha256
+gate-manifest.json
+initial_snapshot.yml
+after_typing_snapshot.yml
+node_modules/
+
+# OS junk
+.DS_Store
+Thumbs.db

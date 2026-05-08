@@ -1,0 +1,61 @@
+{
+  "name": "vgflow",
+  "version": "2.52.2",
+  "description": "VGFlow — deterministic AI-driven development harness for Claude Code + Codex",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "anthropic",
+    "ai",
+    "agent",
+    "harness",
+    "workflow",
+    "vg",
+    "vgflow"
+  ],
+  "homepage": "https://github.com/vietdev99/vgflow",
+  "bugs": {
+    "url": "https://github.com/vietdev99/vgflow/issues"
+  },
+  "license": "MIT",
+  "author": "vietdev99",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vietdev99/vgflow.git"
+  },
+  "bin": {
+    "vg": "bin/vg.js"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "scripts": {
+    "postinstall": "node scripts/npm-postinstall.js",
+    "prepublishOnly": "node scripts/npm-prepublish-check.js"
+  },
+  "files": [
+    "bin/",
+    "commands/",
+    "skills/",
+    "scripts/",
+    "schemas/",
+    "templates/",
+    "codex-skills/",
+    "install.sh",
+    "VERSION",
+    "VGFLOW-VERSION",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "preferGlobal": true,
+  "publishConfig": {
+    "access": "public"
+  }
+}
