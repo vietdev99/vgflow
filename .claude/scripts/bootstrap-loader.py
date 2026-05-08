@@ -347,9 +347,18 @@ def load_rules(
 ) -> list[dict]:
     """Load rules/*.md, filter by scope matching context.
     Returns list of matched rule dicts (frontmatter + 'prose').
+
+    rules_dir resolution priority:
+        1. Explicit `rules_dir` argument
+        2. VG_BOOTSTRAP_RULES_DIR environment variable (test fixtures)
+        3. .vg/bootstrap/rules (default)
     """
     if rules_dir is None:
-        rules_dir = BOOTSTRAP_DIR / "rules"
+        env_dir = os.environ.get("VG_BOOTSTRAP_RULES_DIR")
+        if env_dir:
+            rules_dir = Path(env_dir)
+        else:
+            rules_dir = BOOTSTRAP_DIR / "rules"
     if not rules_dir.exists():
         return []
 
@@ -361,6 +370,10 @@ def load_rules(
         if rule.get("status", "active") not in ("active", "experimental") and not include_dormant:
             continue
         scope = rule.get("scope")
+        # Treat missing scope as match-all (rules with no scope ALWAYS apply).
+        if scope is None or scope == {} or scope == []:
+            matched.append(rule)
+            continue
         try:
             if evaluate_scope(scope, context):
                 matched.append(rule)
@@ -368,6 +381,115 @@ def load_rules(
             print(f"\033[33mbootstrap-loader: {rf} scope eval error: {e}\033[0m", file=sys.stderr)
             continue
     return matched
+
+
+# ---------- v1.1 filter helpers (Stage 4) ----------
+def _matches_target_step(rule: dict, target_steps: list[str]) -> bool:
+    """Rule matches if its target_step is in caller's filter list, OR target_step=='global'.
+
+    Empty filter list = no filter (all rules pass).
+    """
+    if not target_steps:
+        return True
+    rule_step = rule.get("target_step", "global")
+    return rule_step in target_steps or rule_step == "global"
+
+
+def _matches_preconditions(rule: dict, caller_preconds: dict | None) -> bool:
+    """Substring key/value match.
+
+    Rule passes if ALL caller keys are present in rule.preconditions with the same
+    values. If rule has no preconditions field, it passes (rule isn't expressing
+    a requirement, so it's compatible with any context).
+    """
+    if not caller_preconds:
+        return True
+    rule_preconds = rule.get("preconditions") or {}
+    if not isinstance(rule_preconds, dict) or not rule_preconds:
+        # Rule doesn't express preconditions → not a mismatch.
+        return True
+    for k, v in caller_preconds.items():
+        if rule_preconds.get(k) != v:
+            return False
+    return True
+
+
+def _is_procedural(rule: dict) -> bool:
+    return rule.get("type") == "procedural"
+
+
+def _apply_v1_1_filters(
+    rules: list[dict],
+    target_steps: list[str],
+    include_procedural: bool,
+    caller_preconds: dict | None,
+) -> list[dict]:
+    """Apply v1.1 filters in order: target_step → procedural-exclusion → preconditions."""
+    out = []
+    for r in rules:
+        if not _matches_target_step(r, target_steps):
+            continue
+        if _is_procedural(r) and not include_procedural:
+            continue
+        if not _matches_preconditions(r, caller_preconds):
+            continue
+        out.append(r)
+    return out
+
+
+def _project_rule(r: dict) -> dict:
+    """Project rule to the public output shape (matches existing emit format)."""
+    return {
+        "id": r.get("id"),
+        "title": r.get("title"),
+        "target_step": r.get("target_step"),
+        "type": r.get("type"),
+        "action": r.get("action"),
+        "prose": r.get("prose"),
+        "preconditions": r.get("preconditions"),
+        "confidence": r.get("confidence"),
+        "_path": r.get("_path"),
+    }
+
+
+def _truncate_to_max_bytes(payload: dict, max_bytes: int) -> dict:
+    """Truncate prose fields lowest-priority-first until JSON serialization fits.
+
+    Priority order (lowest = truncated first):
+        1. rules_procedural (advisory recipes)
+        2. rules_declarative
+        3. rules (legacy single list)
+
+    Within each list, drop from END (rules are sorted by filename → tier A first
+    in fixture; real-world tier ordering should be applied by caller).
+
+    On extreme over-budget: append a marker rule indicating truncation.
+    """
+    encoded = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return payload
+
+    # Defensive copy
+    p = json.loads(json.dumps(payload))
+
+    truncation_note = "[...truncated to fit max-bytes budget...]"
+
+    for key in ("rules_procedural", "rules_declarative", "rules"):
+        if key not in p:
+            continue
+        rules_list = p[key]
+        # Pop from end until budget is met (or list is empty)
+        while rules_list:
+            rules_list.pop()
+            p[key] = rules_list
+            p["_truncated"] = truncation_note
+            encoded = json.dumps(p, indent=2, ensure_ascii=False).encode("utf-8")
+            if len(encoded) <= max_bytes:
+                return p
+
+    # Even fully drained, may still exceed budget due to context block
+    p["_truncated"] = truncation_note
+    return p
 
 
 def load_patches(
@@ -432,7 +554,45 @@ def main() -> int:
         choices=["overlay", "rules", "patches", "all", "trace"],
         default="all",
     )
+    # ----- v1.1 flags (Stage 4 inject sites) -----
+    ap.add_argument(
+        "--target-step", action="append", default=[],
+        help="Filter rules by frontmatter target_step (repeatable). "
+             "Empty list = no filter. target_step='global' always matches."
+    )
+    ap.add_argument(
+        "--include-procedural", action="store_true",
+        help="Include rules with type=procedural in output. Default excludes them."
+    )
+    ap.add_argument(
+        "--filter-preconditions", default=None,
+        help="JSON object of preconditions key/value pairs. Rule matches if ALL "
+             "caller keys are present in rule.preconditions with same values."
+    )
+    ap.add_argument(
+        "--max-bytes", type=int, default=None,
+        help="Cap total JSON output bytes. Truncate lowest-priority rules first; "
+             "appends '_truncated' marker when truncation occurs."
+    )
     args = ap.parse_args()
+
+    # Parse v1.1 filter inputs once (defensive: bad JSON → ignore filter)
+    caller_preconds: dict | None = None
+    if args.filter_preconditions:
+        try:
+            caller_preconds = json.loads(args.filter_preconditions)
+            if not isinstance(caller_preconds, dict):
+                print(
+                    "\033[33mbootstrap-loader: --filter-preconditions must be a JSON object; ignoring\033[0m",
+                    file=sys.stderr,
+                )
+                caller_preconds = None
+        except json.JSONDecodeError as e:
+            print(
+                f"\033[33mbootstrap-loader: --filter-preconditions JSON error: {e}; ignoring\033[0m",
+                file=sys.stderr,
+            )
+            caller_preconds = None
 
     context = build_context(args)
 
@@ -445,18 +605,28 @@ def main() -> int:
 
     if args.emit in ("rules", "all"):
         rules = load_rules(context)
-        out["rules"] = [
-            {
-                "id": r.get("id"),
-                "title": r.get("title"),
-                "target_step": r.get("target_step"),
-                "action": r.get("action"),
-                "prose": r.get("prose"),
-                "confidence": r.get("confidence"),
-                "_path": r.get("_path"),
-            }
-            for r in rules
-        ]
+        # Apply v1.1 filters
+        rules = _apply_v1_1_filters(
+            rules,
+            target_steps=args.target_step or [],
+            include_procedural=args.include_procedural,
+            caller_preconds=caller_preconds,
+        )
+        # Determine output shape:
+        #   - If any v1.1 flag is set, emit split sections (rules_declarative + rules_procedural)
+        #     AND keep legacy 'rules' as concatenation for back-compat with non-v1.1 consumers.
+        #   - Otherwise (no v1.1 flags) emit only legacy 'rules' key (identical to v2.55.0).
+        any_v1_1 = bool(
+            args.target_step or args.include_procedural or args.filter_preconditions
+        )
+        if any_v1_1:
+            decl = [_project_rule(r) for r in rules if not _is_procedural(r)]
+            proc = [_project_rule(r) for r in rules if _is_procedural(r)]
+            out["rules_declarative"] = decl
+            out["rules_procedural"] = proc
+            out["rules"] = decl + proc  # legacy concatenation
+        else:
+            out["rules"] = [_project_rule(r) for r in rules]
 
     if args.emit in ("patches", "all"):
         out["patches"] = load_patches(context, args.command)
@@ -473,6 +643,10 @@ def main() -> int:
             "rules_matched": [{"id": r.get("id"), "status": r.get("status")} for r in rules],
             "patches_matched": list(patches.keys()),
         }
+
+    # Apply --max-bytes truncation (v1.1, Stage 4)
+    if args.max_bytes is not None and args.max_bytes > 0:
+        out = _truncate_to_max_bytes(out, args.max_bytes)
 
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
