@@ -1525,6 +1525,35 @@ def _resolve_emit_event_target(args) -> dict | None:
 
 
 def cmd_emit_event(args) -> int:
+    # Stage 3 task 3/3 (Codex #9 / design Section 13.4): gate procedural
+    # outcome attribution. Without this, rule fires + phase passes → rule
+    # logged PASS even when executor bypassed sequence entirely → cargo-cult
+    # promotion. Validate payload statically (no active run required) so the
+    # gate fires regardless of run-start/run-id state.
+    if args.event_type == "bootstrap.outcome_recorded" and args.payload:
+        try:
+            _gate_payload = json.loads(args.payload)
+        except json.JSONDecodeError:
+            _gate_payload = None
+        if isinstance(_gate_payload, dict):
+            _rule_type = _gate_payload.get("rule_type", "declarative")
+            if _rule_type == "procedural":
+                _attribution = _gate_payload.get("attribution") or {}
+                _executed = (
+                    _attribution.get("executed_step_ids")
+                    if isinstance(_attribution, dict) else None
+                )
+                if not _executed:  # None or empty list → reject
+                    print(
+                        "emit-event: bootstrap.outcome_recorded for procedural rule "
+                        "REQUIRES payload.attribution.executed_step_ids (non-empty). "
+                        "Empty/missing = executor bypassed sequence (cargo-cult prevention "
+                        "per Codex #9 + design Section 13.4). Run "
+                        ".claude/scripts/bootstrap-attribute-outcome.py first to populate.",
+                        file=sys.stderr,
+                    )
+                    return 1
+
     current = _resolve_emit_event_target(args)
     if not current:
         return 1

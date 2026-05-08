@@ -98,6 +98,19 @@
       "type": "object",
       "description": "Event-type-specific data. See per-event-type schemas."
     },
+    "_event_type_notes": {
+      "description": "Per-event-type payload requirements (informational; enforced at emit time, not by JSON schema validation).",
+      "bootstrap.outcome_recorded": {
+        "description": "Outcome of a fired bootstrap rule. For procedural rules, MUST include attribution payload (Codex #9 cargo-cult prevention / design Section 13.4). Stage 3 task 3/3 of meta-memory v1.1.",
+        "metadata_required_for_procedural": ["attribution.executed_step_ids"],
+        "attribution": {
+          "executed_step_ids": "Array of sequence step ids that actually ran (from bootstrap-attribute-outcome.py prober). Non-empty required for procedural rules — empty/missing = executor bypassed sequence = emit-event rejects with rc=1.",
+          "total_steps": "Length of rule.sequence.",
+          "matched_signals_count": "Count of expected_signals matched within 4096-byte window after each step's cmd in deploy/test log.",
+          "sequence_checksum": "Optional sha256 from bootstrap.rule_fired payload (cross-reference; computed by vg_bootstrap_compute_sequence_checksum at fire time)."
+        }
+      }
+    },
     "prev_hash": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$|^0{64}$",
