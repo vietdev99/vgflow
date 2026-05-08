@@ -488,3 +488,36 @@ Implementation: extend `vg-orchestrator emit-event` schema for `bootstrap.outcom
 - [Memory tool client-side API](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) — 5 commands (view/create/str_replace/insert/delete/rename), `/memories` directory pattern
 - Repo internal: `scripts/bootstrap-shadow-evaluator.py:5` (existing min=5 + correctness gate)
 - Repo internal: `commands/vg/_shared/reflection-trigger.md:105` (existing post-build-wave trigger)
+
+---
+
+## 14. Implementation status (2026-05-09)
+
+All 6 stages of meta-memory v1.1 SHIPPED across v2.53.0–v2.58.0:
+
+| Stage | Version | Tasks | Tests | Commit highlights |
+|---|---|---|---|---|
+| 1 — Schema + validator | v2.53.0 | 2 | 21 | Schema fields documented + validator |
+| 2 — 5 reflector triggers | v2.54.0 | 5 | 20 | post-deploy/test/accept/roam/amend wiring |
+| 3 — Causal attribution HARD GATE | v2.55.0 | 3 | 16 | sequence_checksum + prober + outcome gate |
+| 4 — Loader flags + 4 inject sites | v2.56.0 | 5 | 29 | Loader v1.1 + build/deploy/accept/render |
+| 5 — Dreams 4-phase consolidation | v2.57.0 | 6 | 50+ | gate/lock + orient/gather/consolidate/prune + skill mode |
+| 6 — Rollout + E2E + docs | v2.58.0 | 5 | 12 | meta_memory_mode flag + E2E + smoke + docs |
+
+**Total:** ~26 tasks, ~150 pytest cases, 0 regression on existing infra.
+
+**Critical invariants validated:**
+- Codex #9 attribution gate (cargo-cult prevention) — 16 tests
+- Anthropic Auto Dream patterns (MERGE not side-by-side, NEVER auto-retract, MEMORY.md ≤200 lines, lock try/finally)
+- Stage 3 HARD GATE before Stage 4 (procedural rules cannot promote without attribution proof)
+- Default OFF rollout — `meta_memory_mode=disabled` ships everywhere
+
+**Operator readiness:**
+- `/vg:learn --consolidate [--apply]` — manual dream invocation
+- `vg.config.md → meta_memory_mode={disabled, reflect-only, inject-as-advice}` — opt-in rollout
+- v2.59.0 will flip default after dogfood validation
+
+**Out of scope (acknowledged):**
+- Per-project version pin (v3.x via `vg.config.md`)
+- mem0 MCP cross-project memory (planned but not wired)
+- Plugin marketplace distribution (defer post-v3 layout stable)

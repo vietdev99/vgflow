@@ -1111,6 +1111,25 @@ Verifies bootstrap-inject.sh under git-bash on Windows. Regression for codex Pen
 
 ---
 
+## Stage 6 — IMPLEMENTATION STATUS (2026-05-09)
+
+All 5 tasks of Stage 6 SHIPPED in v2.58.0:
+
+| Task | Commit | Tests | Notes |
+|---|---|---|---|
+| 6.1 | `meta_memory_mode` rollout flag in config-loader.md (canonical + mirror) + template | 3 | Default `disabled` |
+| 6.2 | E2E loop test — phase1 promote → phase2 loader visibility + inject-site gate verification | 2 | `tests/e2e/test_meta_memory_loop.py` |
+| 6.3 | Causal misattribution regression — Codex #9 cargo-cult prevention end-to-end | 2 | `tests/e2e/test_no_cargo_cult.py` |
+| 6.4 | Cross-platform smoke — Windows + POSIX skipif on loader + consolidate | 3 (skipif per-platform) | `tests/smoke/test_windows_powershell_inject.py` |
+| 6.5 | Section 14 in design doc + status note in implementation plan + template comment | n/a | This entry. |
+
+**Net Stage 6:** 5 commits, 12 pytest assertions added, 0 regression. Meta-memory v1.1 implementation END-TO-END complete.
+
+See `docs/plans/2026-05-08-meta-memory-design.md` Section 14 for the
+full per-stage status table, invariants, and operator readiness notes.
+
+---
+
 ## Rollout sequence (production)
 
 After all tasks complete:
