@@ -1,5 +1,50 @@
 # Changelog
 
+## v2.52.2 - #140 cross-session destructive guard
+
+Patch release. Closes the deferred portion of #140 P0 (cross-session lock — issue body suggested fix #5).
+
+### Problem
+
+v2.52.0 destructive-op guard scanned only `.vg/active-runs/${session_id}.json` (own session). When 2+ Claude Code sessions ran concurrently:
+
+- Session A: `/vg:build phase 5` mid-run with untracked `PLAN.md`/`API-CONTRACTS.md`
+- Session B: idle, runs `git checkout main` → drops A's untracked artifacts → cascade
+
+Session B's destructive guard didn't fire because Session B had no own active run.
+
+### Fix
+
+`vg-pre-tool-use-bash.sh` now scans **all** `.vg/active-runs/*.json` for fresh runs (own + others). Block fires when ANY session has an active run.
+
+- Stale runs (>VG_RUN_TTL_SEC, default 1h) treated as inactive → covers crashed sessions where active-runs file never got cleaned up.
+- Diagnostic now lists each active run with sid prefix + command + phase + age, marked `(this session)` vs `(OTHER session)`.
+- Telemetry payload `vg.destructive_op_blocked` includes `active_runs[]` JSON for forensic correlation.
+
+### Bypass / recovery
+
+Same as v2.52.0: `VG_ALLOW_DESTRUCTIVE=1`. Plus stale-run override:
+
+```bash
+# If active runs are stale (crashed sessions), force release:
+rm .vg/active-runs/<stale-sid>.json
+# or wait ${VG_RUN_TTL_SEC:-3600}s for TTL expiry
+```
+
+### Verified
+
+- Smoke 3/3 PASS:
+  - Other-session fresh + own-session idle → BLOCK exit 2 (cross-session catch)
+  - Only stale runs (>1h) → ALLOW (TTL expiry)
+  - `VG_ALLOW_DESTRUCTIVE=1` bypass with fresh other-session → ALLOW exit 0
+- Diagnostic renders run list correctly via env-var-passed VG_OWN_SID
+- `tests/hooks/` — 30 passed, no regressions
+- `.claude/` ↔ canonical mirror byte-identical
+
+### Triage
+
+- **Closes #140 P0** — full coverage now shipped (v2.52.0 single-session + v2.52.2 cross-session). Issue body suggested fixes #1, #4, #5 all delivered.
+
 ## v2.52.1 - Helper bug cluster: #137 + #138 + #139
 
 Patch release. Three independent helper bugs surfaced by PrintwayV3 dogfood under Codex zsh.

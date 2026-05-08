@@ -130,19 +130,88 @@ is_destructive_git_op() {
   return 1
 }
 
-if [ -n "${run_id:-}" ] && [ -f "$run_file" ] && is_destructive_git_op; then
-  if [ "${VG_ALLOW_DESTRUCTIVE:-}" != "1" ]; then
-    cat >&2 <<EOF
-[VG #140] Destructive git/filesystem op blocked — VG run active.
+# Issue #140 cross-session lock (v2.52.2): scan ALL .vg/active-runs/*.json
+# for fresh entries, not just current session's run_file. Other Claude Code
+# sessions running /vg:build phase 5 elsewhere should still block this
+# session's `git checkout`. Stale runs (>VG_RUN_TTL_SEC, default 1h) are
+# treated as inactive (covers crashed sessions where active-runs/*.json
+# never got cleaned up).
+scan_active_runs() {
+  # stdout: JSON array of {sid, run_id, command, phase, age_sec} for fresh runs.
+  # rc 0 if any fresh run, rc 1 if none.
+  local ttl="${VG_RUN_TTL_SEC:-3600}"
+  python3 - "$ttl" <<'PY' 2>/dev/null
+import glob
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
-Run:     ${command_from_run:-unknown} (run_id=${run_id})
-Session: ${run_session_id:-${session_id}}
+ttl = int(sys.argv[1])
+now = datetime.now(timezone.utc).timestamp()
+fresh = []
+for p in glob.glob(".vg/active-runs/*.json"):
+    try:
+        d = json.loads(Path(p).read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    ts_raw = d.get("started_at") or ""
+    try:
+        ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        continue
+    age = now - ts
+    if age < 0 or age > ttl:
+        continue
+    fresh.append({
+        "sid": d.get("session_id") or Path(p).stem,
+        "run_id": d.get("run_id") or "",
+        "command": d.get("command") or "",
+        "phase": d.get("phase") or "",
+        "age_sec": int(age),
+        "path": p,
+    })
+print(json.dumps(fresh))
+PY
+}
+
+if is_destructive_git_op; then
+  active_runs_json="$(scan_active_runs || echo '[]')"
+  if [ "$active_runs_json" != "[]" ] && [ -n "$active_runs_json" ]; then
+    if [ "${VG_ALLOW_DESTRUCTIVE:-}" != "1" ]; then
+      # Build human-readable diagnostic from JSON.
+      # Pass own session_id via env to avoid bash quote/f-string escape clash.
+      diag="$(printf '%s' "$active_runs_json" | VG_OWN_SID="${session_id:-}" python3 -c '
+import json, os, sys
+own_sid = os.environ.get("VG_OWN_SID", "")
+try:
+    runs = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for r in runs:
+    sid = r.get("sid") or "?"
+    cmd = r.get("command") or "?"
+    phase = r.get("phase") or "?"
+    age = r.get("age_sec", 0)
+    sid_short = sid[:12] if isinstance(sid, str) else str(sid)[:12]
+    tag = " (this session)" if sid == own_sid else " (OTHER session)"
+    print("  - " + cmd + " phase=" + str(phase) + " sid=" + sid_short + "... age=" + str(age) + "s" + tag)
+' 2>/dev/null || echo "  (unable to render — see .vg/active-runs/)")"
+      cat >&2 <<EOF
+[VG #140] Destructive git/filesystem op blocked — VG run(s) active.
+
+Active runs (cross-session):
+${diag}
+
 Command: ${cmd_text}
 
 Why blocked:
   Mid-run \`git checkout\`/\`reset --hard\`/\`clean -f\` drops untracked
   artifacts (PLAN.md, API-CONTRACTS.md, etc.) that orchestrator
   validates at run-complete. Cascade = full data loss (#140 P0).
+
+  Cross-session: even if THIS session is idle, another session may be
+  mid-build/blueprint with untracked artifacts you'd silently destroy.
 
 If this is intentional repair (you accept artifact loss):
   VG_ALLOW_DESTRUCTIVE=1 <your command>
@@ -151,17 +220,22 @@ If this is mid-flow recovery, prefer:
   git stash push --include-untracked --message "vg-recovery"
   <recovery work>
   git stash pop
+
+If active runs are stale (crashed sessions), force release:
+  rm .vg/active-runs/<stale-sid>.json
+  # or wait \${VG_RUN_TTL_SEC:-3600}s for TTL expiry
 EOF
-    # Emit telemetry block for forensics
-    if command -v python3 >/dev/null 2>&1; then
-      python3 .claude/scripts/vg-orchestrator emit-event \
-        "vg.destructive_op_blocked" \
-        --actor "pre-tool-use-bash" \
-        --outcome "BLOCK" \
-        --metadata "{\"run_id\":\"${run_id}\",\"command\":\"${cmd_text//\"/\\\"}\"}" \
-        >/dev/null 2>&1 || true
+      # Emit telemetry block for forensics
+      if command -v python3 >/dev/null 2>&1; then
+        python3 .claude/scripts/vg-orchestrator emit-event \
+          "vg.destructive_op_blocked" \
+          --actor "pre-tool-use-bash" \
+          --outcome "BLOCK" \
+          --metadata "{\"command\":\"${cmd_text//\"/\\\"}\",\"active_runs\":${active_runs_json}}" \
+          >/dev/null 2>&1 || true
+      fi
+      exit 2
     fi
-    exit 2
   fi
 fi
 
