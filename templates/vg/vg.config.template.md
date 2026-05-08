@@ -999,6 +999,21 @@ visual_regression:
   report_path: ".planning/phases/{phase}/visual-diff.json"
   ignore_regions: []
   auto_promote_on_first_run: true
+
+# ─── Meta-Memory v1.1 Rollout Flag (Stage 6 — v2.58.0+) ─────────────
+# Controls reflector spawn + 4 inject sites (build preflight / deploy /
+# accept / render). Default OFF — projects opt-in.
+#
+# Values:
+#   disabled         (default) — vanilla pipeline; no reflector, no inject
+#   reflect-only     — reflector drafts candidates; inject sites still skip
+#   inject-as-advice — full loop: candidates surface as advisory rules
+#   default          — alias for inject-as-advice (post-rollout intent)
+#
+# v2.59.0 will flip the default to inject-as-advice after dogfood. Until
+# then, set this explicitly to enable. See docs/plans/2026-05-08-meta-
+# memory-design.md Section 14 for status.
+meta_memory_mode: disabled
 ---
 
 # ─── Bug Reporting (v1.11.0+) ──────────────────────────────────────

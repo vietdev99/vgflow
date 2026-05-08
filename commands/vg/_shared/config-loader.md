@@ -454,6 +454,42 @@ fi
 # Prepend RULES_BLOCK to agent prompt
 ```
 
+## Meta-Memory Rollout Flag (v2.58.0+ — Stage 6 of meta-memory v1.1)
+
+The `meta_memory_mode` top-level YAML key in `.claude/vg.config.md` controls
+the rollout of the meta-memory v1.1 self-learning loop (reflectors + bootstrap
+candidate inject sites). It is parsed by every inject site (`build/preflight`,
+`deploy`, `accept`, render hooks) and by the post-step reflector spawn gate.
+
+**Allowed values:**
+
+| Value | Reflector spawn | Inject sites fire | Use case |
+|---|---|---|---|
+| `disabled` (DEFAULT) | NO | NO | Ship-safe default. Vanilla pipeline behaviour. |
+| `reflect-only` | YES — drafts candidates | NO | Dogfood mode: collect learnings without injecting them back into the pipeline yet. |
+| `inject-as-advice` | YES | YES (advisory only) | Full loop: promoted rules surface as advice in agent prompts. Never blocking. |
+| `default` | (alias for `inject-as-advice`) | (alias) | Semantic alias — "system default behaviour once rollout completes". |
+
+**Default policy (Stage 6):** the flag ships with `default: disabled`. v2.59.0
+will flip the default to `inject-as-advice` after dogfood validation. Until
+then, projects opt-in by adding `meta_memory_mode: <value>` near the top of
+their `.claude/vg.config.md`.
+
+**Read pattern (used by every inject site + reflector trigger):**
+
+```bash
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" .claude/vg.config.md 2>/dev/null \
+                   | awk '{print $2}' | tr -d '"\r' || echo "disabled")
+# Defaults to disabled when key absent — fail-safe.
+```
+
+**Invariants:**
+- Anything other than `disabled` enables reflector spawn (post-deploy/test/accept/roam/amend).
+- Only `inject-as-advice` (or its alias `default`) enables inject-site rendering.
+- All other values (typos, future-reserved keywords) MUST be treated as `disabled`.
+- Setting is OBSERVATION-ONLY in the loader; only `meta-memory` consumers
+  (reflector trigger + 4 inject sites) read it.
+
 ## Variables Available After Loading
 
 After config-loader, every vg/ command has access to:
