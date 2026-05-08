@@ -1,5 +1,69 @@
 # Changelog
 
+## v2.53.0 - npm package skeleton + meta-memory v1.1 schema (Stage 1)
+
+Minor release. Bundles two parallel workstreams:
+
+### A — npm package `vgflow` (public registry)
+
+Skeleton ready for `npm publish --access=public`. See `docs/PUBLISH-NPM.md` for workflow.
+
+- `package.json` — name=vgflow, bin=vg, license=MIT, publishConfig.access=public
+- `bin/vg.js` — Node entry, spawn bash dispatcher with VG_HOME env
+- `bin/vg-cli-dispatcher.sh` — bash router (version, help, install, sync, doctor, health, uninstall)
+- `scripts/npm-postinstall.js` — conservative postinstall (prints location + prompt; does NOT auto-modify settings.json)
+- `scripts/npm-prepublish-check.js` — gate VERSION ≠ package.json version
+- `.npmignore` — excludes .git/, .vg/, .claude/, .codex/, tests/, dev-phases/, docs/, tarballs (pack ~6.4 MB, 1546 files)
+- `docs/PUBLISH-NPM.md` — full publish workflow + CI/CD example
+
+Smoke verified: `vg version`, `vg help`, `vg doctor` work locally after `npm install -g ./vgflow-X.Y.Z.tgz`.
+
+User next step (manual): `npm login` → `npm publish --access=public`.
+
+### B — Meta-memory v1.1 schema (Stage 1 of 6)
+
+Per `docs/plans/2026-05-08-meta-memory-implementation.md`. Stage 1 = schema + validator. No behavior changes yet; subsequent stages (v2.54-v2.59) wire reflector triggers + inject sites + Dreams consolidation.
+
+**Task 1.1 — Schema fields documented** (commit 3c98e23):
+- `type: declarative | procedural` (default declarative for backwards compat)
+- `authority: advisory | reference` (executable BLOCKED in v1)
+- `conditions: { all_of: [], any_of: [] }` DSL replacing applies_when_all_match
+- `target_step: deploy|roam|amend` added (10 allowed values total)
+- Procedural-only fields: `sequence[]`, `success_signals[]`, `attribution_required`, `shadow_evaluator`, `shadow_min_samples=5`, `shadow_min_correctness=0.8`
+- `fingerprint: { repo_id, deploy_target, health_cmd, package_manager, dockerfile_hash }`
+
+Mirrored byte-identical to: `.codex/skills/vg-{reflector,lesson}/SKILL.md` + `codex-skills/vg-{reflector,lesson}/SKILL.md`.
+
+**Task 1.2 — Validator script** (commit bf2c6c8):
+- `.claude/scripts/validators/verify-rule-schema-v1-1.py` (with canonical mirror)
+- 16 pytest cases covering positive + negative + edge paths
+- Enforces: target_step enum, type enum, authority gate, procedural required fields, declarative MUST NOT have sequence, relative-date detection in body
+
+### C — Other
+
+- Drop stale .r{1a,2,3.5,4}-backup files (commit 2977d85; ~1.7 MB × 2 freed in canonical + .claude mirror)
+- Worktree isolation regression suite + `docs/multi-session.md` (commit 6ca6119; 4 tests)
+
+### Verified
+
+- `tests/hooks/` — 30 passed
+- `tests/test_worktree_isolation.py` — 4 passed
+- `tests/test_rule_schema_v1_1.py` — 5 passed
+- `tests/test_verify_rule_schema_v1_1.py` — 16 passed
+- Mirror byte-identical (canonical ↔ .claude/) verified
+- Smoke `npm pack` → 6.4 MB, 1546 files (excluded all sensitive paths)
+- Smoke `npm install -g ./vgflow-2.53.0.tgz` → `vg version` prints 2.53.0
+
+### Migration
+
+No breaking changes. Existing rules without `type` field default to `declarative` at validation time. v2.5x upgrade is `git pull` + `/vg:sync`.
+
+For npm distribution: `npm install -g vgflow` (after first publish — name confirmed available on registry).
+
+### Next
+
+Stage 2 (5 reflector triggers — post-deploy/test/accept/roam/amend) ships next minor release(s). Tracking via `docs/plans/2026-05-08-meta-memory-implementation.md`.
+
 ## v2.52.2 - #140 cross-session destructive guard
 
 Patch release. Closes the deferred portion of #140 P0 (cross-session lock — issue body suggested fix #5).
