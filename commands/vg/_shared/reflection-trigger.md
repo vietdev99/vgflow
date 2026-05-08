@@ -154,3 +154,21 @@ Explicitly NOT valid skip reasons:
 `<step name="bootstrap_reflection">` OR `<step name="*_reflection_*">`
 block that invokes this skill. Missing reflection step in any host = CI
 fail. Run: `python .claude/scripts/verify-reflection-coverage.py`
+
+## post-deploy (NEW v1.1, Stage 2 task 1/5)
+
+**Trigger event:** `phase.deploy_completed` (any outcome).
+
+**Inputs to reflector:**
+- `events.db` query: `deploy.{started,completed,failed}` for current phase
+- `${PHASE_DIR}/DEPLOY-STATE.json` `deployed.{env}` block
+- `${PHASE_DIR}/.deploy-log.{env}.txt` per env stdout
+- `vg.config.md` env list, deploy commands, package manager
+
+**Candidate target:** target_step=deploy, type=procedural.
+
+**Fingerprint:** hash(repo_id + deploy_target + health_cmd + env + commands + dockerfile_hash + package_manager).
+
+**Gating:** vg.config.md → meta_memory_mode != "disabled". Default disabled — no spawn until explicitly enabled per Stage 6 rollout flag (Section 13.6 design).
+
+**Wiring site:** commands/vg/deploy.md — block inserted after existing phase.deploy_completed emit. See test: tests/test_post_deploy_reflector_wiring.py.
