@@ -321,7 +321,10 @@ inject_rule_cards_step_only() {
 }
 
 # CLI entry point — when invoked directly (not sourced)
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+# Issue #137: BASH_SOURCE is bash-only; sourcing under strict shell or non-bash
+# raises "BASH_SOURCE[0]: parameter not set". Fallback to $0 keeps the
+# direct-vs-sourced detection working under zsh/sh/strict-mode.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
   if [ "$#" -lt 2 ]; then
     echo "Usage: $0 <skill> <step> [normal|quiet] [--current-phase X.Y]" >&2
     echo "Example: $0 vg-build 0_parse_args" >&2

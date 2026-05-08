@@ -264,8 +264,14 @@ if not goals:
     verdict = 'BLOCK'
 elif intermediate > 0:
     verdict = 'INTERMEDIATE'
+elif total_by_status['BLOCKED'] > 0 or total_by_status['UNREACHABLE'] > 0:
+    # Issue #139: hard block when any conclusive BLOCKED/UNREACHABLE remains.
+    # Spec (vg-review SKILL.md 100% gate) requires BLOCK regardless of weighted
+    # priority threshold — pre-fix: weighted gate masked BLOCKED < threshold pct
+    # and emitted PASS. Now blocks first.
+    verdict = 'BLOCK'
 else:
-    # Compute weighted gate
+    # Compute weighted gate (only if 0 BLOCKED + 0 UNREACHABLE)
     for prio, info in by_priority.items():
         if info['total'] == 0: continue
         pct = 100 * info['ready'] / info['total']

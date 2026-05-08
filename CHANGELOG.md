@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.52.1 - Helper bug cluster: #137 + #138 + #139
+
+Patch release. Three independent helper bugs surfaced by PrintwayV3 dogfood under Codex zsh.
+
+### #139 (HIGH) — matrix-merger PASS verdict with BLOCKED goals
+
+`commands/vg/_shared/lib/matrix-merger.sh:262-275` — `merge_and_write_matrix` emitted `VERDICT=PASS` when `GOAL-COVERAGE-MATRIX` had 42 READY + 5 BLOCKED + 0 intermediate. Weighted priority gate (critical 100% / important 80% / nice-to-have 50%) computed per-priority pct, but did NOT short-circuit on BLOCKED/UNREACHABLE absolute counts. Per spec (vg-review SKILL.md 100% gate): any conclusive BLOCKED → BLOCK regardless of weighted threshold.
+
+**Fix:** Add `elif total_by_status['BLOCKED'] > 0 or total_by_status['UNREACHABLE'] > 0: verdict = 'BLOCK'` before weighted gate computation. NOT_SCANNED/FAILED still route through INTERMEDIATE branch first.
+
+### #138 (MEDIUM) — phase-resolver zsh nomatch
+
+`commands/vg/_shared/lib/phase-resolver.sh:42,69,81` — `${phases_dir}/${input}-*` glob raised `zsh: no matches found` under default NOMATCH option. Bash silently expands no-match glob to literal; zsh errors. Cascade: `resolve_phase_dir` failed before falling back to step 2/3, breaking `/vg:review` under Codex zsh.
+
+**Fix:** Add at function entry `[ -n "${ZSH_VERSION:-}" ] && setopt LOCAL_OPTIONS NULL_GLOB NO_NOMATCH 2>/dev/null || true`. Uses `LOCAL_OPTIONS` so caller shell options auto-restore on function exit. Bash unaffected.
+
+### #137 (MEDIUM) — inject-rule-cards.sh BASH_SOURCE strict
+
+`commands/vg/_shared/lib/inject-rule-cards.sh:324` — `if [ "${BASH_SOURCE[0]}" = "${0}" ]` raised `BASH_SOURCE[0]: parameter not set` under strict shell (`set -u`) or non-bash. Direct-vs-sourced detection broke before line ran.
+
+**Fix:** `${BASH_SOURCE[0]:-$0}` fallback. Sourced under bash uses BASH_SOURCE; sourced under zsh/sh falls back to $0. Direct invocation behavior unchanged.
+
+### Verified
+
+- Smoke #137: `bash -c 'set -u; source inject-rule-cards.sh'` → exit 0 (was set-u error)
+- Smoke #139: 42 READY + 5 BLOCKED → verdict=BLOCK (was PASS)
+- `tests/hooks/` — 30 passed, no regressions
+- `.claude/` ↔ canonical mirror byte-identical (3 files)
+- Bash syntax check on all 3 modified files
+
+### Triage
+
+- Closes #137 (inject-rule-cards.sh strict-shell)
+- Closes #138 (phase-resolver zsh nomatch)
+- Closes #139 (matrix-merger PASS verdict with BLOCKED)
+
 ## v2.52.0 - #140 P0 mitigations: destructive-op guard + artifact-loss diagnostic + intent-to-add
 
 Minor release. Three independent mitigations for #140 (P0 critical: blueprint artifacts vanish mid-run on auto-checkout). Investigator audit confirmed VG harness has NO auto-destructive git ops — root cause is AI-initiated mid-run `git checkout`/`reset`/`clean` to "fix" perceived issues. These fixes harden the harness against that cascade pattern.

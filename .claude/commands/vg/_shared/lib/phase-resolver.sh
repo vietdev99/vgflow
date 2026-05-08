@@ -25,6 +25,14 @@
 #   PHASE_DIR=$(ls -d ${PLANNING_DIR}/phases/${PHASE_NUMBER}* 2>/dev/null | head -1)
 
 resolve_phase_dir() {
+  # Issue #138: zsh under default NOMATCH errors on `${dir}/${prefix}-*` when
+  # no match exists. Bash silently expands to literal. Disable NOMATCH inside
+  # this function only (saved + restored at function exit) so glob behaves
+  # like bash regardless of caller shell.
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    setopt LOCAL_OPTIONS NULL_GLOB NO_NOMATCH 2>/dev/null || true
+  fi
+
   local input="${1:-}"
   if [ -z "$input" ]; then
     echo "resolve_phase_dir: empty phase number" >&2
