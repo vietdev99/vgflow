@@ -4442,6 +4442,53 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
 
     if missing_files:
         violations.append({"type": "must_write", "missing": missing_files})
+        # Issue #140: emit enriched diagnostic with recent git reflog so user
+        # can diagnose mid-run artifact loss (e.g., AI ran git checkout/reset
+        # mid-build and dropped untracked phase artifacts). Captured in
+        # events.db for post-mortem correlation.
+        try:
+            reflog_entries: list[str] = []
+            recent_branches: list[str] = []
+            try:
+                import subprocess
+                r = subprocess.run(
+                    ["git", "reflog", "-n", "10", "--format=%H %gd %gs"],
+                    capture_output=True, text=True, timeout=5, cwd=os.getcwd(),
+                )
+                if r.returncode == 0:
+                    reflog_entries = r.stdout.splitlines()
+                rb = subprocess.run(
+                    ["git", "for-each-ref", "--sort=-committerdate",
+                     "--count=10", "--format=%(refname:short) %(committerdate:iso)",
+                     "refs/heads/"],
+                    capture_output=True, text=True, timeout=5, cwd=os.getcwd(),
+                )
+                if rb.returncode == 0:
+                    recent_branches = rb.stdout.splitlines()
+            except Exception:
+                pass
+            db.append_event(
+                run_id=run_id,
+                event_type="vg.artifacts_missing",
+                phase=phase,
+                command=command,
+                outcome="BLOCK",
+                payload={
+                    "missing_paths": [m["path"] for m in missing_files],
+                    "missing_count": len(missing_files),
+                    "reflog_recent": reflog_entries,
+                    "branches_recent": recent_branches,
+                    "diagnostic": (
+                        "must_write artifacts missing at run-complete. "
+                        "Check git reflog for recent destructive operations "
+                        "(checkout, reset, stash) that may have dropped "
+                        "untracked artifacts mid-run."
+                    ),
+                },
+            )
+        except Exception:
+            # telemetry failure must not break verify
+            pass
 
     # --wave N partial-run exemption: when user explicitly runs a single wave
     # (e.g. /vg:build 14 --wave 2) AND that wave is NOT the final wave of the

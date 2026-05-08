@@ -85,6 +85,86 @@ else
   run_session_id=""
 fi
 
+# Issue #140: destructive git op guard during active VG run.
+# AI mid-run sometimes runs `git checkout`/`git reset --hard`/`git clean -f`
+# to "fix" something, dropping untracked phase artifacts (PLAN.md, API-CONTRACTS.md,
+# etc.) that the orchestrator validates at run-complete. Cascade = full data loss.
+#
+# Blocks: git checkout <branch>, git checkout -- ., git reset --hard,
+#         git clean -f, git stash drop, git switch <branch>, git branch -D,
+#         git rebase --abort (which checks out HEAD), rm -rf .vg/runs/.
+# Allows: git status, git log, git diff, git rev-parse, git add (incl. -N),
+#         git commit, git stash push (preserves untracked when --include-untracked).
+# Bypass: VG_ALLOW_DESTRUCTIVE=1 env var (operator must opt-in for repair flows).
+is_destructive_git_op() {
+  local c="$cmd_text"
+  # Strip leading whitespace + optional `bash -c` wrapping
+  c="${c#"${c%%[![:space:]]*}"}"
+  case "$c" in
+    git\ checkout\ --\ *)        return 0 ;;
+    git\ checkout\ .)            return 0 ;;
+    git\ checkout\ \.*)          return 0 ;;
+    git\ checkout\ [a-zA-Z0-9_/-]*) return 0 ;;  # branch/tag checkout
+    git\ switch\ *)              return 0 ;;
+    git\ reset\ --hard*)         return 0 ;;
+    git\ reset\ --keep*)         return 0 ;;
+    git\ reset\ --merge*)        return 0 ;;
+    git\ clean\ -f*)             return 0 ;;
+    git\ clean\ -d*)             return 0 ;;
+    git\ clean\ -x*)             return 0 ;;
+    git\ stash\ drop*)           return 0 ;;
+    git\ stash\ clear*)          return 0 ;;
+    git\ stash\ pop*)            return 0 ;;  # pop can drop untracked on conflict
+    git\ branch\ -D*)            return 0 ;;
+    git\ branch\ -d*)            return 0 ;;
+    git\ rebase\ --abort*)       return 0 ;;
+    git\ cherry-pick\ --abort*)  return 0 ;;
+    git\ merge\ --abort*)        return 0 ;;
+    git\ revert\ --abort*)       return 0 ;;
+    git\ worktree\ remove*)      return 0 ;;
+    git\ worktree\ prune*)       return 0 ;;
+    rm\ -rf\ .vg/runs*)          return 0 ;;
+    rm\ -rf\ .vg/phases*)        return 0 ;;
+    rm\ -rf\ .vg)                return 0 ;;
+  esac
+  return 1
+}
+
+if [ -n "${run_id:-}" ] && [ -f "$run_file" ] && is_destructive_git_op; then
+  if [ "${VG_ALLOW_DESTRUCTIVE:-}" != "1" ]; then
+    cat >&2 <<EOF
+[VG #140] Destructive git/filesystem op blocked — VG run active.
+
+Run:     ${command_from_run:-unknown} (run_id=${run_id})
+Session: ${run_session_id:-${session_id}}
+Command: ${cmd_text}
+
+Why blocked:
+  Mid-run \`git checkout\`/\`reset --hard\`/\`clean -f\` drops untracked
+  artifacts (PLAN.md, API-CONTRACTS.md, etc.) that orchestrator
+  validates at run-complete. Cascade = full data loss (#140 P0).
+
+If this is intentional repair (you accept artifact loss):
+  VG_ALLOW_DESTRUCTIVE=1 <your command>
+
+If this is mid-flow recovery, prefer:
+  git stash push --include-untracked --message "vg-recovery"
+  <recovery work>
+  git stash pop
+EOF
+    # Emit telemetry block for forensics
+    if command -v python3 >/dev/null 2>&1; then
+      python3 .claude/scripts/vg-orchestrator emit-event \
+        "vg.destructive_op_blocked" \
+        --actor "pre-tool-use-bash" \
+        --outcome "BLOCK" \
+        --metadata "{\"run_id\":\"${run_id}\",\"command\":\"${cmd_text//\"/\\\"}\"}" \
+        >/dev/null 2>&1 || true
+    fi
+    exit 2
+  fi
+fi
+
 codex_before_first_step() {
   [ "${VG_RUNTIME:-}" = "codex" ] || return 1
   [ -n "${run_id:-}" ] || return 1

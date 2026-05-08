@@ -1,5 +1,77 @@
 # Changelog
 
+## v2.52.0 - #140 P0 mitigations: destructive-op guard + artifact-loss diagnostic + intent-to-add
+
+Minor release. Three independent mitigations for #140 (P0 critical: blueprint artifacts vanish mid-run on auto-checkout). Investigator audit confirmed VG harness has NO auto-destructive git ops — root cause is AI-initiated mid-run `git checkout`/`reset`/`clean` to "fix" perceived issues. These fixes harden the harness against that cascade pattern.
+
+### Fix 4 — `vg.artifacts_missing` event at run-complete
+
+`vg-orchestrator run-complete` now emits a `vg.artifacts_missing` event when `runtime_contract.must_write` paths fail existence/size check. Payload includes:
+- `missing_paths[]` — declared artifact paths that vanished
+- `reflog_recent[]` — last 10 reflog entries for post-mortem correlation
+- `branches_recent[]` — last 10 branches by committer date
+- `diagnostic` — actionable hint pointing to git reflog
+
+Lets `vg:bug-report` capture exact destructive op timeline + failed paths. Existing BLOCK behavior on missing must_write unchanged; this is purely additive forensics.
+
+### Fix 5 — PreToolUse Bash destructive-op guard
+
+`vg-pre-tool-use-bash.sh` now blocks the following commands when `.vg/active-runs/<sid>.json` is fresh+alive:
+- `git checkout <branch>`, `git checkout -- .`, `git checkout .`
+- `git switch <branch>`
+- `git reset --hard|--keep|--merge`
+- `git clean -f|-d|-x`
+- `git stash drop|clear|pop`
+- `git branch -D|-d`
+- `git rebase|cherry-pick|merge|revert --abort`
+- `git worktree remove|prune`
+- `rm -rf .vg/runs`, `rm -rf .vg/phases`, `rm -rf .vg`
+
+Exit 2 with diagnostic + emits `vg.destructive_op_blocked` telemetry.
+
+**Bypass:** `VG_ALLOW_DESTRUCTIVE=1` env var (operator opt-in). Recommended alternative when bypass is needed: `git stash push --include-untracked` → recovery work → `git stash pop`.
+
+### Fix 1 — PostToolUse-Agent intent-to-add hook
+
+New hook `scripts/hooks/vg-post-tool-use-agent.sh` runs after every Agent tool return. Parses subagent JSON envelope for artifact paths (`paths[]`, `summary_path`, `build_log_path`, `artifacts[]`, `sub_files[]`) and runs `git add --intent-to-add` on each.
+
+Effect: if artifacts live OUTSIDE `.vg/` (ignored), git status surfaces them after subagent return. A subsequent `git checkout` will refuse with "would overwrite" instead of silently dropping. For default `.vg/`-based artifacts (gitignored), hook is a no-op.
+
+Best-effort + fail-soft. NEVER blocks. Skips when not in git repo or no active VG run. Wired via `install-hooks.sh` new `Agent` matcher in PostToolUse.
+
+### Settings.json change (re-run /vg:sync to apply)
+
+```json
+"PostToolUse": [
+  {"matcher": "TodoWrite|TaskCreate|TaskUpdate", "hooks": [...]},
+  {"matcher": "AskUserQuestion", "hooks": [...]},
+  {"matcher": "Agent", "hooks": [{"command": "${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/vg-post-tool-use-agent.sh"}]}  // NEW
+]
+```
+
+### Verified
+
+- `tests/hooks/` — 30 passed, no regressions
+- Smoke Fix 5 — `git checkout main` blocked exit 2; `VG_ALLOW_DESTRUCTIVE=1` bypass exit 0; `git status` allowed; `rm -rf .vg/runs` blocked
+- Smoke Fix 4 — orchestrator emit-event wired in `__main__.py:4444+`
+- Bash syntax check on modified hooks
+- `.claude/` mirror byte-identical with canonical (3 files: vg-pre-tool-use-bash.sh, vg-post-tool-use-agent.sh, install-hooks.sh, vg-orchestrator/__main__.py)
+
+### Migration
+
+```bash
+# Existing projects pick up new PostToolUse-Agent matcher:
+/vg:sync
+# Or directly:
+bash scripts/hooks/install-hooks.sh --target ~/.claude/settings.json
+```
+
+If you rely on `git checkout` mid-run for any reason, prefix with `VG_ALLOW_DESTRUCTIVE=1` or wrap in `git stash push --include-untracked`.
+
+### Triage
+
+- **Partially closes #140 P0** — all 3 fixes shipped. Causal misattribution prevention (Fix 4 diagnostic) + AI cascade prevention (Fix 5 guard) + tracked-artifact protection (Fix 1 intent-to-add). Cross-session lock (issue #140 suggested fix #5 full coverage) deferred to follow-up — current fixes catch the AI-driven cascade pattern observed in PrintwayV3 dogfood.
+
 ## v2.51.14 - POSIX hook wrapper bypass: fixes #141 (PrintwayV3 Mac wrapper missing)
 
 Patch release. Closes BLOCK-severity issue #141 (initial commit message and notes misattributed to #137 — corrected). POSIX install emits hook command that hard-depends on `vg-run-bash-hook.py`; when the wrapper file is missing (incomplete sync, manual settings copy, etc.), every `UserPromptSubmit` is blocked.

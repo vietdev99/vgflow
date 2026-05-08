@@ -89,6 +89,8 @@ VG_ENTRIES = {
     "PostToolUse": [
         {"matcher": "TodoWrite|TaskCreate|TaskUpdate", "hooks": [{"type": "command", "command": _cmd("vg-post-tool-use-todowrite.sh")}]},
         {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": _cmd("vg-post-tool-use-askuserquestion.sh")}]},
+        # Issue #140: intent-to-add on subagent-returned artifacts so git surfaces them.
+        {"matcher": "Agent", "hooks": [{"type": "command", "command": _cmd("vg-post-tool-use-agent.sh")}]},
     ],
     "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": _cmd("vg-stop.sh")}]}],
 }
