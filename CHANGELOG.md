@@ -1,5 +1,48 @@
 # Changelog
 
+## v2.54.0 - Meta-memory v1.1 Stage 2: 5 reflector triggers wired
+
+Minor release. Stage 2 of meta-memory v1.1 implementation per `docs/plans/2026-05-08-meta-memory-implementation.md`. Wires reflector subagent spawn after 5 phase-completion events. Gated by `vg.config.md → meta_memory_mode != "disabled"` — default disabled, NO behavior change yet. Subsequent stages (3-6) ship attribution + inject sites + Dreams consolidation in v2.55-v2.59.
+
+### Triggers wired (5 commits, 20 wiring tests)
+
+| Task | Commit | Trigger event | File modified | Candidate target |
+|---|---|---|---|---|
+| 2.1 | `f636e37` | `phase.deploy_completed` | `commands/vg/deploy.md` | target_step=deploy, type=procedural |
+| 2.2 | `5ad625b` | `phase.test_completed` | `commands/vg/test.md` | target_step=test, type=declarative\|procedural |
+| 2.3 | `339c825` | `phase.accept_uat_completed` | `commands/vg/accept.md` | target_step=accept, type=declarative |
+| 2.4 | `e367bd2` | `phase.roam_completed` | `commands/vg/roam.md` | target_step=roam, type=declarative |
+| 2.5 | `c80cadb` | `phase.amend_committed` | `commands/vg/amend.md` | type=retract |
+
+Each trigger:
+- Inserted AFTER `</step>` close (or appropriate non-bash-fence boundary) to preserve markdown rendering
+- Mirror byte-identical (canonical ↔ `.claude/`)
+- Documented in `commands/vg/_shared/reflection-trigger.md` with inputs/fingerprint/gating
+- 4 wiring tests per task: spawn-reference, doc-listed, both mirrors byte-identical
+
+### Reflector inputs by trigger
+
+- **post-deploy:** events.db deploy.* + DEPLOY-STATE.json deployed.{env} + .deploy-log.{env}.txt + vg.config.md
+- **post-test:** events.db test.* + codegen.* + TEST-GOALS verdicts + fix-loop iteration count
+- **post-accept:** UAT-CHECKLIST verdicts + events.db gate.fired + structured digest of user msgs (NO raw transcript — echo-chamber guard)
+- **post-roam:** roam findings JSON + state-mismatch report (high-signal: catches bugs review/test miss)
+- **post-amend:** AMENDMENT-LOG.md + diff between old/new CONTEXT.md decisions (retract candidates for rules referencing removed decisions)
+
+### Verified
+
+- 20 new wiring tests PASS (4 per trigger × 5 triggers)
+- 55+ regression assertions PASS (all prior stages still green)
+- Mirrors byte-identical across all 5 affected canonical/`.claude/` pairs
+- Pre-existing 44 unrelated test failures from earlier infra are NOT introduced by this batch (verified at f636e37 baseline)
+
+### Migration
+
+No breaking changes. `meta_memory_mode` flag defaults `disabled` — no spawn until explicitly enabled per Stage 6 rollout. Existing deploy/test/accept/roam/amend flows unchanged.
+
+### Next
+
+Stage 3 (CRITICAL — causal attribution: sequence checksum + per-step execution prober + outcome event schema) ships v2.55-v2.56. HARD GATE before Stage 4 inject sites — without attribution, procedural rules cannot be promoted (cargo-cult prevention per design Section 13.4).
+
 ## v2.53.0 - npm package skeleton + meta-memory v1.1 schema (Stage 1)
 
 Minor release. Bundles two parallel workstreams:
