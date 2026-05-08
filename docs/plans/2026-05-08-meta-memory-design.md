@@ -365,3 +365,126 @@ Effect: UAT checklist builder biased toward gate patterns historically prone to 
 - Procedural memory format consensus: `sequence + preconditions + success_signals` — does this match Mem0 / LangChain procedural format?
 - Echo-chamber guard: any way Anthropic Dreams reads transcripts and avoids drift?
 - Tier auto-promotion threshold: industry uses ≥3 occurrences — too low? Too high?
+
+---
+
+## 13. Verification round (2026-05-08, post-publish)
+
+Codex CLI review + 3 web fetches against Anthropic Auto Dream actual mechanics + Memory Tool API. Several v1 assumptions revised. Original sections 1-12 kept for diff history; this section is the source of truth.
+
+### 13.1 Anthropic Dreams — actual mechanics (corrects Section 4.3)
+
+Sources: [claudefa.st/auto-dream](https://claudefa.st/blog/guide/mechanics/auto-dream), [grandamenium/dream-skill](https://github.com/grandamenium/dream-skill), [Memory tool API](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool).
+
+| v1 assumption | Anthropic actual | v1.1 fix |
+|---|---|---|
+| 30-day fixed window | 24h passed AND ≥5 sessions since last dream (dual-gate) | Adopt dual-gate. Keep 30-day as outer cost cap, NOT primary trigger. |
+| Side-by-side `CONSOLIDATION-{date}.md` (no overwrite) | MERGES + UPDATES existing files. Surgical: unchanged files untouched. | Drop side-by-side. Use `str_replace` semantics. Keep `CONSOLIDATION-LOG.md` append-only audit trail. |
+| NEVER read AI transcript | Narrow grep on JSONL transcripts is OK (corrections, decisions, recurring themes). Avoid full reads. | Allow targeted grep on user-corrections + explicit-saves + recurring-themes patterns. Still ban full transcript dump. |
+| (missing) | MEMORY.md ≤ 200 lines (startup load cutoff) | Cap `.vg/bootstrap/MEMORY.md` index ≤ 200 lines. Demote verbose to topic files. |
+| (missing) | Absolute timestamps required (no "yesterday") | Validator: reject candidates with relative dates. |
+| (missing) | Lock file prevents concurrent dreams | `.vg/bootstrap/.consolidation.lock` flock during `--consolidate`. |
+| 1-step consolidation | 4-phase: Orient → Gather Signal → Consolidate → Prune/Index | Restructure `bootstrap-consolidate.py` to 4 phases. |
+
+### 13.2 Codex review — 9 findings → action items
+
+| # | Finding | v1.1 action |
+|---|---|---|
+| 1 | Extend bootstrap OK for v1 — but `procedural = advisory recipe`, NOT executable source-of-truth | Add explicit `authority: advisory` field. Block elevation to `authoritative` until v2. |
+| 2 | Post-build wave already exists (`reflection-trigger.md:105`). Missing post-roam + post-amend. | Add 2 NEW triggers (5 total: deploy, test, accept, **roam**, **amend**). post-roam captures bug patterns review/test miss. post-amend retires stale rules when scope changes. |
+| 3 | 30-day window misused for archive/drift detection | 30-day = query/cost cap only. Drift detection: "fired_count == 0 in last N runs" (run-count, not time). |
+| 4 | "NEVER read transcript" too literal | Allow `structured digest` channel. Reflector emits digest at step end → consolidation reads digest, not raw transcript. |
+| 5 | Fingerprint nghèo: `hash(env+commands+dockerfile)` | Expand: `hash(repo_id + deploy_target + health_cmd + env + commands + dockerfile_hash + package_manager)`. |
+| 6 | ≥3 PASS auto-promote too low. Repo already has `bootstrap-shadow-evaluator.py` min=5 + correctness. Outcome currently logged coarsely (phase pass → all rules PASS). | Reuse shadow-evaluator. Procedural threshold ≥5 samples + per-step outcome attribution + human gate. |
+| 7 | `applies_when_all_match: true` ambiguous | Replace with DSL: `all_of[]` / `any_of[]` (existing scope DSL style at `bootstrap-loader.py:363`). |
+| 8 | Flip default=true after 1 phase too fast. Trust model demands `shadow_min_phases=5`. | Rollout: 1 phase = reflect-only, 3-5 phases + 2 env shapes = inject-as-advice, default=true ≥5 phases passing shadow. |
+| 9 | **🔴 CRITICAL — causal misattribution risk** | Add per-step outcome attribution + sequence checksum (Section 13.4). |
+
+### 13.3 Schema v1.1 (revised)
+
+```yaml
+---
+slug: deploy-fly-io-prebuild
+title: "fly.io deploy yêu cầu prebuild"
+type: procedural
+authority: advisory          # NEW — gates executor trust. Allowed: advisory | reference (no executable in v1).
+target_step: deploy
+priority: high
+tier: B
+
+# Fingerprint v1.1 (Codex #5):
+fingerprint:
+  repo_id: "{repo}"
+  deploy_target: fly.io
+  health_cmd: "flyctl status --json"
+  env: production
+  package_manager: npm
+  dockerfile_hash: "{sha256}"
+
+# Conditions v1.1 (Codex #7) — replaces applies_when_all_match
+conditions:
+  all_of:
+    - env: fly.io
+    - has_dockerfile: true
+  any_of:
+    - branch: main
+    - branch: deploy/*
+
+sequence:
+  - id: step1
+    cmd: "npm run build"
+    expected_signals: ["exit=0", "stdout~='built in'"]
+  - id: step2
+    cmd: "flyctl deploy --remote-only"
+    expected_signals: ["exit=0", "deployed-image-ref captured"]
+  - id: step3
+    cmd: "flyctl status --json | jq .Health"
+    expected_signals: ["health=passing"]
+
+# Per-step outcome attribution (Codex #9 — fix causal misattribution):
+attribution_required: true   # consolidation MUST verify each step.executed=true + each step.expected_signals matched
+
+# Shadow gate (Codex #6 — reuse shadow evaluator):
+shadow_evaluator: true       # routes through scripts/bootstrap-shadow-evaluator.py before promote
+shadow_min_samples: 5
+shadow_min_correctness: 0.8
+---
+```
+
+### 13.4 Causal misattribution mitigation (Codex #9 — CRITICAL)
+
+Problem: current `bootstrap.outcome_recorded` is coarse — if phase passes, ALL fired rules logged PASS. Procedural rule with sequence X recorded PASS even when sequence X was bypassed entirely.
+
+Fix:
+1. **Sequence checksum at fire time:** `bootstrap.rule_fired` payload captures `sequence_checksum = sha256(joined_sequence_cmds)`. Stored in event.
+2. **Per-step execution probe:** post-step verifier inspects `events.db` + `.deploy-log.{env}.txt` for actual command executed. Match against rule.sequence[].cmd. Computes `executed_steps_count`.
+3. **Outcome attribution:** `bootstrap.outcome_recorded` payload now requires `attribution: {executed_step_ids: [...], matched_signals: [...], total_steps: N}`. PASS only if `executed_step_ids == rule.sequence ids` AND all `matched_signals` true.
+4. **Shadow consolidator skip:** if `attribution.executed_step_ids` empty → outcome NOT counted toward shadow stats. Prevents false confirmation.
+
+Implementation: extend `vg-orchestrator emit-event` schema for `bootstrap.outcome_recorded`. Add `scripts/bootstrap-attribute-outcome.py` post-step probe.
+
+### 13.5 Trigger list v1.1
+
+| Trigger | Source | Inputs | Candidate target |
+|---|---|---|---|
+| post-deploy | `phase.deploy_completed` | events.db deploy.* + DEPLOY-STATE.json + .deploy-log.{env}.txt | target_step=deploy |
+| post-test | `phase.test_completed` | events.db test.* + TEST-GOALS verdicts + fix-loop count | target_step=test |
+| post-accept | `phase.accept_uat_completed` | UAT-CHECKLIST + events.db gate.fired + structured digest | target_step=accept |
+| **post-roam (NEW)** | `phase.roam_completed` | roam findings + state-mismatch report | target_step=roam, type=declarative (caught patterns) |
+| **post-amend (NEW)** | `phase.amend_committed` | AMENDMENT-LOG.md + diff between old/new CONTEXT.md | type=retract — invalidate rules whose preconditions reference removed decisions |
+
+### 13.6 Rollout v1.1 (5 stages)
+
+1. Schema v1.1 (`type, authority, conditions DSL, attribution_required, shadow_evaluator`). Validator. Backwards compat: rules without `type` default `declarative`.
+2. Reflector triggers (5 hooks). Behind flag `vg.config.md: meta_memory_mode=disabled` default.
+3. Per-step attribution prober + sequence checksum (Section 13.4). Without this, NO procedural promotion.
+4. Inject sites + shadow evaluator integration. Flag → `meta_memory_mode=reflect-only`.
+5. Consolidation 4-phase (Section 13.1). Flag → `meta_memory_mode=inject-as-advice` after 3 phases × 2 env shapes pass shadow. Flip default after ≥5 phases of clean shadow.
+
+### 13.7 New references
+
+- [Auto Dream skill (open-source replication)](https://github.com/grandamenium/dream-skill) — 4-phase reference impl
+- [Anthropic adds dreaming to Claude Managed Agents](https://yourstory.com/ai-story/anthropic-claude-dreaming-self-improving-agents)
+- [Memory tool client-side API](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) — 5 commands (view/create/str_replace/insert/delete/rename), `/memories` directory pattern
+- Repo internal: `scripts/bootstrap-shadow-evaluator.py:5` (existing min=5 + correctness gate)
+- Repo internal: `commands/vg/_shared/reflection-trigger.md:105` (existing post-build-wave trigger)
