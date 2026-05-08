@@ -309,6 +309,90 @@ fi
 
 ---
 
+## STEP 1.5c — Bootstrap rules inject (Section 13.5 / meta-memory v1.1)
+
+After phase context is resolved (STEP 1.5 recon gate populates
+`.recon-state.json`), load procedural+declarative bootstrap rules matching
+the build context. Append rendered markdown to `${PHASE_DIR}/.build-context.md`
+so the orchestrator/planner sees deploy gating patterns BEFORE waves divide.
+
+**Default OFF**: `meta_memory_mode=disabled` (the default) skips this block
+entirely — no behavior change vs prior pipeline. Stage 6 flips the flag.
+
+```bash
+# Stage 4 task 1/4 — meta-memory v1.1 inject (Section 13.5 build site).
+# Loader emits JSON; we render relevant fields back to markdown for the
+# downstream context. Gated by vg.config.md::meta_memory_mode.
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+
+if [ "$META_MEMORY_MODE" = "inject-as-advice" ] || [ "$META_MEMORY_MODE" = "default" ]; then
+  # Build a small preconditions JSON from current phase state. .recon-state.json
+  # was just produced by STEP 1.5; phase_type drives precondition matching.
+  PHASE_TYPE_FOR_INJECT=$(${PYTHON_BIN:-python3} -c "
+import json, os
+p = os.environ.get('PHASE_DIR','.') + '/.recon-state.json'
+try:
+    print(json.load(open(p, encoding='utf-8')).get('phase_type',''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+  PRECONDITIONS_JSON="{\"phase_type\": \"${PHASE_TYPE_FOR_INJECT}\", \"profile\": \"${PROFILE:-}\"}"
+
+  # Loader returns JSON on stdout. Empty-on-error fallback keeps build alive.
+  RULES_JSON=$(${PYTHON_BIN:-python3} .claude/scripts/bootstrap-loader.py \
+    --target-step build \
+    --target-step deploy \
+    --include-procedural \
+    --filter-preconditions "$PRECONDITIONS_JSON" \
+    --max-bytes 8192 \
+    --emit rules 2>/dev/null || echo '{}')
+
+  # Render JSON → markdown via stdin (safer than embedded heredoc string interp).
+  RENDERED=$(printf '%s' "$RULES_JSON" | ${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or '{}')
+except Exception:
+    data = {}
+parts = []
+decl = data.get('rules_declarative', []) or []
+proc = data.get('rules_procedural', []) or []
+if decl:
+    parts.append('### Declarative Rules (MUST do / MUST NOT do)')
+    parts.append('')
+    for r in decl:
+        title = r.get('title', r.get('id', '?'))
+        prose = (r.get('prose') or '')[:200]
+        parts.append(f'- **{title}**: {prose}')
+    parts.append('')
+if proc:
+    parts.append('### Procedural Recipes (worked previously, ADVISORY)')
+    parts.append('')
+    for r in proc:
+        title = r.get('title', r.get('id', '?'))
+        prose = (r.get('prose') or '')[:200]
+        seq = r.get('sequence', []) or []
+        seq_str = ' -> '.join([s.get('cmd','?') for s in seq][:5])
+        parts.append(f'- **{title}**: {prose}')
+        if seq_str:
+            parts.append(f'  - Sequence: {seq_str}')
+    parts.append('')
+sys.stdout.write('\n'.join(parts))
+" 2>/dev/null || echo "")
+
+  if [ -n "$RENDERED" ] && [ -n "${PHASE_DIR:-}" ]; then
+    {
+      echo
+      echo "## Meta-Memory Rules ($(date -Iseconds 2>/dev/null || date))"
+      echo
+      echo "$RENDERED"
+    } >> "${PHASE_DIR}/.build-context.md"
+  fi
+fi
+```
+
+---
+
 ## STEP 1.6 — create task tracker (create_task_tracker) — IMPERATIVE TodoWrite gate
 
 **Bind native tasklist to build hierarchical projection — with profile-filter enforcement.**
