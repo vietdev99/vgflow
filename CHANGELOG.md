@@ -1,5 +1,68 @@
 # Changelog
 
+## v2.55.0 - Meta-memory v1.1 Stage 3: Causal attribution HARD GATE COMPLETE
+
+Minor release. Stage 3 of meta-memory v1.1 — the **CRITICAL HARD GATE** before Stage 4 inject sites can ship. Closes Codex #9 finding (causal misattribution → cargo-cult learning) per design Section 13.4.
+
+### Why this stage matters
+
+Without Stage 3, procedural rule promotion is cargo-cult: rule fires + phase passes → rule logged PASS even when executor BYPASSED sequence entirely. Shadow evaluator would auto-promote on false positives. Stage 3 closes this hole with 3 mechanisms:
+
+| Task | Commit | Mechanism |
+|---|---|---|
+| 3.1 | `874a024` | `sequence_checksum` at fire time — sha256 of joined sequence cmds, attached to `bootstrap.rule_fired` event payload |
+| 3.2 | `2385e4a` | Per-step execution prober — `bootstrap-attribute-outcome.py` substring-matches each cmd in deploy/test log via forward cursor |
+| 3.3 | `94973ce` | Outcome event gate — `cmd_emit_event` rejects `bootstrap.outcome_recorded` for procedural rules without `metadata.attribution.executed_step_ids` |
+
+### Task 3.1 — Sequence checksum at fire time
+
+`commands/vg/_shared/lib/bootstrap-inject.sh`:
+- NEW helper `vg_bootstrap_compute_sequence_checksum <rule_path> [--json]`
+- Existing `vg_bootstrap_emit_fired` augmented per-rule loop: if rule has `_path` + `type==procedural`, re-parse rule file, attach `sequence_checksum` to event metadata
+- Existing 8 callers UNCHANGED (signature preserved)
+- Helper accepts both `slug:` (Stage 1 schema docs) and `id:` (loader payload format)
+
+### Task 3.2 — Per-step execution prober
+
+`.claude/scripts/bootstrap-attribute-outcome.py` (with mirror):
+- Forward-cursor substring match enforces order (out-of-order = not counted)
+- `expected_signals` matched only within 4096-byte window after each step's cmd
+- Returns JSON: `{executed_step_ids[], total_steps, matched_signals_count}`
+- Empty `executed_step_ids[]` = executor bypassed entirely
+
+### Task 3.3 — Outcome event attribution gate
+
+`vg-orchestrator emit-event` for `bootstrap.outcome_recorded`:
+- Rejects rc=1 if `payload.rule_type == "procedural"` AND `payload.attribution.executed_step_ids` empty/missing
+- Other event types unaffected
+- Declarative rules + legacy events without `rule_type` field accepted (backwards compat)
+- `event.json` schema documents attribution requirement
+
+### Verified
+
+- 16 new pytest cases (4 + 6 + 6 across 3 tasks) all PASS
+- 75 cumulative pytest assertions PASS (all prior stages still green)
+- Mirrors byte-identical (canonical ↔ `.claude/`) for bootstrap-inject.sh, bootstrap-attribute-outcome.py, vg-orchestrator/__main__.py, schemas/event.json
+- No regression on Stage 1+2 work
+- PyYAML 6.0.2 verified available
+
+### Adaptations from plan
+
+Implementer made 3 user-confirmed adaptations:
+1. **Approach B1** (helper-based) instead of plan's signature-overload approach — preserves 8 existing emit_fired callers
+2. **CLI flag is `--payload`** not `--metadata` (corrected from plan to match actual `cmd_emit_event` signature)
+3. **Gate placement before active-run check** — otherwise "no active run" downstream would mask rejection in tests
+
+### Migration
+
+No breaking changes for end-users. Stage 3 mechanisms are dormant until Stage 4 wires them into inject sites. `meta_memory_mode` flag still defaults `disabled` — no behavior change.
+
+For developers extending VG: any new procedural rule fired must now flow through the prober → outcome event must include attribution payload. Stage 4 inject sites will wire this end-to-end.
+
+### Next
+
+Stage 4 (4 inject sites — build preflight, deploy pre-spawn, accept preflight, existing site filter expansion) UNBLOCKED. Ships v2.56.0+.
+
 ## v2.54.0 - Meta-memory v1.1 Stage 2: 5 reflector triggers wired
 
 Minor release. Stage 2 of meta-memory v1.1 implementation per `docs/plans/2026-05-08-meta-memory-implementation.md`. Wires reflector subagent spawn after 5 phase-completion events. Gated by `vg.config.md → meta_memory_mode != "disabled"` — default disabled, NO behavior change yet. Subsequent stages (3-6) ship attribution + inject sites + Dreams consolidation in v2.55-v2.59.
