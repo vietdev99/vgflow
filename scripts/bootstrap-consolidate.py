@@ -26,6 +26,12 @@ Subcommands:
   --phase gather [--json]      Phase 2: aggregate signal from events.db
   --phase consolidate [--apply] Phase 3: in-place merge into overlay/ACCEPTED/log
   --phase prune [--apply]      Phase 4: rebuild MEMORY.md <=200 lines, demote to topics/
+  --consolidate-all [--apply] [--json]
+                              Task 5.6 orchestrator: gate -> lock -> 4 phases
+                              -> update_state (if --apply) -> release_lock.
+                              Lock is ALWAYS released (try/finally) even on
+                              mid-run exception. Default mode dry-run; --apply
+                              required for any file write.
 """
 from __future__ import annotations
 
@@ -891,6 +897,72 @@ def prune(state_dir: Path, apply: bool) -> dict:
     return report
 
 
+# ---------------------------------------------------------------------------
+# Task 5.6 - --consolidate-all orchestrator
+#
+# Wires gate -> lock -> 4 phases -> state update -> release-lock into a single
+# atomic CLI surface invoked by /vg:learn --consolidate. Lock is ALWAYS
+# released via try/finally so a phase crash never strands the bootstrap zone.
+#
+# Exit codes:
+#   0 - gate_closed (no-op) | ok (success, dry-run or apply)
+#   1 - lock_busy (concurrent dream blocked) | phase_error (any phase raised)
+# ---------------------------------------------------------------------------
+
+def consolidate_all(state_dir: Path, apply: bool,
+                    since_days: int = DEFAULT_GATHER_SINCE_DAYS,
+                    max_events: int = DEFAULT_GATHER_MAX_EVENTS) -> tuple[int, dict]:
+    """Run the full 4-phase Anthropic Auto Dream cycle atomically.
+
+    Returns (exit_code, report_dict).
+    """
+    # 1. Gate check -- if closed, return 0 with reason and DO NOTHING
+    gate_open, reason = check_gate(state_dir)
+    if not gate_open:
+        return 0, {"status": "gate_closed", "reason": reason,
+                   "state_dir": str(state_dir)}
+
+    # 2. Acquire lock -- if busy, return 1
+    if not acquire_lock(state_dir):
+        return 1, {"status": "lock_busy",
+                   "reason": "concurrent dream already running",
+                   "state_dir": str(state_dir)}
+
+    # 3. Run 4 phases. CRITICAL: try/finally so release_lock ALWAYS runs.
+    try:
+        orient_result = orient(state_dir)
+        gather_result = gather(state_dir, since_days, max_events)
+        consolidate_result = consolidate(state_dir, gather_result, apply=apply)
+        prune_result = prune(state_dir, apply=apply)
+
+        # 4. Update state.json only on real apply (dry-run leaves state alone)
+        if apply:
+            update_state(state_dir)
+
+        report = {
+            "status": "ok",
+            "apply": apply,
+            "state_dir": str(state_dir),
+            "orient": orient_result,
+            "gather": gather_result,
+            "consolidate": consolidate_result,
+            "prune": prune_result,
+        }
+        return 0, report
+    except Exception as exc:  # noqa: BLE001 - we re-raise context via report
+        return 1, {
+            "status": "phase_error",
+            "apply": apply,
+            "state_dir": str(state_dir),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    finally:
+        # ALWAYS release the lock, even on exception. This is the hard
+        # invariant: a stranded lock blocks every future dream until
+        # someone manually clears .consolidation.lock.
+        release_lock(state_dir)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Bootstrap consolidation gate (Task 5.1)")
     parser.add_argument("--check-gate", action="store_true", help="Check trigger gate")
@@ -910,6 +982,10 @@ def main(argv: list[str]) -> int:
                         help="Phase 2 max events to scan (default 5000)")
     parser.add_argument("--apply", action="store_true",
                         help="Phase 3/4: perform writes (default: dry-run report)")
+    parser.add_argument("--consolidate-all", action="store_true",
+                        help="Task 5.6 orchestrator: gate -> lock -> 4 phases "
+                             "-> update_state (if --apply) -> release_lock. "
+                             "Lock ALWAYS released via try/finally.")
     parser.add_argument("--json", action="store_true", help="Output JSON")
     args = parser.parse_args(argv[1:])
 
@@ -1009,6 +1085,39 @@ def main(argv: list[str]) -> int:
             print(f"  topics_written: {report['topics_written']}")
             print(f"  files_modified: {report['files_modified']}")
         return 0
+
+    if args.consolidate_all:
+        rc, report = consolidate_all(state_dir, apply=args.apply,
+                                     since_days=args.since_days,
+                                     max_events=args.max_events)
+        if args.json:
+            print(json.dumps(report))
+        else:
+            status = report.get("status", "?")
+            mode = "apply" if args.apply else "dry-run"
+            print(f"consolidate-all status={status} mode={mode} "
+                  f"state_dir={report.get('state_dir','?')}")
+            if status == "gate_closed":
+                print(f"  reason: {report.get('reason','')}")
+            elif status == "lock_busy":
+                print(f"  reason: {report.get('reason','')}")
+            elif status == "phase_error":
+                print(f"  error: {report.get('error','')}")
+            elif status == "ok":
+                cons = report.get("consolidate", {}) or {}
+                pru = report.get("prune", {}) or {}
+                gather_r = report.get("gather", {}) or {}
+                print(f"  events_processed: "
+                      f"{gather_r.get('events_processed', 0)}")
+                print(f"  promotions: "
+                      f"{len(cons.get('promotions', []))}")
+                print(f"  contradictions: "
+                      f"{len(cons.get('contradictions', []))}")
+                print(f"  demoted: {pru.get('demoted_count', 0)}")
+                files_mod = list(cons.get("files_modified", []) or []) + \
+                            list(pru.get("files_modified", []) or [])
+                print(f"  files_modified: {len(files_mod)} -> {files_mod}")
+        return rc
 
     parser.print_help()
     return 2

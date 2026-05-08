@@ -1,6 +1,6 @@
 ---
 description: Review, promote, reject, or retract bootstrap candidates — user-gate for AI-proposed learnings
-argument-hint: "[--auto-surface|--review [id]|--review --all|--promote <id> --reason '...'|--reject <id> --reason '...'|--retract <id> --reason '...']"
+argument-hint: "[--auto-surface|--review [id]|--review --all|--promote <id> --reason '...'|--reject <id> --reason '...'|--retract <id> --reason '...'|--consolidate [--apply]]"
 mutates_repo: true
 runtime_contract:
   must_emit_telemetry:
@@ -222,6 +222,104 @@ Use when:
    ```
 5. Emit `bootstrap.rule_retracted` telemetry
 
+### `/vg:learn --consolidate [--apply]` (meta-memory v1.1, Task 5.6)
+
+Run Anthropic Auto Dream-style 4-phase consolidation over `.vg/bootstrap/`.
+Default mode is **dry-run** — pass `--apply` to actually merge.
+
+#### Trigger gate (Anthropic Dreams pattern, design Section 13.1)
+
+Consolidation only runs if BOTH conditions hold:
+
+- 24+ hours since last `--consolidate --apply` (override `VG_DREAMS_GATE_HOURS`)
+- &gt;5 sessions since last apply (override `VG_DREAMS_GATE_SESSIONS`)
+
+If gate closed → exit 0 with `{"status":"gate_closed","reason":"..."}`; no work done.
+This is intentionally a no-op, not an error — the orchestrator runs cheaply
+on every session start.
+
+#### 4 phases (run sequentially, atomic)
+
+1. **Orient** — read `.vg/bootstrap/` directory; snapshot rule counts +
+   storage health (oversized + orphan files, MEMORY.md line count).
+2. **Gather Signal** — query `.vg/events.db` (last 30d / 5000 events,
+   whichever smaller); narrow-grep transcripts for user corrections +
+   recurring themes. **Codex #9 attribution gate** drops procedural rule
+   outcomes WITHOUT non-empty `attribution.executed_step_ids` —
+   cargo-cult prevention.
+3. **Consolidate** — MERGE in-place per Anthropic Dreams pattern (NOT
+   side-by-side):
+   - Recurrence (≥3 attributed PASS, 0 FAIL) → tier-A confirmed in
+     `overlay.yml` + ACCEPTED.md entry + CONSOLIDATION-LOG.md line
+   - Contradiction (≥3 PASS streak then ≥3 FAIL) → warning in
+     `CONSOLIDATION-LOG.md` (NEVER auto-retract; humans decide via
+     `--retract`)
+   - Drift (no fire ≥30d) → archive proposal in log
+4. **Prune & Index** — rebuild `MEMORY.md` ≤ 200 lines (Anthropic cap),
+   demote verbose entries to `topics/{slug}.md`.
+
+#### Critical invariants (per design Section 13.4 + Codex #9)
+
+- Procedural rule outcomes WITHOUT `attribution.executed_step_ids`
+  (non-empty) are dropped at gather stage. Cargo-cult prevention.
+- Default mode dry-run — `rules/*.md`, `overlay.yml`, `MEMORY.md` files
+  NEVER modified without `--apply`.
+- Lock file `.vg/bootstrap/.consolidation.lock` blocks concurrent runs.
+- Lock is **ALWAYS** released via `try/finally` even on mid-phase
+  exception — a stranded lock would block every future dream.
+- NEVER auto-retract on contradiction (warn-only). `/vg:learn --retract`
+  remains the only path to remove an ACCEPTED rule.
+
+#### Invocation
+
+The orchestrator subcommand `--consolidate-all` runs gate → lock → 4
+phases → state update (if `--apply`) → release-lock atomically:
+
+```bash
+# Dry-run (default — no file changes, safe to run anytime)
+"${PYTHON_BIN:-python3}" .claude/scripts/bootstrap-consolidate.py --consolidate-all
+
+# Apply (real merge — writes to overlay.yml, MEMORY.md, CONSOLIDATION-LOG.md)
+"${PYTHON_BIN:-python3}" .claude/scripts/bootstrap-consolidate.py --consolidate-all --apply
+
+# Just check the gate (no work, returns rc=0 open / rc=1 closed)
+"${PYTHON_BIN:-python3}" .claude/scripts/bootstrap-consolidate.py --check-gate
+```
+
+Individual phases remain available for debugging:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/bootstrap-consolidate.py --phase orient --json
+"${PYTHON_BIN:-python3}" .claude/scripts/bootstrap-consolidate.py --phase gather --json
+"${PYTHON_BIN:-python3}" .claude/scripts/bootstrap-consolidate.py --phase consolidate [--apply]
+"${PYTHON_BIN:-python3}" .claude/scripts/bootstrap-consolidate.py --phase prune [--apply]
+```
+
+#### Output
+
+Pass `--json` for a machine-readable combined report on stdout:
+
+```json
+{
+  "status": "ok",
+  "apply": false,
+  "state_dir": ".../.vg/bootstrap",
+  "orient": { "rule_count": 12, "memory_md_lines": 187, ... },
+  "gather": { "events_processed": 142, "rule_signals": { ... } },
+  "consolidate": { "promotions": [...], "contradictions": [...], "files_modified": [...] },
+  "prune": { "rules_total": 12, "demoted_count": 2, ... }
+}
+```
+
+If gate closed: `{"status":"gate_closed","reason":"<24h since last run (3.2h elapsed)"}`.
+If lock busy: `{"status":"lock_busy","reason":"concurrent dream already running"}`.
+If a phase raises: `{"status":"phase_error","error":"..."}` and the lock is
+released before exit.
+
+Exit codes:
+- `0` — gate closed (no-op) or success
+- `1` — lock busy or phase error
+
 ## Interactive inline-edit (`e` option during --review)
 
 Not an external editor — prompt loop:
@@ -244,6 +342,7 @@ When `done` → re-validate schema + scope syntax, then proceed to promote.
 
 - `--review` → terminal listing + optional full-detail block
 - `--promote/--reject/--retract` → confirmation message + git SHA
+- `--consolidate` → JSON / human-readable report (gate decision + 4-phase results)
 
 ## Safety
 
