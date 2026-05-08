@@ -1,5 +1,74 @@
 # Changelog
 
+## v2.57.0 - Meta-memory v1.1 Stage 5: Anthropic Auto Dream consolidation engine
+
+Minor release. Stage 5 implements Anthropic Auto Dream-style 4-phase consolidation per design Section 13.1. 6 commits — gate + lock + 4 phases + skill mode.
+
+### Foundation (Task 5.1, commit `78c599a`)
+
+`bootstrap-consolidate.py` script with gate + lock + state subcommands:
+
+| Subcommand | Purpose |
+|---|---|
+| `--check-gate [--json]` | 24h+ AND >5 sessions both required (Anthropic Dreams pattern) |
+| `--acquire-lock` | Concurrent dream prevention via `.consolidation.lock` |
+| `--release-lock` | Always called from try/finally |
+| `--update-state` | After successful `--apply` only |
+| `--increment-sessions` | Hooked into session-start |
+
+State at `.vg/bootstrap/state.json`. Override gates via `VG_DREAMS_GATE_HOURS` + `VG_DREAMS_GATE_SESSIONS` env vars. 8 pytest cases.
+
+### 4 Dreams phases (Tasks 5.2-5.5, commits `111a162` + `ce11ab8` + `2a107db` + `e316ec0`)
+
+| Phase | Commit | Action |
+|---|---|---|
+| 1 — Orient | `111a162` | Read `.vg/bootstrap/` snapshot: rule count, MEMORY.md size, oversized files |
+| 2 — Gather | `ce11ab8` | Query events.db (last 30d/100 sessions). **Codex #9 attribution gate enforced**: drop procedural outcomes with empty `executed_step_ids[]` (cargo-cult prevention) |
+| 3 — Consolidate | `2a107db` | **MERGE in-place** (NOT side-by-side, per Anthropic Dreams). Recurrence (≥3 attributed PASS) → tier-A confirm. Contradiction (PASS+FAIL ≥3 each) → log warning ONLY (NEVER auto-retract). Drift (≥30d no fire) → archive proposal in log. |
+| 4 — Prune & Index | `e316ec0` | Rebuild `MEMORY.md` ≤ 200 lines (Anthropic cap). Demote verbose entries to `topics/{step}.md`. Idempotent re-runs. |
+
+30 pytest cases across 4 phases. Default = dry-run; `--apply` flag triggers actual writes.
+
+### Skill mode (Task 5.6, commit `7ab4c86`)
+
+`/vg:learn --consolidate [--apply]` orchestrator subcommand `--consolidate-all`:
+- Gate check → acquire lock → 4 phases (orient/gather/consolidate/prune) → update state if `--apply` → release lock (always, even on exception)
+- 12 pytest cases including: lock release on phase crash, dry-run safety, gate-closed rc=0
+- Documented in `commands/vg/learn.md` + `codex-skills/vg-learn/SKILL.md` (4 mirrors byte-identical)
+
+### Critical invariants enforced
+
+1. **Codex #9 attribution gate** — Phase 2 drops cargo-cult outcomes (procedural rules with empty `executed_step_ids[]`)
+2. **MERGE not side-by-side** — Phase 3 updates `overlay.yml`/`ACCEPTED.md`/`CONSOLIDATION-LOG.md` in-place
+3. **NEVER auto-retract** — Contradictions log warnings only; rule files byte-identical
+4. **Default dry-run** — All 4 phases require `--apply` for filesystem writes
+5. **Absolute UTC timestamps** — Phase 3 logs reject relative dates (yesterday/today)
+6. **MEMORY.md ≤ 200 lines** — Anthropic cap enforced; overflow demotes to `topics/`
+7. **Idempotent re-runs** — Phase 3 no double-promote; Phase 4 stable
+8. **Lock try/finally** — Released even on exception (verified by monkey-patch test)
+
+### Verified
+
+- 50 cumulative pytest assertions across Stage 5 PASS
+- 12 prior tests (consolidate test files) + 38 phase tests + adjacent attribution/loader/render tests all PASS
+- All mirror pairs byte-identical
+- 44 pre-existing failures (`test_vg_load_*`, `test_tasklist_depth_enforcement`) verified unrelated
+
+### Migration
+
+No breaking changes. `meta_memory_mode` flag still defaults `disabled`. End-users see zero behavior change.
+
+For developers: dream consolidation is now invocable via `/vg:learn --consolidate` (dry-run) or `--consolidate --apply`. Stage 6 will wire automatic invocation per rollout flag.
+
+### Deferred (acknowledged)
+
+- Phase 2 transcript narrow-grep — placeholder; events.db signals sufficient for v1 rollout
+- Phase 3 drift detection beyond 30d window — needs additional events.db query (rule_fired count over time); not blocking current rollout
+
+### Next
+
+Stage 6 (rollout flag `meta_memory_mode={disabled, reflect-only, inject-as-advice, default}` + E2E + cross-platform smoke + docs) ships v2.58-v2.59.
+
 ## v2.56.0 - Meta-memory v1.1 Stage 4: 4 inject sites + loader v1.1 flags
 
 Minor release. Stage 4 wires bootstrap rules end-to-end into skill prompts. 5 commits (Task 4.0 foundation + 4 inject sites). Gated by `meta_memory_mode != "disabled"` (default disabled — no behavior change yet, Stage 6 flips flag).
