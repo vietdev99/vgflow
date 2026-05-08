@@ -172,3 +172,20 @@ fail. Run: `python .claude/scripts/verify-reflection-coverage.py`
 **Gating:** vg.config.md → meta_memory_mode != "disabled". Default disabled — no spawn until explicitly enabled per Stage 6 rollout flag (Section 13.6 design).
 
 **Wiring site:** commands/vg/deploy.md — block inserted after existing phase.deploy_completed emit. See test: tests/test_post_deploy_reflector_wiring.py.
+
+## post-test (NEW v1.1, Stage 2 task 2/5)
+
+**Trigger event:** `phase.test_completed` (any outcome).
+
+**Inputs to reflector:**
+- events.db query: test.* + codegen.* for current phase
+- TEST-GOALS.md per-goal verdicts
+- fix-loop iteration count
+
+**Candidate target:** target_step=test, type=declarative|procedural (auto-detect).
+
+**Fingerprint:** hash(framework + selector_strategy + repo_id).
+
+**Gating:** vg.config.md → meta_memory_mode != "disabled". Default disabled.
+
+**Wiring site:** commands/vg/test.md.

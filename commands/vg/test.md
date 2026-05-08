@@ -327,6 +327,32 @@ Covers: write_report (SANDBOX-TEST.md final verdict), complete marker
 bootstrap_reflection (vg-reflector subagent call — non-blocking severity:warn),
 telemetry `test.completed`, tasklist clear, run-complete signal.
 
+
+### Post-test reflector trigger (Section 13.5 / meta-memory v1.1)
+
+After `phase.test_completed` emits, spawn vg-reflector subagent IF
+`meta_memory_mode != "disabled"`:
+
+```bash
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+
+if [ "$META_MEMORY_MODE" != "disabled" ] && [ "$EVENT_TYPE" = "phase.test_completed" ]; then
+  bash scripts/vg-narrate-spawn.sh vg-reflector spawning "post-test candidate draft"
+  ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+    "reflection.trigger_requested" --actor "test" --outcome "INFO" \
+    --metadata "{\"step\":\"test\",\"phase\":\"${PHASE_NUMBER}\",\"trigger\":\"post-test\"}"
+fi
+```
+
+**Inputs to reflector:**
+- events.db query: test.* + codegen.* for current phase
+- TEST-GOALS.md per-goal verdicts
+- fix-loop iteration count
+
+**Candidate target:** `target_step=test`, `type=declarative|procedural` (auto-detect by reflector heuristic).
+
+**Fingerprint:** `hash(framework + selector_strategy + repo_id)`.
+
 ## Diagnostic flow (5 layers)
 
 If any tool call is blocked by a hook:
