@@ -293,6 +293,32 @@ After return, the MAIN AGENT runs 3 hard-exit gates (in `overview.md`):
 The Stop hook then verifies all 17 markers, must_write paths, and
 must_emit_telemetry events.
 
+
+### Post-accept reflector trigger (Section 13.5 / meta-memory v1.1)
+
+After `phase.accept_uat_completed` emits, spawn vg-reflector subagent IF
+`meta_memory_mode != "disabled"`:
+
+```bash
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+
+if [ "$META_MEMORY_MODE" != "disabled" ] && [ "$EVENT_TYPE" = "phase.accept_uat_completed" ]; then
+  bash scripts/vg-narrate-spawn.sh vg-reflector spawning "post-accept candidate draft"
+  ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+    "reflection.trigger_requested" --actor "accept" --outcome "INFO" \
+    --metadata "{\"step\":\"accept\",\"phase\":\"${PHASE_NUMBER}\",\"trigger\":\"post-accept\"}"
+fi
+```
+
+**Inputs to reflector:**
+- UAT-CHECKLIST.md per-item verdicts
+- events.db query: `gate.fired` for current phase
+- structured digest of user msgs (NO raw transcript — echo-chamber guard)
+
+**Candidate target:** `target_step=accept`, `type=declarative`.
+
+**Fingerprint:** `hash(phase_type + gate_pattern + repo_id)`.
+
 ## Diagnostic flow (5 layers — see vg-meta-skill.md)
 
 If any tool call is blocked by a hook:

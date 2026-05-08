@@ -189,3 +189,20 @@ fail. Run: `python .claude/scripts/verify-reflection-coverage.py`
 **Gating:** vg.config.md → meta_memory_mode != "disabled". Default disabled.
 
 **Wiring site:** commands/vg/test.md.
+
+## post-accept (NEW v1.1, Stage 2 task 3/5)
+
+**Trigger event:** `phase.accept_uat_completed` (any outcome).
+
+**Inputs to reflector:**
+- UAT-CHECKLIST.md per-item verdicts
+- events.db query: `gate.fired` for current phase
+- structured digest of user msgs (NO raw transcript — echo-chamber guard)
+
+**Candidate target:** target_step=accept, type=declarative.
+
+**Fingerprint:** hash(phase_type + gate_pattern + repo_id).
+
+**Gating:** vg.config.md → meta_memory_mode != "disabled". Default disabled.
+
+**Wiring site:** commands/vg/accept.md.
