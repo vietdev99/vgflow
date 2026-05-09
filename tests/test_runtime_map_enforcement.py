@@ -19,7 +19,8 @@ This suite locks two layers:
      - provenance drift (source_inputs hash mismatch).
 3. **Skill-MD declaration layer** — `commands/vg/review.md` declares
    the two flags on the artifacts that need cross-run trust
-   (`api-docs-check.txt`, `api-contract-precheck.txt`).
+   (`RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md`,
+   `api-docs-check.txt`, `api-contract-precheck.txt`).
 
 If review.md ever drops a flag, or if a refactor of `__main__.py`
 silently severs the call from `_verify_contract` to
@@ -331,10 +332,11 @@ class TestReviewSkillContractDeclaration:
     """commands/vg/review.md must declare must_be_created_in_run +
     check_provenance on the artifacts that need cross-run trust.
 
-    Note: RUNTIME-MAP.json itself does NOT carry these flags (it is
-    regenerated each review and validated by content_min_bytes), but
-    the API discovery artifacts do — they must be created BY the
-    current review run, not reused from an earlier session.
+    v2.65.0 A8 follow-up: RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md
+    were previously declared with only profile_aware + content_min_bytes,
+    so a stale RUNTIME-MAP from a prior run could satisfy the gate
+    (state-shortcut bug). They now carry the same provenance flags as
+    api-docs-check.txt and api-contract-precheck.txt.
     """
 
     @pytest.fixture
@@ -354,6 +356,39 @@ class TestReviewSkillContractDeclaration:
         entry = self._entry_for(must_write, "RUNTIME-MAP.json")
         assert entry is not None, (
             "RUNTIME-MAP.json missing from review.md must_write"
+        )
+
+    def test_runtime_map_has_provenance_flags(self, must_write):
+        """v2.65.0 A8 follow-up — RUNTIME-MAP.json is the canonical
+        review output. A stale RUNTIME-MAP from a prior session must
+        not satisfy the gate; the file must be (a) created in the
+        current run AND (b) traceable to its source inputs.
+        """
+        entry = self._entry_for(must_write, "RUNTIME-MAP.json")
+        assert entry is not None, "RUNTIME-MAP.json missing from must_write"
+        assert entry["must_be_created_in_run"] is True, (
+            "RUNTIME-MAP.json must declare must_be_created_in_run: true "
+            "to prevent stale runtime-map reuse across review runs "
+            "(v2.65.0 A8 follow-up — state-shortcut bug fix)"
+        )
+        assert entry["check_provenance"] is True, (
+            "RUNTIME-MAP.json must declare check_provenance: true"
+        )
+
+    def test_goal_coverage_matrix_has_provenance_flags(self, must_write):
+        """v2.65.0 A8 follow-up — GOAL-COVERAGE-MATRIX.md is the
+        per-run goal verdict. Reusing a prior run's matrix would
+        silently shortcut goal coverage validation.
+        """
+        entry = self._entry_for(must_write, "GOAL-COVERAGE-MATRIX.md")
+        assert entry is not None, (
+            "GOAL-COVERAGE-MATRIX.md missing from must_write"
+        )
+        assert entry["must_be_created_in_run"] is True, (
+            "GOAL-COVERAGE-MATRIX.md must declare must_be_created_in_run: true"
+        )
+        assert entry["check_provenance"] is True, (
+            "GOAL-COVERAGE-MATRIX.md must declare check_provenance: true"
         )
 
     def test_api_docs_check_has_both_flags(self, must_write):

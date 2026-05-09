@@ -29,9 +29,13 @@ runtime_contract:
     - path: "${PHASE_DIR}/RUNTIME-MAP.json"
       profile_aware: false
       content_min_bytes: 80
+      must_be_created_in_run: true
+      check_provenance: true
     - path: "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
       profile_aware: false
       content_min_bytes: 80
+      must_be_created_in_run: true
+      check_provenance: true
     - path: "${PHASE_DIR}/api-docs-check.txt"
       content_min_bytes: 60
       required_unless_flag: "--skip-discovery"
