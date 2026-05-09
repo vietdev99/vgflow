@@ -27,12 +27,18 @@ from typing import Iterable
 from urllib.parse import urljoin
 
 
+# v2.67.0 #157 — add WS|WEBSOCKET to all 3 method regexes so contracts that
+# declare WebSocket endpoints surface in the parsed list (previously dropped
+# silently → 0 endpoints → setup-error exit).
 HEADER_RE = re.compile(
-    r"(?m)^###?\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)"
+    r"(?m)^###?\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|WS|WEBSOCKET)\s+(\S+)"
 )
 PARAM_SEGMENT_RE = re.compile(r"/(:[A-Za-z0-9_]+|\{[^}/]+\})")
 GET_ACCEPTABLE = set(range(200, 300)) | {400, 401, 403, 405, 409, 422, 428}
 MUTATION_ACCEPTABLE = {200, 201, 202, 204, 400, 401, 403, 405, 409, 415, 422, 428}
+# v2.67.0 #157 — WS/WEBSOCKET methods cannot be HTTP-probed (they require
+# upgrade handshake). probe_endpoint() short-circuits these to a SKIP verdict.
+WS_METHODS = {"WS", "WEBSOCKET"}
 
 
 @dataclass
@@ -65,11 +71,11 @@ class ProbeResult:
 
 
 TABLE_ROW_RE = re.compile(
-    r"^\|\s*\S+\s*\|\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\|\s*(\S+)\s*\|",
+    r"^\|\s*\S+\s*\|\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|WS|WEBSOCKET)\s*\|\s*(\S+)\s*\|",
     re.MULTILINE | re.IGNORECASE,
 )
 SPLIT_FILE_HEAD_RE = re.compile(
-    r"^#\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S+)\s*$",
+    r"^#\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|WS|WEBSOCKET)\s+(/\S+)\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -158,6 +164,68 @@ def parse_contracts(path: Path) -> list[Endpoint]:
     return _parse_split_files(path)
 
 
+# v2.67.0 #157 — OpenAPI schema validity pre-gate.
+#
+# When openapi-generation.log shows the API server failed to emit a valid
+# schema (FST_ERR_INVALID_SCHEMA from Fastify, or HTTP 500 from the
+# /openapi.json route), docs-derived probes are not trustworthy: API-CONTRACTS
+# may have been derived from a broken schema, or the live OpenAPI endpoint
+# may itself return 500. In either case the probe report would mislead.
+#
+# Returns (valid, reason). When invalid, callers should exit 2 (setup error)
+# rather than burn time on probes whose verdicts cannot be trusted.
+_OPENAPI_INVALID_PATTERNS = (
+    "FST_ERR_INVALID_SCHEMA",
+    "openapi schema invalid",
+    "openapi generation failed",
+)
+
+
+def _openapi_schema_valid(phase_dir: Path) -> tuple[bool, str]:
+    """Inspect ``openapi-generation.log`` (if present) for failure signals.
+
+    Args:
+        phase_dir: Phase directory (typically ``$PHASE_DIR``) where the log
+            is expected to live.
+
+    Returns:
+        ``(valid, reason)`` — ``valid=True`` when no log exists OR the log
+        is clean. ``valid=False`` when FST_ERR_INVALID_SCHEMA, an explicit
+        500 against an OpenAPI route, or another invalid-schema marker is
+        present.
+    """
+    log = phase_dir / "openapi-generation.log"
+    if not log.exists():
+        return True, "no openapi-generation.log — pre-gate skipped"
+    try:
+        text = log.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        # Cannot read log → don't punish the run; log the reason.
+        return True, f"openapi-generation.log unreadable: {exc}"
+
+    text_lower = text.lower()
+    for pat in _OPENAPI_INVALID_PATTERNS:
+        if pat.lower() in text_lower:
+            return False, (
+                f"OpenAPI generation failed — found '{pat}' in "
+                f"openapi-generation.log; docs-derived probes unreliable"
+            )
+
+    # Look for HTTP 500 specifically associated with openapi (avoid false
+    # positives from unrelated 500 strings).
+    if re.search(
+        r"(HTTP/[\d.]+\s+500|status[:= ]+500).*openapi|openapi.*\b500\b",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        return False, (
+            "OpenAPI route returned 500 in openapi-generation.log — "
+            "docs-derived probes unreliable"
+        )
+
+    return True, "openapi-generation.log clean"
+
+
 def _json_top_keys(body: bytes, content_type: str) -> str:
     if "json" not in (content_type or "").lower() or not body:
         return ""
@@ -215,6 +283,22 @@ def _curl(
 
 
 def probe_endpoint(base_url: str, endpoint: Endpoint, headers: list[str], timeout: int) -> ProbeResult:
+    # v2.67.0 #157 — WS/WebSocket endpoints cannot be HTTP-probed. Short-circuit
+    # with a SKIP verdict so the run still inventories the endpoint without
+    # falsely failing it on a 4xx GET/OPTIONS against a WS upgrade handler.
+    method_upper = (endpoint.method or "").upper()
+    if method_upper in WS_METHODS:
+        return ProbeResult(
+            endpoint=endpoint,
+            url="",
+            status=0,
+            verdict="SKIP",
+            detail=(
+                f"probe={endpoint.method}; WS/WebSocket endpoint not probed "
+                f"via HTTP — verify externally (upgrade handshake required)"
+            ),
+        )
+
     probe_path = endpoint.materialized_path
     url = urljoin(base_url.rstrip("/") + "/", probe_path.lstrip("/"))
     curl_rc, curl_err, status, body, content_type = _curl(
@@ -383,6 +467,26 @@ def main() -> int:
     out_path = Path(args.out)
     if not contracts_path.exists():
         print(f"missing contracts file: {contracts_path}", file=sys.stderr)
+        return 2
+
+    # v2.67.0 #157 — OpenAPI schema validity pre-gate. The phase dir is the
+    # parent of the contracts file (API-CONTRACTS.md typically sits at the
+    # phase root). If the OpenAPI generator emitted FST_ERR_INVALID_SCHEMA or
+    # a 500 for /openapi.json, docs-derived probes are unreliable; exit 2 so
+    # /vg:review handles this as a setup error instead of trusting probe
+    # verdicts produced from a broken contract.
+    phase_dir = contracts_path.parent
+    valid, reason = _openapi_schema_valid(phase_dir)
+    if not valid:
+        print(
+            f"⛔ API contract probe pre-gate BLOCK: {reason}",
+            file=sys.stderr,
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            f"⛔ OpenAPI schema invalid — pre-gate BLOCK: {reason}\n",
+            encoding="utf-8",
+        )
         return 2
 
     endpoints = parse_contracts(contracts_path)
