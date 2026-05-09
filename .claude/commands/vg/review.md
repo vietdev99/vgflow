@@ -2393,6 +2393,73 @@ JSON
     fi
   fi
 fi
+
+# v2.67.0 #161 — Phase 0.5 hard gates (P1/P2/P3).
+#
+# These three preflight gates run unconditionally (no scripts/runtime guard)
+# because they protect every review run, not just RFC v9-equipped phases.
+# Each gate exits 1 immediately when the precondition is broken — running a
+# review against routes-static drift, an under-specified ENV-CONTRACT, or a
+# 500-ing OpenAPI generator wastes Haiku tokens on doomed evidence.
+
+# Preflight P1 (#161): routes-static.json validity.
+# routes-static.json drives route-level coverage in the scanner and the
+# RUNTIME-MAP. Missing or empty array = scan cannot validate any route.
+ROUTES_STATIC="${PHASE_DIR}/routes-static.json"
+if [ ! -f "$ROUTES_STATIC" ]; then
+  echo "⛔ Preflight P1 BLOCK: routes-static.json missing at ${ROUTES_STATIC}" >&2
+  echo "   Fix path: regenerate routes-static.json via /vg:build or the route" >&2
+  echo "   extractor for this phase. Review cannot run without it." >&2
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p1_routes_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  exit 1
+fi
+ROUTES_LEN=$("${PYTHON_BIN:-python3}" -c "
+import json, sys
+try:
+    d = json.load(open('${ROUTES_STATIC}', encoding='utf-8'))
+    routes = d.get('routes') if isinstance(d, dict) else d
+    print(len(routes) if isinstance(routes, list) else 0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+if [ "${ROUTES_LEN:-0}" -eq 0 ]; then
+  echo "⛔ Preflight P1 BLOCK: routes-static.json contains 0 routes" >&2
+  echo "   Fix path: rebuild route inventory. Empty routes-static prevents" >&2
+  echo "   coverage gating in Phase 1." >&2
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p1_routes_empty" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+# Preflight P2 (#161): ENV-CONTRACT.md preflight_checks section.
+# /vg:review uses preflight_checks: as the source of truth for which gates
+# RFC v9 must run. ENV-CONTRACT.md is allowed to be absent (legacy phases),
+# but if present it MUST declare preflight_checks — otherwise downstream
+# gates silently skip.
+if [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
+  if ! grep -qE '^[[:space:]]*preflight_checks[[:space:]]*:' "${PHASE_DIR}/ENV-CONTRACT.md"; then
+    echo "⛔ Preflight P2 BLOCK: ENV-CONTRACT.md missing 'preflight_checks:' section" >&2
+    echo "   Fix path: add preflight_checks: block to ENV-CONTRACT.md listing" >&2
+    echo "   the invariants /vg:review must verify (see ENV-CONTRACT-template.md)." >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p2_env_contract_section_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+# Preflight P3 (#161): OpenAPI schema validity.
+# Mirrors scripts/review-api-contract-probe.py::_openapi_schema_valid (#157).
+# When openapi-generation.log shows FST_ERR_INVALID_SCHEMA or HTTP/1.1 500,
+# every docs-derived probe in this run will be misleading. Block before scan.
+OPENAPI_LOG="${PHASE_DIR}/openapi-generation.log"
+if [ -f "$OPENAPI_LOG" ]; then
+  if grep -qE 'FST_ERR_INVALID_SCHEMA|HTTP/[0-9.]+[[:space:]]+500' "$OPENAPI_LOG"; then
+    echo "⛔ Preflight P3 BLOCK: OpenAPI generation FST_ERR_INVALID_SCHEMA / 500 in ${OPENAPI_LOG}" >&2
+    echo "   Fix path: repair the OpenAPI schema (most often a route registers" >&2
+    echo "   without a valid response schema). Docs-derived probes are unreliable" >&2
+    echo "   until the generator returns valid output." >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p3_openapi_invalid" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
 ```
 
 ## Phase 1: CODE SCAN (automated, <10 sec)
