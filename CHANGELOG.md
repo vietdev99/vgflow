@@ -1,9 +1,31 @@
 # Changelog
 
-## v2.65.0 — Codex review speed + state-shortcut hardening — BREAKING: deepscan default ON (UNRELEASED)
+## v2.65.0 — Codex review speed + state-shortcut hardening (2026-05-09)
 
 ### Breaking changes
 - **A7:** Phase 2b-2 deepscan now default ON. Was OPT-IN since v2.42.4 → reviews silently skipped deepscan even when stale state present. Opt-out: `--skip-deepscan` flag OR `CONFIG_REVIEW_DEEPSCAN_DEFAULT: off` in vg.config.md. Adds ~30-90s to review wall time but catches state drift bugs missed in v2.64.x. Legacy `--with-deepscan` and `--full-scan` flags still parsed but are no-ops (deepscan runs anyway); `--with-deepscan` emits a deprecation notice.
+
+### Performance (Codex review slowness fixes)
+- **A1:** `scripts/spawn_recursive_probe.py` now supports `--parallel N` for ThreadPoolExecutor lens probe dispatch. Default 1 (sequential, full back-compat). Set `parallel_workers` in vg.config.md to opt in. Includes `--mock-mode` for deterministic tests + partial-failure handling (`exit_code: -3` sentinel for worker exceptions, homogeneous error dict shape — same shape as timeout/notfound paths).
+- **A2:** `scripts/review-api-contract-probe.py` adds `probe_endpoints()` wrapper with `--parallel N` flag. Same ThreadPoolExecutor pattern as A1 with `ProbeResult` dataclass error shape (`verdict=FAIL, status=0, detail=worker_raise:...`).
+- **A3:** `codex-inline` scanner can now spawn `N × commands/vg/_shared/lib/codex-spawn.sh --tier scanner --sandbox read-only` for non-MCP classification work over captured snapshots when `parallel_workers > 1`. MCP/browser actions stay inline (codex-spawn lacks MCP). Haiku model remains Claude-only.
+- **A6:** Phase 3 fix-loop dual-path: Claude runtime uses `Agent` tool (existing behavior), Codex runtime uses `commands/vg/_shared/lib/codex-spawn.sh --tier executor --sandbox workspace-write`. Branch on `VG_RUNTIME` at `commands/vg/review.md:5886-5894`.
+
+### Correctness
+- **A4:** Fix-loop max iterations bumped from 3 → 5. Each iteration emits `review.fix_iteration_started` telemetry event with `{iter, max_iter, violations}` metadata for mid-loop progress visibility.
+- **A8:** `RUNTIME-MAP.json` and `GOAL-COVERAGE-MATRIX.md` now declared with `must_be_created_in_run: true` + `check_provenance: true` in `commands/vg/review.md:25-47` runtime_contract. Previously stale artifacts from a prior run could be reused — exactly the state-shortcut bypass user reported ("chỉ đọc state là bỏ qua luôn deepscan trong khi còn cả 1 tá lỗi"). `_verify_artifact_run_binding` enforces sha256 + creator_run_id + source_inputs against per-run manifest. `api-docs-check.txt` and `api-contract-precheck.txt` already had these flags; A8 closes the RUNTIME-MAP + COVERAGE-MATRIX gap.
+- **A9:** Codex skills (`codex-skills/{vg-build, vg-review, vg-test, vg-deploy, vg-accept, vg-blueprint, vg-scope}/SKILL.md`) now manually emit `vg-orchestrator mark-step` for every HARD marker declared in their corresponding `commands/vg/{cmd}.md` `must_touch_markers:` list. Codex has no PreToolUse/PostToolUse hooks, so previously the orchestrator only saw 8/39 markers — contract validator rejected runs as silent-skip. Each skill now has a `<HARD-GATE-CODEX>` reminder block + inline mark-step bash invocations per step. **77 HARD markers across 7 skills** explicitly emitted.
+
+### Configuration
+- **A5:** New `parallel_workers: 5` field in `vg.config.template.md` (default 5). Caps concurrent workers for A1, A2, A3 ops. Set to 1 to disable parallelism (full back-compat with v2.64.x sequential behavior). Higher values (8-12) recommended on multi-core boxes with good network.
+
+### Migration
+- **A7 breaking:** Existing reviews without `--skip-deepscan` will now run Phase 2b-2 (deepscan) by default. To preserve old behavior, set `CONFIG_REVIEW_DEEPSCAN_DEFAULT: off` in your vg.config.md OR pass `--skip-deepscan` per invocation.
+- **A1/A2/A3 opt-in:** Default `parallel_workers: 5` in template, but if your existing `vg.config.md` doesn't have the field, parallel ops fall back to sequential (default `parallel=1` on the Python scripts). Add `parallel_workers: N` to enable.
+- **A9 codex-skills:** Existing Codex sessions will need to update their `codex-skills/` from this release for marker compliance. Old skills will continue to work but contract validator will report missing markers and reject runs.
+
+### Test coverage
+**62 new tests across 9 task suites:** `test_recursive_probe_parallel.py` (4), `test_api_contract_probe_parallel.py` (3), `test_codex_inline_parallel.py` (4), `test_review_fix_loop_progress.py` (3), `test_parallel_workers_config.py` (4), `test_review_fix_loop_dual_path.py` (4), `test_deepscan_default_on.py` (6), `test_runtime_map_enforcement.py` (19), `test_codex_marker_coverage.py` (15). All pass.
 
 ## v2.64.1 — Hotfix: 3-layer split parser bugs (2026-05-09)
 
