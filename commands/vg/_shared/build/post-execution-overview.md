@@ -41,12 +41,14 @@ The post-executor returns a JSON envelope. You MUST validate that
 `gates_passed[]` includes `L2`, `L3` (when any task carried
 `design_ref`), `L5`, `L6` (when any task carried `design_ref`),
 `L4_form` (when `${PHASE_DIR}/FORM-API-MAP.md` exists from
-/vg:blueprint v2.62.0+ F3), and `truthcheck` BEFORE writing the step
-marker. You MUST also validate that `summary_path` exists on disk and
-`sha256sum ${summary_path}` matches `summary_sha256`. Marker write
-WITHOUT this validation is a HARD VIOLATION — review/test/accept
-downstream consumes SUMMARY.md and trusts gates_passed; drift here
-corrupts the entire phase tail.
+/vg:blueprint v2.62.0+ F3), `L4_workflow` (when
+`${PHASE_DIR}/WORKFLOW-SPECS.md` or `${PHASE_DIR}/WORKFLOW-SPECS/`
+exists from /vg:blueprint v2.64.0+ F5), and `truthcheck` BEFORE
+writing the step marker. You MUST also validate that `summary_path`
+exists on disk and `sha256sum ${summary_path}` matches
+`summary_sha256`. Marker write WITHOUT this validation is a HARD
+VIOLATION — review/test/accept downstream consumes SUMMARY.md and
+trusts gates_passed; drift here corrupts the entire phase tail.
 </HARD-GATE>
 
 ---
@@ -783,7 +785,14 @@ step complete. The post-executor returns the envelope shaped per
    the phase (v2.63.0 F4 — form ↔ API field cross-check; the
    subagent's procedure step 5b runs the validator and adds the gate
    to gates_passed on PASS or warn-only mode; legacy phases without
-   FORM-API-MAP.md are exempt and emit `build.l4_form_skipped`).
+   FORM-API-MAP.md are exempt and emit `build.l4_form_skipped`);
+   MUST include `L4_workflow` when `${PHASE_DIR}/WORKFLOW-SPECS.md`
+   OR `${PHASE_DIR}/WORKFLOW-SPECS/` exists for the phase
+   (v2.64.0 F5 — workflow evidence cross-check; the subagent's
+   procedure step 5c runs `verify-workflow-evidence.py` and adds the
+   gate to gates_passed on PASS or warn-only mode; legacy phases
+   without WORKFLOW-SPECS.md are exempt and emit
+   `build.l4_workflow_skipped`).
 3. **Summary path exists**: `[ -f "${summary_path}" ]` must succeed.
 4. **Summary hash matches**: `sha256sum "${summary_path}" | cut -d' ' -f1`
    must equal `summary_sha256`.
@@ -833,6 +842,13 @@ if has_design_ref:
 # /vg:blueprint v2.62.0 F3). Legacy phases without the map are exempt.
 if (phase_dir / "FORM-API-MAP.md").is_file():
     required_gates |= {"L4_form"}
+
+# v2.64.0 F5: L4_workflow (workflow evidence cross-check) is
+# conditionally required when ${PHASE_DIR}/WORKFLOW-SPECS.md or
+# ${PHASE_DIR}/WORKFLOW-SPECS/ exists (emitted by /vg:blueprint
+# v2.64.0 Pass 3). Legacy phases without workflows are exempt.
+if (phase_dir / "WORKFLOW-SPECS.md").is_file() or (phase_dir / "WORKFLOW-SPECS").is_dir():
+    required_gates |= {"L4_workflow"}
 
 missing_gates = required_gates - gates_passed
 if missing_gates:

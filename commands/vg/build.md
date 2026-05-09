@@ -139,6 +139,13 @@ runtime_contract:
     - event_type: "build.l4_form_skipped"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # v2.64.0 F5 — L4_workflow gate (workflow evidence cross-check)
+    - event_type: "build.l4_workflow_completed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"  # not required — only fires when WORKFLOW-SPECS.md exists
+    - event_type: "build.l4_workflow_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"  # only fires for legacy phases or no workflows
     # Task 18 (pre-test gate) — STEP 6.5 telemetry. complete = full T1+T2
     # ran (with optional deploy); skipped = --skip-pre-test override path.
     - event_type: "build.pre_test_complete"

@@ -312,6 +312,86 @@ For each task index `i` in [0, task_count):
    FORM-API-MAP.md exists for the phase) — see
    `post-execution-overview.md` Step 5.5 documentation.
 
+5c. **L4_workflow — Workflow evidence cross-check (when WORKFLOW-SPECS exists, v2.64.0 F5)** —
+   phase-level gate (NOT per-task) that runs ONCE after L4_form.
+   Parallel to v2.63.0 F4 `L4_form` but scans for multi-actor
+   workflow evidence (FE pages + BE handlers) instead of form ↔ API
+   field matches. Skip when:
+
+   - `${PHASE_DIR}/WORKFLOW-SPECS.md` missing OR empty AND
+     `${PHASE_DIR}/WORKFLOW-SPECS/` directory absent (legacy phase or
+     no multi-actor workflows declared by /vg:blueprint Pass 3 — emit
+     skip telemetry).
+   - Profile not in {feature, web-fullstack, web-frontend-only,
+     web-backend-only} (CLI tool / library / docs / hotfix → skip
+     silently, no telemetry).
+
+   When applicable:
+
+   ```bash
+   WF_SPECS="${PHASE_DIR}/WORKFLOW-SPECS.md"
+   WF_DIR="${PHASE_DIR}/WORKFLOW-SPECS"
+
+   # Skip path: no workflows declared
+   if [ ! -s "$WF_SPECS" ] && [ ! -d "$WF_DIR" ]; then
+     python3 .claude/scripts/vg-orchestrator emit-event "build.l4_workflow_skipped" \
+       --phase "${PHASE_NUMBER}" \
+       --payload "{\"reason\":\"WORKFLOW-SPECS missing — phase has no multi-actor workflows\"}" 2>/dev/null || true
+   else
+     # Resolve fe_root + be_root from CONTEXT.md or vg.config.md, fall back to defaults
+     FE_ROOT=$(grep -E "^fe_root:" "${PHASE_DIR}/CONTEXT.md" 2>/dev/null | awk '{print $2}')
+     [ -z "$FE_ROOT" ] && FE_ROOT="apps/web/src"
+     BE_ROOT=$(grep -E "^be_root:" "${PHASE_DIR}/CONTEXT.md" 2>/dev/null | awk '{print $2}')
+     [ -z "$BE_ROOT" ] && BE_ROOT="apps/api/src"
+
+     STRICT_FLAG=""
+     if [ "${VG_BUILD_L4_WORKFLOW_STRICT:-false}" = "true" ]; then
+       STRICT_FLAG="--strict"
+     fi
+
+     EVIDENCE_PATH="${PHASE_DIR}/.evidence/l4-workflow-${PHASE_NUMBER}.json"
+     mkdir -p "${PHASE_DIR}/.evidence" 2>/dev/null
+
+     python3 scripts/validators/verify-workflow-evidence.py \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "${PHASE_DIR}" \
+       --fe-root "${FE_ROOT}" \
+       --be-root "${BE_ROOT}" \
+       --evidence-out "${EVIDENCE_PATH}" \
+       ${STRICT_FLAG}
+     L4_WORKFLOW_RC=$?
+
+     if [ "$L4_WORKFLOW_RC" -eq 0 ]; then
+       python3 .claude/scripts/vg-orchestrator emit-event "build.l4_workflow_completed" \
+         --phase "${PHASE_NUMBER}" \
+         --payload "{\"phase\":\"${PHASE_NUMBER}\",\"strict\":\"${STRICT_FLAG}\"}" 2>/dev/null || true
+       GATES_PASSED="${GATES_PASSED} L4_workflow"
+     elif [ "$L4_WORKFLOW_RC" -eq 1 ] && [ -z "$STRICT_FLAG" ]; then
+       # Default warn-only mode: drift detected but does not BLOCK build
+       python3 .claude/scripts/vg-orchestrator emit-event "build.l4_workflow_completed" \
+         --phase "${PHASE_NUMBER}" \
+         --outcome "WARN" \
+         --payload "{\"phase\":\"${PHASE_NUMBER}\",\"drift_detected\":true}" 2>/dev/null || true
+       GATES_PASSED="${GATES_PASSED} L4_workflow"
+     elif [ "$L4_WORKFLOW_RC" -eq 2 ]; then
+       # No workflows — emit skip event, treat as gate skipped
+       python3 .claude/scripts/vg-orchestrator emit-event "build.l4_workflow_skipped" \
+         --phase "${PHASE_NUMBER}" \
+         --payload "{\"reason\":\"validator returned rc=2 (no workflows)\"}" 2>/dev/null || true
+     else
+       # Strict mode + drift = real BLOCK; or invocation error
+       echo "⛔ L4_workflow gate failed (rc=$L4_WORKFLOW_RC) — see ${EVIDENCE_PATH}" >&2
+       exit 1
+     fi
+   fi
+   ```
+
+   Add `L4_workflow` to `gates_passed[]` on PASS or WARN; only
+   invocation errors / strict-mode drift block. The orchestrator's
+   post-spawn validator treats `L4_workflow` as conditionally required
+   (only when WORKFLOW-SPECS.md or WORKFLOW-SPECS/ exists for the
+   phase) — see `post-execution-overview.md` gates_passed[] enumeration.
+
 6. **Gap closure** — for each entry in `gates_failed[]` produced in
    steps 1-5, attempt ONE auto-fix iteration:
    - Wait 5 seconds (lets background servers settle / dev server
@@ -412,7 +492,7 @@ The full rendered prompt is also persisted to
 
 | Field | Required | Description |
 |---|---|---|
-| `gates_passed` | yes | List of gate IDs that passed for AT LEAST ONE task in the phase. Orchestrator validates this is a SUPERSET of the required gates (`L2`, `L5`, `truthcheck` always; `L3`, `L6` when any task has `design_ref`; `L4_form` when `${PHASE_DIR}/FORM-API-MAP.md` exists from /vg:blueprint v2.62.0 F3). |
+| `gates_passed` | yes | List of gate IDs that passed for AT LEAST ONE task in the phase. Orchestrator validates this is a SUPERSET of the required gates (`L2`, `L5`, `truthcheck` always; `L3`, `L6` when any task has `design_ref`; `L4_form` when `${PHASE_DIR}/FORM-API-MAP.md` exists from /vg:blueprint v2.62.0 F3; `L4_workflow` when `${PHASE_DIR}/WORKFLOW-SPECS.md` or `${PHASE_DIR}/WORKFLOW-SPECS/` exists from /vg:blueprint v2.64.0 F5). |
 | `gates_failed` | yes | List of `{task_id, gate, reason}` triples for failures detected in steps 1-5. May be empty (clean phase). Each entry NOT closed by `gaps_closed[]` blocks marker write. |
 | `gaps_closed` | yes | List of `{task_id, gate, fix}` triples for failures that re-passed after the 1-retry gap closure (procedure step 6). Used by orchestrator to determine whether to route to gap-recovery. |
 | `summary_path` | yes | Absolute path to the SUMMARY.md file written in procedure step 7. Orchestrator validates `[ -f "${summary_path}" ]`. |
