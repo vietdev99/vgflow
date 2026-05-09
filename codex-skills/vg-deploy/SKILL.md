@@ -70,6 +70,34 @@ Codex hook parity is evidence-based: `.vg/events.db`, step markers,
 `must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
 run is not complete just because the model says it is complete.
 
+<HARD-GATE-CODEX>
+Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
+hook auto-emits `must_touch_markers` declared in `commands/vg/deploy.md`;
+Codex does NOT receive that signal. AI MUST emit each HARD marker manually
+after the corresponding STEP's primary action completes — failure to do so
+causes the contract validator to reject the run with "8/N markers found".
+
+After each STEP's primary action completes, run:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step deploy <marker>
+```
+
+Required HARD markers for /vg:deploy (v2.65.0 A9):
+
+| STEP | Marker |
+|---|---|
+| 0 (parse + validate) | `0_parse_and_validate` |
+| 0a (env select + confirm) | `0a_env_select_and_confirm` |
+| 1 (deploy per env) | `1_deploy_per_env` |
+| 2 (persist summary) | `2_persist_summary` |
+| Final close | `complete` |
+
+All five are HARD — none has severity:warn in `commands/vg/deploy.md`. The
+existing skill body already emits these inline; this reminder protects
+against accidental removal during future regeneration.
+</HARD-GATE-CODEX>
+
 Before executing command bash blocks from a Codex skill, export
 `VG_RUNTIME=codex`. This is an adapter signal, not a source replacement:
 Claude/unknown runtime keeps the canonical `AskUserQuestion` + Haiku path,

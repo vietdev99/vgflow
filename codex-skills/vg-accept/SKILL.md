@@ -236,6 +236,37 @@ right after with one todo per `projection_items[]` entry (5 group headers
 Lifecycle: `replace-on-start` (first projection replaces stale list) +
 `close-on-complete` (final clear or completed sentinel).
 
+<HARD-GATE-CODEX>
+Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
+hook auto-emits `must_touch_markers` declared in `commands/vg/accept.md`;
+Codex does NOT receive that signal. AI MUST emit each HARD marker manually
+after the corresponding STEP's primary action completes — failure to do so
+causes the contract validator to reject the run with "8/N markers found".
+
+After each STEP's primary action completes, run:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept <marker>
+```
+
+Required HARD markers for /vg:accept (v2.65.0 A9):
+
+| STEP | Marker(s) to emit |
+|---|---|
+| STEP 1 (preflight) | `0_gate_integrity_precheck`, `0_load_config`, `create_task_tracker`, `0c_telemetry_suggestions` |
+| STEP 2 (gates) | `1_artifact_precheck`, `2_marker_precheck`, `3_sandbox_verdict_gate`, `3b_unreachable_triage_gate`, `3c_override_resolution_gate` |
+| STEP 3 (UAT checklist build) | `4_build_uat_checklist` |
+| STEP 4 (UAT narrative autofire) | `4b_uat_narrative_autofire` |
+| STEP 5 (interactive UAT) | `5_interactive_uat` |
+| STEP 6 (UAT quorum gate) | `5_uat_quorum_gate` |
+| STEP 7 (audit) | `6b_security_baseline`, `6c_learn_auto_surface`, `6_write_uat_md` |
+| STEP 8 (cleanup) | `7_post_accept_actions` |
+
+All 17 markers are HARD. None has severity:warn in `commands/vg/accept.md` —
+the close gate (Stop hook on Claude / Gate B in STEP 8 on Codex) blocks the
+run unless every applicable `.step-markers/<marker>.done` exists.
+</HARD-GATE-CODEX>
+
 ## Steps (5 checklist groups → 8 STEP sections)
 
 ### STEP 1 — preflight (4 light steps)
@@ -252,6 +283,15 @@ After STEP 1.create_task_tracker bash runs, you MUST call TodoWrite
 IMMEDIATELY with the projection items from
 `.vg/runs/<run_id>/tasklist-contract.json`.
 
+After STEP 1 completes (Codex hook fallback):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_gate_integrity_precheck
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_load_config
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept create_task_tracker
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0c_telemetry_suggestions
+```
+
 ### STEP 2 — gates (3-tier preflight gates)
 
 Read `_shared/accept/gates.md` and follow it exactly.
@@ -265,6 +305,16 @@ This step covers:
 
 Each gate is fail-fast. Override only with `--override-reason="<text>"`
 (logs to override-debt register).
+
+After each gate passes (or override is logged):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 1_artifact_precheck
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 2_marker_precheck
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3_sandbox_verdict_gate
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3b_unreachable_triage_gate
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3c_override_resolution_gate
+```
 
 ### STEP 3 — UAT checklist build (HEAVY, subagent)
 
@@ -295,6 +345,12 @@ RIPPLE-ANALYSIS.md, SUMMARY*.md, build-state.log).
 After return, validate output JSON contract + present section counts to
 user (proceed/abort prompt).
 
+After STEP 3 returns (UAT checklist written):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 4_build_uat_checklist
+```
+
 ### STEP 4 — UAT narrative autofire
 
 Read `_shared/accept/uat/narrative.md` and follow it exactly.
@@ -304,6 +360,12 @@ This step covers `4b_uat_narrative_autofire` — deterministic
 TEST-GOALS frontmatter (`entry_url`, `navigation_steps`, `precondition`,
 `expected_behavior`) + design-ref blocks. Strings come ONLY from
 `narration-strings.yaml` (D-18 strict enforcement).
+
+After UAT-NARRATIVE.md is written:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 4b_uat_narrative_autofire
+```
 
 ### STEP 5 — interactive UAT (INLINE, NOT subagent)
 
@@ -320,6 +382,12 @@ This step covers `5_interactive_uat` — 50+ AskUserQuestion items across
 6 sections (Decisions, Goals, Ripple HIGH callers, Design refs,
 Deliverables, Mobile gates). User decisions persisted per-section.
 
+After all 6 sections persist `.uat-responses.json`:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_interactive_uat
+```
+
 ### STEP 6 — UAT quorum gate
 
 Read `_shared/accept/uat/quorum.md` and follow it exactly.
@@ -328,6 +396,12 @@ This step covers `5_uat_quorum_gate` — quorum math + rationalization
 guard. Counts SKIPs on critical items (Section A decisions, Section B
 READY goals); blocks unless `--allow-uat-skips` AND rationalization-guard
 passes.
+
+After quorum math passes (or `--allow-uat-skips` clears the gate):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_uat_quorum_gate
+```
 
 ### STEP 7 — audit (security + learn + UAT.md write)
 
@@ -342,6 +416,14 @@ This step covers 3 sub-steps:
 
 Use `vg-load --priority` (NOT flat TEST-GOALS.md) when enumerating goals
 for UAT.md (Phase F Task 30 absorption).
+
+After each STEP 7 sub-step finishes:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6b_security_baseline
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6c_learn_auto_surface
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6_write_uat_md
+```
 
 ### STEP 8 — cleanup (HEAVY, subagent + post-spawn gates)
 
@@ -377,6 +459,12 @@ After return, the MAIN AGENT runs 3 hard-exit gates (in `overview.md`):
 
 The Stop hook then verifies all 17 markers, must_write paths, and
 must_emit_telemetry events.
+
+After Gate C emits `accept.completed` and `run-complete` returns 0:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 7_post_accept_actions
+```
 
 
 ### Post-accept reflector trigger (Section 13.5 / meta-memory v1.1)
