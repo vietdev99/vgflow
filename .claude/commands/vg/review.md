@@ -1,7 +1,7 @@
 ---
 name: vg:review
 description: Post-build review — code scan + browser discovery + fix loop + goal comparison → RUNTIME-MAP
-argument-hint: "<phase> [--target-env=local|staging|sandbox|prod | --local | --sandbox | --staging | --prod] [--mode=full|delta|regression|schema-verify|link-check|infra-smoke] [--scanner=haiku-only|codex-inline|codex-supplement|gemini-supplement|council-all] [--with-deepscan] [--non-interactive] [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--re-scan-goals=G-XX,G-YY] [--dogfood] [--force] [--full-scan] [--allow-no-crud-surface] [--skip-lens-plan-gate]"
+argument-hint: "<phase> [--target-env=local|staging|sandbox|prod | --local | --sandbox | --staging | --prod] [--mode=full|delta|regression|schema-verify|link-check|infra-smoke] [--scanner=haiku-only|codex-inline|codex-supplement|gemini-supplement|council-all] [--skip-deepscan] [--with-deepscan] [--non-interactive] [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--evaluate-only] [--retry-failed] [--re-scan-goals=G-XX,G-YY] [--dogfood] [--force] [--full-scan] [--allow-no-crud-surface] [--skip-lens-plan-gate]"
 allowed-tools:
   - Read
   - Write
@@ -558,6 +558,8 @@ Flags:
 - `--dogfood` — re-scan ALL mutation goals (any goal with non-empty `mutation_evidence` in TEST-GOALS.md) regardless of matrix status. Use when: you suspect systemic submit-evidence gaps. Slower than `--retry-failed` but catches the full surface.
 - `--force` — full rerun from scratch for an already-reviewed phase. Clears prior review markers/artifacts before any staleness/reuse logic runs, so API precheck + discovery + matrix must be regenerated in the current run. Use when: you explicitly want fresh evidence, not re-validation on existing artifacts.
 - `--full-scan` — disable sidebar suppression. Haiku agents see full page (sidebar/header/footer) in every snapshot. Use when: app has non-standard layout, geometry detection fails, or debugging suppression issues.
+- `--skip-deepscan` — **(v2.65.0)** opt out of Phase 2b-2 Haiku per-view exhaustive scan for THIS run. Saves ~30-90s of wall time but trades it for weaker bug detection (state drift, hidden modal coverage, etc.). v2.65.0 made deepscan default ON after a v2.42.4–v2.64.x audit found OPT-IN caused state-shortcut bypass. For project-wide opt-out (e.g. cli-tool / library profiles with no UI surface), set `CONFIG_REVIEW_DEEPSCAN_DEFAULT: off` in vg.config.md instead.
+- `--with-deepscan` — **(legacy, v2.42.4–v2.64.x)** parsed but a no-op since v2.65.0 (deepscan runs by default now). Kept for backward-compat; emits a deprecation notice when seen.
 - `--with-probes` — enable mutation probe variations (edit/boundary/repeat) in step 2b-3 step 9. Adds 1 Haiku per mutation goal. Default OFF — let /vg:test handle variations via Playwright codegen (deterministic, cheaper).
 - `--allow-no-crud-surface` — last-resort waiver for legacy phases missing CRUD-SURFACES.md. Logs debt via validator output; do not use for new CRUD work.
 
@@ -580,6 +582,8 @@ SKIP_CROSSAI=""
 ALLOW_NO_CRUD_SURFACE=""
 NON_INTERACTIVE=""
 FORCE_RERUN=""
+SKIP_DEEPSCAN=""           # v2.65.0 A7 — explicit opt-out for default-ON deepscan
+WITH_DEEPSCAN_LEGACY=""    # v2.65.0 A7 — track legacy flag for deprecation notice
 
 for tok in $ARGS_RAW; do
   case "$tok" in
@@ -596,12 +600,20 @@ for tok in $ARGS_RAW; do
     --skip-crossai)            SKIP_CROSSAI=1 ;;
     --allow-no-crud-surface)   ALLOW_NO_CRUD_SURFACE=1 ;;
     --non-interactive)         NON_INTERACTIVE=1 ;;
+    --skip-deepscan)           SKIP_DEEPSCAN=1 ;;
+    --with-deepscan)           WITH_DEEPSCAN_LEGACY=1 ;;
   esac
 done
 
+# v2.65.0 A7 — emit deprecation notice for legacy --with-deepscan (now no-op)
+if [ -n "$WITH_DEEPSCAN_LEGACY" ]; then
+  echo "▸ NOTE: --with-deepscan is a no-op since v2.65.0 (deepscan now runs by default)."
+  echo "  Remove the flag from your invocation. Use --skip-deepscan to opt OUT instead."
+fi
+
 export RETRY_FAILED RE_SCAN_GOALS DOGFOOD SKIP_SCAN SKIP_DISCOVERY FIX_ONLY \
        EVALUATE_ONLY FULL_SCAN WITH_PROBES SKIP_CROSSAI ALLOW_NO_CRUD_SURFACE \
-       NON_INTERACTIVE FORCE_RERUN
+       NON_INTERACTIVE FORCE_RERUN SKIP_DEEPSCAN WITH_DEEPSCAN_LEGACY
 ```
 
 **Phase profile detection (P5, v1.9.2) — FIRST ACTION before any blanket check:**
@@ -3560,36 +3572,52 @@ Then immediately proceed to 2b-2 (spawn Haiku).
 
 #### 2b-2: Spawn Haiku Scanners (parallel OR sequential per view — v1.9.4 R3.3)
 
-<DEEPSCAN_OPT_IN_GATE_v2.42.4>
-**v2.42.4+ refactor — Phase 2b-2 default OFF.**
+<DEEPSCAN_OPT_OUT_GATE_v2.65.0>
+**v2.65.0 BREAKING change — Phase 2b-2 deepscan now default ON.**
 
-Per the 3-tier review/test/roam refactor (see `.vg/research/ROAM-RFC-v1.md`
-and `PLAN-vgflow-2026-05-01.md` Part D), exhaustive UI exploration moves
-to `/vg:roam`. /vg:review keeps light browser smoke (Phase 2b-1 navigator
-+ Phase 2b-3 goal recording) for goal-binding verification, but skips
-the per-view Haiku exhaustive scan unless explicitly opted in.
+Earlier history: v2.42.4 made deepscan OPT-IN to push exhaustive UI
+exploration toward `/vg:roam`. Field audit (v2.64.x) found this caused
+state-shortcut bypass — reviews silently skipped deepscan even when
+review state was stale, and bugs that deepscan would have caught fell
+through to test/accept. v2.65.0 flips back to OPT-OUT so /vg:review
+once again surfaces those bugs by default. Adds ~30-90s wall time per
+review run; this is intentional (correctness over speed).
 
-**Skip 2b-2 entirely UNLESS one of these holds:**
-- `$ARGUMENTS` contains `--with-deepscan`, OR
-- `$ARGUMENTS` contains `--full-scan` (legacy alias, kept for backward compat), OR
-- Phase profile is mobile-* (mobile uses sequential haiku as primary scan path), OR
-- `CONFIG_REVIEW_DEEPSCAN_DEFAULT` is set to `on` in vg.config.md (per-project opt-back-in)
+**Run 2b-2 BY DEFAULT.** Skip ONLY if one of these explicit opt-outs holds:
+- `$ARGUMENTS` contains `--skip-deepscan` (v2.65.0 opt-out flag), OR
+- `CONFIG_REVIEW_DEEPSCAN_DEFAULT` is set to `off` in vg.config.md
+  (per-project opt-out — useful for cli-tool / library profiles where
+  there is no UI surface to deepscan)
 
-Skip narration:
+Legacy compatibility (v2.42.4 → v2.64.x):
+- `--with-deepscan` and `--full-scan` flags still parsed but are now
+  no-ops (deepscan runs anyway). Emit a deprecation notice if seen.
+- `CONFIG_REVIEW_DEEPSCAN_DEFAULT: on` is now the default; explicit
+  `on` is harmless (idempotent).
+
+Skip narration (only when --skip-deepscan or config off resolved):
 ```
-echo "▸ Phase 2b-2 (Haiku per-view exhaustive scan) skipped — v2.42.4 default off."
-echo "  Lens-driven exhaustive exploration now lives in /vg:roam (post-test janitor)."
-echo "  Pass --with-deepscan to opt back in for this run, or set"
-echo "  config.review.deepscan_default=on in vg.config.md for project-wide opt-in."
+echo "▸ Phase 2b-2 (Haiku per-view exhaustive scan) skipped — explicit opt-out."
+echo "  Reason: $SKIP_REASON  (--skip-deepscan flag | CONFIG_REVIEW_DEEPSCAN_DEFAULT=off)"
+echo "  Note: v2.65.0 made deepscan default ON. Skipping trades ~30-90s for"
+echo "  weaker bug detection. Re-enable by removing the flag or setting"
+echo "  CONFIG_REVIEW_DEEPSCAN_DEFAULT=on in vg.config.md."
 ```
 
-After echoing skip narration, jump directly to phase2b-3 (goal sequence
-recording). The MANDATORY_GATE block below applies ONLY when 2b-2 is
-gated ON via the conditions above.
-</DEEPSCAN_OPT_IN_GATE_v2.42.4>
+Run narration (default path):
+```
+echo "▸ Phase 2b-2 (Haiku per-view exhaustive scan) running — v2.65.0 default ON."
+echo "  Opt out per-run with --skip-deepscan, or project-wide with"
+echo "  CONFIG_REVIEW_DEEPSCAN_DEFAULT=off in vg.config.md."
+```
+
+After running 2b-2 (or echoing skip narration), proceed to phase2b-3
+(goal sequence recording). The MANDATORY_GATE block below applies on
+the default path; it is bypassed only when an explicit opt-out resolved.
+</DEEPSCAN_OPT_OUT_GATE_v2.65.0>
 
 <MANDATORY_GATE>
-**Applies only when 2b-2 is gated ON (--with-deepscan, --full-scan, mobile-*, or config opt-in).**
+**Applies on the default path (v2.65.0+ deepscan default ON). Bypassed only when an explicit opt-out resolved (--skip-deepscan flag OR CONFIG_REVIEW_DEEPSCAN_DEFAULT=off).**
 
 **You MUST run the provider-native scanner protocol in step 2b-2** (unless spawn_mode=none for cli-tool/library profiles). This is NOT optional.
 - Do NOT skip this step because "phase is small" or "I already covered everything in 2b-1"

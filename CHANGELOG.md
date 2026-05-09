@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.65.0 — Codex review speed + state-shortcut hardening — BREAKING: deepscan default ON (UNRELEASED)
+
+### Breaking changes
+- **A7:** Phase 2b-2 deepscan now default ON. Was OPT-IN since v2.42.4 → reviews silently skipped deepscan even when stale state present. Opt-out: `--skip-deepscan` flag OR `CONFIG_REVIEW_DEEPSCAN_DEFAULT: off` in vg.config.md. Adds ~30-90s to review wall time but catches state drift bugs missed in v2.64.x. Legacy `--with-deepscan` and `--full-scan` flags still parsed but are no-ops (deepscan runs anyway); `--with-deepscan` emits a deprecation notice.
+
 ## v2.64.1 — Hotfix: 3-layer split parser bugs (2026-05-09)
 
 ### Bug fixes (closes 6 GitHub issues from darwin user)

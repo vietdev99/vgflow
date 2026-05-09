@@ -321,6 +321,22 @@ routing:
 # Set higher (8-12) on machines with many cores + good network.
 parallel_workers: 5
 
+# v2.65.0 A7 — Phase 2b-2 deepscan default ON (BREAKING change vs v2.42.4–v2.64.x)
+# History: v2.42.4 made deepscan OPT-IN to push exhaustive UI exploration toward
+# /vg:roam. Field audit (v2.64.x) found this caused state-shortcut bypass — reviews
+# silently skipped deepscan even when state was stale, missing many bugs that fell
+# through to /vg:test and /vg:accept. v2.65.0 flips back to OPT-OUT.
+#
+# Values:
+#   on   → /vg:review runs Phase 2b-2 (Haiku per-view exhaustive scan) by default.
+#          Adds ~30-90s per review run; catches state-drift + hidden-modal bugs.
+#   off  → project-wide opt-out. /vg:review skips Phase 2b-2 unless --with-deepscan
+#          (legacy) is explicitly passed. Use for cli-tool/library profiles with
+#          no UI surface, or in CI tiers where the time cost is unacceptable.
+#
+# Per-run override flag (v2.65.0): --skip-deepscan
+CONFIG_REVIEW_DEEPSCAN_DEFAULT: on
+
 review:
   # ─── Scanner spawn mode (v1.9.4 R3.3 — mobile sequential gate) ──────
   # Controls how Phase 2b-2 spawns Haiku scanner agents:
