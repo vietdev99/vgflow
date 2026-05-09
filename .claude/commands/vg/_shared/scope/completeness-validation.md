@@ -4,14 +4,19 @@
 > 4 automated checks on the generated CONTEXT.md. Surfaces warnings + hard-blocks on critical gaps.
 
 <HARD-GATE>
-You MUST run all 4 checks (A endpoint coverage, B design ref, C decision
-completeness, D orphan detection). `step-active` fires before checks,
-`mark-step` after. BLOCK on any Check A/C gap.
+You MUST run all 5 checks (A endpoint coverage, B design ref, C decision
+completeness, D orphan detection, **E upstream prereq verification**).
+`step-active` fires before checks, `mark-step` after. BLOCK on any Check
+A/C/E gap.
 
 **v2.66.0 BREAKING (strict default ON):** Check B + D WARNs now trigger
 exit 1 by default. Pass `--lenient-prereqs` (preflight parse loop exports
 `LENIENT_PREREQS=true`) to restore v2.65.x lenient behavior where only
 BLOCK_COUNT > 0 fails.
+
+**Check E is strict-only (no lenient exemption):** missing upstream
+symbols always BLOCK regardless of `--lenient-prereqs`. See Check E
+section below for rationale (PrintwayV3 31×404 cascade root cause).
 </HARD-GATE>
 
 ## Step active (gate enforcement)
@@ -88,6 +93,57 @@ Decisions that don't trace back to any SPECS.md in-scope item (potential scope c
 Found → WARN:
 ```
 ⚠ D-{XX} doesn't map to any SPECS in-scope item. Intentional addition or scope creep?
+```
+
+## Check E — Upstream Prereq Verification (⛔ BLOCK; v2.66.0 #156, no `--lenient-prereqs` exemption)
+
+When CONTEXT.md declares a `## Prerequisites` section (or table) referencing
+fields/endpoints owned by upstream phases (cross-phase prereqs), Check E
+verifies each entry exists in the owner phase's SPECS.md or PLAN.md before
+allowing scope to complete.
+
+**Why strict (no `--lenient-prereqs` exemption for Check E):** Lenient mode
+is intended to downgrade fidelity-style WARNs (design refs, orphan decisions).
+Cross-phase prereqs declaring missing upstream symbols ARE the cascade root
+cause behind the v2.66.0 PrintwayV3 31×404 incident — there is no legitimate
+reason to lenient-skip a missing upstream patch. Check E always BLOCKs on a
+missing owner symbol.
+
+**Logic** (executed inside the python pass below; canonical bash sketch for
+reviewer reference):
+
+```bash
+# Reviewer reference only — actual logic lives in the python block below.
+# Parses any ## Prerequisites table with columns: phase | artifact | symbol
+# For each row: greps owner phase SPECS.md/PLAN.md for the symbol token.
+# If owner files exist but the symbol is missing → BLOCK.
+PREREQS_TABLE=$(awk '/^## Prerequisites/,/^## /' "${PHASE_DIR}/CONTEXT.md" 2>/dev/null)
+while IFS='|' read -r _ owner_phase artifact symbol _; do
+    owner_phase=$(echo "$owner_phase" | xargs)
+    symbol=$(echo "$symbol" | xargs)
+    [ -z "$owner_phase" ] && continue
+    [ -z "$symbol" ] && continue
+    owner_specs=".vg/phases/${owner_phase}/SPECS.md"
+    owner_plan=".vg/phases/${owner_phase}/PLAN.md"
+    found=false
+    [ -f "$owner_specs" ] && grep -q "$symbol" "$owner_specs" && found=true
+    [ -f "$owner_plan" ] && grep -q "$symbol" "$owner_plan" && found=true
+    [ "$found" = "false" ] && {
+        # → BLOCK with /vg:amend remedy
+        :
+    }
+done <<< "$PREREQS_TABLE"
+```
+
+**Failure remedy text** (operator must do exactly one of these before continuing):
+
+```
+⛔ Prereq '{symbol}' not found in owner phase {owner_phase}.
+   Choose one remedy:
+   1. Run `/vg:amend {owner_phase}` to add the missing field/endpoint to its SPECS/PLAN.
+   2. Insert a patch phase (e.g. {owner_phase}.5) before this scope completes.
+   3. Remove the prereq from CONTEXT.md if the symbol is actually local.
+   Cannot be exempted via --lenient-prereqs (upstream prereqs are strict-only).
 ```
 
 ## Surface warnings + emit events
@@ -219,6 +275,70 @@ if specs:
                 "check": "D_orphan_decision",
                 "decision": d["id"],
                 "msg": f"{d['id']} doesn't map to any SPECS in-scope item — intentional or scope creep?",
+            })
+
+# Check E — Upstream Prereq Verification (v2.66.0 #156, BLOCK; strict-only,
+# no --lenient-prereqs exemption). Parse the "## Prerequisites" section in
+# CONTEXT.md (markdown table with columns: phase | artifact | symbol | ...)
+# For each (owner_phase, symbol) row, grep owner phase SPECS.md/PLAN.md for
+# the symbol token. Missing → BLOCK with /vg:amend remedy.
+prereq_section_re = re.compile(
+    r"^##\s+Prerequisites\s*$(.*?)(?=^##\s+|\Z)",
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+)
+prereq_match = prereq_section_re.search(context)
+if prereq_match:
+    prereq_block = prereq_match.group(1)
+    # Extract markdown table rows: lines starting with `|` and containing 3+ pipes
+    repo_root = Path(".")
+    phases_root = repo_root / ".vg" / "phases"
+    for line in prereq_block.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        # Skip header + separator rows
+        joined = " ".join(cells).lower()
+        if "phase" in joined and "artifact" in joined:
+            continue
+        if all(re.fullmatch(r":?-+:?", c) for c in cells if c):
+            continue
+        owner_phase, _artifact, symbol = cells[0], cells[1], cells[2]
+        if not owner_phase or not symbol:
+            continue
+        # Resolve owner phase dir (slugged or bare)
+        owner_dir = None
+        if phases_root.exists():
+            for p in phases_root.iterdir():
+                if p.is_dir() and (p.name == owner_phase or p.name.startswith(f"{owner_phase}-")):
+                    owner_dir = p
+                    break
+        owner_specs = (owner_dir / "SPECS.md") if owner_dir else None
+        owner_plan = (owner_dir / "PLAN.md") if owner_dir else None
+        found = False
+        symbol_token = re.escape(symbol)
+        for fp in (owner_specs, owner_plan):
+            if fp and fp.exists():
+                try:
+                    if re.search(symbol_token, fp.read_text(encoding="utf-8")):
+                        found = True
+                        break
+                except Exception:
+                    pass
+        if not found:
+            blocks.append({
+                "check": "E_upstream_prereq",
+                "owner_phase": owner_phase,
+                "symbol": symbol,
+                "msg": (
+                    f"Prereq '{symbol}' not found in owner phase {owner_phase} "
+                    f"(SPECS.md/PLAN.md). Run `/vg:amend {owner_phase}` to add it, "
+                    f"insert a patch phase before this scope completes, or remove "
+                    f"the prereq if it is actually local. Cannot --lenient-prereqs "
+                    f"exempt (upstream prereqs are strict-only)."
+                ),
             })
 
 print(json.dumps({"warnings": warnings, "blocks": blocks}))

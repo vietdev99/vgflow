@@ -201,12 +201,20 @@ per decision (Layer 1) + CONTEXT/index.md (Layer 2) + DISCUSSION-LOG.md
 
 ### STEP 5 — completeness validation
 Read `_shared/scope/completeness-validation.md` and follow it exactly.
-Runs 4 checks (decision count, endpoint coverage, UI components,
-test scenarios) and surfaces warnings.
+Runs 5 checks (A endpoint coverage, B design ref, C decision completeness,
+D orphan detection, E upstream prereq verification) and surfaces warnings.
 
 **v2.66.0 BREAKING:** prereq strict default ON — both WARN and BLOCK
 violations exit 1. Pass `--lenient-prereqs` (preflight exports
 `LENIENT_PREREQS=true`) for v2.65.x WARN-only behavior.
+
+**Check E (v2.66.0 #156) — upstream amendment enforcement:** when
+CONTEXT.md declares a `## Prerequisites` table with `phase | artifact |
+symbol` rows, each symbol must exist in the owner phase's SPECS.md or
+PLAN.md. Missing → BLOCK with remedy via `/vg:amend ${owner_phase}` or
+patch phase insertion. **Cannot be `--lenient-prereqs` exempted** —
+cross-phase prereqs are the cascade root cause behind the PrintwayV3
+31×404 incident; lenient mode covers fidelity, not upstream truth.
 
 ### STEP 6 — CrossAI review (skippable with --skip-crossai + --override-reason)
 Read `_shared/scope/crossai.md` and follow it exactly.

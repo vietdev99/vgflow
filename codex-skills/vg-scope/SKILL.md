@@ -337,10 +337,21 @@ After atomic group commit succeeds:
 
 ### STEP 5 — completeness validation
 Read `_shared/scope/completeness-validation.md` and follow it exactly.
-Runs 4 checks (decision count, endpoint coverage, UI components,
-test scenarios) and surfaces warnings.
+Runs 5 checks (A endpoint coverage, B design ref, C decision completeness,
+D orphan detection, E upstream prereq verification) and surfaces warnings.
 
-After all 4 checks complete (warnings surfaced, blocking violations resolved):
+**v2.66.0 BREAKING:** prereq strict default ON — Check B/D WARNs now exit 1.
+Pass `--lenient-prereqs` for v2.65.x WARN-only behavior.
+
+**Check E enforcement (v2.66.0 #156):** when you author a `## Prerequisites`
+table in CONTEXT.md, every `phase | artifact | symbol` row MUST already
+exist in the owner phase's SPECS.md or PLAN.md. If owner is missing the
+symbol, STOP and propose `/vg:amend ${owner_phase}` (or insert a patch
+phase) before continuing scope. Check E **cannot be `--lenient-prereqs`
+exempted** — upstream prereqs are strict-only because they were the
+cascade root cause behind the v2.66.0 PrintwayV3 31×404 incident.
+
+After all 5 checks complete (warnings surfaced, blocking violations resolved):
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 3_completeness_validation
