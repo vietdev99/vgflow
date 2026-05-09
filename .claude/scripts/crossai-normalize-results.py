@@ -18,14 +18,40 @@ from xml.sax.saxutils import escape
 
 VALID_VERDICTS = {"pass", "flag", "block", "inconclusive"}
 
+# v2.66.0 (#151): tls_self_signed MUST come before auth_missing because the
+# Gemini cert error text contains "Error authenticating:" as a prefix and the
+# auth_missing pattern would otherwise win, hiding the real CA-cert remedy.
+# Pattern widened to match real-world strings: `self-signed certificate`,
+# `certificate chain`, `SELF_SIGNED_CERT_IN_CHAIN`, `unable to verify the
+# first certificate`, `SSL certificate problem`.
 INFRA_PATTERNS: list[tuple[str, str]] = [
+    (
+        "tls_self_signed",
+        r"self[_ -]?signed[_ -]?cert|SELF_SIGNED_CERT_IN_CHAIN|certificate chain"
+        r"|unable to verify the first certificate|SSL certificate problem",
+    ),
     ("auth_missing", r"no active credentials|error authenticating|authentication"),
     ("quota_or_limit", r"hit your limit|quota|rate limit|usage limit"),
-    ("tls_self_signed", r"self[_ -]?signed[_ -]?cert|SELF_SIGNED_CERT_IN_CHAIN"),
     ("unsupported_hook_config", r"invalid hook event name|unsupported additionalContext"),
     ("timeout", r"timed out|timeout"),
     ("cli_missing", r"command not found|not found in PATH|no such file"),
 ]
+
+# v2.66.0 (#151): Operator-actionable remedies. Surfaced inside the inconclusive
+# verdict's <finding> text so a human running `/vg:scope` etc. immediately sees
+# how to unblock the CLI without spelunking through stderr.
+FAILURE_HINTS: dict[str, str] = {
+    "tls_self_signed": (
+        "TLS handshake failed (self-signed CA chain). On corp networks, "
+        "set NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem before invoking the CLI, "
+        "OR pass --insecure-skip-tls-verify if your CLI build supports it."
+    ),
+    "auth_missing": "Run the CLI's auth-login command (e.g. `gemini auth login`, `codex login`) to refresh credentials.",
+    "quota_or_limit": "Provider quota exhausted. Wait for the rate-limit window OR switch to a different account/provider in vg.config.md.",
+    "unsupported_hook_config": "CLI rejected a project hook config. Run from an isolated cwd OR remove the offending hook (see crossai-runner cwd isolation).",
+    "timeout": "CLI did not return within the timeout window. Increase the per-CLI timeout in vg.config.md OR retry with a smaller context.",
+    "cli_missing": "CLI binary not on PATH. Install it OR set the binary path explicitly in vg.config.md.",
+}
 
 
 def _read(path: Path) -> str:
@@ -134,6 +160,10 @@ def normalize(output_dir: Path, label: str, phase: str = "unknown") -> dict:
             if not raw_path.exists():
                 raw_path.write_text(xml_text, encoding="utf-8")
         finding = f"{name} CrossAI CLI inconclusive: {reason}"
+        # v2.66.0 (#151): prepend operator-actionable hint when reason is known.
+        hint = FAILURE_HINTS.get(reason, "")
+        if hint:
+            finding = f"{finding}. HINT: {hint}"
         if err_text.strip():
             tail = " ".join(err_text.strip().splitlines()[-3:])[:500]
             finding = f"{finding}. stderr: {tail}"
@@ -150,6 +180,7 @@ def normalize(output_dir: Path, label: str, phase: str = "unknown") -> dict:
                 "reviewer": name,
                 "exit_code": exit_code or "missing",
                 "reason": reason,
+                "failure_hint": hint,
             }
         )
 
