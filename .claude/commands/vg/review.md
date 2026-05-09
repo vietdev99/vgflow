@@ -4775,6 +4775,20 @@ fi
 
 Reads `REVIEW-FINDINGS.json` and emits `AUTO-FIX-TASKS.md` for findings meeting the conservative gate (severity ≥ high, confidence == high, cleanup_status == completed). `/vg:build` consumes via `--include-auto-fix` flag (opt-in v2.37, may default-on v2.38 after dogfood).
 
+### v2.67.0 #160 — BLOCKED 5-reason taxonomy + reason-based routing
+
+GOAL-COVERAGE-MATRIX BLOCKED status is no longer monolithic. `scripts/challenge-coverage.py` now exposes `BlockedReason` enum + `classify_blocked()` so each BLOCKED goal carries one of:
+
+| Reason | Routing |
+|---|---|
+| `APP_BLOCKED` | route to `/vg:build` (real bug, code shipped wrong) |
+| `WORKFLOW_BLOCKED` | flag tool issue — file workflow bug, do NOT route |
+| `PREREQ_MISSING` | propose `/vg:amend ${owner_phase}` — upstream patch was DEFERRED |
+| `EXTERNAL_REQUIRED` | operator action — OAuth/WS/reset token needed before re-probe |
+| `PROBE_INVALID` | flag probe bug (e.g., WS endpoint hit as GET) — fix probe, re-run; do NOT route |
+
+Auto-fix routing in this phase only sends `APP_BLOCKED` goals to `/vg:build`. Other reasons are surfaced as separate handling text in `AUTO-FIX-TASKS.md` and not pushed to the build queue. This prevents the auto-fix loop from looping on goals where /vg:build cannot help (probe bugs, missing OAuth, deferred upstream).
+
 ```bash
 echo ""
 echo "━━━ Phase 2f — Route findings to /vg:build (auto-fix loop) ━━━"
@@ -4789,6 +4803,43 @@ if [ -f "${PHASE_DIR}/REVIEW-FINDINGS.json" ]; then
     TASK_COUNT=$(grep -c "^### Task AF-" "${PHASE_DIR}/AUTO-FIX-TASKS.md" 2>/dev/null || echo 0)
     echo "  ✓ ${TASK_COUNT} auto-fix task group(s) → AUTO-FIX-TASKS.md"
     echo "    Run /vg:build ${PHASE_NUMBER} --include-auto-fix to consume"
+
+    # v2.67.0 #160 — surface BLOCKED reason taxonomy if present in COVERAGE-CHALLENGE.json
+    # so the user knows which BLOCKED goals are NOT routed (PREREQ_MISSING / EXTERNAL_REQUIRED /
+    # PROBE_INVALID / WORKFLOW_BLOCKED) and need separate handling.
+    COVERAGE_CHALLENGE="${PHASE_DIR}/COVERAGE-CHALLENGE.json"
+    if [ -f "$COVERAGE_CHALLENGE" ]; then
+      ${PYTHON_BIN:-python3} - "$COVERAGE_CHALLENGE" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+try:
+    data = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+reasons = data.get("blocked_reasons") or {}
+if not reasons:
+    sys.exit(0)
+# Reasons NOT routable to /vg:build
+non_app = {k: v for k, v in reasons.items() if k != "APP_BLOCKED"}
+if not non_app:
+    sys.exit(0)
+print("  ⚠ BLOCKED goals NOT routed to /vg:build (reason-based handling required):")
+for reason, count in non_app.items():
+    if reason == "PREREQ_MISSING":
+        hint = "→ /vg:amend ${owner_phase}"
+    elif reason == "EXTERNAL_REQUIRED":
+        hint = "→ operator action (OAuth/WS/reset)"
+    elif reason == "PROBE_INVALID":
+        hint = "→ probe bug — fix probe + re-run"
+    elif reason == "WORKFLOW_BLOCKED":
+        hint = "→ workflow/tool issue — file bug"
+    else:
+        hint = ""
+    print(f"    {reason}: {count} {hint}")
+PY
+    fi
+
     emit_telemetry_v2 "review_phase2f_routed" "${PHASE_NUMBER}" \
       "review.2f-route" "auto_fix_routing" "PASS" \
       "{\"task_groups\":${TASK_COUNT}}" 2>/dev/null || true

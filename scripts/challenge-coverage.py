@@ -48,9 +48,62 @@ import os
 import random
 import re
 import sys
+from enum import Enum
 from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# v2.67.0 #160 — GOAL-COVERAGE-MATRIX BLOCKED 5-reason taxonomy.
+#
+# The matrix BLOCKED status conflates 5 distinct reasons. Auto-fix routing
+# (review.md Phase 2f) must distinguish so it only sends APP_BLOCKED goals
+# to /vg:build — other reasons need different handling (operator action,
+# upstream amend, probe bug fix).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class BlockedReason(Enum):
+    """Why a goal in GOAL-COVERAGE-MATRIX shows BLOCKED status."""
+
+    APP_BLOCKED = "app_blocked"            # code shipped, runtime returns wrong response → /vg:build
+    WORKFLOW_BLOCKED = "workflow_blocked"  # tool/probe pipeline bug (not WS-as-GET specifically) → workflow fix
+    PREREQ_MISSING = "prereq_missing"      # upstream patch DEFERRED → /vg:amend ${owner_phase}
+    EXTERNAL_REQUIRED = "external_required"  # OAuth / WS / reset token required → operator action
+    PROBE_INVALID = "probe_invalid"        # probe ran wrong (e.g. WS endpoint hit as GET) → flag probe bug
+
+
+def classify_blocked(evidence: dict) -> BlockedReason:
+    """Classify why a goal is BLOCKED based on the evidence dict.
+
+    Evidence keys (any subset):
+      - probe_error: str — message describing probe pipeline failure
+      - upstream_deferred: bool — owner phase decided to defer
+      - requires_external: bool — needs OAuth/WS/external trigger
+      - runtime_response_present: bool — server responded
+      - matches_contract: bool — response matches contract shape
+
+    Routing rules (v2.67.0 #160):
+      - probe_error containing "probe" → PROBE_INVALID (probe ran wrong)
+      - other probe_error → WORKFLOW_BLOCKED (tool pipeline issue)
+      - upstream_deferred → PREREQ_MISSING (route to /vg:amend)
+      - requires_external → EXTERNAL_REQUIRED (operator action)
+      - runtime_response_present and not matches_contract → APP_BLOCKED
+      - default → APP_BLOCKED (real bug in shipped code)
+    """
+    probe_error = evidence.get("probe_error")
+    if probe_error:
+        if "probe" in str(probe_error).lower():
+            return BlockedReason.PROBE_INVALID
+        return BlockedReason.WORKFLOW_BLOCKED
+    if evidence.get("upstream_deferred"):
+        return BlockedReason.PREREQ_MISSING
+    if evidence.get("requires_external"):
+        return BlockedReason.EXTERNAL_REQUIRED
+    if evidence.get("runtime_response_present") and not evidence.get("matches_contract", True):
+        return BlockedReason.APP_BLOCKED
+    return BlockedReason.APP_BLOCKED  # default — assume real bug
 
 
 def load_run(path: Path) -> dict:
