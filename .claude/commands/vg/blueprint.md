@@ -83,6 +83,26 @@ runtime_contract:
       required_unless_flag: "--skip-form-api-map"
       profile_aware: true
       severity: "warn"
+    # UI-SPEC 3-layer split (D1 v2.63.0 — matches API-CONTRACTS / PLAN /
+    # TEST-GOALS pattern). Per-slug split eliminates the prior "Sample 2-3
+    # representative" architectural budget cap from
+    # _shared/blueprint/design.md:264 — every slug now gets evidence.
+    # severity=warn while ecosystem migrates from flat-only UI-SPEC.md.
+    # profile_aware: only enforced for FE profiles (web-fullstack,
+    # web-frontend-only).
+    - path: "${PHASE_DIR}/UI-SPEC.md"
+      profile_aware: true
+      required_unless_flag: "--skip-ui-spec"
+      severity: "warn"
+    - path: "${PHASE_DIR}/UI-SPEC/index.md"
+      profile_aware: true
+      required_unless_flag: "--skip-ui-spec"
+      severity: "warn"
+    - path: "${PHASE_DIR}/UI-SPEC/*.md"
+      glob_min_count: 2  # at least index.md + 1 slug file
+      profile_aware: true
+      required_unless_flag: "--skip-ui-spec"
+      severity: "warn"
   must_touch_markers:
     - "0_design_discovery"
     - "0_amendment_preflight"

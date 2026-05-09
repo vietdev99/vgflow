@@ -6,7 +6,7 @@
 # partial loading instead of reading the full flat file — saves context budget.
 #
 # USAGE
-#   vg-load --phase <N> --artifact <plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant|workflow> [<filter-flags>]
+#   vg-load --phase <N> --artifact <plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant|workflow|ui-spec> [<filter-flags>]
 #
 # ARTIFACTS + FILTERS
 #   --artifact plan
@@ -54,6 +54,11 @@
 #       --workflow WF-NN   → WORKFLOW-SPECS/WF-NN.md (per-workflow detail)
 #       --full | --index | --list
 #
+#   --artifact ui-spec (D1 v2.63.0)
+#       --slug <slug>      → UI-SPEC/<slug>.md (per-slug split, falls back to
+#                            flat UI-SPEC.md if per-slug file missing)
+#       --full | --index | --list
+#
 # OPTIONAL
 #   --phases-dir DIR    override default .vg/phases (or $PHASES_DIR env)
 #   --quiet             suppress informational stderr
@@ -86,6 +91,7 @@ while [ $# -gt 0 ]; do
     --task|--wave|--endpoint|--resource|--goal|--priority|--decision)
                     filter_kind="${1#--}"; filter_value="$2"; shift 2 ;;
     --workflow)     filter_kind="workflow"; filter_value="$2"; shift 2 ;;
+    --slug)         filter_kind="slug"; filter_value="$2"; shift 2 ;;
     --full|--list|--index)
                     filter_kind="${1#--}"; filter_value=""; shift ;;
     --phases-dir)   phases_dir="$2"; shift 2 ;;
@@ -100,8 +106,8 @@ done
 
 # Validate artifact name before filter check so unknown artifacts produce the right error.
 case "$artifact" in
-  plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant|workflow) ;;
-  *) echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant, workflow" >&2; exit 1 ;;
+  plan|contracts|goals|edge-cases|crud-surfaces|lens-walk|rcrurd-invariant|workflow|ui-spec) ;;
+  *) echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant, workflow, ui-spec" >&2; exit 1 ;;
 esac
 
 [ -z "$filter_kind" ] && { echo "ERROR: filter required (--task/--wave/--full/--list/--index/etc.)" >&2; exit 1; }
@@ -307,8 +313,32 @@ case "$artifact" in
     esac
     ;;
 
+  ui-spec)
+    # D1 v2.63.0 — UI-SPEC 3-layer split (matches API-CONTRACTS / PLAN /
+    # TEST-GOALS pattern). Per-slug split eliminates the prior "Sample 2-3
+    # representative" architectural budget cap. Falls back to flat
+    # UI-SPEC.md if per-slug file missing (legacy phase pre-D1).
+    sub_dir="$phase_dir/UI-SPEC"
+    flat_file="$phase_dir/UI-SPEC.md"
+    case "$filter_kind" in
+      full)  cat "$flat_file" 2>/dev/null || { echo "ERROR: $flat_file not found" >&2; exit 2; } ;;
+      index) cat "$sub_dir/index.md" 2>/dev/null || { echo "ERROR: $sub_dir/index.md not found" >&2; exit 2; } ;;
+      list)  ls "$sub_dir"/*.md 2>/dev/null | grep -v '/index\.md$' || { echo "no per-slug UI-SPEC files" >&2; exit 3; } ;;
+      slug)
+        split="$sub_dir/${filter_value}.md"
+        if [ -f "$split" ]; then
+          cat "$split"
+        else
+          [ "$quiet" = "0" ] && echo "⚠ UI-SPEC/${filter_value}.md missing — falling back to flat UI-SPEC.md" >&2
+          cat "$flat_file" 2>/dev/null || { echo "ERROR: $flat_file not found" >&2; exit 2; }
+        fi
+        ;;
+      *) echo "ERROR: unsupported filter '$filter_kind' for ui-spec (use --slug <slug>, --full, --index, --list)" >&2; exit 1 ;;
+    esac
+    ;;
+
   *)
-    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant, workflow" >&2
+    echo "ERROR: unknown artifact '$artifact'. Supported: plan, contracts, goals, edge-cases, crud-surfaces, lens-walk, rcrurd-invariant, workflow, ui-spec" >&2
     exit 1
     ;;
 esac

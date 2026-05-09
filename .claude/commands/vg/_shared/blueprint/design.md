@@ -257,20 +257,43 @@ fi
 Answers: layout, component set, spacing tokens, interaction states,
 responsive breakpoints.
 
-**Input (~750 lines agent context):**
+**Input (per-slug, scales linearly with slug count):**
 - CONTEXT.md design decisions (~100 lines)
 - Task file-paths of FE tasks + their `<design-ref>` attributes (~100 lines)
 - `${DESIGN_OUTPUT_DIR}/manifest.json` (~50 lines)
-- Sample design refs (2-3 representative `*.structural.html` + `*.interactions.md`) (~300 lines)
+- For EACH slug in PLAN `<design-ref>` tags: `*.structural.html` +
+  `*.interactions.md` for that specific slug. (Previously v2.62.0 and earlier:
+  "Sample 2-3 representative refs (~300 lines)" — superseded by D1 v2.63.0
+  per-slug split. The old sampling cap left pages 4+ in a phase with no markup
+  evidence, causing build executors to write forms from imagination.)
 - **`${DESIGN_OUTPUT_DIR}/scans/{slug}.scan.json`** — per-slug Haiku Layer 2
   output (modals_discovered, forms_discovered, tabs_discovered, warnings)
   for EVERY slug in PLAN. Already produced by `/vg:design-extract` Layer 2 —
   consume as authoritative.
 
+**Output (3-layer split — matches API-CONTRACTS / PLAN / TEST-GOALS pattern):**
+
+For every slug in PLAN.md `<design-ref>` tags, emit `${PHASE_DIR}/UI-SPEC/<slug>.md`. Each per-slug file:
+  - Layout (grid/flex), sections, states (from scan.json + structural.html for that slug)
+  - Per-form verbatim markup (top-5 forms from F1 cap; this slug's forms only)
+  - Component variants in this slug (button/modal/datatable canonical markup)
+  - Interaction patterns from interactions.md
+
+Also emit `${PHASE_DIR}/UI-SPEC/index.md` listing all per-slug files with one-line summary.
+
+The flat `${PHASE_DIR}/UI-SPEC.md` is built post-agent by the orchestrator concatenating per-slug files. Agents do NOT write the flat file directly.
+
+Per-slug context budget: ~50 lines each. Total context for UI-SPEC writing scales linearly with slug count, no sampling needed. This supersedes the previously deprecated "Sample 2-3 representative" architectural drift (D1) where pages 4+ in a phase had no markup evidence in UI-SPEC.
+
 **Agent prompt:**
 ```
-Generate UI-SPEC.md for phase {PHASE}. This is the design contract FE
-executors copy verbatim.
+Generate UI-SPEC per-slug files for phase {PHASE}. This is the design contract
+FE executors copy verbatim. Emit `${PHASE_DIR}/UI-SPEC/<slug>.md` for EVERY
+slug in PLAN.md `<design-ref>` tags, plus `${PHASE_DIR}/UI-SPEC/index.md` as
+the table of contents.
+
+DO NOT write the flat `${PHASE_DIR}/UI-SPEC.md` — orchestrator builds it
+post-agent by concatenating per-slug files.
 
 RULES:
 1. Extract visible patterns from design-normalized refs — do NOT invent.
@@ -294,19 +317,24 @@ RULES:
    including hidden inputs, CSRF tokens, ARIA attrs, and validation patterns.
    NEVER use `...` ellipsis inside the markup block. NO ELLIPSIS.
 
-   Limit: top 5 forms by task reference count (count occurrences in PLAN.md tasks).
-   Remaining forms keep path-reference style. The 5-form cap controls UI-SPEC.md
-   size while ensuring high-traffic forms are byte-accurate for build executors.
+   Limit: top 5 forms by task reference count (count occurrences in PLAN.md tasks)
+   WITHIN THIS SLUG. Remaining forms keep path-reference style. The 5-form cap
+   controls per-slug file size while ensuring high-traffic forms are byte-accurate
+   for build executors.
 8. **Verbatim markup for interactive components (buttons, modals, fields):**
    Where multiple variants exist (primary/secondary/ghost button), paste markup for
    ONE canonical variant per component verbatim, then list other variants as text
    deltas. NEVER use `...` ellipsis in markup blocks. NO ELLIPSIS.
+9. **Per-slug emission (D1 v2.63.0):** Write each slug's UI spec to its own file at
+   `${PHASE_DIR}/UI-SPEC/<slug>.md`. Do NOT bundle multiple slugs into one file.
+   Build executors load only what they need via
+   `vg-load --artifact ui-spec --slug <slug>`.
 
-Output format:
+Output format (each `${PHASE_DIR}/UI-SPEC/<slug>.md`):
 
-# UI Spec — Phase {PHASE}
+# UI Spec — {slug} (Phase {PHASE})
 
-Source: ${DESIGN_OUTPUT_DIR}/  (screenshots + structural + interactions)
+Source: ${DESIGN_OUTPUT_DIR}/  (screenshots + structural + interactions for this slug)
 Derived: {YYYY-MM-DD}
 
 ## Design Tokens
@@ -374,14 +402,14 @@ Derived: {YYYY-MM-DD}
 
 ## Verbatim Cap
 
-UI-SPEC paste cap: top **5 forms** + **3 interactive components** (button/modal/datatable
-canonical variants) verbatim. Remaining forms/components reference by path
+Per-slug paste cap: top **5 forms** + **3 interactive components** (button/modal/datatable
+canonical variants) verbatim WITHIN THIS SLUG. Remaining forms/components reference by path
 (`{slug}.structural.html#anchor`). User can opt-out via `vg.config.md →
 blueprint.ui_spec_verbatim_cap: <int>`. Default 5/3.
 
-**Why caps:** UI-SPEC.md is read by every FE build task. Unbounded paste → context
-budget overflow → executor truncate. 5 forms × 50 lines avg = 250 lines, still
-within 750-line agent context budget per `_shared/blueprint/design.md:260`.
+**Why caps:** Per-slug UI-SPEC files are loaded selectively by build executors
+via `vg-load --artifact ui-spec --slug <slug>`. Unbounded paste per slug →
+context budget overflow → executor truncate. 5 forms × 50 lines avg = 250 lines.
 
 ## Responsive Breakpoints
 (only if design has multiple viewport screenshots)
@@ -390,12 +418,59 @@ within 750-line agent context budget per `_shared/blueprint/design.md:260`.
 (flag anything where design refs disagree; include scan.json[].warnings verbatim)
 ```
 
-Write `${PHASE_DIR}/UI-SPEC.md`. Build step 4/8c injects relevant section per FE task.
+**Index file format (`${PHASE_DIR}/UI-SPEC/index.md`):**
+
+```markdown
+# UI-SPEC Index — Phase {PHASE}
+
+Generated: {YYYY-MM-DD}
+3-layer split (D1 v2.63.0): per-slug files + this index + flat concat (UI-SPEC.md).
+
+## Per-slug files
+
+- [{slug-a}](./{slug-a}.md) — one-line summary (e.g., "publisher sites list with toolbar + 5-col table")
+- [{slug-b}](./{slug-b}.md) — one-line summary
+- ... (one entry per slug emitted)
+
+## Loading
+
+Build executors:
+  vg-load --phase {PHASE} --artifact ui-spec --slug <slug>
+
+Falls back to flat UI-SPEC.md if per-slug file missing (legacy phase pre-D1).
+```
+
+Write per-slug files to `${PHASE_DIR}/UI-SPEC/<slug>.md` and index to
+`${PHASE_DIR}/UI-SPEC/index.md`. Build step 4/8c loads per-slug via vg-load.
 
 ```bash
 vg-orchestrator step-active 2b6_ui_spec
 
-# (Agent spawn happens here — orchestrator dispatches per agent prompt above)
+# (Agent spawn happens here — orchestrator dispatches per agent prompt above.
+#  Agent writes ${PHASE_DIR}/UI-SPEC/<slug>.md per slug + UI-SPEC/index.md.)
+
+# D1 v2.63.0 — Post-agent: concat per-slug UI-SPEC into flat for legacy compat.
+# Agents emit per-slug files; orchestrator builds the flat UI-SPEC.md by
+# concatenating them. Existing grep validators that scan UI-SPEC.md keep working.
+mkdir -p "${PHASE_DIR}/UI-SPEC" 2>/dev/null
+{
+  echo "# UI Spec — Phase ${PHASE_NUMBER}"
+  echo ""
+  echo "Generated: $(date -u +%FT%TZ)"
+  echo "Layered split: see UI-SPEC/index.md for per-slug files."
+  echo ""
+  for f in "${PHASE_DIR}/UI-SPEC/"*.md; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f" .md)
+    [ "$base" = "index" ] && continue
+    echo "---"
+    echo ""
+    echo "## (slug: ${base})"
+    echo ""
+    cat "$f"
+    echo ""
+  done
+} > "${PHASE_DIR}/UI-SPEC.md"
 
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6_ui_spec" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6_ui_spec.done"
