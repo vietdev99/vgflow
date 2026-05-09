@@ -4409,7 +4409,11 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
         )
         if not result["ok"]:
             # Missing — is this artifact even applicable for the phase profile?
-            if not contracts.artifact_applicable(phase_profile, rendered):
+            # #142: profile filter only applies to entries declared
+            # profile_aware: True (default). Command-specific outputs
+            # (e.g. review's RUNTIME-MAP.json) opt out via profile_aware:
+            # false so missing always hard-blocks regardless of profile.
+            if item.get("profile_aware", True) and not contracts.artifact_applicable(phase_profile, rendered):
                 profile_skipped.append({
                     "path": str(p),
                     "reason": result["reason"],

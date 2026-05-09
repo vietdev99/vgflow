@@ -23,8 +23,15 @@ runtime_contract:
   # internally-guarded ones use severity=warn so missing emits telemetry
   # without blocking run (body has own enforcement).
   must_write:
-    - "${PHASE_DIR}/RUNTIME-MAP.json"
-    - "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
+    # Issue #142: these are review-specific outputs, not phase artifacts
+    # subject to profile filter. profile_aware: false ensures missing →
+    # BLOCK regardless of phase profile (was silent profile_skip WARN).
+    - path: "${PHASE_DIR}/RUNTIME-MAP.json"
+      profile_aware: false
+      content_min_bytes: 80
+    - path: "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
+      profile_aware: false
+      content_min_bytes: 80
     - path: "${PHASE_DIR}/api-docs-check.txt"
       content_min_bytes: 60
       required_unless_flag: "--skip-discovery"

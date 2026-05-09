@@ -452,6 +452,13 @@ def normalize_must_write(items: list) -> list[dict]:
       legacy behavior; new contracts opt in explicitly)
     - check_provenance: bool — also verify source_inputs in manifest
       still hash the same on disk (default: False)
+
+    v2.59.0 (#142) extension:
+    - profile_aware: bool — when True (default) missing artifacts on
+      profiles where the file is not in _PROFILE_REQUIRED_ARTIFACTS get
+      downgraded to a WARN (profile_skip). When False, missing always
+      hard-blocks regardless of profile (used for command-specific outputs
+      like review's RUNTIME-MAP.json that aren't phase artifacts).
     """
     result = []
     for item in items or []:
@@ -461,7 +468,8 @@ def normalize_must_write(items: list) -> list[dict]:
                            "glob_min_count": None,
                            "required_unless_flag": None,
                            "must_be_created_in_run": False,
-                           "check_provenance": False})
+                           "check_provenance": False,
+                           "profile_aware": True})
         elif isinstance(item, dict) and "path" in item:
             result.append({
                 "path": item["path"],
@@ -475,6 +483,7 @@ def normalize_must_write(items: list) -> list[dict]:
                     item.get("must_be_created_in_run", False)
                 ),
                 "check_provenance": bool(item.get("check_provenance", False)),
+                "profile_aware": bool(item.get("profile_aware", True)),
             })
     return result
 
