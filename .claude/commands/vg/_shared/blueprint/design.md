@@ -287,6 +287,20 @@ RULES:
      `## Per-Page Layout`.
    - `scan.json.warnings[]` MUST be quoted in `## Conflicts / Ambiguities`.
    Do NOT silently drop scan.json findings — re-introduces L-002 silent skip.
+7. **Verbatim markup for forms + interactive components (top-N by reference count):**
+   For each `<form>` discovered in `scan.json[].forms_discovered`, paste the FULL
+   markup block VERBATIM from `{slug}.structural.html`. Do NOT summarize. Do NOT
+   replace attribute values with placeholders. Copy `<form>...</form>` byte-for-byte
+   including hidden inputs, CSRF tokens, ARIA attrs, and validation patterns.
+   NEVER use `...` ellipsis inside the markup block. NO ELLIPSIS.
+
+   Limit: top 5 forms by task reference count (count occurrences in PLAN.md tasks).
+   Remaining forms keep path-reference style. The 5-form cap controls UI-SPEC.md
+   size while ensuring high-traffic forms are byte-accurate for build executors.
+8. **Verbatim markup for interactive components (buttons, modals, fields):**
+   Where multiple variants exist (primary/secondary/ghost button), paste markup for
+   ONE canonical variant per component verbatim, then list other variants as text
+   deltas. NEVER use `...` ellipsis in markup blocks. NO ELLIPSIS.
 
 Output format:
 
@@ -305,7 +319,16 @@ Derived: {YYYY-MM-DD}
 ### Button
 - Variants: primary | secondary | ghost
 - States: default | hover | disabled
-- Markup: `<button class="btn btn-{variant}">...</button>` (from {slug}.structural.html#btn-primary)
+- Markup (verbatim, primary variant):
+
+  ```html
+  <button class="btn btn-primary" type="submit" data-action="save">
+    Save
+  </button>
+  ```
+
+  Other variants delta-listed: secondary class swap (`btn-primary` → `btn-secondary`),
+  ghost variant adds `btn-ghost` class.
 
 ### Modal
 - Pattern: overlay + centered card
@@ -329,9 +352,36 @@ Derived: {YYYY-MM-DD}
 ## Forms
 (enumerate every form from scan.json[].forms_discovered)
 ### {form-name} (from {slug})
-- Submit endpoint: {API contract ref}
-- Fields: {list from scan.json with type}
-- Validation: {client-side rules}
+
+**Submit endpoint:** {API contract ref}
+
+**Markup (verbatim from {slug}.structural.html):**
+
+```html
+<form id="..." action="..." method="..." novalidate>
+  <input type="hidden" name="_csrf" value="...">
+  <input name="user_email" type="email" required pattern="[^\s@]+@[^\s@]+">
+  <!-- COPY EVERY input/select/textarea/button verbatim. NO ELLIPSIS. -->
+</form>
+```
+
+**Field summary (derived from markup above):**
+
+| name attr | type | required | pattern / max |
+|---|---|---|---|
+| user_email | email | yes | regex above |
+| ... | ... | ... | ... |
+
+## Verbatim Cap
+
+UI-SPEC paste cap: top **5 forms** + **3 interactive components** (button/modal/datatable
+canonical variants) verbatim. Remaining forms/components reference by path
+(`{slug}.structural.html#anchor`). User can opt-out via `vg.config.md →
+blueprint.ui_spec_verbatim_cap: <int>`. Default 5/3.
+
+**Why caps:** UI-SPEC.md is read by every FE build task. Unbounded paste → context
+budget overflow → executor truncate. 5 forms × 50 lines avg = 250 lines, still
+within 750-line agent context budget per `_shared/blueprint/design.md:260`.
 
 ## Responsive Breakpoints
 (only if design has multiple viewport screenshots)
