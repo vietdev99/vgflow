@@ -5868,9 +5868,43 @@ If severity == MINOR AND files <= config.review.fix_routing.minor.inline_when.ma
 ```
 
 **MINOR big scope OR MODERATE → spawn (config-driven model):**
-```
-SPAWN_MODEL="${config.models.review_fix_spawn:-${config.models.executor}}"
 
+**Runtime branching (v2.65.0 A6) — Claude vs Codex spawn primitives:**
+
+Fix-agent spawn site is dual-path: Claude Code uses the native `Agent` tool;
+Codex (`VG_RUNTIME=codex`) does NOT have the `Agent` tool, so it MUST shell
+out to `codex-spawn.sh --tier executor` (write access required because fixes
+edit code). See `codex-skills/vg-build/SKILL.md` "Codex spawn precedence"
+table — `/vg:review` fix agents map to `--tier executor` with
+`workspace-write` sandbox.
+
+```bash
+SPAWN_MODEL="${config.models.review_fix_spawn:-${config.models.executor}}"
+PROMPT_FILE="${PHASE_DIR}/.fix-prompt-${ERR_ID:-$idx}.md"
+# (Render the structured prompt below into $PROMPT_FILE before spawning.)
+
+if [ "${VG_RUNTIME:-claude}" = "codex" ]; then
+  # Codex path (v2.65.0 A6) — no Agent tool; use codex-spawn.sh executor tier.
+  # Sandbox=workspace-write because fix-agents edit code/tests.
+  bash codex-skills/_shared/codex-spawn.sh \
+       --tier executor \
+       --task "fix-${ERR_ID:-$idx}" \
+       --sandbox workspace-write \
+       --prompt-file "${PROMPT_FILE}" \
+       --out "${PHASE_DIR}/.fix-out-${ERR_ID:-$idx}.json" \
+    || { echo "⚠ codex-spawn fix-agent failed for ${ERR_ID:-$idx} — escalate to REVIEW-FEEDBACK.md" >&2; }
+else
+  # Claude path — preserve existing Agent tool spawn (narrate first, then call).
+  bash scripts/vg-narrate-spawn.sh general-purpose spawning "fix-${ERR_ID:-$idx}" 2>/dev/null || true
+  # Then invoke the Agent tool with the prompt body below; model/$SPAWN_MODEL
+  # is passed as the model parameter (provider-native).
+fi
+```
+
+Prompt body (rendered into `${PROMPT_FILE}` for Codex, or passed inline to
+the `Agent(...)` tool call on Claude):
+
+```
 Agent(
   model="$SPAWN_MODEL",
   description="[fix ${idx}/${total}] ${severity} ${file}:${line} — ${bug_type}"
@@ -5899,7 +5933,7 @@ Agent(
   - One-line summary
   """
 
-narrate_fix "[spawn:sonnet] ${severity} ${bug_title}"
+narrate_fix "[spawn:${SPAWN_MODEL}] ${severity} ${bug_title}"
 ```
 
 **MAJOR → escalate (no auto-fix):**
