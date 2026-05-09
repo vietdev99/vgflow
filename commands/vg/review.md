@@ -1020,6 +1020,18 @@ fi
 
 export VG_ENV VG_REVIEW_MODE VG_SCANNER VG_METHOD
 
+# 2c. v2.65.0 A3 — Codex runtime parallel scanner option (codex-spawn for non-MCP work)
+#
+# **Codex runtime parallel scanner** (v2.65.0 A3):
+# - Default `codex-inline` runs scanner sequentially in main Codex orchestrator
+# - When `VG_RUNTIME=codex` AND `${PARALLEL_WORKERS:-1} > 1` (read from vg.config.md `parallel_workers` field):
+#   - Spawn up to `PARALLEL_WORKERS` × `codex-skills/_shared/codex-spawn.sh --tier scanner --sandbox read-only`
+#     for non-MCP classification work over captured snapshots
+#   - MCP/browser actions (page navigation, screenshots, network capture) stay in main Codex orchestrator —
+#     codex-spawn lacks MCP access
+#   - Each spawn produces 1 `scan-NN.json` output → main orchestrator aggregates
+#   - Fallback: if `codex-spawn.sh` fails, log warning + revert to inline sequential for this scan
+
 # 3. Backward-compat: existing code reads ENV_NAME / REVIEW_MODE
 ENV_NAME="$VG_ENV"
 REVIEW_MODE="$VG_REVIEW_MODE"
@@ -3582,7 +3594,7 @@ gated ON via the conditions above.
 **You MUST run the provider-native scanner protocol in step 2b-2** (unless spawn_mode=none for cli-tool/library profiles). This is NOT optional.
 - Do NOT skip this step because "phase is small" or "I already covered everything in 2b-1"
 - Claude Code path: spawn at least 1 Haiku agent per view discovered in 2b-1; the Agent tool with model="haiku" MUST be called.
-- Codex path: keep MCP/browser actions in the main Codex orchestrator for `codex-inline`; optionally use `codex-spawn.sh --tier scanner --sandbox read-only` only for non-MCP classification over captured snapshots. Do not ask to spawn Haiku on Codex.
+- Codex path: keep MCP/browser actions in main Codex orchestrator for `codex-inline`. For non-MCP classification work over captured snapshots, you MAY spawn `codex-spawn.sh --tier scanner --sandbox read-only` workers when `parallel_workers > 1` in vg.config.md (v2.65.0 A3). Do not spawn Haiku on Codex (Haiku is Claude-only); only `codex-spawn` model is allowed for parallel codex scanner workers.
 - Required evidence is provider-neutral: `scan-*.json`, RUNTIME-MAP merge, GOAL-COVERAGE-MATRIX impact, and `review.haiku_scanner_spawned` telemetry semantics.
 </MANDATORY_GATE>
 
