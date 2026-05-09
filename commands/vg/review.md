@@ -7183,6 +7183,37 @@ through the isolated CrossAI runner and the gate consumes normalized
 Required evidence when not skipped:
 - `${PHASE_DIR}/crossai/review-check.xml`
 - `crossai.verdict` telemetry event
+
+### v2.66.1 #154 — verdict-gated marker write (Phase 2c)
+
+The `crossai_review.done` marker write is now **verdict-gated + ok_count
+checked**. Previously, when all 3 reviewers failed (CLI missing / auth missing
+/ path bug / TLS chain) the aggregator emitted `<verdict>inconclusive</verdict>`
+with `<ok_count>0</ok_count>` but the orchestrator still wrote
+`.step-markers/review/crossai_review.done`. `/vg:next` then skipped re-running
+CrossAI because the marker existed.
+
+**Gating rule (condition check):** only write `crossai_review.done` when
+`verdict in {pass, flag, ok, partial}` AND `ok_count > 0`. Otherwise write
+`crossai_review.inconclusive` (different file name) so `/vg:next` knows to
+re-run on the next invocation.
+
+The shared writer enforces this rule in one place:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/crossai-marker-write.py \
+  --marker-dir "${PHASE_DIR}/.step-markers/review" \
+  --step crossai_review \
+  --report-json "${PHASE_DIR}/crossai/review-check.report.json"
+# Exit code 0 = .done written (verdict pass/flag, ok_count > 0).
+# Exit code 2 = .inconclusive written (verdict inconclusive OR ok_count == 0)
+#               — orchestrator must re-run CrossAI on next /vg:next.
+# Exit code 1 = IO / argument error.
+```
+
+The writer derives verdict + ok_count from the aggregator report JSON
+emitted by `crossai-normalize-results.py`, so review.md does not duplicate
+the gating logic.
 </step>
 
 <step name="write_artifacts" mode="full">
