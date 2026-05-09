@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -256,6 +257,83 @@ def probe_endpoint(base_url: str, endpoint: Endpoint, headers: list[str], timeou
     )
 
 
+def probe_endpoints(
+    endpoints: list[Endpoint],
+    base_url: str,
+    headers: list[str],
+    timeout: int,
+    *,
+    parallel: int = 1,
+) -> list[ProbeResult]:
+    """Probe ``endpoints`` against ``base_url`` and return ProbeResults.
+
+    v2.65.0 A2: when ``parallel > 1`` use ThreadPoolExecutor with up to
+    ``parallel`` concurrent workers. ``probe_endpoint`` shells out to curl
+    via ``subprocess.run`` (blocking I/O), so threads (not processes) are
+    the right primitive — we just need overlapping waits, not CPU-parallel
+    python work. Result ordering is preserved via indexed futures.
+
+    Args:
+        endpoints: Parsed endpoints from ``parse_contracts``.
+        base_url: Live API base URL passed to each ``probe_endpoint`` call.
+        headers: Extra curl headers (e.g. Authorization bearer).
+        timeout: Per-request curl timeout in seconds.
+        parallel: Max concurrent workers. ``1`` (default) keeps the
+            sequential list-comprehension codepath for full back-compat.
+            Values >1 dispatch via ThreadPoolExecutor.
+
+    Returns:
+        ``list[ProbeResult]`` — one entry per input endpoint, in input
+        order regardless of completion order.
+
+    Partial-failure handling: when ``parallel > 1``, each worker call is
+    wrapped in try/except so a single raise doesn't crash the whole batch.
+    The error shape mirrors the existing ``curl_rc != 0`` path in
+    ``probe_endpoint`` itself (``status=0, verdict="FAIL"``) plus a
+    ``worker_raise:`` detail prefix carrying the exception message — this
+    keeps a single ``r.verdict == "FAIL" and r.status == 0`` predicate
+    covering connectivity failures and worker exceptions uniformly (A1
+    homogeneous-shape principle).
+    """
+    if parallel <= 1:
+        return [
+            probe_endpoint(base_url, endpoint, headers, timeout)
+            for endpoint in endpoints
+        ]
+
+    # Parallel branch — preserve ordering via indexed futures.
+    n = len(endpoints)
+    results_indexed: list[ProbeResult | None] = [None] * n
+
+    def _run_one(idx: int) -> tuple[int, ProbeResult]:
+        endpoint = endpoints[idx]
+        try:
+            return idx, probe_endpoint(base_url, endpoint, headers, timeout)
+        except Exception as exc:  # noqa: BLE001 — preserve any worker failure
+            # Error shape mirrors the curl_rc != 0 path in probe_endpoint
+            # (status=0, verdict="FAIL"). The ``worker_raise:`` detail prefix
+            # lets a downstream consumer distinguish exception failures from
+            # connectivity failures while keeping the canonical FAIL+status=0
+            # predicate intact.
+            url = urljoin(
+                base_url.rstrip("/") + "/",
+                endpoint.materialized_path.lstrip("/"),
+            )
+            return idx, ProbeResult(
+                endpoint=endpoint,
+                url=url,
+                status=0,
+                verdict="FAIL",
+                detail=f"worker_raise: {exc}",
+            )
+
+    with ThreadPoolExecutor(max_workers=parallel) as ex:
+        for idx, res in ex.map(_run_one, range(n)):
+            results_indexed[idx] = res
+
+    return [r for r in results_indexed if r is not None]
+
+
 def render_report(base_url: str, endpoints: list[Endpoint], results: list[ProbeResult]) -> str:
     lines = [
         f"▸ API contract probe against {base_url}",
@@ -292,6 +370,13 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="Report output file")
     ap.add_argument("--header", action="append", default=[], help="Extra curl header")
     ap.add_argument("--timeout", type=int, default=12, help="Per-request timeout seconds")
+    # v2.65.0 A2 — parallel dispatch control. Default 1 = full back-compat
+    # (sequential list-comp). Values >1 enable ThreadPoolExecutor; result
+    # order is preserved regardless of completion order.
+    ap.add_argument("--parallel", type=int, default=1, metavar="N",
+                    help="Max concurrent probe workers. Default 1 "
+                         "(sequential, full back-compat). N>1 uses "
+                         "ThreadPoolExecutor; result order is preserved.")
     args = ap.parse_args()
 
     contracts_path = Path(args.contracts)
@@ -308,10 +393,13 @@ def main() -> int:
         )
         return 2
 
-    results = [
-        probe_endpoint(args.base_url, endpoint, args.header, args.timeout)
-        for endpoint in endpoints
-    ]
+    results = probe_endpoints(
+        endpoints,
+        base_url=args.base_url,
+        headers=args.header,
+        timeout=args.timeout,
+        parallel=max(1, int(args.parallel)),
+    )
     report = render_report(args.base_url, endpoints, results)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
