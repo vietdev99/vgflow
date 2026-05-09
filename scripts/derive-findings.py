@@ -73,6 +73,85 @@ def normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
 
 
+def normalize_api_endpoint(raw: str) -> str:
+    """Extract endpoint shape: METHOD /path/with/:id (strip query, replace IDs).
+
+    v2.66.1 #153 — used by cluster_by_api_endpoint to bucket findings hitting
+    the same backend endpoint shape, regardless of which view triggered the call.
+    """
+    if not raw:
+        return ""
+    # Strip query string
+    raw = raw.split("?", 1)[0].strip()
+    # Replace numeric/uuid path segments with :id
+    parts = raw.split(" ", 1)
+    if len(parts) != 2:
+        return raw
+    method, path = parts
+    segments = path.split("/")
+    norm = []
+    for seg in segments:
+        if not seg:
+            norm.append(seg)
+            continue
+        # numeric, uuid-like (hex+dashes), or slug-like with dash and >=8 chars
+        if (
+            re.fullmatch(r"\d+", seg)
+            or re.fullmatch(r"[a-f0-9-]{8,}", seg, re.IGNORECASE)
+            or (len(seg) >= 8 and "-" in seg and re.fullmatch(r"[A-Za-z0-9-]+", seg))
+        ):
+            norm.append(":id")
+        else:
+            norm.append(seg)
+    return f"{method} {'/'.join(norm)}"
+
+
+def cluster_by_api_endpoint(findings: list[dict]) -> list[dict]:
+    """Cluster findings sharing same api_endpoint shape into ROOT + children.
+
+    v2.66.1 #153 — When 1 missing backend endpoint causes 4xx across N consumer
+    views, dedupe (which keys on resource+role+step+title) emits N MINOR findings
+    that miss the auto-fix gate. Clustering escalates the shared root cause to
+    MAJOR severity with one ROOT finding + N-1 child references.
+
+    Findings without api_endpoint key pass through as standalone (back-compat).
+    """
+    clusters: dict[str, list[dict]] = {}
+    standalone: list[dict] = []
+
+    for f in findings:
+        ep = f.get("api_endpoint")
+        if not ep:
+            f.setdefault("cluster_role", "standalone")
+            standalone.append(f)
+            continue
+        norm = normalize_api_endpoint(ep)
+        clusters.setdefault(norm, []).append(f)
+
+    out: list[dict] = []
+    for norm_ep, items in clusters.items():
+        if len(items) == 1:
+            items[0].setdefault("cluster_role", "standalone")
+            out.append(items[0])
+            continue
+        # Build ROOT finding (escalated severity)
+        root = dict(items[0])
+        root["cluster_role"] = "root"
+        root["api_endpoint"] = norm_ep
+        root["severity"] = "MAJOR"  # escalate from MINOR (or whatever original was)
+        root["title"] = f"{norm_ep} — failing on {len(items)} views"
+        root["affected_views"] = [it.get("resource", "?") for it in items]
+        root["affected_views_count"] = len(items)
+        out.append(root)
+        # Children retain original metadata + cluster_role=child
+        for child in items[1:]:
+            child["cluster_role"] = "child"
+            child["cluster_root_endpoint"] = norm_ep
+            out.append(child)
+
+    return out + standalone
+
+
 def dedupe(findings: list[dict]) -> list[dict]:
     seen: dict[str, dict] = {}
     for f in findings:
@@ -99,7 +178,11 @@ def aggregate_findings(runs: list[dict], severity_floor: str | None) -> list[dic
             entry = {**finding, "resource": resource, "role": role}
             entry.setdefault("dedupe_key", "")
             out.append(entry)
-    return dedupe(out)
+    # v2.66.1 #153 — Cluster by API endpoint shape BEFORE dedupe so 1 missing
+    # backend endpoint hitting N views collapses to 1 ROOT (MAJOR) + child refs
+    # instead of N MINOR view-keyed leaves that miss the auto-fix gate.
+    clustered = cluster_by_api_endpoint(out)
+    return dedupe(clustered)
 
 
 def aggregate_coverage(runs: list[dict]) -> dict:
