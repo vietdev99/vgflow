@@ -109,6 +109,45 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", errors="replace")
 
 
+def _strip_codex_banner(text: str) -> str:
+    """Strip Codex CLI banner lines before persisting to result file.
+
+    Issue #155 (v2.66.0): Codex CLI v0.118.0 emits a multi-line banner
+    (``Reading additional input from stdin...`` / ``OpenAI Codex v0.118.0
+    (research preview)`` / ``--------`` separator / ``workdir:`` /
+    ``model:`` / ``provider:`` / ``--------`` separator / ``user`` keyword /
+    ``<prompt echo>`` lines) BEFORE the actual model output. The runner
+    used to write raw stdout, so the result XML file started with banner
+    text instead of ``<crossai_review>`` — downstream extractor matched on
+    the prompt's example XML or returned malformed_output.
+
+    Strategy: detect Codex output via the ``OpenAI Codex`` banner header.
+    For non-Codex (Claude, Gemini, ...), pass through byte-identical. For
+    Codex, find the LAST ``--------`` separator (which closes the banner
+    block), skip a ``user`` keyword line if present, then skip prompt
+    echo lines until we hit the first line that starts with ``<`` (XML),
+    ``{`` (JSON), or a code-fence opener — these mark the start of model
+    output.
+    """
+    if "OpenAI Codex" not in text:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    sep_indices = [i for i, line in enumerate(lines) if line.strip() == "--------"]
+    if len(sep_indices) < 2:
+        # Banner shape unrecognized — be conservative and pass through.
+        return text
+
+    start = sep_indices[-1] + 1
+    # Skip the ``user`` keyword line if Codex emitted one.
+    if start < len(lines) and lines[start].strip() == "user":
+        start += 1
+    # Skip prompt echo lines until we reach actual model output.
+    while start < len(lines) and not lines[start].lstrip().startswith(("<", "{", "```")):
+        start += 1
+    return "".join(lines[start:])
+
+
 def _materialize_command(template: str, context_path: str, prompt: str) -> str:
     """Substitute {context} and {prompt} with shell-safe quoted values.
 
@@ -179,7 +218,9 @@ def run_one(
         stderr_text = f"{exc}\n"
         exit_code = 127
 
-    _write(result_file, stdout_text)
+    # v2.66.0 (#155): strip Codex banner before persisting so the XML file
+    # starts with <crossai_review> rather than `OpenAI Codex v0.118.0...`.
+    _write(result_file, _strip_codex_banner(stdout_text))
     _write(err_file, stderr_text)
     _write(exit_file, f"{exit_code}\n")
     meta_file.write_text(
