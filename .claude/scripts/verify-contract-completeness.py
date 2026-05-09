@@ -43,6 +43,44 @@ from pathlib import Path
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 
 
+# v2.67.0 (Issue #159): centralized scan-skip directory list.
+# Pre-fix: each rglob loop (grep_db_models / grep_background_jobs /
+# grep_webhooks) inlined its own subset of skip names, so backup, archive,
+# legacy, _archive, and .vg artifacts were scanned and polluted the
+# inventory diff. Codex round 5 dogfood flagged stale `_backup/`
+# routes/models showing up as "uncovered" findings even though they were
+# explicitly retired code paths.
+#
+# Adding new skip names here applies to all three loops at once.
+DEFAULT_SKIP_DIR_NAMES: tuple[str, ...] = (
+    # canonical build/runtime directories (preserved from v2.39.0)
+    "node_modules", "dist", "build", ".next", "venv", "__pycache__", ".git",
+    # v2.67.0 #159 — exclude backup/archive/legacy by default so retired
+    # code paths don't surface as uncovered routes/models/jobs/webhooks
+    "_backup", "backup", "_archive", "archive", "legacy", "_legacy",
+    # phase artifact tree shouldn't be scanned as production code
+    ".vg",
+)
+
+# Background-jobs and webhooks loops historically also skip test trees so
+# fixture queues/handlers don't pollute the inventory. Keep that behavior
+# isolated to the loops that opted in (the models loop did NOT skip tests).
+_TEST_SKIP_DIR_NAMES: tuple[str, ...] = ("test", "tests")
+
+
+def _should_skip_path(path: Path, *, include_tests: bool = False) -> bool:
+    """v2.67.0 #159 — return True if any path segment matches the
+    centralized skip list. Case-insensitive on the segment name. Pass
+    include_tests=True for the bg-jobs/webhooks loops which additionally
+    skip `test`/`tests` directories.
+    """
+    parts_lower = [p.lower() for p in path.parts]
+    skip_set = set(s.lower() for s in DEFAULT_SKIP_DIR_NAMES)
+    if include_tests:
+        skip_set.update(s.lower() for s in _TEST_SKIP_DIR_NAMES)
+    return any(seg in skip_set for seg in parts_lower)
+
+
 # v2.64.1 (Issue #147): profile-aware scope.
 # Pre-fix: validator unconditionally grepped DB models, background jobs, and
 # webhooks even on web-frontend-only phases, producing irrelevant warnings
@@ -170,8 +208,13 @@ def _normalize_route(p: str) -> str:
     return p.rstrip("/")
 
 
-def grep_db_models(code_root: Path) -> set[str]:
+def grep_db_models(code_root: Path) -> tuple[set[str], int]:
+    """v2.67.0 #159 — return (matched models, scanned file count).
+    The scanned count gives cross-artifact reconciliation the real
+    "files inspected" denominator alongside `len(out)` (the matches).
+    """
     out: set[str] = set()
+    scanned = 0
     patterns = [
         re.compile(r"\bmongoose\.model\(\s*['\"]([A-Z][A-Za-z0-9_]*)['\"]"),
         re.compile(r"\bclass\s+([A-Z][A-Za-z0-9_]*)\s*\([^)]*(?:Model|Base|sqlalchemy|declarative_base)"),
@@ -182,8 +225,11 @@ def grep_db_models(code_root: Path) -> set[str]:
     ]
     for ext in (".js", ".ts", ".tsx", ".py", ".prisma", ".rs"):
         for fp in code_root.rglob(f"*{ext}"):
-            if any(seg in fp.parts for seg in ("node_modules", "dist", "build", ".next", "venv", "__pycache__", ".git")):
+            # v2.67.0 #159 — centralized skip-list includes _backup, archive,
+            # legacy, _archive, .vg in addition to node_modules/dist/...
+            if _should_skip_path(fp):
                 continue
+            scanned += 1
             try:
                 text = fp.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -191,11 +237,13 @@ def grep_db_models(code_root: Path) -> set[str]:
             for pat in patterns:
                 for m in pat.finditer(text):
                     out.add(m.group(1))
-    return out
+    return out, scanned
 
 
-def grep_background_jobs(code_root: Path) -> list[dict]:
+def grep_background_jobs(code_root: Path) -> tuple[list[dict], int]:
+    """v2.67.0 #159 — return (matched jobs, scanned file count)."""
     out: list[dict] = []
+    scanned = 0
     patterns = [
         ("bullmq_queue", re.compile(r"new\s+Queue\s*\(\s*['\"]([^'\"]+)['\"]")),
         ("celery_task", re.compile(r"@(?:app|celery)\.task\b[^\n]*\n[^\n]*?def\s+([a-zA-Z_]\w*)")),
@@ -205,8 +253,11 @@ def grep_background_jobs(code_root: Path) -> list[dict]:
     ]
     for ext in (".js", ".ts", ".tsx", ".py"):
         for fp in code_root.rglob(f"*{ext}"):
-            if any(seg in fp.parts for seg in ("node_modules", "dist", "build", ".next", "venv", "__pycache__", ".git", "test", "tests")):
+            # v2.67.0 #159 — also skips `test`/`tests` so fixture queues
+            # don't pollute the inventory (parity with pre-fix loop behavior).
+            if _should_skip_path(fp, include_tests=True):
                 continue
+            scanned += 1
             try:
                 text = fp.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -214,18 +265,22 @@ def grep_background_jobs(code_root: Path) -> list[dict]:
             for kind, pat in patterns:
                 for m in pat.finditer(text):
                     out.append({"kind": kind, "name": m.group(1), "file": str(fp.relative_to(code_root)).replace("\\", "/")})
-    return out
+    return out, scanned
 
 
-def grep_webhooks(code_root: Path) -> list[dict]:
+def grep_webhooks(code_root: Path) -> tuple[list[dict], int]:
+    """v2.67.0 #159 — return (matched webhooks, scanned file count)."""
     out: list[dict] = []
+    scanned = 0
     patterns = [
         re.compile(r'(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*[\'"`](/webhooks?/[^\'"`]+|/callbacks?/[^\'"`]+)[\'"`]', re.I),
     ]
     for ext in (".js", ".ts", ".tsx", ".py"):
         for fp in code_root.rglob(f"*{ext}"):
-            if any(seg in fp.parts for seg in ("node_modules", "dist", "build", "test", "tests")):
+            # v2.67.0 #159 — centralized skip + skip test trees.
+            if _should_skip_path(fp, include_tests=True):
                 continue
+            scanned += 1
             try:
                 text = fp.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -233,7 +288,7 @@ def grep_webhooks(code_root: Path) -> list[dict]:
             for pat in patterns:
                 for m in pat.finditer(text):
                     out.append({"method": m.group(1).upper(), "path": m.group(2), "file": str(fp.relative_to(code_root)).replace("\\", "/")})
-    return out
+    return out, scanned
 
 
 def diff_routes(routes: list[dict], declared: set[str], resource_names: set[str]) -> list[dict]:
@@ -313,6 +368,12 @@ def main() -> int:
             rsj_root = code_root / "routes-static.json"
             routes = load_routes_static(rsj_root) if rsj_root.is_file() else []
 
+    # v2.67.0 #159 — track scanned file counts per loop so the output
+    # JSON reports the inspected denominator alongside hit counts.
+    scanned_models = 0
+    scanned_jobs = 0
+    scanned_webhooks = 0
+
     if is_fe_only:
         # Pure FE phase — backend route inventory not relevant. Skip the
         # routes-static.json warning entirely (it would only be needed for
@@ -326,9 +387,9 @@ def main() -> int:
     else:
         if not routes and not args.quiet:
             print(f"  \033[33mno routes-static.json available — run scripts/extract-routes-static.py first for full coverage\033[0m")
-        models = grep_db_models(code_root)
-        bg_jobs = grep_background_jobs(code_root)
-        webhooks = grep_webhooks(code_root)
+        models, scanned_models = grep_db_models(code_root)
+        bg_jobs, scanned_jobs = grep_background_jobs(code_root)
+        webhooks, scanned_webhooks = grep_webhooks(code_root)
         if is_be_only and not args.quiet:
             # BE-only — keep BE inventory active, but downstream FE-only
             # warnings (route-vs-resource diff for SPA-only paths) are
@@ -350,6 +411,13 @@ def main() -> int:
         "models_inventoried": len(models),
         "background_jobs_inventoried": len(bg_jobs),
         "webhooks_inventoried": len(webhooks),
+        # v2.67.0 #159 — scanned denominator per loop. *_inventoried counts
+        # only matched items; scanned_*_count records files inspected (after
+        # skip-list filter), giving cross-artifact reconciliation a stable
+        # "files looked at" metric independent of pattern hit-rate.
+        "scanned_models_count": scanned_models,
+        "scanned_jobs_count": scanned_jobs,
+        "scanned_webhooks_count": scanned_webhooks,
         "uncovered_routes": uncovered_routes,
         "uncovered_models": uncovered_models,
         "background_jobs": bg_jobs,
