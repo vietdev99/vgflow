@@ -1,5 +1,73 @@
 # Changelog
 
+## v2.62.0 — RTB blueprint→build quality bundle (2026-05-09)
+
+### Bug fix — Supply chain quality
+
+User pain (verbatim from session): 'AI có vẻ không làm theo HTML, việc call các request giữa FE và BE vẫn còn lỗi, đơn giản như bấm save form thôi cũng lỗi nhiều loại.'
+
+Investigation across harness code confirmed 4 drift points (D1-D4) in the blueprint → build supply chain. This release ships fixes for **D2/D3/D4**.
+
+### 3-fix bundle (commits)
+
+| Fix | Drift Point | Commit | File(s) |
+|---|---|---|---|
+| **F1** UI-SPEC verbatim markup | **D2** Lossy text-summary | `745677f` | `commands/vg/_shared/blueprint/design.md` |
+| **F2** Capsule MUST READ structural.html | **D3** Silent path reference | `7ba8fdf` | `scripts/pre-executor-check.py` |
+| **F3** FORM-API-MAP generator + verifier | **D4** No FE form ↔ API field cross-ref | `4feb86f` | `scripts/blueprint-form-api-map.py`, `scripts/validators/verify-form-api-field-match.py`, `commands/vg/blueprint.md` |
+
+### F1 details (D2 fix)
+
+Blueprint UI-SPEC agent prompt previously instructed text-summary references like `Markup: <button class=...> (from {slug}.structural.html#btn-primary)` — lossy. Now mandates verbatim markup paste for top-5 forms + top-3 interactive components per phase. Ellipsis (`...`) explicitly forbidden in markup blocks. Cap (default 5/3) controls bloat — opt-out via `vg.config.md → blueprint.ui_spec_verbatim_cap: <int>`.
+
+Forms section template now emits actual ` ```html ` fenced blocks plus a derived field-summary table, so build executors get byte-accurate `<input name="...">` attrs, types, required attrs, validation patterns.
+
+### F2 details (D3 fix)
+
+`scripts/pre-executor-check.py` design-context block previously emitted a passive `Structural ref: {path}` line inside the PNG per-slug list. Compare PNG handling: explicit `Read: {path}` + `READ EACH PATH WITH THE Read TOOL BEFORE WRITING CODE` mandate.
+
+New parallel section `## Structural HTML — READ EACH PATH AND COPY MARKUP VERBATIM` matches PNG strength. Section text explains:
+- Field name drift consequences (`user_email` ≠ `email` = save form 422)
+- Hidden inputs / CSRF / ARIA / validation pattern preservation
+- Forward-references UI-SPEC `## Forms` (F1) + `FORM-API-MAP.md` + verifier (F3)
+
+### F3 details (D4 fix)
+
+NEW `scripts/blueprint-form-api-map.py` runs during `/vg:blueprint` Pass 4 (after BLOCK 5). Parses structural.html `<form>` elements (action, method, input/select/textarea name attrs, types, validation patterns) × API-CONTRACTS request schemas. Emits `${PHASE_DIR}/FORM-API-MAP.md` with per-form table flagging:
+- `✓` clean match
+- `⚠ NAME-DRIFT` (snake_case ↔ camelCase, fully different name)
+- `◇ HEADER` (CSRF tokens, hidden meta inputs)
+
+Match strategy: exact → case-insensitive → snake_case ↔ camelCase normalize. Mismatches after normalization = drift. Forms without `action=` (client-side only) skipped.
+
+NEW `scripts/validators/verify-form-api-field-match.py` runs during `/vg:build` post-execution. Reads FORM-API-MAP.md + walks FE codegen for `.tsx/.jsx/.vue/.html` files. Compares actual `<input name="...">` attrs vs FORM-API-MAP expected. Emits BuildWarningEvidence (severity=warn default; BLOCK with `--strict`). Full L4-form gate integration deferred to v2.63.
+
+`commands/vg/blueprint.md` declares FORM-API-MAP.md in `must_write` with `profile_aware: true` (skipped for non-FE profiles) and `required_unless_flag: '--skip-form-api-map'`.
+
+### Test additions
+
+~24 new pytest assertions across 3 files:
+- `tests/test_ui_spec_verbatim_markup.py` (7 tests)
+- `tests/test_capsule_html_mandatory_read.py` (6 tests)
+- `tests/test_form_api_map.py` (11 tests)
+
+### Migration
+
+No breaking changes:
+- F1 cap is additive (default 5 forms / 3 components verbatim).
+- F2 strengthens design-context output text — no contract change.
+- F3 introduces new artifact `FORM-API-MAP.md`. `profile_aware: true` skips for non-FE profiles. `severity: warn` keeps advisory until `--skip-form-api-map` removed in v2.63.
+
+### Deferred to v2.63+
+
+- **D1** (UI-SPEC samples only 2-3 structural.html refs per phase) requires per-component split-file pattern. Architectural — tracked for v2.63.
+- **F4** (Verifier L7 — parse FE output vs structural.html, hard gate) — full pipeline integration when FORM-API-MAP.md is mandatory.
+- **F5** (Workflow tracer — submit → API → response → state → UI) — needs evidence flow tracking.
+
+### Cumulative test count
+
+v2.61.0 baseline + ~24 new = ~250+ pytest assertions.
+
 ## v2.61.0 — Post-wave continuation defense in depth (2026-05-09)
 
 ### Bug fix — Post-wave continuation
