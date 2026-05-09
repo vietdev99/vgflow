@@ -6,8 +6,12 @@
 <HARD-GATE>
 You MUST run all 4 checks (A endpoint coverage, B design ref, C decision
 completeness, D orphan detection). `step-active` fires before checks,
-`mark-step` after. BLOCK on any Check A/C gap; WARN on B (default fidelity)
-and D.
+`mark-step` after. BLOCK on any Check A/C gap.
+
+**v2.66.0 BREAKING (strict default ON):** Check B + D WARNs now trigger
+exit 1 by default. Pass `--lenient-prereqs` (preflight parse loop exports
+`LENIENT_PREREQS=true`) to restore v2.65.x lenient behavior where only
+BLOCK_COUNT > 0 fails.
 </HARD-GATE>
 
 ## Step active (gate enforcement)
@@ -29,17 +33,22 @@ Gap → ⛔ BLOCK:
    Add a TS-NN under D-{XX} that references the endpoint, or remove the endpoint from D-{XX}.
 ```
 
-## Check B — Design Ref Coverage (WARN default; ⛔ BLOCK in production fidelity per D-02)
+## Check B — Design Ref Coverage (⛔ BLOCK by default in v2.66.0; lenient via flag)
 
 If `config.design_assets` configured, for every decision with **UI Components:**, check design-ref exists in `${PHASE_DIR}/` or `config.design_assets.output_dir`.
 
-Phase 15 D-02 escalation:
+Phase 15 D-02 escalation (v2.66.0 BREAKING — strict default ON):
 - Resolve fidelity via `scripts/lib/threshold-resolver.py --phase ${PHASE_NUMBER}`
 - `production` (≥ 0.95) → missing design-ref = ⛔ BLOCK
-- `default` (~0.85) → WARN
+- **v2.66.0 BREAKING:** default → BLOCK. Use `--lenient-prereqs` flag for v2.65.x WARN behavior.
 - `prototype` (~0.70) → SKIP
 
-Default WARN message:
+Strict (default) BLOCK message:
+```
+⛔ D-{XX} has UI components but no design reference found. Run /vg:design-extract OR pass --lenient-prereqs to downgrade to WARN (v2.65.x legacy behavior).
+```
+
+Lenient (--lenient-prereqs) WARN message:
 ```
 ⚠ D-{XX} has UI components but no design reference found. Consider running /vg:design-extract.
 ```
@@ -230,15 +239,27 @@ for w in data.get("warnings", []):
 '
 
 vg-orchestrator emit-event scope.completeness_validation \
-  --payload "{\"warnings\":${WARN_COUNT},\"blocks\":${BLOCK_COUNT},\"fidelity\":\"${FIDELITY}\"}" \
+  --payload "{\"warnings\":${WARN_COUNT},\"blocks\":${BLOCK_COUNT},\"fidelity\":\"${FIDELITY}\",\"lenient_prereqs\":\"${LENIENT_PREREQS:-false}\"}" \
   >/dev/null 2>&1 || true
 
-if [ "$BLOCK_COUNT" -gt 0 ]; then
-  echo "⛔ ${BLOCK_COUNT} blocking gap(s) found — fix before /vg:blueprint" >&2
-  exit 1
+# v2.66.0 BREAKING: strict default — both BLOCK and WARN trigger exit 1.
+# Legacy lenient mode (v2.65.x behavior) opt-in via --lenient-prereqs flag
+# (LENIENT_PREREQS=true exported by scope.md preflight parse loop).
+if [ "${LENIENT_PREREQS:-false}" = "true" ]; then
+  # Lenient mode (legacy v2.65.x behavior, opt-out via --lenient-prereqs flag)
+  if [ "$BLOCK_COUNT" -gt 0 ]; then
+    echo "⛔ ${BLOCK_COUNT} blocking gap(s) found — fix before /vg:blueprint (lenient mode: ${WARN_COUNT} warnings allowed)" >&2
+    exit 1
+  fi
+else
+  # Strict mode (v2.66.0 default — both BLOCK and WARN trigger exit 1)
+  if [ "$BLOCK_COUNT" -gt 0 ] || [ "$WARN_COUNT" -gt 0 ]; then
+    echo "⛔ ${BLOCK_COUNT} BLOCK + ${WARN_COUNT} WARN violations (strict mode v2.66.0; pass --lenient-prereqs to downgrade WARNs)" >&2
+    exit 1
+  fi
 fi
 
-echo "✓ Completeness validation: ${WARN_COUNT} warning(s), ${BLOCK_COUNT} block(s), fidelity=${FIDELITY}"
+echo "✓ Completeness validation: ${WARN_COUNT} warning(s), ${BLOCK_COUNT} block(s), fidelity=${FIDELITY}, mode=${LENIENT_PREREQS:+lenient}${LENIENT_PREREQS:-strict}"
 ```
 
 ## Mark step

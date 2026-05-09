@@ -51,6 +51,7 @@ SKIP_ENV_PREF=false
 RESET_ENV_PREF=false
 ENV_PREF_INLINE=""
 ALLOW_DECISIONS_UNTRACED=false
+LENIENT_PREREQS=false
 FORCE_TEST_STRATEGY=false
 PHASE_NUMBER=""
 
@@ -68,6 +69,7 @@ for arg in $ARGUMENTS; do
     --reset-env-preference)      RESET_ENV_PREF=true ;;
     --env-preference=*)          ENV_PREF_INLINE="${arg#*=}" ;;
     --allow-decisions-untraced)  ALLOW_DECISIONS_UNTRACED=true ;;
+    --lenient-prereqs)           LENIENT_PREREQS=true; export LENIENT_PREREQS ;;
     --force)                     FORCE_TEST_STRATEGY=true ;;
     --redetect-ui-scope)         ;;  # blueprint-style flag, ignored here
     --skip-design-discovery)     ;;  # blueprint-style flag, ignored here

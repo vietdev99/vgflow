@@ -1,7 +1,7 @@
 ---
 name: vg:scope
 description: Deep phase discussion — 5 structured rounds producing enriched CONTEXT.md + DISCUSSION-LOG.md
-argument-hint: "<phase> [--skip-crossai] [--skip-crossai-output] [--auto] [--update] [--deepen=D-XX] [--override-reason=<text>] [--skip-env-preference] [--reset-env-preference] [--env-preference=<mode>] [--allow-decisions-untraced] [--force] [--non-interactive]"
+argument-hint: "<phase> [--skip-crossai] [--skip-crossai-output] [--auto] [--update] [--deepen=D-XX] [--override-reason=<text>] [--skip-env-preference] [--reset-env-preference] [--env-preference=<mode>] [--allow-decisions-untraced] [--lenient-prereqs] [--force] [--non-interactive]"
 allowed-tools:
   - Read
   - Write
@@ -203,6 +203,10 @@ per decision (Layer 1) + CONTEXT/index.md (Layer 2) + DISCUSSION-LOG.md
 Read `_shared/scope/completeness-validation.md` and follow it exactly.
 Runs 4 checks (decision count, endpoint coverage, UI components,
 test scenarios) and surfaces warnings.
+
+**v2.66.0 BREAKING:** prereq strict default ON — both WARN and BLOCK
+violations exit 1. Pass `--lenient-prereqs` (preflight exports
+`LENIENT_PREREQS=true`) for v2.65.x WARN-only behavior.
 
 ### STEP 6 — CrossAI review (skippable with --skip-crossai + --override-reason)
 Read `_shared/scope/crossai.md` and follow it exactly.
