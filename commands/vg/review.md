@@ -426,7 +426,7 @@ Pipeline: specs → scope → blueprint → build → **review** → test → ac
 4 Phases:
 - Phase 1: CODE SCAN — grep contracts + count elements (fast, automated, <10 sec)
 - Phase 2: BROWSER DISCOVERY — MCP Playwright organic exploration → RUNTIME-MAP
-- Phase 3: FIX LOOP — errors found → fix → redeploy → re-discover (max 3 iterations)
+- Phase 3: FIX LOOP — errors found → fix → redeploy → re-discover (max 5 iterations, v2.65.0 A4)
 - Phase 4: GOAL COMPARISON — map TEST-GOALS to discovered paths → weighted gate
 </objective>
 
@@ -1268,7 +1268,7 @@ Per TASKLIST_POLICY, the tasklist shown by `emit-tasklist.py` is a binding contr
    2c:   Runtime lens dispatch (plugins: enrich, CRUD/RCRURD, filter, paging, sort, search, URL-state, visual)
    2d:   API error-message runtime lens (API body message -> visible toast/form error)
    2e:   Findings pipeline (merge, adversarial challenge, auto-fix routing)
-   3:    Fix loop (max 3 iterations)
+   3:    Fix loop (max 5 iterations)
    4a:   Load goals + filter infra deps
    4b:   Map goals to RUNTIME-MAP
    4c:   Weighted gate evaluation
@@ -1280,7 +1280,7 @@ Per TASKLIST_POLICY, the tasklist shown by `emit-tasklist.py` is a binding contr
 
 **Dynamic header examples** (concrete values in headers, not in stale task items):
 - `## ━━━ 2b-2: Scanning /conversions as advertiser (3/7 views) ━━━`
-- `## ━━━ 3: Fixing Bug #2: S2SSecretSection crash (iter 1/3) ━━━`
+- `## ━━━ 3: Fixing Bug #2: S2SSecretSection crash (iter 1/5) ━━━`
 - `## ━━━ 4a: 38 goals loaded, 16 INFRA_PENDING (ClickHouse, pixel_server) ━━━`
 </step>
 
@@ -3034,7 +3034,7 @@ Ví dụ user thấy khi `/vg:review` chạy:
       ❌ Flow G-02 fail — button "Edit" không tìm thấy trên row
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔎 Phase 3 — Fix loop (iteration 1/3)
+🔎 Phase 3 — Fix loop (iteration 1/5)
    Sửa các bug MINOR, re-verify affected views
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ✓ Fixed: /reports missing empty-state (1 file changed)
@@ -5701,12 +5701,23 @@ fi
 </step>
 
 <step name="phase3_fix_loop" mode="full">
-## Phase 3: FIX LOOP (max 3 iterations)
+## Phase 3: FIX LOOP (max 5 iterations)
 
-→ `narrate_phase "Phase 3 — Fix loop (iteration ${I}/3)" "Sửa bug MINOR, escalate MODERATE/MAJOR"`
+**Iteration cap (v2.65.0 A4):** `MAX_ITER=5`. Bumped from 3 → 5 because multi-class
+violation buckets (e.g. 1 SPEC_GAP + 2 CODE_BUG together) typically need 4–5 passes
+to fully resolve. Each iteration emits `review.fix_iteration_started` so operators
+have mid-loop telemetry instead of a black box.
+
+→ `narrate_phase "Phase 3 — Fix loop (iteration ${I}/${MAX_ITER:-5})" "Sửa bug MINOR, escalate MODERATE/MAJOR"`
 
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase3_fix_loop >/dev/null 2>&1 || true
+
+# v2.65.0 A4 — fix-loop iteration cap (max_iter=5)
+# Each iteration body MUST emit review.fix_iteration_started with
+# {iter, max_iter, violations} metadata so progress is observable mid-loop.
+MAX_ITER=5
+export MAX_ITER
 ```
 
 **If no errors found in Phase 2 → skip to Phase 4.**
@@ -6033,11 +6044,22 @@ After fix+redeploy, spawn Sonnet agents to re-verify affected views + ripple zon
 Repeat 3a-3d until:
 - RUNTIME-MAP is **stable** (no new errors between 2 iterations)
 - Zero CODE BUG errors remaining
-- Max 3 iterations reached
+- `MAX_ITER=5` iterations reached (v2.65.0 A4 bump from 3 → 5 for multi-class buckets)
+
+**Per-iteration telemetry (v2.65.0 A4):** at the top of every iteration body, emit
+`review.fix_iteration_started` so operators can watch progress mid-loop:
+
+```bash
+# Emit at the start of each iteration (after ITER + VIOLATION_COUNT are known).
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "review.fix_iteration_started" --actor "review" --outcome "INFO" \
+  --metadata "{\"iter\":${ITER},\"max_iter\":${MAX_ITER:-5},\"violations\":${VIOLATION_COUNT:-0}}" \
+  >/dev/null 2>&1 || true
+```
 
 Display after each iteration:
 ```
-Fix iteration {N}/3:
+Fix iteration {N}/${MAX_ITER:-5}:
   Errors fixed: {N}
   Errors remaining: {N} (infra: {N}, spec-gap: {N}, pre-existing: {N})
   Sonnet agents spawned: {N} (re-verified {M} views)
@@ -6048,9 +6070,9 @@ Fix iteration {N}/3:
 
 ### 3e: Iter limit fallback — Diagnostic L2 (RFC v9 D11 + D26, PR-E)
 
-When iter 3 exits with errors STILL remaining (loop hit cap without
-self-resolving), do NOT silent-BLOCK. Spawn diagnostic_l2 single-advisory
-fallback:
+When the final iteration (`ITER == MAX_ITER`, default 5) exits with errors STILL
+remaining (loop hit cap without self-resolving), do NOT silent-BLOCK. Spawn
+diagnostic_l2 single-advisory fallback:
 
 1. Capture residual evidence: list of unresolved error rows from
    RUNTIME-MAP + scan-*.json + recipe_executor logs.
@@ -6063,15 +6085,15 @@ fallback:
      - confidence ≥ 0.7  → "Đề xuất: <fix>. [Yes / chi tiết]"
      - confidence < 0.7  → 3-option block_resolve_l3_present (legacy)
 5. **User gate is mandatory** — never auto-apply (per project policy).
-6. User accept → apply fix → re-run iter 4 (one extra iteration grace).
+6. User accept → apply fix → re-run one extra iteration grace (ITER+1).
 7. User reject → BLOCK with full audit trail in
    `.l2-proposals/{proposal_id}.json` + DEFECT-LOG entry referencing
    the proposal.
 
 ```bash
-if [ "${ITER:-1}" -eq 3 ] && [ -n "${REMAINING_ERRORS}" ] && \
+if [ "${ITER:-1}" -eq "${MAX_ITER:-5}" ] && [ -n "${REMAINING_ERRORS}" ] && \
    { [ -f "${REPO_ROOT}/.claude/scripts/spawn-diagnostic-l2.py" ] || [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; }; then
-  echo "━━━ Phase 3e — Diagnostic L2 fallback (iter 3 hit cap) ━━━"
+  echo "━━━ Phase 3e — Diagnostic L2 fallback (iter ${ITER} hit cap=${MAX_ITER:-5}) ━━━"
   DIAGNOSTIC_L2="${REPO_ROOT}/.claude/scripts/spawn-diagnostic-l2.py"
   [ -f "$DIAGNOSTIC_L2" ] || DIAGNOSTIC_L2="${REPO_ROOT}/scripts/spawn-diagnostic-l2.py"
   L2_ARGS=(
@@ -6094,7 +6116,7 @@ except: print('')
     if [ -f "$TESTER_PRO_CLI" ]; then
       "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" defect new \
         --phase "${PHASE_NUMBER}" \
-        --title "[ITER-LIMIT] Fix loop hit max=3, L2 proposal $L2_PROPOSAL_ID" \
+        --title "[ITER-LIMIT] Fix loop hit max=${MAX_ITER:-5}, L2 proposal $L2_PROPOSAL_ID" \
         --severity major --found-in review \
         --notes "L2 proposal at .l2-proposals/${L2_PROPOSAL_ID}.json — user decision pending" \
         2>&1 | sed 's/^/  /' || true
