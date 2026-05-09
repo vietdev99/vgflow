@@ -144,7 +144,30 @@ PY
 )"
 fi
 
-session_context=$'<EXTREMELY_IMPORTANT>\nYou have VGFlow harness loaded.\n\n'"${base_text}${diagnostics}"$'\n</EXTREMELY_IMPORTANT>'
+# F1 v2.60.0: tasklist restore on resume/compact.
+# When a session resumes (or context compacts) mid-run, native TodoWrite
+# state is wiped — AI then shows only "next task" instead of the full pipeline.
+# Re-prime the AI by emitting the contract's projection_items as markdown
+# inside additionalContext so it MUST re-call TodoWrite before doing anything.
+restore_text=""
+if [[ "${CLAUDE_HOOK_EVENT:-}" =~ ^(compact|resume)$ ]] && [ -f "$ACTIVE_RUN_PATH" ]; then
+  ACTIVE_RUN_ID="$(python3 -c '
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("run_id", ""))
+except Exception:
+    print("")
+' "$ACTIVE_RUN_PATH" 2>/dev/null)"
+  if [ -n "$ACTIVE_RUN_ID" ] && [ -f ".vg/runs/${ACTIVE_RUN_ID}/tasklist-contract.json" ]; then
+    EMIT_HELPER=".claude/scripts/emit-tasklist.py"
+    [ -f "$EMIT_HELPER" ] || EMIT_HELPER="scripts/emit-tasklist.py"
+    if [ -f "$EMIT_HELPER" ]; then
+      restore_text="$(python3 "$EMIT_HELPER" --restore-mode --run-id "$ACTIVE_RUN_ID" 2>/dev/null || echo "")"
+    fi
+  fi
+fi
+
+session_context=$'<EXTREMELY_IMPORTANT>\nYou have VGFlow harness loaded.\n\n'"${base_text}${diagnostics}${restore_text}"$'\n</EXTREMELY_IMPORTANT>'
 
 escaped="$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read())[1:-1])' <<< "$session_context")"
 

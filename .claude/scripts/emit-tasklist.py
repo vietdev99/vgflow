@@ -699,14 +699,139 @@ def _print_tasklist(
     print("")
 
 
+def _restore_mode(run_id: str) -> int:
+    """F1 v2.60.0: emit markdown that primes AI to re-call TodoWrite after
+    a session resume/compact event. Reads the run's tasklist-contract.json
+    (authoritative projection at run-start) and an optional
+    .todowrite-snapshot.json (latest-seen status from the post-tool hook),
+    overlaying snapshot statuses where present.
+
+    Output goes to stdout — caller (vg-session-start.sh) appends to
+    additionalContext. NEVER raises; on missing/corrupt input emits a
+    benign "nothing to restore" marker and exits 0.
+    """
+    if not run_id:
+        print("# (no run_id supplied — nothing to restore)")
+        return 0
+
+    contract_path = REPO_ROOT / ".vg" / "runs" / run_id / "tasklist-contract.json"
+    if not contract_path.exists():
+        print("# (no tasklist contract — nothing to restore)")
+        return 0
+
+    contract = _read_json(contract_path)
+    if not isinstance(contract, dict):
+        print("# (tasklist contract unreadable — nothing to restore)")
+        return 0
+
+    items = contract.get("projection_items") or []
+    if not isinstance(items, list) or not items:
+        print("# (tasklist contract has no projection_items — nothing to restore)")
+        return 0
+
+    # Overlay snapshot status (latest seen state) over contract default.
+    snapshot_path = REPO_ROOT / ".vg" / "runs" / run_id / ".todowrite-snapshot.json"
+    snapshot_overrides: dict[str, str] = {}
+    snapshot_used = False
+    snapshot = _read_json(snapshot_path)
+    if isinstance(snapshot, dict):
+        snap_items = snapshot.get("items") or []
+        if isinstance(snap_items, list):
+            for snap in snap_items:
+                if not isinstance(snap, dict):
+                    continue
+                sid = str(snap.get("id") or "").strip()
+                sstatus = str(snap.get("status") or "").strip()
+                if sid and sstatus:
+                    snapshot_overrides[sid] = sstatus
+            snapshot_used = bool(snapshot_overrides)
+
+    # Resolve effective status per item (snapshot wins).
+    resolved: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        iid = str(it.get("id") or "")
+        title = str(it.get("title") or iid)
+        status = snapshot_overrides.get(iid) or str(it.get("status") or "pending")
+        resolved.append({"id": iid, "title": title, "status": status})
+
+    # Status counts.
+    pending_n = sum(1 for r in resolved if r["status"] == "pending")
+    in_prog_n = sum(1 for r in resolved if r["status"] == "in_progress")
+    done_n = sum(1 for r in resolved if r["status"] == "completed")
+
+    cmd = contract.get("command") or "unknown"
+    phase = contract.get("phase") or "?"
+    short_run = run_id[:8] if len(run_id) > 8 else run_id
+
+    out_lines: list[str] = []
+    out_lines.append("")
+    out_lines.append("## Tasklist restore (resume/compact recovery)")
+    out_lines.append("")
+    out_lines.append(
+        f"Active VG run: command={cmd}, phase={phase}, run_id={short_run}"
+    )
+    out_lines.append(
+        f"Contract: {len(resolved)} items "
+        f"({in_prog_n} in_progress, {pending_n} pending, {done_n} completed)"
+    )
+    out_lines.append("")
+    out_lines.append(
+        "YOU MUST IMMEDIATELY call TodoWrite with these items (verbatim):"
+    )
+    out_lines.append("")
+    out_lines.append("| Status | Title |")
+    out_lines.append("|---|---|")
+    for r in resolved:
+        # Escape pipe in titles to keep markdown table valid.
+        safe_title = r["title"].replace("|", "\\|")
+        out_lines.append(f"| {r['status']} | {safe_title} |")
+    out_lines.append("")
+    out_lines.append(
+        f"Source contract: .vg/runs/{run_id}/tasklist-contract.json"
+    )
+    if snapshot_used:
+        out_lines.append(
+            f"Last snapshot: .vg/runs/{run_id}/.todowrite-snapshot.json (statuses overlaid)"
+        )
+    else:
+        out_lines.append("Last snapshot: (none)")
+    out_lines.append("")
+    out_lines.append(
+        "Do NOT skip this — without TodoWrite restoration the user can't see "
+        "pipeline progress and the AI tends to wander instead of following the tasklist."
+    )
+    out_lines.append("")
+
+    print("\n".join(out_lines))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--command", required=True, help="e.g. vg:build")
-    ap.add_argument("--profile", required=True, help="e.g. web-fullstack")
-    ap.add_argument("--phase", required=True, help="e.g. 7.14")
+    ap.add_argument("--restore-mode", action="store_true",
+                    help="F1 v2.60.0: emit markdown to re-prime TodoWrite "
+                         "after resume/compact (reads tasklist-contract.json "
+                         "+ optional snapshot). Pair with --run-id.")
+    ap.add_argument("--run-id", default=None,
+                    help="Run ID for --restore-mode (required when in restore mode)")
+    ap.add_argument("--command", help="e.g. vg:build")
+    ap.add_argument("--profile", help="e.g. web-fullstack")
+    ap.add_argument("--phase", help="e.g. 7.14")
     ap.add_argument("--mode", default=None, help="optional workflow mode, e.g. full")
     ap.add_argument("--no-emit", action="store_true", help="print list only")
     args = ap.parse_args()
+
+    # F1: restore mode — read existing contract, emit markdown, exit. NO event,
+    # NO contract write. Side-effect free.
+    if args.restore_mode:
+        return _restore_mode(args.run_id or "")
+
+    # Normal mode requires the projection trio.
+    missing = [n for n in ("command", "profile", "phase") if not getattr(args, n)]
+    if missing:
+        ap.error("the following arguments are required: " + ", ".join(f"--{m}" for m in missing))
 
     steps = _get_step_list(args.command, args.profile, args.mode)
     if not steps:
