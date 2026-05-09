@@ -35,6 +35,19 @@ These thoughts mean STOP — you're rationalizing skipping the Intent map:
 | "I'll deploy via raw `npm publish` since user said 'ship'" | NO — if `/vg:deploy` is configured for the project, use it. |
 | "Intent matches `/vg:learn` but I'll just summarize manually" | NO — the harness needs the consolidate event for attribution gates. |
 
+## Red Flags — Post-wave continuation
+
+These thoughts mean STOP — wave subagents returning is NOT the end of a `/vg:*` command:
+
+| Thought | Reality |
+|---|---|
+| "Final wave done = build done" | NO — `/vg:build` STEP 5 (post-execution L2/L3/L5/L6 gates) + STEP 6 (CrossAI) + STEP 6.5 (pre-test) + STEP 7 (close) all required after waves. Read `commands/vg/build.md` STEP 5+ and execute IN SAME TURN. |
+| "Wave Agent returned, my turn ends" | NO — entry script has IS_FINAL_WAVE check at `commands/vg/build.md:262`. If `.vg/runs/${RUN_ID}/.is-final-wave=true`, MUST proceed to STEP 5 immediately. Auto-continue is mandatory. |
+| "User will say 'continue' if needed" | NO — user intervention after final wave = harness failure. /vg:build/test/accept/deploy run end-to-end in one turn (modulo blocking gates). |
+| "Test wave done = /vg:test done" | NO — `/vg:test` has post-wave goal verification, regression, security audit, write_report, complete steps. Read `commands/vg/test.md` after wave returns. |
+| "Accept UAT collected = /vg:accept done" | NO — accept Section 6 writes UAT.md, Section 7 post-accept actions, plus run-complete. Read `commands/vg/accept.md` after each interactive step. |
+| "Deploy per-env returned = /vg:deploy done" | NO — `/vg:deploy` Step 2 persists summary, then run-complete. Don't end turn until DEPLOY-STATE.json written + emit-event fired. |
+
 ## Open diagnostic threads (Layer 4 mechanism)
 
 If this injected context contains "OPEN DIAGNOSTICS for current run", you
