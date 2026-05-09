@@ -1,5 +1,109 @@
 # Changelog
 
+## v2.64.0 — F5 Workflow tracer (full impl) (2026-05-09)
+
+### Closing the last deferred item from RTB blueprint→build investigation
+
+| Component | Commit | File |
+|---|---|---|
+| **Validator** | `ce620dd` | `scripts/validators/verify-workflow-evidence.py` |
+| **L4_workflow gate wire** | `12d23b2` | `commands/vg/_shared/build/post-execution-delegation.md`, `post-execution-overview.md`, `commands/vg/build.md` |
+| **Design doc (predecessor)** | `cdc6440` | `docs/plans/2026-05-09-f5-workflow-tracer-design.md` |
+
+### What it does
+
+User pain: even with v2.62.0 F3 (FORM-API-MAP field cross-ref) + v2.63.0 F4 (auto-wire), bugs slip through. Forms post correctly but `setState` never called → UI stuck on loading. Fetch succeeds but `.then()` missing → response shape never parsed.
+
+F5 catches **wiring bugs across components**, not field-name bugs. For each step in `${PHASE_DIR}/WORKFLOW-SPECS/WF-NN.md` (produced by /vg:blueprint Pass 3), validator searches FE + BE source trees for matching code patterns.
+
+### How it works
+
+`verify-workflow-evidence.py` runs lexical AST search (regex-based, pure stdlib + optional pyyaml — no tree-sitter, no babel). For each workflow step:
+
+- **User clicks** → `onClick={fn}`, `button[type=submit]`, `on:click=`
+- **FE validate** → `handleSubmit`, `useForm`, `zod.parse`, `yup.|joi.`
+- **FE HTTP** → `fetch('/api/x', {method:'POST'})`, `axios.post|get|put|patch|delete`
+- **FE response handler** → `.then()`, `await fetch`, `onSuccess:`
+- **FE state update** → `setState`, `set[A-Z]\w*`, `dispatch`
+- **FE cache invalidate** → `invalidateQueries`, `mutate`, `refetch`
+- **FE navigation** → `navigate()`, `router.push`, `history.push`
+- **BE routes** → `router.post|get|put|patch|delete('/path')`, `app.METHOD`, `@post` decorators (Express, Fastify, Flask, FastAPI)
+- **BE persistence** → ORM `.save()/.create()/.update()`, raw SQL, prisma ops
+
+URL/method matching with path normalization (`:id`, `{id}`, `${var}` → `:param`).
+
+### Output
+
+`${PHASE_DIR}/WORKFLOW-EVIDENCE/<wf-id>.json` per workflow:
+
+```json
+{
+  "workflow_id": "WF-001",
+  "phase": "7.14",
+  "steps": [
+    {
+      "step_idx": 0,
+      "actor": "user",
+      "action": "click submit",
+      "evidence": {"file": "...", "line": 42, "anchor": "onClick={handleSubmit}"},
+      "status": "found"
+    },
+    {
+      "step_idx": 4,
+      "actor": "FE",
+      "action": "handle response",
+      "evidence": null,
+      "status": "missing",
+      "missing_reason": "no .then() / await response handler within scope"
+    }
+  ],
+  "summary": {"total_steps": 6, "found": 4, "missing": 2, "drift_severity": "warn"}
+}
+```
+
+Status taxonomy: `found`, `missing`, `divergent`, `ambiguous`, `skipped`.
+
+### Strict mode (per user §9.3 decision)
+
+`VG_BUILD_L4_WORKFLOW_STRICT=true` → BLOCKs on **both** `missing` and `divergent` steps. Default warn-only — drift detected but build proceeds.
+
+### Wired automatically into post-execution
+
+New `L4_workflow` gate in `gates_passed[]` (parallel to v2.63.0 F4 `L4_form`):
+- Runs after L4_form
+- Skips when `${PHASE_DIR}/WORKFLOW-SPECS.md` absent (legacy phase or no flows)
+- Skips for non-FE/BE profiles (infra, docs, hotfix, bugfix, migration)
+- Emit `build.l4_workflow_completed` (severity warn)
+- Emit `build.l4_workflow_skipped` (severity warn) when no workflows
+
+### TSX-only for v2.64.0 (per user §9.2 decision)
+
+Vue support is lexical-only (extract `<script>` block then regex). Full Vue SFC parsing deferred to v2.64.1 per design §6b. Svelte/SolidJS unsupported — emit `skipped` with `unsupported_framework`.
+
+### Test additions
+
+~16 new pytest assertions across 2 files:
+- `tests/test_workflow_evidence.py` (8 tests)
+- `tests/test_l4_workflow_gate_wired.py` (8 tests)
+
+### Migration
+
+No breaking changes:
+- F5 warn-only by default. Existing builds pass through unchanged.
+- Set `VG_BUILD_L4_WORKFLOW_STRICT=true` to opt into BLOCK mode.
+- Phases without `WORKFLOW-SPECS.md` (pre-Pass 3 blueprint or no multi-actor flows) skip silently.
+
+### Cumulative test count
+
+v2.63.0 baseline + ~16 new = ~286+ pytest assertions covering meta-memory v1.1 + supply-chain gates + tasklist UX + post-wave continuation + RTB quality + workflow tracer.
+
+### Deferred to v2.64.1+
+
+- Full Vue SFC parsing (currently lexical script-only)
+- Svelte/SolidJS framework support
+- Runtime workflow trace (instrumentation-based, alternative to static AST)
+- Temporal order verification (step 2 before step 5 in execution)
+
 ## v2.63.0 — UI-SPEC per-slug split + L4_form auto-wire (2026-05-09)
 
 ### Bug fix — Closing 2 deferred items from v2.62.0 RTB investigation
