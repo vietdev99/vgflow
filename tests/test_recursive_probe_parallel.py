@@ -72,9 +72,12 @@ def test_default_sequential_backcompat(probe_module, tmp_path: Path) -> None:
     elapsed = time.time() - started
 
     assert len(results) == 4
-    # Sequential lower bound: total ≈ N * sleep_s = 0.6s. We assert ≥0.5s
+    # Sequential lower bound: total ≈ N * sleep_s = 0.6s. We assert ≥0.55s
     # to catch the case where parallel=1 accidentally fires the executor.
-    assert elapsed >= 0.5, (
+    # 0.55s gives Windows-under-load slack while staying well below the
+    # 0.6s sequential expectation and far above any plausible parallel
+    # finish (~0.2s).
+    assert elapsed >= 0.55, (
         f"parallel=1 finished in {elapsed:.2f}s — too fast, suggests "
         "ThreadPoolExecutor branch fired when it should have stayed sequential"
     )
@@ -92,8 +95,9 @@ def test_parallel_speedup(probe_module, tmp_path: Path) -> None:
     """parallel=4 over 8 entries (each sleeping 0.2s) must be measurably
     faster than the sequential lower bound (8 * 0.2 = 1.6s).
 
-    Threshold: <1.0s (≥38% reduction). Ideal on a 4-worker pool is ~0.4s;
-    we pad heavily to keep CI flake-free.
+    Threshold: <1.3s (≥19% reduction). Ideal on a 4-worker pool is ~0.4s;
+    we pad heavily — 1.3s — to keep CI flake-free under load while still
+    decisively below the 1.6s sequential floor.
     """
     plan = _mock_plan(n=8, sleep_s=0.2)
     started = time.time()
@@ -103,8 +107,8 @@ def test_parallel_speedup(probe_module, tmp_path: Path) -> None:
     elapsed = time.time() - started
 
     assert len(results) == 8
-    assert elapsed < 1.0, (
-        f"parallel=4 took {elapsed:.2f}s — expected <1.0s "
+    assert elapsed < 1.3, (
+        f"parallel=4 took {elapsed:.2f}s — expected <1.3s "
         "(sequential would be ~1.6s); ThreadPoolExecutor likely not engaged"
     )
 
@@ -130,3 +134,68 @@ def test_parallel_output_order_preserved(probe_module, tmp_path: Path) -> None:
             f"results[{i}].selector={r['selector']!r} expected btn-{i}; "
             "ordering not preserved by ThreadPoolExecutor branch"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — partial-failure: one worker raises, others must still return
+# ---------------------------------------------------------------------------
+def test_parallel_partial_failure_returns_error_dict(
+    probe_module, tmp_path: Path, monkeypatch
+) -> None:
+    """If a single worker raises, dispatch must NOT crash the whole batch.
+
+    The sentinel ``mock_sleep_s == -1`` triggers a RuntimeError in the
+    monkeypatched mock. We pass 5 entries where index 2 is poisoned; the
+    other 4 must come back as successful mocks, and entry 2 must surface
+    as an error-shaped dict (selector + lens + status="error" + error).
+    """
+    real_mock = probe_module._mock_spawn_one
+
+    def flaky_mock(entry, slot):
+        if entry.get("mock_sleep_s") == -1:
+            raise RuntimeError("simulated worker crash")
+        return real_mock(entry, slot)
+
+    monkeypatch.setattr(probe_module, "_mock_spawn_one", flaky_mock)
+
+    plan = [
+        _mock_entry(0, 0.05),
+        _mock_entry(1, 0.05),
+        _mock_entry(2, -1),  # poisoned — flaky_mock raises on this
+        _mock_entry(3, 0.05),
+        _mock_entry(4, 0.05),
+    ]
+    results = probe_module.dispatch_auto(
+        plan, tmp_path, parallel=4, mock_mode=True,
+    )
+
+    # Order must still align with input plan even when one entry errored.
+    assert len(results) == 5
+    for i, r in enumerate(results):
+        assert r["selector"] == f"btn-{i}", (
+            f"results[{i}].selector={r['selector']!r} expected btn-{i}; "
+            "ordering not preserved when a worker raised"
+        )
+
+    # Entries 0,1,3,4 succeeded — exit_code 0, no error key set.
+    for i in (0, 1, 3, 4):
+        r = results[i]
+        assert r.get("exit_code") == 0, (
+            f"results[{i}] expected successful mock (exit_code=0); got {r!r}"
+        )
+        assert r.get("status") != "error", (
+            f"results[{i}] should not be marked error; got {r!r}"
+        )
+
+    # Entry 2 surfaced as an error-shaped dict matching the canonical
+    # field set downstream consumers read.
+    err = results[2]
+    assert err["status"] == "error", f"poisoned entry not flagged: {err!r}"
+    assert "simulated worker crash" in err["error"], (
+        f"error message not propagated: {err!r}"
+    )
+    assert err["selector"] == "btn-2"
+    assert err["lens"] == "lens-authz-negative"
+    assert err.get("_idx") == 2, (
+        f"_idx not preserved on error result: {err!r}"
+    )

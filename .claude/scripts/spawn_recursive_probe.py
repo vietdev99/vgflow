@@ -894,17 +894,38 @@ def dispatch_auto(plan: list[dict[str, Any]], phase_dir: Path,
         return results
 
     # Parallel branch — preserve ordering via indexed futures.
+    #
+    # Partial-failure handling: a worker raising must NOT crash dispatch
+    # and lose every other partial success. We wrap each call in try/except
+    # and emit an error-shaped dict (same canonical fields downstream
+    # consumers read: selector, lens, exit_code, error) so the caller can
+    # tell which entries blew up while still seeing the ones that worked.
     n = len(plan)
     results_indexed: list[dict[str, Any] | None] = [None] * n
 
     def _run_one(idx: int) -> tuple[int, dict[str, Any]]:
         entry = plan[idx]
         slot = MCP_SLOTS[idx % len(MCP_SLOTS)]
-        if spawn_fn is not None:
-            res = spawn_fn(entry, slot)
-        else:
-            res = spawn_one_worker(entry, phase_dir, mcp_slot=slot)
-        return idx, res
+        elem = entry.get("element", {})
+        try:
+            if spawn_fn is not None:
+                res = spawn_fn(entry, slot)
+            else:
+                res = spawn_one_worker(entry, phase_dir, mcp_slot=slot)
+            return idx, res
+        except Exception as exc:  # noqa: BLE001 — preserve any worker failure
+            err: dict[str, Any] = {
+                "exit_code": -3,
+                "duration_seconds": 0.0,
+                "output_path": "",
+                "mcp_slot": slot,
+                "lens": entry.get("lens", "lens-unknown"),
+                "selector": elem.get("selector"),
+                "status": "error",
+                "error": str(exc),
+                "_idx": idx,
+            }
+            return idx, err
 
     with ThreadPoolExecutor(max_workers=parallel) as ex:
         for idx, res in ex.map(_run_one, range(n)):
