@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.64.1 — Hotfix: 3-layer split parser bugs (2026-05-09)
+
+### Bug fixes (closes 6 GitHub issues from darwin user)
+
+| Issue | Severity | Fix |
+|---|---|---|
+| #148 | HIGH | `matrix-merger.sh` TOTAL=0 with 60 goals (review FALSE-PASS). Now supports index table + split files. |
+| #146/#145/#144 | medium | `review-api-contract-probe.py` parses 3-layer split format (table + per-endpoint files). |
+| #143 | medium | `generate-api-docs.py` same parser fix (via `api_docs_common.parse_contract_sections`). |
+| #147 | medium | `verify-contract-completeness` profile-aware scope (skips BE artifacts on FE-only phases). |
+
+### Root cause
+
+Parsers expected legacy `## METHOD /path` heading + `## Goal G-XX:` block formats. v2.63.0 D1 + earlier blueprint changes shifted artifacts to 3-layer split (Layer 2 index table + Layer 1 per-file). Old parsers returned 0 endpoints/goals → silent FALSE-PASS or incorrect warnings.
+
+### Fix strategy
+
+Multi-format fallback: try legacy → table → split. Return whichever finds non-zero results.
+
+No breaking changes. Legacy phases continue to parse via heading/block. New phases parse via table or split.
+
+### Tests
+
+`tests/test_hotfix_v2_64_1_parser_bugs.py` — 10 cases covering all 4 fixes plus regression coverage for legacy formats.
+
 ## v2.64.0 — F5 Workflow tracer (full impl) (2026-05-09)
 
 ### Closing the last deferred item from RTB blueprint→build investigation

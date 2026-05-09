@@ -64,10 +64,88 @@ def parse_contract_sections_text(text: str) -> list[ContractSection]:
     return sections
 
 
+# v2.64.1 (Issue #143): table + split-file fallback parsers.
+INDEX_TABLE_ROW_RE = re.compile(
+    r"^\|\s*\S+\s*\|\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\|\s*(\S+)\s*\|",
+    re.MULTILINE | re.IGNORECASE,
+)
+SPLIT_FILE_HEAD_RE = re.compile(
+    r"^#\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S+)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _parse_index_table_sections(text: str) -> list[ContractSection]:
+    """Layer 2: index-table rows → ContractSection (body stays empty since
+    the table row carries no per-endpoint body — callers reading body fields
+    will get empty strings, which is correct for a TOC).
+    """
+    out: list[ContractSection] = []
+    for m in INDEX_TABLE_ROW_RE.finditer(text):
+        out.append(
+            ContractSection(
+                method=m.group(1).upper(),
+                path=m.group(2).strip(),
+                body="",
+            )
+        )
+    return out
+
+
+def _parse_split_file_sections(index_path: Path) -> list[ContractSection]:
+    """Layer 1: walk siblings of index.md (API-CONTRACTS/<slug>.md) and
+    convert the first `# METHOD /path` heading + remainder of file into a
+    ContractSection. The body keeps full per-endpoint content so downstream
+    consumers (request shape, response shape, auth, etc.) work unchanged.
+    """
+    out: list[ContractSection] = []
+    parent = index_path.parent
+    if not parent.is_dir():
+        return out
+    for fp in sorted(parent.glob("*.md")):
+        if fp.name == "index.md":
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = SPLIT_FILE_HEAD_RE.search(text)
+        if not m:
+            continue
+        out.append(
+            ContractSection(
+                method=m.group(1).upper(),
+                path=m.group(2).strip(),
+                body=text[m.end():],
+            )
+        )
+    return out
+
+
 def parse_contract_sections(path: Path) -> list[ContractSection]:
+    """3-layer split format support (v2.64.1, issue #143).
+
+    Pre-fix: only the legacy `## METHOD /path` heading parser ran, returning
+    [] for phases using the 3-layer split pattern (Layer 2 index table +
+    Layer 1 per-endpoint files). Empty result triggered "no endpoints
+    parsed" and bricked /vg:build doc generation.
+
+    Strategy: try legacy heading → index-table rows → split files; return
+    the first non-empty result.
+    """
     if not path.exists():
         return []
-    return parse_contract_sections_text(path.read_text(encoding="utf-8", errors="replace"))
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    legacy = parse_contract_sections_text(text)
+    if legacy:
+        return legacy
+
+    table = _parse_index_table_sections(text)
+    if table:
+        return table
+
+    return _parse_split_file_sections(path)
 
 
 def _parse_markdown_table(block: str) -> list[dict[str, str]]:

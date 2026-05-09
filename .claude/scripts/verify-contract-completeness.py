@@ -43,6 +43,63 @@ from pathlib import Path
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 
 
+# v2.64.1 (Issue #147): profile-aware scope.
+# Pre-fix: validator unconditionally grepped DB models, background jobs, and
+# webhooks even on web-frontend-only phases, producing irrelevant warnings
+# for the FE-only user. Skip BE inventory entirely on FE-only profiles, and
+# skip FE-only signals on web-backend-only profiles.
+_FRONTEND_ONLY_PROFILES = {"web-frontend-only"}
+_BACKEND_ONLY_PROFILES = {"web-backend-only"}
+_PROFILE_FRONTMATTER_RE = re.compile(
+    r"^\s*(?:platform|surface|profile)\s*:\s*[\"']?([\w\-]+)[\"']?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PROFILE_INLINE_RE = re.compile(
+    r"^\s*\*\*\s*(?:Platform|Surface|Profile)\s*:?\s*\*\*\s*[`\"']?([\w\-]+)[`\"']?",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def detect_phase_platform_profile(phase_dir: Path) -> str:
+    """Lite mirror of phase-profile.sh's detect_phase_platform_profile.
+
+    Reads frontmatter (platform/surface/profile) from SPECS.md, PLAN.md,
+    TEST-GOALS.md, CONTEXT.md. Returns one of:
+        web-fullstack | web-frontend-only | web-backend-only |
+        mobile-* | cli-tool | library
+    or "web-fullstack" as fallback.
+    """
+    valid = {
+        "web-fullstack", "web-frontend-only", "web-backend-only",
+        "mobile-rn", "mobile-flutter", "mobile-native-ios",
+        "mobile-native-android", "mobile-hybrid", "cli-tool", "library",
+    }
+    for filename in ("SPECS.md", "PLAN.md", "TEST-GOALS.md", "CONTEXT.md"):
+        fp = phase_dir / filename
+        if not fp.is_file():
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        # Frontmatter block (between leading ---) takes priority.
+        fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
+        scan_blocks = []
+        if fm_match:
+            scan_blocks.append(fm_match.group(1))
+        scan_blocks.append(text)
+        for block in scan_blocks:
+            for m in _PROFILE_FRONTMATTER_RE.finditer(block):
+                value = m.group(1).strip().lower()
+                if value in valid:
+                    return value
+            for m in _PROFILE_INLINE_RE.finditer(block):
+                value = m.group(1).strip().lower()
+                if value in valid:
+                    return value
+    return "web-fullstack"
+
+
 def load_crud_surfaces(phase_dir: Path) -> dict:
     p = phase_dir / "CRUD-SURFACES.md"
     if not p.is_file():
@@ -241,6 +298,11 @@ def main() -> int:
     resource_names = declared_resource_names(surfaces)
     declared_paths = declared_routes(surfaces)
 
+    # v2.64.1 (Issue #147) — profile-aware scope routing.
+    platform_profile = detect_phase_platform_profile(phase_dir)
+    is_fe_only = platform_profile in _FRONTEND_ONLY_PROFILES
+    is_be_only = platform_profile in _BACKEND_ONLY_PROFILES
+
     if args.routes_static:
         routes = load_routes_static(Path(args.routes_static))
     else:
@@ -251,12 +313,29 @@ def main() -> int:
             rsj_root = code_root / "routes-static.json"
             routes = load_routes_static(rsj_root) if rsj_root.is_file() else []
 
-    if not routes and not args.quiet:
-        print(f"  \033[33mno routes-static.json available — run scripts/extract-routes-static.py first for full coverage\033[0m")
-
-    models = grep_db_models(code_root)
-    bg_jobs = grep_background_jobs(code_root)
-    webhooks = grep_webhooks(code_root)
+    if is_fe_only:
+        # Pure FE phase — backend route inventory not relevant. Skip the
+        # routes-static.json warning entirely (it would only be needed for
+        # BE coverage which we are not performing).
+        routes = []
+        models: set[str] = set()
+        bg_jobs: list[dict] = []
+        webhooks: list[dict] = []
+        if not args.quiet:
+            print(f"  profile={platform_profile} — skipping BE inventory (DB models, background jobs, webhooks)")
+    else:
+        if not routes and not args.quiet:
+            print(f"  \033[33mno routes-static.json available — run scripts/extract-routes-static.py first for full coverage\033[0m")
+        models = grep_db_models(code_root)
+        bg_jobs = grep_background_jobs(code_root)
+        webhooks = grep_webhooks(code_root)
+        if is_be_only and not args.quiet:
+            # BE-only — keep BE inventory active, but downstream FE-only
+            # warnings (route-vs-resource diff for SPA-only paths) are
+            # irrelevant. The current diff already focuses on routes
+            # declared by CRUD-SURFACES.md, so no extra suppression needed
+            # for the BE-only path beyond surfacing the profile.
+            print(f"  profile={platform_profile} — running BE inventory only")
 
     uncovered_routes = diff_routes(routes, declared_paths, resource_names)
     uncovered_models = diff_models(models, resource_names)
@@ -265,6 +344,7 @@ def main() -> int:
         "phase_dir": str(phase_dir),
         "code_root": str(code_root),
         "checked_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "platform_profile": platform_profile,
         "declared_resources": len(surfaces.get("resources") or []),
         "routes_inventoried": len(routes),
         "models_inventoried": len(models),

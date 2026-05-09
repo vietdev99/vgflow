@@ -1,5 +1,13 @@
 # shellcheck shell=bash
-# Matrix Merger — bash function library (v1.9.2.4)
+# Matrix Merger — bash function library (v2.64.1 hotfix)
+#
+# v2.64.1 (Issue #148 HIGH — review FALSE-PASS):
+#   Added 3-layer split format support. Pre-fix: parser only understood
+#   legacy `## Goal G-XX:` heading blocks in flat TEST-GOALS.md, returning
+#   TOTAL=0 when phases used the new index-table or per-goal split files,
+#   which produced silent FALSE-PASS in the review gate.
+#   Post-fix: 3-tier fallback — flat headings → index-table rows → split
+#   files — taking max non-zero count.
 #
 # Problem this solves:
 #   v1.9.2.3 added surface probe execution in Phase 4a (writes
@@ -68,37 +76,131 @@ from pathlib import Path
 
 phase_dir, test_goals_path, runtime_map_path, probe_path, out_path, phase_num = sys.argv[1:7]
 
-# ─── Load TEST-GOALS ──────────────────────────────────────────────
+# ─── Load TEST-GOALS (v2.64.1 — 3-layer split format support) ─────
+# Issue #148 HIGH: pre-fix only flat-heading parser ran. New phases use
+# 3-layer pattern → flat had no headings → TOTAL=0 → silent FALSE-PASS.
+# Strategy: try each parse method, take whichever finds the most goals
+# (and log which method won via stderr for diagnostics).
 tg_text = Path(test_goals_path).read_text(encoding='utf-8', errors='ignore')
-goals = []
-# Split by goal blocks first — lets us capture multi-field metadata per goal
-# (Mutation evidence + Persistence check are paragraph-level fields that the
-# single-line regex above cannot match reliably).
-goal_heading = r'^## (?:Goal )?(G-[\w]+): *(.+?)$'
-next_goal_heading = r'^## (?:Goal )?G-[\w]+:'
-for blk_m in re.finditer(
-    goal_heading +
-    r'(?P<body>(?:(?!' + next_goal_heading + r').)*)',
-    tg_text, re.M | re.S
-):
-    gid, title, body = blk_m.group(1), blk_m.group(2).strip(), blk_m.group('body') or ''
-    def _field(name, blk=body):
-        mm = re.search(rf'^\*\*{re.escape(name)}:\*\*\s*(.+?)(?:\n\*\*|\n##|\Z)', blk, re.M | re.S)
-        return (mm.group(1).strip() if mm else '')
-    prio = re.search(r'^\*\*Priority:\*\*\s*(\w[\w-]*)', body, re.M)
-    surface = re.search(r'^\*\*Surface:\*\*\s*(\w[\w-]*)', body, re.M)
-    infra = re.search(r'^\*\*Infra deps:\*\*\s*\[([^\]]+)\]', body, re.M)
-    goals.append({
-        'id': gid,
-        'title': title[:80],
-        'priority': (prio.group(1) if prio else 'important').lower(),
-        'surface': (surface.group(1) if surface else 'ui').lower(),
-        'infra_deps': [x.strip() for x in (infra.group(1) if infra else '').split(',') if x.strip()],
-        'mutation_evidence': _field('Mutation evidence'),
-        'persistence_check': _field('Persistence check'),
-        'status': 'NOT_SCANNED',
-        'evidence': '',
-    })
+
+def _parse_flat_blocks(text):
+    """Layer 3 / legacy: `## Goal G-XX:` heading blocks with full metadata."""
+    out = []
+    goal_heading = r'^## (?:Goal )?(G-[\w]+): *(.+?)$'
+    next_goal_heading = r'^## (?:Goal )?G-[\w]+:'
+    for blk_m in re.finditer(
+        goal_heading + r'(?P<body>(?:(?!' + next_goal_heading + r').)*)',
+        text, re.M | re.S
+    ):
+        gid, title, body = blk_m.group(1), blk_m.group(2).strip(), blk_m.group('body') or ''
+        def _field(name, blk=body):
+            mm = re.search(rf'^\*\*{re.escape(name)}:\*\*\s*(.+?)(?:\n\*\*|\n##|\Z)', blk, re.M | re.S)
+            return (mm.group(1).strip() if mm else '')
+        prio = re.search(r'^\*\*Priority:\*\*\s*(\w[\w-]*)', body, re.M)
+        surface = re.search(r'^\*\*Surface:\*\*\s*(\w[\w-]*)', body, re.M)
+        infra = re.search(r'^\*\*Infra deps:\*\*\s*\[([^\]]+)\]', body, re.M)
+        out.append({
+            'id': gid,
+            'title': title[:80],
+            'priority': (prio.group(1) if prio else 'important').lower(),
+            'surface': (surface.group(1) if surface else 'ui').lower(),
+            'infra_deps': [x.strip() for x in (infra.group(1) if infra else '').split(',') if x.strip()],
+            'mutation_evidence': _field('Mutation evidence'),
+            'persistence_check': _field('Persistence check'),
+            'status': 'NOT_SCANNED',
+            'evidence': '',
+        })
+    return out
+
+
+def _parse_index_table(text):
+    """Layer 2: `| G-NN | <surface> | <priority> | <file> |` table rows."""
+    out = []
+    # Match: `| G-01 | <surface> | <priority> | <file> |` — at least the G-NN id col + 1 more col.
+    row_re = re.compile(r'^\|\s*(G-[\w]+)\s*\|([^\n]*)\|\s*$', re.M)
+    for m in row_re.finditer(text):
+        gid = m.group(1)
+        rest = [c.strip() for c in m.group(2).split('|')]
+        # Common formats:
+        #   G-01 | login | P0 | G-01.md
+        #   G-01 | login | critical | G-01.md
+        #   G-01 | <title> | ui | important
+        surface = ''
+        priority = ''
+        if len(rest) >= 2:
+            surface = rest[0].lower()
+            prio_raw = rest[1].lower()
+            # Normalize P0/P1/P2/P3 to severity words.
+            prio_map = {'p0': 'critical', 'p1': 'critical', 'p2': 'important', 'p3': 'nice-to-have'}
+            priority = prio_map.get(prio_raw, prio_raw)
+        out.append({
+            'id': gid,
+            'title': gid,
+            'priority': priority or 'important',
+            'surface': surface or 'ui',
+            'infra_deps': [],
+            'mutation_evidence': '',
+            'persistence_check': '',
+            'status': 'NOT_SCANNED',
+            'evidence': '',
+        })
+    return out
+
+
+def _parse_split_files(phase_dir_path):
+    """Layer 1: walk TEST-GOALS/G-*.md per-goal files."""
+    out = []
+    tg_dir = Path(phase_dir_path) / 'TEST-GOALS'
+    if not tg_dir.is_dir():
+        return out
+    for fp in sorted(tg_dir.glob('G-*.md')):
+        try:
+            txt = fp.read_text(encoding='utf-8', errors='ignore')
+        except OSError:
+            continue
+        # First H1: `# G-NN: <title>` or `# G-NN <title>`
+        head = re.search(r'^#\s+(G-[\w]+)[:\s]', txt, re.M)
+        gid = head.group(1) if head else fp.stem
+        prio = re.search(r'^\*\*Priority:\*\*\s*(\w[\w-]*)', txt, re.M)
+        surface = re.search(r'^\*\*Surface:\*\*\s*(\w[\w-]*)', txt, re.M)
+        out.append({
+            'id': gid,
+            'title': gid,
+            'priority': (prio.group(1).lower() if prio else 'important'),
+            'surface': (surface.group(1).lower() if surface else 'ui'),
+            'infra_deps': [],
+            'mutation_evidence': '',
+            'persistence_check': '',
+            'status': 'NOT_SCANNED',
+            'evidence': '',
+        })
+    return out
+
+
+# Run all 3 parsers, take whichever finds the most goals.
+flat_goals = _parse_flat_blocks(tg_text)
+# Index-table parse: prefer TEST-GOALS/index.md, else flat file (which may
+# itself contain a table when the flat file is just a TOC).
+index_text = ''
+index_path = Path(phase_dir) / 'TEST-GOALS' / 'index.md'
+if index_path.is_file():
+    index_text = index_path.read_text(encoding='utf-8', errors='ignore')
+table_goals = _parse_index_table(index_text or tg_text)
+split_goals = _parse_split_files(phase_dir)
+
+# Pick winner: max count, but de-dup by id if multiple sources tie.
+candidates = [
+    ('flat-blocks', flat_goals),
+    ('index-table', table_goals),
+    ('split-files', split_goals),
+]
+candidates.sort(key=lambda kv: len(kv[1]), reverse=True)
+method, goals = candidates[0]
+if not goals:
+    goals = []
+print(f"⓵ matrix-merger: parsed {len(goals)} goals via '{method}' "
+      f"(flat={len(flat_goals)}, table={len(table_goals)}, split={len(split_goals)})",
+      file=sys.stderr)
 
 # ─── Load RUNTIME-MAP (browser scan results) ──────────────────────
 rm_seqs = {}
@@ -285,7 +387,7 @@ lines = [
     '',
     f'**Generated:** {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}  ',
     f'**Source:** RUNTIME-MAP.json (UI goals) + .surface-probe-results.json (backend goals)  ',
-    f'**Merger:** _shared/lib/matrix-merger.sh v1.9.2.4',
+    f'**Merger:** _shared/lib/matrix-merger.sh v2.64.1',
     '',
     '## Summary',
     '',

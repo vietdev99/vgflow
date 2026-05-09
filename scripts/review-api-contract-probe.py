@@ -63,8 +63,18 @@ class ProbeResult:
     detail: str
 
 
-def parse_contracts(path: Path) -> list[Endpoint]:
-    text = path.read_text(encoding="utf-8")
+TABLE_ROW_RE = re.compile(
+    r"^\|\s*\S+\s*\|\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\|\s*(\S+)\s*\|",
+    re.MULTILINE | re.IGNORECASE,
+)
+SPLIT_FILE_HEAD_RE = re.compile(
+    r"^#\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S+)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _parse_legacy_headings(text: str) -> list[Endpoint]:
+    """Layer 3 / legacy: `### METHOD /path` heading + body block."""
     matches = list(HEADER_RE.finditer(text))
     endpoints: list[Endpoint] = []
     for idx, match in enumerate(matches):
@@ -75,12 +85,76 @@ def parse_contracts(path: Path) -> list[Endpoint]:
         auth_match = re.search(r"(?m)^\*\*Auth:\*\*\s*(.+?)\s*$", body)
         endpoints.append(
             Endpoint(
+                method=method.upper(),
+                path=ep_path,
+                auth=auth_match.group(1).strip() if auth_match else None,
+            )
+        )
+    return endpoints
+
+
+def _parse_index_table(text: str) -> list[Endpoint]:
+    """Layer 2: `| <slug> | METHOD | /path | <file> |` index table rows."""
+    endpoints: list[Endpoint] = []
+    for m in TABLE_ROW_RE.finditer(text):
+        method = m.group(1).upper()
+        ep_path = m.group(2)
+        endpoints.append(Endpoint(method=method, path=ep_path, auth=None))
+    return endpoints
+
+
+def _parse_split_files(index_path: Path) -> list[Endpoint]:
+    """Layer 1: walk siblings of index.md (API-CONTRACTS/<slug>.md) and parse
+    first `# METHOD /path` heading per file."""
+    endpoints: list[Endpoint] = []
+    parent = index_path.parent
+    if not parent.is_dir():
+        return endpoints
+    for fp in sorted(parent.glob("*.md")):
+        if fp.name == "index.md":
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = SPLIT_FILE_HEAD_RE.search(text)
+        if not m:
+            continue
+        method = m.group(1).upper()
+        ep_path = m.group(2)
+        body = text[m.end():]
+        auth_match = re.search(r"(?m)^\*\*Auth:\*\*\s*(.+?)\s*$", body)
+        endpoints.append(
+            Endpoint(
                 method=method,
                 path=ep_path,
                 auth=auth_match.group(1).strip() if auth_match else None,
             )
         )
     return endpoints
+
+
+def parse_contracts(path: Path) -> list[Endpoint]:
+    """3-layer split format support (v2.64.1, issues #146/#145/#144).
+
+    Pre-fix: parser scanned for `### METHOD /path` headings only. New phases
+    use 3-layer pattern (Layer 2 index table + Layer 1 per-endpoint files),
+    which produced 0 endpoints and a setup-error exit code.
+
+    Strategy: try legacy headings → index-table rows → split files; return
+    the first non-empty result (or empty list if all 3 yield nothing).
+    """
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+
+    legacy = _parse_legacy_headings(text)
+    if legacy:
+        return legacy
+
+    table = _parse_index_table(text)
+    if table:
+        return table
+
+    return _parse_split_files(path)
 
 
 def _json_top_keys(body: bytes, content_type: str) -> str:
