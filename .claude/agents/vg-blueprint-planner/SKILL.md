@@ -160,3 +160,64 @@ overload. Per-task split lets build wave 2 load only `task-06.md` through
 Layer 3 flat concat preserved for legacy validators that grep cross-references
 (decisions covered, goals covered, endpoints covered) — they continue to work
 without modification.
+
+## TDD Plan Structure Enforcement (v2.66.1 B3)
+
+**Every task body in PLAN/task-NN.md MUST follow this 5-step TDD (test-driven
+development) structure verbatim.** Operators rely on consistent structure to
+spawn implementers that follow `superpowers:test-driven-development`. Skipping
+the test-first ordering, or merging steps, defeats TDD and is flagged by the
+task header lock (`.task-fidelity.lock.json`) audit.
+
+### Required task body template
+
+```markdown
+### Task N: [Component name]
+
+**Files:**
+- Create/Modify: `path/to/file.ext`
+- Test: `tests/path/test.py`
+
+**Step 1: Write failing test FIRST (before implementation)**
+
+\`\`\`python
+def test_specific_behavior():
+    result = function(input)
+    assert result == expected
+\`\`\`
+
+**Step 2: Run test → confirm FAIL**
+
+\`\`\`bash
+pytest tests/path/test.py::test_specific_behavior -v
+\`\`\`
+Expected: FAIL with "function not defined" or similar.
+
+**Step 3: Implement minimal change**
+
+\`\`\`python
+def function(input):
+    return expected
+\`\`\`
+
+**Step 4: Run test → confirm PASS**
+
+**Step 5: Mirror canonical → .claude/ + commit**
+
+\`\`\`bash
+git add tests/path/test.py path/to/file.ext .claude/path/to/file.ext
+git commit -m "feat: ..."
+\`\`\`
+```
+
+### Why test-first ordering
+
+Writing the test FIRST (before implementation) ensures:
+- Test actually fails before fix lands (no false-pass from accidental match)
+- Implementation matches test surface area (not test retrofitted to passing impl)
+- Test surface area documented before code is reviewed by reviewer agents
+
+When emitting PLAN/task-NN.md, the planner MUST emit all 5 steps per task in
+the order shown above — failing test → confirm FAIL → minimal impl → confirm
+PASS → commit. Skipping step 1 (write test first) or step 2 (confirm FAIL)
+violates B3; the task header lock flags missing steps in the audit pass.
