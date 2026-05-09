@@ -451,6 +451,20 @@ Stop hook reminds you to run `/vg:learn --consolidate --apply` when 24h + 5 sess
 
 Default remains `disabled` — no behavior change unless you explicitly opt in.
 
+## Tasklist + Intent (v2.60.0)
+
+### Auto-restore tasklist on session resume
+
+When a wave is mid-execution and the session crashes / hits limit / compacts, VGFlow restores the full tasklist projection on resume. The Stop hook captures latest TodoWrite state to `.vg/runs/{run_id}/.todowrite-snapshot.json` after every update; SessionStart hook re-projects on resume so `in_progress` items + completed status are preserved. No more "1 next task only" after resume.
+
+### TodoWrite re-order by status
+
+`in_progress` items surface to the top of each group, completed sink to the bottom. Group headers auto-reflect active state — groups with any `in_progress` step show as `in_progress`, fully-completed groups show `completed`.
+
+### Natural language → VG command (intent primer)
+
+The SessionStart-injected primer now includes an Intent → Command map. When you type "build phase 7.14 bằng VG đi" or "lập plan cho phase 8", the AI recognizes the intent and invokes the matching `/vg:*` slash command. Supports both English and Vietnamese trigger phrases.
+
 ## Repository layout
 
 ```

@@ -1,5 +1,44 @@
 # Changelog
 
+## v2.60.0 — Tasklist UX + intent primer (2026-05-09)
+
+### Tasklist UX (F1 + F2)
+
+User pain (verbatim from session): "wave đang chạy, bị hết limit vì lý do gì đó mà tasklist mất. khi tôi khôi phục lại phiên, tasklist chỉ hiện 1 next task duy nhất, không khôi phục lại tasklist. Hơn nữa Tasklist không update các task đang làm, chuẩn bị làm lên đầu."
+
+| Feature | File | Behaviour |
+|---|---|---|
+| **F1 SessionStart auto-restore** | `scripts/hooks/vg-session-start.sh` + `scripts/emit-tasklist.py --restore-mode` + new `scripts/hooks/vg-tasklist-snapshot.py` | On `resume`/`compact` event, if active VG run + `tasklist-contract.json` exist, append restoration markdown to `additionalContext` instructing AI to immediately re-project the full tasklist via TodoWrite. Snapshot statuses preserved. |
+| **F2 TodoWrite re-order by status** | `scripts/emit-tasklist.py` `reorder_projection_by_status()` + `scripts/hooks/vg-post-tool-use-todowrite.sh` snapshot wire | Within each group: `in_progress` → `pending` → `completed`. Group header status auto-reflects step states. After every TodoWrite call, `.vg/runs/{run_id}/.todowrite-snapshot.json` captures latest state for F1 restore. |
+
+### Intent recognition (Task 3)
+
+User pain: "build phase X bằng VG đi" — natural language requests don't trigger VG slash commands. AI writes code by hand instead of invoking `/vg:build`.
+
+`scripts/hooks/vg-meta-skill.md` adds two sections injected on every SessionStart:
+
+- **Intent → Command map** — 17 entries mapping English + Vietnamese phrases ("build phase X" / "lập plan cho phase X" / "rà code" / "đẩy lên" / "tiến độ" / etc.) to `/vg:*` commands. Includes disambiguation rules and fallback for non-matching requests.
+- **Red Flags — Intent recognition** — 6 rationalizations AI uses to skip the map ("I'll just write code directly", "/vg:debug overkill for one file") with reality responses.
+
+Primer file size: 13KB / 20KB budget — well under SessionStart context limit.
+
+### Test additions (~25 new pytest assertions)
+
+- `tests/test_tasklist_session_restore.py` (7 tests)
+- `tests/test_todowrite_reorder.py` (10 tests)
+- `tests/test_meta_skill_intent_table.py` (8 tests)
+
+### Migration
+
+No breaking changes:
+- F1 restore activates only on resume/compact when active run exists. Fresh sessions unaffected.
+- F2 reorder applies via emit-tasklist.py — visible immediately to all users.
+- Intent map is additive guidance — AI behavior gradually improves; no command surface change.
+
+### Cumulative test count
+
+v2.59.0 baseline + ~25 new = ~205+ pytest assertions.
+
 ## v2.59.0 — Supply chain bug fixes + meta-memory helper (2026-05-09)
 
 Patch-style minor release. 3 P0/HIGH bug fixes confirmed by 2-agent supply-chain audit + 2 meta-memory dogfood enablers (helper command + Stop hook reminder). No breaking changes; meta-memory remains opt-in (default `disabled`).
