@@ -90,10 +90,15 @@ mkdir -p "$OUTPUT_DIR"
 
 # Read CLIs from config
 # config.crossai_clis = [
-#   { name: "codex", command: "codex exec \"{prompt}\"", label: "Codex configured model" },
-#   { name: "gemini", command: "cat \"{context}\" | gemini -m gemini-2.5-pro -p \"{prompt}\" --yolo", label: "Gemini Pro High 3.1" },
-#   { name: "claude", command: "cat \"{context}\" | claude --model sonnet -p \"{prompt}\"", label: "Claude Sonnet 4.6" }
+#   { name: "codex", command: "codex exec {prompt}", label: "Codex configured model" },
+#   { name: "gemini", command: "cat '{context}' | gemini -m gemini-2.5-pro -p {prompt} --yolo", label: "Gemini Pro High 3.1" },
+#   { name: "claude", command: "cat '{context}' | claude --model sonnet -p {prompt}", label: "Claude Sonnet 4.6" }
 # ]
+#
+# Issue #149 (v2.66.0): {context} is wrapped in single quotes so workspace
+# paths with spaces survive the shell pipe. {prompt} is left unquoted because
+# scripts/crossai-runner.py routes it through shlex.quote() inside
+# _materialize_command — adding our own quotes here would double-wrap.
 
 PROMPT="Review artifacts and output crossai_review XML per format specified"
 

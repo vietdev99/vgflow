@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -108,6 +109,22 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", errors="replace")
 
 
+def _materialize_command(template: str, context_path: str, prompt: str) -> str:
+    """Substitute {context} and {prompt} with shell-safe quoted values.
+
+    Issue #149: bare ``str.replace`` left workspace paths with spaces unquoted
+    so the shell split the pipe at the first whitespace
+    (``cat: /Users/<u>/path: Is a directory``). Both placeholders are routed
+    through :func:`shlex.quote` so the materialized command parses safely
+    regardless of spaces/quotes/``$``-vars in either value.
+    """
+    return (
+        template
+        .replace("{context}", shlex.quote(str(context_path)))
+        .replace("{prompt}", shlex.quote(str(prompt)))
+    )
+
+
 def run_one(
     *,
     name: str,
@@ -123,8 +140,10 @@ def run_one(
     exit_file = output_dir / f"result-{name}.exit"
     meta_file = output_dir / f"result-{name}.meta.json"
 
-    command = command_template.replace("{prompt}", prompt).replace(
-        "{context}", str(context_file)
+    command = _materialize_command(
+        template=command_template,
+        context_path=str(context_file),
+        prompt=prompt,
     )
     shell = _shell_binary()
     isolated_cwd = Path(
