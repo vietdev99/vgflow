@@ -1,5 +1,69 @@
 # Changelog
 
+## v2.63.0 — UI-SPEC per-slug split + L4_form auto-wire (2026-05-09)
+
+### Bug fix — Closing 2 deferred items from v2.62.0 RTB investigation
+
+| Fix | Drift | Commit | Files |
+|---|---|---|---|
+| **D1** UI-SPEC per-slug split | Architectural sampling cap (`Sample 2-3 representative`) | `410ee5d` | `commands/vg/_shared/blueprint/design.md`, `commands/vg/blueprint.md`, `scripts/vg-load.sh` |
+| **F4** L4_form auto-wire | v2.62.0 F3 verifier was opt-in only | `655336e` | `commands/vg/_shared/build/post-execution-delegation.md`, `commands/vg/_shared/build/post-execution-overview.md`, `commands/vg/build.md` |
+
+### D1 details (UI-SPEC per-slug split)
+
+Old behavior: agent prompt at `_shared/blueprint/design.md:264` instructed `Sample design refs (2-3 representative *.structural.html + *.interactions.md)`. Pages 4+ in multi-page phases had no markup evidence in UI-SPEC. F1 (v2.62.0) added top-5 verbatim cap but the architectural sampling remained.
+
+Fix: 3-layer split matching API-CONTRACTS / PLAN / TEST-GOALS:
+
+```
+${PHASE_DIR}/UI-SPEC.md           ← Layer 3 flat (legacy compat, post-agent concat)
+${PHASE_DIR}/UI-SPEC/index.md     ← Layer 2 table of contents
+${PHASE_DIR}/UI-SPEC/<slug>.md    ← Layer 1 per-slug split
+```
+
+Build executors load only what's needed via:
+
+```
+vg-load --artifact ui-spec --slug <slug>
+```
+
+Falls back to flat UI-SPEC.md when per-slug file missing (legacy phase). Context scales linearly with slug count — no architectural budget cap.
+
+### F4 details (L4_form auto-wire)
+
+v2.62.0 F3 shipped `verify-form-api-field-match.py` as opt-in. F4 wires it into the automatic post-execution sequence run by `vg-build-post-executor` subagent.
+
+New gate `L4_form` added to `gates_passed[]`:
+- Runs `verify-form-api-field-match.py` with `--evidence-out`
+- Default mode: warn-only (drift = WARN telemetry, does NOT BLOCK)
+- Strict mode opt-in via `VG_BUILD_L4_FORM_STRICT=true` env var
+- Skips when `${PHASE_DIR}/FORM-API-MAP.md` missing (legacy phase, emits `build.l4_form_skipped`)
+- Skips silently for non-FE profiles (backend-only, infra, docs, hotfix)
+
+Telemetry events declared in `build.md` must_emit_telemetry:
+- `build.l4_form_completed` (severity warn)
+- `build.l4_form_skipped` (severity warn)
+
+### Test additions
+
+~18 new pytest assertions across 2 files:
+- `tests/test_ui_spec_per_slug_split.py` (10 tests)
+- `tests/test_l4_form_gate_wired.py` (8 tests)
+
+### Migration
+
+No breaking changes:
+- D1: existing flat `UI-SPEC.md` still works (Layer 3 maintained for legacy validators). New per-slug split is additive — phases pre-D1 won't break, just won't get the per-slug split until next /vg:blueprint run.
+- F4: warn-only by default. Existing builds pass through unchanged. Set `VG_BUILD_L4_FORM_STRICT=true` to opt into BLOCK mode.
+
+### Deferred to v2.64+
+
+- **F5** (Workflow tracer — submit → API → response → state → UI evidence chain) requires per-step file:line evidence schema. Deferred until design solidifies.
+
+### Cumulative test count
+
+v2.62.0 baseline + ~18 new = ~270+ pytest assertions.
+
 ## v2.62.0 — RTB blueprint→build quality bundle (2026-05-09)
 
 ### Bug fix — Supply chain quality
