@@ -14,7 +14,7 @@ REFS = {
     "post-execution-overview.md":  980,  # extracted from backup step 9 (896 lines); R2 round-2 expanded post-spawn validator to enforce BUILD-LOG sha + index + sub-files (closes A4/E2/C5 drift)
     "post-execution-delegation.md": 500,
     "crossai-loop.md":             500,
-    "close.md":                    600,  # combines step 10 + 12 (90 + 395 = 485 source), wrapper at 539
+    "close.md":                    660,  # combines step 10 + 12 (90 + 395 = 485 source), wrapper at 539; v2.66.1 B4 STEP 7.1.5 final-reviewer wiring added ~50 lines
 }
 
 
