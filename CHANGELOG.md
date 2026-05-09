@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.67.0 — Dogfood Issues Batch 2 (2026-05-10)
+
+### Bug fixes (closes 7 PrintwayV3 dogfood issues batch 2)
+- **#157 CRITICAL:** API contract probe parser now matches `WS|WEBSOCKET` in all 3 regexes (HEADER_RE + TABLE_ROW_RE + SPLIT_FILE_HEAD_RE). WS endpoints return SKIP verdict (not GET-probed). New `_openapi_schema_valid()` pre-gate exits 2 when `openapi-generation.log` shows FST_ERR_INVALID_SCHEMA / 500.
+- **#158 HIGH:** Lens artifacts (LENS-DISPATCH-PLAN.json + LENS-COVERAGE-MATRIX.md) now have tightened `content_min_bytes` (500/300) + `content_required_sections` enforcement. Codex skill (`codex-skills/vg-review/SKILL.md`) emits lens markers per A9 pattern (`2b3_lens_dispatch_complete`, `2b3_lens_matrix_rendered`).
+- **#159 HIGH:** Validator inventory loops (`verify-contract-completeness.py`) now exclude `_backup`, `archive`, `legacy`, `_archive`, `.vg` directories via centralized `_should_skip_path()` helper. New `scanned_models_count`, `scanned_jobs_count`, `scanned_webhooks_count` metrics in JSON output for cross-artifact reconciliation.
+- **#160 HIGH:** GOAL-COVERAGE-MATRIX BLOCKED status now classified into 5 reasons via `BlockedReason` enum: APP_BLOCKED (route to /vg:build), WORKFLOW_BLOCKED (probe/tool bug), PREREQ_MISSING (route to /vg:amend), EXTERNAL_REQUIRED (operator action), PROBE_INVALID (probe bug). Auto-fix routing only sends APP_BLOCKED to /vg:build; surfaces actionable hints for the other 4 reasons inline.
+- **#161 HIGH:** Phase 0.5 preflight adds 3 BLOCK gates: routes-static.json validity (`jq` route count > 0), ENV-CONTRACT.md `preflight_checks:` section, OpenAPI schema validity log scan (`FST_ERR_INVALID_SCHEMA|HTTP/x.x 500`). Each gate emits `review.preflight_pN_*` telemetry.
+- **#162 MEDIUM:** Envelope drift findings now route via `ALWAYS_ROUTE_FINDING_TYPES` set (bypasses severity floor). Same treatment for `openapi_invalid`, `auth_misconfigured`, `prereq_missing` finding types. `should_route(finding)` is single source of truth (`filter_findings()` delegates).
+- **#163 MEDIUM:** Security baseline validator now emits Evidence with severity field (TLS=CRITICAL, HSTS=HIGH, cookies=MEDIUM, plus complete map for 9 evidence types: CORS-wildcard-credentials=CRITICAL, secret-in-example=CRITICAL, etc.). New `merge_to_review_findings()` writes security findings into REVIEW-FINDINGS.json with `finding_type: security_baseline`. Severity field added to `_common.Evidence` (backwards-compatible — benefits all validators).
+
+### Test coverage
+**31 new tests across 7 suites.** All pass. Zero regression on v2.66.x.
+
+### Migration
+Bug fixes only — no migration needed. Existing reviews automatically benefit on next /vg:review run.
+
+### Closes 15/15 PrintwayV3 dogfood issues
+With v2.67.0, all PrintwayV3 dogfood issues from 2026-05-09 are closed (8 batch 1 in v2.66.x + 7 batch 2 in v2.67.0 = 15 total).
+
 ## v2.66.1 — Plan-fidelity followup + 2 deferred issues (2026-05-10)
 
 ### Bug fixes (closes 2 deferred dogfood issues — ALL 8/8 closed)
