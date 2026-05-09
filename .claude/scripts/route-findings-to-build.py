@@ -44,6 +44,24 @@ SEVERITY_PASS = {"critical", "high"}
 SEVERITY_PASS_WITH_MEDIUM = {"critical", "high", "medium"}
 
 
+# v2.67.0 #162 — finding_type values that ALWAYS route regardless of the
+# severity floor. Some bug classes are inherently MEDIUM-severity but always
+# actionable (envelope shape mismatch between contract + runtime, OpenAPI
+# schema invalid, auth misconfigured, prereq missing). The conservative
+# severity≥HIGH gate filters them out and they never reach AUTO-FIX-TASKS.md
+# despite being real bugs the user wants fixed. This set bypasses the floor.
+#
+# Producers (e.g. scripts/derive-findings.py, validators) MUST tag a
+# finding's `finding_type` field with one of these values for the finding
+# to bypass the gate. cleanup_status / confidence still apply.
+ALWAYS_ROUTE_FINDING_TYPES = {
+    "envelope_drift",       # contract envelope shape ≠ runtime envelope shape
+    "openapi_invalid",      # schema-level — generation failed / FST_ERR_INVALID_SCHEMA
+    "auth_misconfigured",   # security-critical (auth bypass, scope leak)
+    "prereq_missing",       # blocks downstream phases
+}
+
+
 def load_findings(phase_dir: Path) -> dict:
     p = phase_dir / "REVIEW-FINDINGS.json"
     if not p.is_file():
@@ -54,19 +72,33 @@ def load_findings(phase_dir: Path) -> dict:
         return {}
 
 
-def filter_findings(findings: list[dict], include_medium: bool) -> list[dict]:
+def should_route(finding: dict, include_medium: bool = False) -> bool:
+    """v2.67.0 #162 — single source of truth for routing eligibility.
+
+    Returns True when the finding should land in AUTO-FIX-TASKS.md.
+
+    Rules:
+      1. cleanup_status, if set, MUST be "completed" (data integrity gate).
+      2. confidence MUST be "high".
+      3. EITHER finding_type ∈ ALWAYS_ROUTE_FINDING_TYPES (bypass severity floor)
+         OR severity meets the floor (HIGH+ by default, MEDIUM+ when
+         include_medium=True).
+    """
+    cleanup = finding.get("cleanup_status")
+    if cleanup and cleanup != "completed":
+        return False
+    if (finding.get("confidence") or "low").lower() != "high":
+        return False
+    finding_type = (finding.get("finding_type") or "").lower()
+    if finding_type in ALWAYS_ROUTE_FINDING_TYPES:
+        return True
     sev_pass = SEVERITY_PASS_WITH_MEDIUM if include_medium else SEVERITY_PASS
-    out: list[dict] = []
-    for f in findings:
-        sev = (f.get("severity") or "info").lower()
-        if sev not in sev_pass:
-            continue
-        if (f.get("confidence") or "low").lower() != "high":
-            continue
-        if f.get("cleanup_status") and f.get("cleanup_status") != "completed":
-            continue
-        out.append(f)
-    return out
+    sev = (finding.get("severity") or "info").lower()
+    return sev in sev_pass
+
+
+def filter_findings(findings: list[dict], include_medium: bool) -> list[dict]:
+    return [f for f in findings if should_route(f, include_medium=include_medium)]
 
 
 def group_by_dedupe(findings: list[dict]) -> dict[str, list[dict]]:
