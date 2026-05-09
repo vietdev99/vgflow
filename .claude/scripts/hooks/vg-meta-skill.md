@@ -22,6 +22,19 @@ fulfill the missing prerequisite, then retry. Do not work around the gate.
 | "I'll just retry, no need to tell the user" | Layer 5 rule: narrate in session language using template, never retry silently |
 | "I'll write the evidence file directly" | Protected paths blocked by PreToolUse on Write — use vg-orchestrator-emit-evidence-signed.py |
 
+## Red Flags — Intent recognition
+
+These thoughts mean STOP — you're rationalizing skipping the Intent map:
+
+| Thought | Reality |
+|---|---|
+| "User said 'build phase X' but I'll just write code directly" | NO — invoke `/vg:build`. The harness gates depend on it. |
+| "User said 'plan' but the request is small, I'll skip /vg:blueprint" | NO — even small phases benefit from contract enforcement. |
+| "User wants to fix one file, /vg:debug is overkill" | NO — if the bug is in a phase under VG management, use `/vg:debug`. |
+| "User said 'review' but I'll just `cat` the files myself" | NO — `/vg:review` runs CrossAI lens probe + RUNTIME-MAP gen. |
+| "I'll deploy via raw `npm publish` since user said 'ship'" | NO — if `/vg:deploy` is configured for the project, use it. |
+| "Intent matches `/vg:learn` but I'll just summarize manually" | NO — the harness needs the consolidate event for attribution gates. |
+
 ## Open diagnostic threads (Layer 4 mechanism)
 
 If this injected context contains "OPEN DIAGNOSTICS for current run", you
@@ -44,6 +57,47 @@ project, roadmap, specs, scope, blueprint, build, review, test, accept
 When the user invokes `/vg:<cmd>`, follow the slim entry SKILL.md exactly.
 Read references when instructed. Spawn subagents (using tool name `Agent`,
 NOT `Task`) when instructed.
+
+## Intent → Command map (natural language recognition)
+
+When user uses natural language matching these patterns, you MUST invoke
+the listed VG slash command via Skill tool. DO NOT write code by hand or
+ad-hoc edit files when a /vg:* command exists for the intent. The harness
+gates depend on the command being invoked.
+
+| User intent (English / tiếng Việt) | Invoke |
+|---|---|
+| "build phase X" / "code phase Y" / "implement phase Z" / "viết code cho phase X" | `/vg:build` |
+| "plan phase X" / "lập plan cho phase X" / "blueprint phase X" | `/vg:blueprint` |
+| "specs cho phase X" / "viết spec cho X" | `/vg:specs` |
+| "discuss phase X" / "scope phase X" / "thảo luận phase X" | `/vg:scope` |
+| "review phase" / "check code phase" / "rà code phase" | `/vg:review` |
+| "test phase" / "kiểm thử phase" | `/vg:test` |
+| "accept phase" / "uat phase" / "duyệt phase" | `/vg:accept` |
+| "deploy" / "ship lên sandbox/staging/prod" / "đẩy lên" | `/vg:deploy` |
+| "fix bug X" / "sửa lỗi X" / "debug X" | `/vg:debug` |
+| "amend decision" / "đổi quyết định" / "thay đổi context" | `/vg:amend` |
+| "consolidate learnings" / "merge dreams" / "học từ session" | `/vg:learn --consolidate` |
+| "next step" / "tiếp" / "bước tiếp theo" | `/vg:next` |
+| "progress" / "ở phase nào rồi" / "tiến độ" | `/vg:progress` |
+| "health check" / "kiểm tra dự án" | `/vg:health` |
+| "new project" / "khởi tạo dự án" | `/vg:project` |
+| "roadmap" / "lộ trình dự án" | `/vg:roadmap` |
+| "add phase" / "thêm phase" | `/vg:add-phase` |
+
+**Disambiguation rules:**
+
+- If user says "fix X" without bug context → ask first whether they mean `/vg:debug` (runtime bug) or `/vg:amend` (change decision) before invoking.
+- If user says "review" without phase context → if active wave exists, default to `/vg:review` for that phase. Otherwise ask.
+- "test" alone is ambiguous: `/vg:test` runs the full test suite; user may mean ad-hoc one-off test. If uncertain, ask.
+
+**When intent does NOT match any command:**
+
+The map is exhaustive for VG-governed work. If user's request doesn't match
+any row, this is NOT a VG pipeline operation — handle as ad-hoc work.
+But if 50% of the request matches (e.g., user says "fix this auth bug"),
+prefer the matching command unless the user explicitly says "ad-hoc" or
+"don't use VG".
 
 ## Subagent spawn narration (MANDATORY)
 
