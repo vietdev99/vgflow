@@ -244,6 +244,74 @@ For each task index `i` in [0, task_count):
      `{"task_id": "${task_id}", "gate": "truthcheck", "reason":
      "endpoint_unreachable: <method-path>"}`.
 
+5b. **L4_form — Form ↔ API field cross-check (when FORM-API-MAP.md exists, v2.63.0 F4)** —
+   phase-level gate (NOT per-task) that runs ONCE after all per-task
+   gates above. Skip when:
+
+   - `${PHASE_DIR}/FORM-API-MAP.md` missing (phase pre-dates v2.62.0
+     F3 or has no FE forms — emit skip telemetry).
+   - Profile not in {feature, web-fullstack, web-frontend-only}
+     (backend-only / infra / docs / hotfix → skip silently, no
+     telemetry).
+
+   When applicable:
+
+   ```bash
+   FE_ROOT=$(grep -E "^fe_root:" "${PHASE_DIR}/CONTEXT.md" 2>/dev/null | awk '{print $2}')
+   [ -z "$FE_ROOT" ] && FE_ROOT="apps/web/src"
+
+   STRICT_FLAG=""
+   if [ "${VG_BUILD_L4_FORM_STRICT:-false}" = "true" ]; then
+     STRICT_FLAG="--strict"
+   fi
+
+   EVIDENCE_PATH="${PHASE_DIR}/.evidence/l4-form-${PHASE_NUMBER}.json"
+   mkdir -p "${PHASE_DIR}/.evidence" 2>/dev/null
+
+   python3 scripts/validators/verify-form-api-field-match.py \
+     --phase "${PHASE_NUMBER}" \
+     --phase-dir "${PHASE_DIR}" \
+     --fe-root "${FE_ROOT}" \
+     --evidence-out "${EVIDENCE_PATH}" \
+     ${STRICT_FLAG}
+   L4_FORM_RC=$?
+
+   # Emit telemetry
+   if [ "$L4_FORM_RC" -eq 0 ]; then
+     python3 .claude/scripts/vg-orchestrator emit-event "build.l4_form_completed" \
+       --phase "${PHASE_NUMBER}" \
+       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"strict\":\"${STRICT_FLAG}\"}" 2>/dev/null || true
+     GATES_PASSED="${GATES_PASSED} L4_form"
+   elif [ "$L4_FORM_RC" -eq 1 ] && [ -z "$STRICT_FLAG" ]; then
+     # Default warn-only mode: drift detected but does not BLOCK build
+     python3 .claude/scripts/vg-orchestrator emit-event "build.l4_form_completed" \
+       --phase "${PHASE_NUMBER}" \
+       --outcome "WARN" \
+       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"drift_detected\":true}" 2>/dev/null || true
+     GATES_PASSED="${GATES_PASSED} L4_form"
+   else
+     # Strict mode + drift = real BLOCK; or invocation error = also BLOCK
+     echo "⛔ L4_form gate failed (rc=$L4_FORM_RC) — see ${EVIDENCE_PATH}" >&2
+     exit 1
+   fi
+   ```
+
+   Skip path (no FORM-API-MAP.md present — legacy phase or no FE forms):
+
+   ```bash
+   if [ ! -f "${PHASE_DIR}/FORM-API-MAP.md" ]; then
+     python3 .claude/scripts/vg-orchestrator emit-event "build.l4_form_skipped" \
+       --phase "${PHASE_NUMBER}" \
+       --payload "{\"reason\":\"FORM-API-MAP.md missing — phase pre-dates v2.62.0 F3 or no FE forms\"}" 2>/dev/null || true
+   fi
+   ```
+
+   Add `L4_form` to `gates_passed[]` on PASS or WARN; only invocation
+   errors / strict-mode drift block. The orchestrator's post-spawn
+   validator treats `L4_form` as conditionally required (only when
+   FORM-API-MAP.md exists for the phase) — see
+   `post-execution-overview.md` Step 5.5 documentation.
+
 6. **Gap closure** — for each entry in `gates_failed[]` produced in
    steps 1-5, attempt ONE auto-fix iteration:
    - Wait 5 seconds (lets background servers settle / dev server
@@ -344,7 +412,7 @@ The full rendered prompt is also persisted to
 
 | Field | Required | Description |
 |---|---|---|
-| `gates_passed` | yes | List of gate IDs that passed for AT LEAST ONE task in the phase. Orchestrator validates this is a SUPERSET of the required gates (`L2`, `L5`, `truthcheck` always; `L3`, `L6` when any task has `design_ref`). |
+| `gates_passed` | yes | List of gate IDs that passed for AT LEAST ONE task in the phase. Orchestrator validates this is a SUPERSET of the required gates (`L2`, `L5`, `truthcheck` always; `L3`, `L6` when any task has `design_ref`; `L4_form` when `${PHASE_DIR}/FORM-API-MAP.md` exists from /vg:blueprint v2.62.0 F3). |
 | `gates_failed` | yes | List of `{task_id, gate, reason}` triples for failures detected in steps 1-5. May be empty (clean phase). Each entry NOT closed by `gaps_closed[]` blocks marker write. |
 | `gaps_closed` | yes | List of `{task_id, gate, fix}` triples for failures that re-passed after the 1-retry gap closure (procedure step 6). Used by orchestrator to determine whether to route to gap-recovery. |
 | `summary_path` | yes | Absolute path to the SUMMARY.md file written in procedure step 7. Orchestrator validates `[ -f "${summary_path}" ]`. |

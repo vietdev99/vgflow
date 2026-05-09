@@ -39,13 +39,14 @@ narration breaks operator UX visibility but does NOT block.
 
 The post-executor returns a JSON envelope. You MUST validate that
 `gates_passed[]` includes `L2`, `L3` (when any task carried
-`design_ref`), `L5`, `L6` (when any task carried `design_ref`), and
-`truthcheck` BEFORE writing the step marker. You MUST also validate
-that `summary_path` exists on disk and `sha256sum ${summary_path}`
-matches `summary_sha256`. Marker write WITHOUT this validation is a
-HARD VIOLATION — review/test/accept downstream consumes
-SUMMARY.md and trusts gates_passed; drift here corrupts the entire
-phase tail.
+`design_ref`), `L5`, `L6` (when any task carried `design_ref`),
+`L4_form` (when `${PHASE_DIR}/FORM-API-MAP.md` exists from
+/vg:blueprint v2.62.0+ F3), and `truthcheck` BEFORE writing the step
+marker. You MUST also validate that `summary_path` exists on disk and
+`sha256sum ${summary_path}` matches `summary_sha256`. Marker write
+WITHOUT this validation is a HARD VIOLATION — review/test/accept
+downstream consumes SUMMARY.md and trusts gates_passed; drift here
+corrupts the entire phase tail.
 </HARD-GATE>
 
 ---
@@ -777,7 +778,12 @@ step complete. The post-executor returns the envelope shaped per
 2. **Gates coverage**: `gates_passed[]` MUST include `L2`, `L5`, and
    `truthcheck` unconditionally; MUST include `L3` AND `L6` when ANY
    task in the phase carried a `<design-ref>` (i.e., when
-   `${TASK_READ_EVIDENCE_LIST[@]}` contains any non-`null` entry).
+   `${TASK_READ_EVIDENCE_LIST[@]}` contains any non-`null` entry); MUST
+   include `L4_form` when `${PHASE_DIR}/FORM-API-MAP.md` exists for
+   the phase (v2.63.0 F4 — form ↔ API field cross-check; the
+   subagent's procedure step 5b runs the validator and adds the gate
+   to gates_passed on PASS or warn-only mode; legacy phases without
+   FORM-API-MAP.md are exempt and emit `build.l4_form_skipped`).
 3. **Summary path exists**: `[ -f "${summary_path}" ]` must succeed.
 4. **Summary hash matches**: `sha256sum "${summary_path}" | cut -d' ' -f1`
    must equal `summary_sha256`.
@@ -821,6 +827,12 @@ required_gates = {"L2", "L5", "truthcheck"}
 has_design_ref = any(p != "null" for p in re_list)
 if has_design_ref:
     required_gates |= {"L3", "L6"}
+
+# v2.63.0 F4: L4_form (form ↔ API field cross-check) is conditionally
+# required when ${PHASE_DIR}/FORM-API-MAP.md exists (emitted by
+# /vg:blueprint v2.62.0 F3). Legacy phases without the map are exempt.
+if (phase_dir / "FORM-API-MAP.md").is_file():
+    required_gates |= {"L4_form"}
 
 missing_gates = required_gates - gates_passed
 if missing_gates:

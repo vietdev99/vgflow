@@ -129,6 +129,16 @@ runtime_contract:
     - event_type: "build.l4a_gates_passed"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    # v2.63.0 F4 — L4_form gate (form ↔ API field cross-check)
+    # Auto-runs in STEP 5 post-execution when FORM-API-MAP.md exists.
+    # severity=warn — only fires when /vg:blueprint v2.62.0 F3 emitted
+    # the map (legacy phases / non-FE profiles emit l4_form_skipped instead).
+    - event_type: "build.l4_form_completed"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
+    - event_type: "build.l4_form_skipped"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
     # Task 18 (pre-test gate) — STEP 6.5 telemetry. complete = full T1+T2
     # ran (with optional deploy); skipped = --skip-pre-test override path.
     - event_type: "build.pre_test_complete"
