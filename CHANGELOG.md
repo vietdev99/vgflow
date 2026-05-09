@@ -1,5 +1,48 @@
 # Changelog
 
+## v2.61.0 — Post-wave continuation defense in depth (2026-05-09)
+
+### Bug fix — Post-wave continuation
+
+User pain (verbatim): 'build xong phase theo từng wave, tới wave cuối chạy xong, không thấy kích hoạt các bước còn lại của build, lại phải ra lệnh bằng prompt thuần.'
+
+After last wave Agent returns, AI ended turn instead of continuing to STEP 5/6/6.5/7. Same pattern affected `/vg:test`, `/vg:accept`, `/vg:deploy`.
+
+### 3-layer defense (commits)
+
+| Layer | Commit | Mechanism |
+|---|---|---|
+| **L1** | `04b6b09` | Primer Red Flags — 6 rationalizations injected via SessionStart primer (`scripts/hooks/vg-meta-skill.md`) |
+| **L2** | `b59841e` | PostToolUse hook reminder — active stderr emit when wave Agent returns + post-step marker missing (`scripts/hooks/vg-post-tool-use-agent.sh`) |
+| **L3** | `ccba53b` | MANDATORY entry block — explicit instruction in `commands/vg/{build,test,accept,deploy}.md` |
+
+### Wave executor → marker map (L2)
+
+| Subagent type | Command | Post-step marker |
+|---|---|---|
+| `vg-build-task-executor` | vg:build | `9_post_execution` |
+| `vg-test-codegen` | vg:test | `5c_goal_verification` |
+| `vg-test-goal-verifier` | vg:test | `write_report` |
+| `vg-deploy-executor` | vg:deploy | `2_persist_summary` |
+| `vg-accept-uat-builder` | vg:accept | `5_interactive_uat` |
+
+### Bonus fixes in L2
+
+- Stripped trailing `\r` from harvested paths — silent failure on Windows Python for #140 intent-to-add.
+- Switched to `vg_resolve_session_id_from_input` to honor subagent session isolation (#135/#136).
+
+### Test additions
+
+~18 new pytest assertions across 3 files (`tests/test_meta_skill_post_wave_red_flags.py`, `tests/test_post_wave_reminder.py`, `tests/test_post_wave_mandatory_block.py`).
+
+### Migration
+
+No breaking changes. Hooks always exit 0. Entry blocks are additive. Existing flows continue working — additions are reminders + explicit instructions.
+
+### Cumulative test count
+
+v2.60.0 baseline + ~18 new = ~225+ pytest assertions.
+
 ## v2.60.0 — Tasklist UX + intent primer (2026-05-09)
 
 ### Tasklist UX (F1 + F2)
