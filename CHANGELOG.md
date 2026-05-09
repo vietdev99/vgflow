@@ -1,5 +1,34 @@
 # Changelog
 
+## v2.66.0 — Plan-fidelity B1 + CrossAI hotfix bundle + Prereq strict (2026-05-09)
+
+### Breaking changes
+- **C4 #152 #156:** Prereq verifier strict default ON. Was lenient by default → cascade of 31 runtime 404s when upstream patches DEFERRED. Opt-out via `--lenient-prereqs` flag. Strict-only Check E (upstream prereq verification) cannot be lenient-exempted.
+
+### Bug fixes (closes 6 GitHub issues from PrintwayV3 dogfood)
+- **#149 CRITICAL:** crossai-runner path quoting — workspace path with spaces broke stdin pipe to all CLIs. Now uses `shlex.quote()` for context + prompt substitution.
+- **#150 HIGH:** Codex CLI invoke template missing `--skip-git-repo-check` — added flag + sandbox config to match build-crossai-loop parity.
+- **#151 HIGH:** Gemini self-signed cert error swallowed as `auth_missing` — new `tls_self_signed` classifier (ordered before `auth_missing` for first-match-wins) + actionable hint pointing to `NODE_EXTRA_CA_CERTS` workaround.
+- **#152 CRITICAL:** Lenient prereq gate — flipped to strict default (BREAKING). Both BLOCK and WARN trigger exit 1 unless `--lenient-prereqs` flag passed.
+- **#155 LOW:** Codex banner text leaked into result XML — strip Codex CLI banner (everything before second `--------` separator + prompt echo) before persisting via new `_strip_codex_banner()` helper.
+- **#156 CRITICAL:** Scope step doesn't enforce upstream amendment for cross-phase prereqs — added Check E (BLOCK) that scans owner phase SPECS.md/PLAN.md for declared prereq symbols. Missing → demand `/vg:amend ${owner_phase}` or patch phase before continuing. Cannot be lenient-exempted.
+
+### Features
+- **B1:** Per-task spec compliance reviewer — new `.claude/agents/vg-build-spec-reviewer/SKILL.md` agent invoked after L-gates per implemented task. Strictly verifies code matches PLAN.md spec (separate from code quality). Wired in build STEP 5.1 (severity: warn — informational signal until v2.67.0 telemetry-driven flip).
+
+### Test coverage
+**24 new tests across 7 suites.** All pass.
+
+### Migration
+- **C4 BREAKING:** Existing scope steps without `--lenient-prereqs` will now BLOCK on prereq violations. To preserve v2.65.x behavior, pass `--lenient-prereqs` per invocation. Cannot lenient-exempt Check E (upstream prereq verification) — must run `/vg:amend ${owner_phase}` or insert patch phase.
+- **B1 informational:** Default severity=warn. New per-task reviewer runs but doesn't block until v2.67.0 telemetry-driven flip.
+- **#149-#155 transparent:** crossai-runner fixes are bug fixes — no migration needed.
+
+### Deferred to v2.66.1
+- **#153** review aggregator clustering by API contract
+- **#154** crossai_review.done marker semantics
+- **B2-B4** remaining plan-fidelity (questions+self-review, TDD plan structure, in-build final reviewer)
+
 ## v2.65.0 — Codex review speed + state-shortcut hardening (2026-05-09)
 
 ### Breaking changes
