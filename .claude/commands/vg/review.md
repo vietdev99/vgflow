@@ -65,12 +65,20 @@ runtime_contract:
     - path: "${PHASE_DIR}/scan-*.json"
       glob_min_count: 1
       required_unless_flag: "--skip-discovery"
-    # Task 36b — lens dispatch chain artifacts (waived if --probe-mode skip)
+    # Task 36b — lens dispatch chain artifacts (waived if --probe-mode skip).
+    # v2.67.0 #158: tightened guards — content_min_bytes raised + structural
+    # content_required_sections added, so a stub plan/matrix cannot satisfy
+    # the gate when the probe ran. Required keys come from
+    # `lens-dispatch/emit-dispatch-plan.py` (always emits "phase",
+    # "dispatches", "plan_hash") and `aggregators/lens-coverage-matrix.py`
+    # (always emits "Coverage Matrix" title + "Plan hash:" header).
     - path: "${PHASE_DIR}/LENS-DISPATCH-PLAN.json"
-      content_min_bytes: 200
+      content_min_bytes: 500
+      content_required_sections: ['"dispatches"', '"phase"', '"plan_hash"']
       required_unless_flag: "--probe-mode-skip"
     - path: "${PHASE_DIR}/LENS-COVERAGE-MATRIX.md"
-      content_min_bytes: 100
+      content_min_bytes: 300
+      content_required_sections: ["Coverage Matrix", "Plan hash"]
       required_unless_flag: "--probe-mode-skip"
   must_touch_markers:
     # ─── Hard gates (block) — foundational, always run ───

@@ -96,6 +96,12 @@ The remaining markers in `must_touch_markers:` (phase1_*, phase2_*, phaseP_*,
 crossai_review, write_artifacts, bootstrap_reflection, env-mode-gate, etc.)
 are advisory (severity: warn) or flag-gated; emit them when the matching
 profile branch executes.
+
+v2.67.0 #158 — lens telemetry parity: the body below explicitly calls
+`mark-step review 2b3_lens_dispatch_complete` and
+`mark-step review 2b3_lens_matrix_rendered` after the matching steps so
+Codex matches the Claude PostToolUse hook's marker coverage on the
+LENS-DISPATCH-PLAN.json + LENS-COVERAGE-MATRIX.md must_write artifacts.
 </HARD-GATE-CODEX>
 
 Before executing command bash blocks from a Codex skill, export
@@ -3931,6 +3937,12 @@ else
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"plan_path\":\"${PHASE_DIR}/LENS-DISPATCH-PLAN.json\"}" \
     >/dev/null 2>&1 || true
 
+  # v2.67.0 #158 — Codex telemetry parity (A9 pattern): Claude gets this
+  # marker via PostToolUse hook on the bash above; Codex MUST emit it
+  # explicitly so the contract validator sees the same step coverage.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step \
+    review 2b3_lens_dispatch_complete >/dev/null 2>&1 || true
+
   # 2. Add --dispatch-plan flag so spawn_recursive_probe uses Task 26 tier dispatcher
   ARGS+=( --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" )
 
@@ -3954,6 +3966,11 @@ if [ ! -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
     --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" \
     --runs-dir "${PHASE_DIR}/runs" \
     --output "${PHASE_DIR}/LENS-COVERAGE-MATRIX.md" || true
+
+  # v2.67.0 #158 — Codex telemetry parity (A9 pattern): mark matrix
+  # rendered so the contract sees the same coverage Claude gets via hook.
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step \
+    review 2b3_lens_matrix_rendered >/dev/null 2>&1 || true
 
   # 5. Coverage failure → Task 33 wrapper (NOT exit 1 — user gets 4 options)
   if [ "$COVERAGE_RC" -ne 0 ]; then
