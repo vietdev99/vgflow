@@ -37,6 +37,7 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -834,13 +835,83 @@ def spawn_one_worker(entry: dict[str, Any], phase_dir: Path,
         }
 
 
-def dispatch_auto(plan: list[dict[str, Any]], phase_dir: Path) -> list[dict[str, Any]]:
-    """Spawn one worker per plan entry, round-robin across MCP slots."""
-    results: list[dict[str, Any]] = []
-    for i, entry in enumerate(plan):
-        slot = MCP_SLOTS[i % len(MCP_SLOTS)]
-        results.append(spawn_one_worker(entry, phase_dir, mcp_slot=slot))
-    return results
+def _mock_spawn_one(entry: dict[str, Any], mcp_slot: str) -> dict[str, Any]:
+    """In-process mock for spawn_one_worker — sleeps ``mock_sleep_s`` then
+    returns a result dict in the same shape. Used by tests + ``--mock-mode``
+    to validate the parallel dispatch wiring without forking gemini.
+    """
+    sleep_s = float(entry.get("mock_sleep_s", 0))
+    started = time.time()
+    if sleep_s > 0:
+        time.sleep(sleep_s)
+    elem = entry.get("element", {})
+    return {
+        "exit_code": 0,
+        "duration_seconds": round(time.time() - started, 3),
+        "output_path": "",
+        "mcp_slot": mcp_slot,
+        "lens": entry.get("lens", "lens-unknown"),
+        "selector": elem.get("selector"),
+        "mock": True,
+    }
+
+
+def dispatch_auto(plan: list[dict[str, Any]], phase_dir: Path,
+                  *, parallel: int = 1,
+                  mock_mode: bool = False) -> list[dict[str, Any]]:
+    """Spawn one worker per plan entry, round-robin across MCP slots.
+
+    v2.65.0 A1: when ``parallel > 1`` use ThreadPoolExecutor with up to
+    ``parallel`` concurrent workers. Subprocess.run releases the GIL during
+    its blocking wait, so threads (not processes) are the right primitive —
+    we just need overlapping I/O, not CPU-parallel python work. Result
+    ordering is preserved via indexed futures.
+
+    Args:
+        plan: List of entries from build_plan().
+        phase_dir: Phase directory passed to spawn_one_worker.
+        parallel: Max concurrent workers. ``1`` (default) = sequential
+            back-compat. Values >1 enable ThreadPoolExecutor.
+        mock_mode: When True, swap spawn_one_worker for an in-process
+            ``time.sleep(entry['mock_sleep_s'])`` mock. Used by the parallel
+            test suite + the test_recursive_probe_smoke fixture to validate
+            wiring without forking gemini.
+
+    Returns:
+        ``list[dict]`` with one result per plan entry, in plan order
+        regardless of completion order.
+    """
+    spawn_fn = _mock_spawn_one if mock_mode else None
+
+    if parallel <= 1:
+        results: list[dict[str, Any]] = []
+        for i, entry in enumerate(plan):
+            slot = MCP_SLOTS[i % len(MCP_SLOTS)]
+            if spawn_fn is not None:
+                results.append(spawn_fn(entry, slot))
+            else:
+                results.append(spawn_one_worker(entry, phase_dir, mcp_slot=slot))
+        return results
+
+    # Parallel branch — preserve ordering via indexed futures.
+    n = len(plan)
+    results_indexed: list[dict[str, Any] | None] = [None] * n
+
+    def _run_one(idx: int) -> tuple[int, dict[str, Any]]:
+        entry = plan[idx]
+        slot = MCP_SLOTS[idx % len(MCP_SLOTS)]
+        if spawn_fn is not None:
+            res = spawn_fn(entry, slot)
+        else:
+            res = spawn_one_worker(entry, phase_dir, mcp_slot=slot)
+        return idx, res
+
+    with ThreadPoolExecutor(max_workers=parallel) as ex:
+        for idx, res in ex.map(_run_one, range(n)):
+            results_indexed[idx] = res
+
+    # All slots filled by the executor; cast away Optional for the caller.
+    return [r for r in results_indexed if r is not None]
 
 
 def _load_vg_config(phase_dir: Path) -> dict[str, Any]:
@@ -1001,6 +1072,16 @@ def _build_argparser() -> argparse.ArgumentParser:
                          "the spawn loop iterates per-dispatch rather than "
                          "per-classification, using lens_tier_dispatcher "
                          "for per-lens model selection.")
+    # v2.65.0 A1 — parallel dispatch control.
+    ap.add_argument("--parallel", type=int, default=1, metavar="N",
+                    help="Max concurrent workers when --probe-mode=auto. "
+                         "Default 1 (sequential, full back-compat). N>1 "
+                         "uses ThreadPoolExecutor; result order is "
+                         "preserved regardless of completion order.")
+    ap.add_argument("--mock-mode", action="store_true",
+                    help="In-process mock dispatch (no gemini subprocess). "
+                         "Honors per-entry mock_sleep_s. Used by parallel "
+                         "tests; not intended for production runs.")
     return ap
 
 
@@ -1429,7 +1510,11 @@ def main(argv: list[str] | None = None) -> int:
                 phase=phase_dir.name,
             )
         else:
-            results = dispatch_auto(plan, phase_dir)
+            results = dispatch_auto(
+                plan, phase_dir,
+                parallel=max(1, int(args.parallel)),
+                mock_mode=bool(args.mock_mode),
+            )
         index_path = phase_dir / "runs" / "INDEX.json"
         index_path.parent.mkdir(parents=True, exist_ok=True)
         index_path.write_text(
@@ -1462,7 +1547,11 @@ def main(argv: list[str] | None = None) -> int:
         # Auto branch.
         results: list[dict[str, Any]] = []
         if auto_plan:
-            results = dispatch_auto(auto_plan, phase_dir)
+            results = dispatch_auto(
+                auto_plan, phase_dir,
+                parallel=max(1, int(args.parallel)),
+                mock_mode=bool(args.mock_mode),
+            )
             index_path = phase_dir / "runs" / "INDEX.json"
             index_path.parent.mkdir(parents=True, exist_ok=True)
             index_path.write_text(

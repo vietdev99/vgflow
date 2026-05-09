@@ -4010,6 +4010,8 @@ fi
 if [[ "${VG_NON_INTERACTIVE:-0}" == "1" ]]; then
   ARGS+=( --non-interactive )
 fi
+# v2.65.0 A1 — parallel lens probe dispatch (default 1 = back-compat sequential).
+ARGS+=( --parallel "${REVIEW_PARALLEL_WORKERS:-1}" )
 
 # v2.41.2 — pre-flight succeeded; emit telemetry so audit can confirm prompts ran.
 emit_telemetry_v2 "review.recursive_probe.preflight_asked" "${PHASE_NUMBER}" \
