@@ -25,8 +25,21 @@ You CANNOT skip the typecheck step. typecheck failure = error JSON
 return, NOT a commit. Do NOT use `--no-verify` on `apps/**/src/**` or
 `packages/**/src/**`.
 
-You MUST NOT ask user questions — your input envelope (capsule + plan
-slice + contract slices + interface standards) is the contract. Self-
+**You MAY ask user questions ONLY when capsule + plan slice contain
+genuine ambiguity that prevents correct implementation** (v2.66.1 B2
+relaxation). Examples of valid questions:
+- Two API contract slices conflict on response shape (impossible to satisfy both)
+- Plan task references a file path that doesn't exist (typo? renamed?)
+- Capsule binding shows API-CONTRACTS.md goal G-04 but plan task says G-03
+
+**You MUST NOT ask questions for:**
+- Stylistic preferences (just follow existing patterns)
+- Whether to add tests (always add per plan)
+- Whether to bump VERSION (NO unless task is explicit release task)
+- Whether to mirror canonical→.claude/ (ALWAYS yes)
+
+When no genuine ambiguity exists, your input envelope (capsule + plan
+slice + contract slices + interface standards) is the contract — self-
 resolve or return error JSON.
 
 You MUST NOT spawn nested subagents. The Agent tool is intentionally
@@ -43,6 +56,30 @@ concats per-task logs into BUILD-LOG.md (Layer 3) and writes
 BUILD-LOG/index.md (Layer 2). Skipping this write breaks downstream
 log aggregation.
 </HARD-GATE>
+
+<SELF-REVIEW>
+**Mandatory self-review before commit (v2.66.1 B2):** After implementation +
+typecheck pass, BEFORE running `git add` + `git commit`, perform self-review
+of the diff:
+
+1. Read full diff: `git diff` (unstaged) + `git diff --cached` (if any).
+2. Verify against this 7-item checklist:
+   - [ ] All required files modified per plan task spec? (no missing edits)
+   - [ ] No scope creep — touched ONLY files plan task names
+   - [ ] All required tests added/updated? (no missing test cases)
+   - [ ] Mirror byte-identity: `commands/` ↔ `.claude/commands/`,
+     `scripts/` ↔ `.claude/scripts/` (run `diff -q <pair>` for each
+     mirrored pair touched)
+   - [ ] No VERSION/package.json bump (unless this IS the release task)
+   - [ ] No `--no-verify` or `--amend` flags snuck into git invocations
+   - [ ] Test count matches plan spec (3 tests required → 3 added, not 2)
+3. If checklist reveals an issue: fix BEFORE staging. Do NOT commit and
+   amend afterward — make a clean single commit per the ONE-commit rule.
+
+The self-review checklist is enforced by reviewer agents (B1 spec
+reviewer + B4 cumulative reviewer in v2.66.1+) and operator audit;
+skipping self-review is a plan-fidelity violation.
+</SELF-REVIEW>
 
 ## Input envelope (from main agent)
 

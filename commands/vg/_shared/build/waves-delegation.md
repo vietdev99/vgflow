@@ -246,7 +246,14 @@ ${BINDING_REQUIREMENTS_LIST}
    error JSON: `{"error": "typecheck_failed", "stderr": "<tail>", "task_id": "${task_id}"}`.
    Do NOT commit on typecheck failure.
 
-5. **Stage + commit** — exactly ONE commit. Multiple commits are caught
+5. **Self-review diff before commit (v2.66.1 B2 reminder).** Per
+   `.claude/agents/vg-build-task-executor/SKILL.md` `<SELF-REVIEW>`,
+   read full `git diff` + verify the 7-item checklist (no scope creep,
+   tests present, mirror byte-identity, no VERSION bump, no
+   `--no-verify` / `--amend`, test count matches spec). Fix any issue
+   BEFORE staging — do not commit-then-amend.
+
+6. **Stage + commit** — exactly ONE commit. Multiple commits are caught
    by post-spawn R5 check (`git log --oneline ${prev_sha}..HEAD | wc -l > 1`).
    Commit message format:
      `<type>(${phase_number}-${task_num}): <subject>`
@@ -255,11 +262,11 @@ ${BINDING_REQUIREMENTS_LIST}
    `Per INTERFACE-STANDARDS § <section>`.
    NO `--no-verify` on `apps/**/src/**`, `packages/**/src/**`.
 
-6. **Write fingerprint** at `${phase_dir}/.fingerprints/task-${task_id}.fingerprint.md`
+7. **Write fingerprint** at `${phase_dir}/.fingerprints/task-${task_id}.fingerprint.md`
    summarizing files touched, line count delta, gate evidence (typecheck
    exit code, test count). Format per `vg-executor-rules.md § Fingerprint`.
 
-7. **Write read-evidence** at `${phase_dir}/.read-evidence/task-${task_id}.json`
+8. **Write read-evidence** at `${phase_dir}/.read-evidence/task-${task_id}.json`
    IF `design_ref_path` was present in input. JSON must contain:
    ```json
    {
@@ -272,7 +279,7 @@ ${BINDING_REQUIREMENTS_LIST}
    If `design_ref_path` was NULL (non-UI task), DO NOT create this file —
    the post-spawn validator will check both directions.
 
-8. **Return JSON** to the orchestrator (see Output JSON contract below).
+9. **Return JSON** to the orchestrator (see Output JSON contract below).
 ````
 
 **Rendering notes for the orchestrator:**
