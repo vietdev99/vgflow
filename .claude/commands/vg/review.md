@@ -1025,7 +1025,7 @@ export VG_ENV VG_REVIEW_MODE VG_SCANNER VG_METHOD
 # **Codex runtime parallel scanner** (v2.65.0 A3):
 # - Default `codex-inline` runs scanner sequentially in main Codex orchestrator
 # - When `VG_RUNTIME=codex` AND `${PARALLEL_WORKERS:-1} > 1` (read from vg.config.md `parallel_workers` field):
-#   - Spawn up to `PARALLEL_WORKERS` × `codex-skills/_shared/codex-spawn.sh --tier scanner --sandbox read-only`
+#   - Spawn up to `PARALLEL_WORKERS` × `commands/vg/_shared/lib/codex-spawn.sh --tier scanner --sandbox read-only`
 #     for non-MCP classification work over captured snapshots
 #   - MCP/browser actions (page navigation, screenshots, network capture) stay in main Codex orchestrator —
 #     codex-spawn lacks MCP access
@@ -5886,7 +5886,7 @@ PROMPT_FILE="${PHASE_DIR}/.fix-prompt-${ERR_ID:-$idx}.md"
 if [ "${VG_RUNTIME:-claude}" = "codex" ]; then
   # Codex path (v2.65.0 A6) — no Agent tool; use codex-spawn.sh executor tier.
   # Sandbox=workspace-write because fix-agents edit code/tests.
-  bash codex-skills/_shared/codex-spawn.sh \
+  bash commands/vg/_shared/lib/codex-spawn.sh \
        --tier executor \
        --task "fix-${ERR_ID:-$idx}" \
        --sandbox workspace-write \
