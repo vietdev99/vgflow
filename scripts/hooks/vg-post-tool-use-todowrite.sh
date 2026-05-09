@@ -221,3 +221,63 @@ if command -v vg-orchestrator >/dev/null 2>&1; then
   cmd="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["command"])' "$run_file" | sed 's/^vg://')"
   vg-orchestrator emit-event "${cmd}.native_tasklist_projected" >/dev/null 2>&1 || true
 fi
+
+# F2 v2.60.0: capture latest TodoWrite payload to snapshot for F1 restore on
+# resume/compact. Best-effort — never block the hook on snapshot failure.
+# Reuses $input (the original stdin) so we don't try to re-read closed stdin.
+snap_helper="${hook_dir}/vg-tasklist-snapshot.py"
+if [ ! -f "$snap_helper" ]; then
+  snap_helper="scripts/hooks/vg-tasklist-snapshot.py"
+fi
+if [ -f "$snap_helper" ]; then
+  # Pull the todos[] (TodoWrite path) or reconstruct from the trace
+  # (TaskCreate/TaskUpdate path) and pipe to the snapshot helper.
+  VG_HOOK_INPUT="$input" VG_RUN_ID="$run_id" python3 - "$snap_helper" <<'PY' >/dev/null 2>&1 || true
+import json, os, subprocess, sys
+from pathlib import Path
+helper = sys.argv[1]
+hook_input = json.loads(os.environ.get("VG_HOOK_INPUT", "{}") or "{}")
+run_id = os.environ.get("VG_RUN_ID", "")
+if not run_id:
+    sys.exit(0)
+tool_name = hook_input.get("tool_name") or "TodoWrite"
+todos = []
+if tool_name == "TodoWrite":
+    todos = hook_input.get("tool_input", {}).get("todos") or []
+else:
+    # TaskCreate / TaskUpdate — reconstruct from per-run trace file we just
+    # appended to. Mirrors the logic above so snapshot stays in sync.
+    trace = Path(f".vg/runs/{run_id}/.taskcreate-trace.jsonl")
+    if trace.exists():
+        items_by_id, items_no_id = {}, []
+        for line in trace.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            act = rec.get("action")
+            tid = rec.get("task_id") or ""
+            if act == "create":
+                entry = {"id": tid or rec.get("subject", ""),
+                         "content": rec.get("subject", ""),
+                         "status": rec.get("status", "pending")}
+                if tid:
+                    items_by_id[tid] = entry
+                else:
+                    items_no_id.append(entry)
+            elif act == "update":
+                if tid in items_by_id and rec.get("status"):
+                    items_by_id[tid]["status"] = rec["status"]
+        todos = list(items_by_id.values()) + items_no_id
+if not todos:
+    sys.exit(0)
+payload = json.dumps({"items": todos})
+proc = subprocess.run(
+    [sys.executable, helper, "--write", "--run-id", run_id],
+    input=payload, capture_output=True, text=True,
+)
+PY
+fi

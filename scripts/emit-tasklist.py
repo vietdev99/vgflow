@@ -428,6 +428,87 @@ def _build_hierarchical_projection(checklists: list[dict]) -> list[dict]:
     return items
 
 
+def reorder_projection_by_status(items: list[dict]) -> list[dict]:
+    """F2 v2.60.0: reorder projection items so in_progress steps surface within each group.
+
+    Order within group:
+      1. in_progress steps (any number)
+      2. pending steps (preserves original order)
+      3. completed steps (preserves original order)
+
+    Group header status is computed from its steps:
+      - "in_progress" if any step is in_progress
+      - "completed" if all steps completed
+      - else "pending"
+
+    Group order preserved relative to each other (groups stay where they are
+    relative to each other; only intra-group step order is rearranged).
+
+    Pure function — no side effects. Skips items that don't have the
+    `kind: group/step` shape (returns them unchanged at end if encountered
+    before any group is seen).
+
+    User pain solved: "Tasklist không update các task đang làm, chuẩn bị làm
+    lên đầu" — TodoWrite UI keeps original group→step order, so in_progress
+    didn't surface and completed didn't sink. After this reorder, the active
+    focus area is visually prominent within each group.
+    """
+    # Split into groups + their step lists in original sequence
+    groups: list[tuple[dict, list[dict]]] = []
+    current_group: dict | None = None
+    current_steps: list[dict] = []
+    leading_orphans: list[dict] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        if kind == "group":
+            if current_group is not None:
+                groups.append((current_group, current_steps))
+            current_group = dict(item)  # shallow copy so we don't mutate caller
+            current_steps = []
+        elif kind == "step":
+            if current_group is None:
+                # Step seen before any group header — keep at front, don't
+                # discard. Should never happen for normal projections.
+                leading_orphans.append(item)
+            else:
+                current_steps.append(item)
+        else:
+            # Unknown kind — preserve in current group's tail (or orphan).
+            if current_group is None:
+                leading_orphans.append(item)
+            else:
+                current_steps.append(item)
+    if current_group is not None:
+        groups.append((current_group, current_steps))
+
+    out: list[dict] = list(leading_orphans)
+    priority = {"in_progress": 0, "pending": 1, "completed": 2}
+
+    for group, steps in groups:
+        # Compute new group status from steps
+        if any(s.get("status") == "in_progress" for s in steps):
+            group["status"] = "in_progress"
+        elif steps and all(s.get("status") == "completed" for s in steps):
+            group["status"] = "completed"
+        else:
+            group["status"] = "pending"
+
+        # Sort steps: in_progress → pending → completed (stable within bucket)
+        sorted_steps = sorted(
+            enumerate(steps),
+            key=lambda kv: (priority.get(kv[1].get("status"), 1), kv[0]),
+        )
+        steps_out = [s for _, s in sorted_steps]
+
+        out.append(group)
+        out.extend(steps_out)
+
+    return out
+
+
 def _humanize_step_for_display(step: str) -> str:
     """Snake_case step ID → human-readable display title.
 
@@ -603,6 +684,11 @@ def _write_contract(
         for step in steps
     ]
     projection_items = _build_hierarchical_projection(checklists)
+    # F2 v2.60.0: re-order so in_progress surfaces within each group. For the
+    # initial contract write everything is pending so this is a no-op, but it
+    # keeps the contract self-consistent with what the runtime UI will look
+    # like once steps start advancing.
+    projection_items = reorder_projection_by_status(projection_items)
     contract = {
         "schema": "native-tasklist.v2",
         "run_id": run_id,
@@ -675,6 +761,9 @@ def _print_tasklist(
     checklists: list[dict],
 ) -> None:
     projection_items = _build_hierarchical_projection(checklists)
+    # F2 v2.60.0: same reorder as the contract path so user sees the in-progress
+    # priority order from the start (no-op for initial all-pending state).
+    projection_items = reorder_projection_by_status(projection_items)
     print("")
     print("━" * 78)
     mode_label = f" — Mode {mode}" if mode else ""
@@ -754,7 +843,18 @@ def _restore_mode(run_id: str) -> int:
         iid = str(it.get("id") or "")
         title = str(it.get("title") or iid)
         status = snapshot_overrides.get(iid) or str(it.get("status") or "pending")
-        resolved.append({"id": iid, "title": title, "status": status})
+        resolved.append({
+            "kind": it.get("kind") or ("group" if it.get("parent") in (None, "") else "step"),
+            "id": iid,
+            "parent": it.get("parent"),
+            "title": title,
+            "status": status,
+        })
+
+    # F2 v2.60.0: reorder so in_progress steps surface inside each group on
+    # resume. Snapshot statuses already overlaid above, so this puts the
+    # active focus where the user expects it after compact/resume.
+    resolved = reorder_projection_by_status(resolved)
 
     # Status counts.
     pending_n = sum(1 for r in resolved if r["status"] == "pending")
