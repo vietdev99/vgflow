@@ -49,6 +49,12 @@ runtime_contract:
     - path: "${PHASE_DIR}/PRE-TEST-REPORT.md"
       required_unless_flag: "--skip-pre-test"
       content_min_bytes: 80
+    # Cross-cutting: PIPELINE-STATE.json drives downstream gates
+    # (deploy/review/test/accept all read steps.build.status from this file).
+    # Missing here = silent drift; resume after compact loses the file.
+    - path: "${PHASE_DIR}/PIPELINE-STATE.json"
+      content_min_bytes: 80
+      content_required_sections: ["steps.build.status", "built-complete"]
   must_touch_markers:
     # OHOK Batch 4 C3 (2026-04-22): contract 8 → 15 markers.
     # Previously 8 steps (1/4/7/8/9/10/11/12) were validated — 11 other
