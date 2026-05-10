@@ -107,11 +107,29 @@ per-task review (B1 owns per-task lane).
 - Verdict must be exactly one of `PASS`, `PARTIAL`, `FAIL` (uppercase,
   no synonyms).
 
-## v2.67.0 future
+## Severity (v2.66.1 → v2.69.0)
 
-Severity will flip from `warn` to `block` in v2.67.0 once telemetry
-shows the verdict distribution + false-positive rate from real-world
-phases. For now (v2.66.1) this is purely informational — operator gets
-the verdict but the build does not block on a `FAIL`. v2.67.0
-calibration window: 2-4 weeks of dogfood phases collecting verdict
-ground truth.
+Marker `7_1_5_final_review` was advisory `severity: warn` in v2.66.1
+(doc-only, not in `must_touch_markers`). **v2.69.0 T2 added the marker
+to build.md frontmatter with `required_unless_flag: "--skip-final-review"`**
+— build now BLOCKs when this reviewer FAILs unless the operator passes
+`--skip-final-review --override-reason=<text>` (logs override-debt entry).
+
+## Telemetry emission (v2.69.0)
+
+After computing the cumulative verdict, emit a telemetry event for
+distribution tracking — operators query `events.db` to see
+PASS/PARTIAL/FAIL distribution, escape-hatch usage rate, and
+false-positive trends. This data drives future tuning.
+
+```bash
+${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+  "b4.verdict" --actor "vg-build-final-reviewer" --outcome "${VERDICT}" \
+  --metadata "{\"phase\":\"${PHASE_NUMBER}\",\"verdict\":\"${VERDICT}\",\"confidence\":\"${CONFIDENCE:-medium}\"}"
+```
+
+Gate ID is `b4.verdict` (B4 = cumulative final reviewer). `${VERDICT}` is
+one of `PASS` | `PARTIAL` | `FAIL`. `${CONFIDENCE}` defaults to `medium`
+if the reviewer did not classify; reviewers SHOULD set it to `high` when
+the gap is unambiguous (cross-task contract violation visible in commit
+range) and `low` when the verdict required interpretation.

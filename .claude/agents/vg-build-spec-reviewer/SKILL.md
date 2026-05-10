@@ -66,9 +66,30 @@ PASS | FAIL — {one-line summary}
 - NO nested Agent() spawn. NO AskUserQuestion. Return your verdict and exit.
 - Output the verdict text directly to stdout/your final response — the orchestrator parses it.
 
-## Severity classification (v2.66.0)
+## Severity classification (v2.66.0 → v2.69.0)
 
-This step's marker `5_1_spec_compliance_review` is registered in build.md
-with `severity: warn` — informational signal, not a hard block, since the
-fix protocol (in-scope-fix-loop / re-spawn implementer) handles failures.
-The flip to hard-block is gated on v2.67.0 telemetry-driven evaluation.
+This step's marker `5_1_spec_compliance_review` was registered in build.md
+with `severity: warn` from v2.66.0. **v2.69.0 T1 flipped it to
+`required_unless_flag: "--skip-spec-review"`** — build now BLOCKs when
+this reviewer FAILs unless the operator passes `--skip-spec-review
+--override-reason=<text>` (logs override-debt entry).
+
+## Telemetry emission (v2.69.0)
+
+After computing the verdict, emit a telemetry event for distribution
+tracking — operators query `events.db` to see PASS/FAIL distribution,
+escape-hatch usage rate, and false-positive trends. This data drives
+future tuning (e.g. tightening / loosening severity, adjusting
+escape-hatch defaults).
+
+```bash
+${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+  "b1.verdict" --actor "vg-build-spec-reviewer" --outcome "${VERDICT}" \
+  --metadata "{\"phase\":\"${PHASE_NUMBER}\",\"task_id\":\"${TASK_ID}\",\"verdict\":\"${VERDICT}\",\"confidence\":\"${CONFIDENCE:-medium}\"}"
+```
+
+Gate ID is `b1.verdict` (B1 = per-task spec reviewer). `${VERDICT}` is one
+of `PASS` | `FAIL`. `${CONFIDENCE}` defaults to `medium` if the reviewer
+did not classify; reviewers SHOULD set it to `high` when the gap is
+unambiguous (literal mismatch) and `low` when the verdict required
+interpretation.

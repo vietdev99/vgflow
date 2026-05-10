@@ -67,3 +67,30 @@ For each fix commit:
 - If fix commit reverts the test instead of fixing the code: AUTO-FAIL.
 
 This is a meta-quality gate. Run ONCE after all fix-loop iterations complete (Phase 3d tail). Do NOT run per-iteration.
+
+## Severity (v2.68.0 → v2.69.0)
+
+Marker `phase3d_5_qa_checker` was advisory `severity: warn` in v2.68.0
+(doc-only, not in review.md `must_touch_markers`). **v2.69.0 T3 added the
+marker to review.md frontmatter with `required_unless_flag: "--skip-qa-check"`**
+— review now BLOCKs when this checker FAILs unless the operator passes
+`--skip-qa-check --override-reason=<text>` (logs override-debt entry).
+
+## Telemetry emission (v2.69.0)
+
+After computing the cumulative verdict, emit a telemetry event for
+distribution tracking — operators query `events.db` to see
+PASS/PARTIAL/FAIL distribution, escape-hatch usage rate, and
+false-positive trends. This data drives future tuning.
+
+```bash
+${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+  "c2.verdict" --actor "vg-review-qa-checker" --outcome "${VERDICT}" \
+  --metadata "{\"phase\":\"${PHASE_NUMBER}\",\"verdict\":\"${VERDICT}\",\"confidence\":\"${CONFIDENCE:-medium}\"}"
+```
+
+Gate ID is `c2.verdict` (C2 = QA-Checker meta-agent). `${VERDICT}` is one
+of `PASS` | `PARTIAL` | `FAIL`. `${CONFIDENCE}` defaults to `medium` if
+the checker did not classify; checkers SHOULD set it to `high` when the
+suppression hack / false-fix is unambiguous and `low` when the verdict
+required interpretation.
