@@ -1,5 +1,61 @@
 # Changelog
 
+## v2.86.0 — Tier 1 from agent-skills audit: lifecycle taxonomy + anti-rationalization tables + eng-principles + discovery flowchart (2026-05-10)
+
+### Goal
+Synthesize lessons from [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) (38k stars) into VG. Content-only docs — zero runtime change. High-leverage cognitive scaffolding.
+
+### Changes — 4 new docs
+
+**`commands/vg/_shared/rationalization-tables.md` NEW (~150 lines, 6 categories, 26 rows)**
+
+Static catalogue of common AI rationalizations encountered in VG pipeline runs, with concrete rebuttals. Augments runtime `rationalization-guard.md` (which spawns Haiku adjudicator for novel cases) by capturing recurring patterns up front.
+
+Categories: Test/verification skips · Gate/contract skips · Code change skips · Migration/breaking change skips · Deploy/production skips · Documentation skips. Each row is `Excuse | Reality`.
+
+**`commands/vg/_shared/eng-principles.md` NEW (~150 lines, 8 principles)**
+
+Cross-cut reference for engineering principles VG gates encode. Skills cite this doc instead of re-deriving rationale. Principles: Hyrum's Law, Beyonce Rule, Shift Left, Test Pyramid, Trunk-Based Development, Fail-Closed by Default, Provenance Binding, Idempotency. Each section maps the principle → VG gate locations + AI implication.
+
+**`commands/vg/_shared/discovery-flowchart.md` NEW (~120 lines + Mermaid)**
+
+Visual decision tree mapping user intent → which `/vg:*` command. Top-level Mermaid `flowchart TD` for the 7-phase pipeline. Plus alphabetical "user says X → run Y" lookup table covering 25+ commands. Plus by-lifecycle-phase index. Plus adversarial detection ("when user says skip X").
+
+**`commands/vg/LIFECYCLE.md` NEW (~150 lines + Mermaid)**
+
+VG pipeline taxonomy as single-page mental model. 8-phase Mermaid `flowchart LR` (Init / Define / Scope / Plan / Build / Verify / Test / Accept + optional Deploy). Phase contract table: command + required artifact + downstream gates. Sub-phase tables for Scope's 5 rounds + Plan's 4 sub-steps + Verify's fix loop. Cycle vs sequential semantics documented.
+
+### Cross-references between docs
+All 4 docs cross-link via "Cross-references" footer sections. Loop: rationalization-tables → eng-principles → discovery-flowchart → LIFECYCLE → back. Plus runtime guard (`rationalization-guard.md`) referenced from static tables.
+
+### Test coverage
+26 new tests in `tests/test_v2_86_tier1_docs.py`, all PASS:
+- 4× existence
+- 4× mirror byte-identity (canonical ↔ `.claude`)
+- 8× frontmatter / name / description
+- rationalization-tables: 6 categories, Excuse/Reality columns, runtime-guard cross-ref
+- eng-principles: 8 core concepts, 4 cross-refs
+- discovery-flowchart: Mermaid block, 9 main commands listed
+- LIFECYCLE: 8 phases, contract columns, 6 scope sub-phases
+
+### Source attribution
+Inspired by analysis of [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills):
+- Anti-rationalization tables → adopted (their pattern, VG-specific content)
+- Lifecycle taxonomy → adopted (their 7-phase mental model → our 8-phase VG-specific contract)
+- SRE references baked into skills → adopted (Hyrum's Law et al)
+- Discovery flowchart pattern → adopted (Mermaid `flowchart` from their meta-skill)
+
+### Migration
+None. Pure content additions. Skills can begin citing new docs incrementally; no required updates.
+
+### Roadmap
+- v2.76.0–v2.85.0 — Stages 1-7 partial (resolver, helpers, hook installer, vg CLI, install skill, deploy decouple, migration helpers)
+- v2.86.0 (this) — Tier 1 cognitive scaffolding from agent-skills audit
+- v2.87.x — Stage 7 final consumer migrations (deploy.md, build pre-test gate runtime updates)
+- **v3.0.0** — Stage 9: VERSION 3.0.0 + README rewrite + npm publish
+
+---
+
 ## v2.85.0 — v3.0.0 Stage 7.1: deploy state migration helper (2026-05-10)
 
 ### Goal
