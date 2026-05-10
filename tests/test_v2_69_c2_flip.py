@@ -57,7 +57,14 @@ def test_review_parse_loop_handles_skip_qa_check():
 
 
 def test_phase3d_5_short_circuits_when_skipped():
-    body = (REPO_ROOT / "commands/vg/review.md").read_text(encoding="utf-8")
+    # v2.70.0 T8: phase3_fix_loop content moved to _shared/review/fix-loop-and-goals.md.
+    # Concatenate review.md + all _shared/review/*.md to keep assertion split-independent.
+    parts = [(REPO_ROOT / "commands/vg/review.md").read_text(encoding="utf-8")]
+    shared_review = REPO_ROOT / "commands/vg/_shared/review"
+    if shared_review.is_dir():
+        for p in sorted(shared_review.glob("*.md")):
+            parts.append(p.read_text(encoding="utf-8"))
+    body = "\n".join(parts)
     p3d5 = re.search(r"3d\.5.*?(?=3e|## |\Z)", body, re.DOTALL)
     assert p3d5
     assert "SKIP_QA_CHECK" in p3d5.group(0)
