@@ -1,5 +1,55 @@
 # Changelog
 
+## v2.85.0 — v3.0.0 Stage 7.1: deploy state migration helper (2026-05-10)
+
+### Goal
+Stage 7.1 of v3.0.0 plan. Adds the helper that consolidates legacy per-phase `${PHASE_DIR}/DEPLOY-STATE.json` files into the v3 project-level `.vg/deploy/STATE.json` (schema shipped v2.82.0). Designed to be invoked by `vg-migrate-v3.sh` post Stage 8.
+
+### Changes
+
+**`scripts/migrate/merge-deploy-states.py` NEW**
+
+Walks `.vg/phases/*/DEPLOY-STATE.json`, merges each env's latest entry (by `deployed_at`) into project STATE.json. Per-phase `preferred_env_for` field maps to project-level `preferred_env_for_phase[<phase>]`. Annotates `phase_context` automatically when the legacy entry didn't track it.
+
+**Flags:**
+- `--project-root <path>` (default cwd)
+- `--dry-run` — print merged JSON to stdout, do NOT write STATE.json
+- `--backup` — copy existing STATE.json to `.bak.<epoch>` before overwrite
+
+**Exit codes:**
+- 0 ok (state written / dry-run printed)
+- 1 import error (cannot find `deploy.state` module)
+- 2 no per-phase state files found (not an error — caller may skip)
+- 3 write failed
+
+Path resolution probes: `.claude/scripts/`, `scripts/`, `~/.vgflow/scripts/`, then script's own `scripts/migrate/.. = scripts/` parent — works whether invoked from a project clone, npm-installed VG_HOME, or directly from the migration helper directory.
+
+### Test coverage
+9 new tests in `tests/test_merge_deploy_states.py`, all PASS:
+- `test_no_phase_states_returns_2` (rc=2 when nothing to merge)
+- `test_dry_run_merges_single_phase` / `test_dry_run_does_not_write_state_json`
+- `test_latest_deploy_wins_across_phases` (newest deployed_at per env)
+- `test_preferred_env_per_phase_carried_over` (per-phase → project-level map)
+- `test_multiple_envs_merged`
+- `test_skips_corrupt_phase_state` (warn + continue)
+- `test_backup_flag_creates_bak`
+- `test_phase_context_added_when_missing` (auto-annotation)
+
+### Migration
+None for end-users. `vg-migrate-v3.sh` (Stage 8, v2.83.0) will call this helper in a future minor — currently optional / manual. Run via:
+
+```bash
+python3 ~/.vgflow/scripts/migrate/merge-deploy-states.py --project-root . --backup
+```
+
+### Stage 7 Status
+- ✓ config-loader.md (v2.84.0) — biggest fanout
+- ✓ review_batch.py (v2.84.2)
+- ✓ merge-deploy-states.py migration helper (this v2.85.0)
+- Deferred: deploy.md / pre-test-gate / enrich-env-question.py runtime updates — these will read project-level STATE.json once `vg-migrate-v3.sh` chains in this helper
+
+---
+
 ## v2.84.2 — Stage 7 follow-up: review_batch dual-mode (2026-05-10)
 
 ### Goal
