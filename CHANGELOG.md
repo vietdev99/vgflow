@@ -1,5 +1,42 @@
 # Changelog
 
+## v2.82.0 — v3.0.0 Stage 6: deploy decouple foundation (2026-05-10)
+
+### Goal
+Stage 6 of v3.0.0 plan. Deploy state moves from per-phase `.vg/phases/{N}/DEPLOY-STATE.json` to project-level `.vg/deploy/STATE.json`. Phase context preserved as audit-only field on each env entry. Helpers shipped, no consumer migrations yet (Stage 7 next minor).
+
+### Changes
+
+**`schemas/deploy-state.v1.json` NEW (Task 6.1)**
+JSON Schema (draft-07) for project-level deploy state. Required: `schema_version=1`, `envs{}`. Per-env required: `sha`, `deployed_at`. Optional: `phase_context`, `previous_sha`, `rollback_target`, `health` (passing/failing/unknown/warming), `deploy_duration_sec`, `deploy_commands[]`, `deployer`, `release_tag`. Top-level optional: `preferred_env_for_phase{}`, `active_environments[]`, `updated_at`.
+
+**`scripts/deploy/state.py` NEW (Task 6.2)**
+`DeployState` dataclass + reader/writer. Atomic write via `<path>.tmp` → `os.replace()`. `set_env(env, sha, deployed_at, ...)` auto-rolls `previous_sha` from prior entry when caller omits. `set_preferred_env_for_phase(phase, env)` validates env exists. Optional `save(backup=True)` keeps prior file as `.bak.<epoch>`.
+
+**`scripts/deploy/history.py` NEW (Task 6.3)**
+`append_event(project_root, payload)` writes one JSON object per line to `.vg/deploy/history.jsonl`. Auto-adds `ts` field when caller omits. Rotates at 10 MB → `history-{date}.jsonl`. `read_events(env=, event=, since=, limit=)` for filtered queries. `latest_successful_sha(env, before=)` for rollback target derivation.
+
+**Deferred to v2.82.1:**
+- Task 6.4: per-env `flock .vg/deploy/.deploy.lock` for concurrent-deploy guard
+- Task 6.5: auto-detect phase context from `.vg/active-runs/*.json`
+
+### Test coverage
+29 new tests across 2 files, all PASS:
+- `tests/test_deploy_state.py` — 16 tests (schema validation, load/save, set_env auto-roll, atomic write, backup)
+- `tests/test_deploy_history.py` — 13 tests (append, rotate, filter, latest_successful_sha)
+
+### Migration
+None. Helpers shipped without consumers — Stage 7 (v2.83.x) migrates `commands/vg/deploy.md` + ~10 readers (scope env-preference, build pre-test gate, test deploy step, etc.) to use the new helpers. Existing per-phase `.vg/phases/{N}/DEPLOY-STATE.json` continues to work until v3.0.0 migration script consolidates.
+
+### Roadmap
+- v2.76.0–v2.81.0 — Stages 1-5 (resolver / helpers / hook installer / vg CLI / install skill)
+- v2.82.0 (this) — Stage 6 deploy decouple foundation
+- v2.82.1 — Stage 6 finish (flock + auto-detect phase context)
+- v2.83.x — Stage 7: deploy migration + ~10 consumer migrations
+- **v3.0.0** — Stages 8-9: migration script + npm publish
+
+---
+
 ## v2.81.0 — v3.0.0 Stage 5: /vg:install skill (interactive ASK + switch + repair) (2026-05-10)
 
 ### Goal
