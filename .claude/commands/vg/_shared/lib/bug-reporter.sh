@@ -496,8 +496,15 @@ print(f"""**Auto-reported via vg bug-reporter** (v{ev.get("version", "?")})
     body_tmp=$(mktemp -t vg-bug-body-XXXXXX 2>/dev/null) \
       || body_tmp="${TMPDIR:-/tmp}/vg-bug-body-$$-${RANDOM}"
     printf '%s' "$body" > "$body_tmp"
+    # Issue #171: `trap RETURN` is bash-specific and emits
+    # `trap:RETURN: undefined signal: RETURN` under zsh (Codex's default
+    # shell on macOS). Guard with $BASH_VERSION; under non-bash shells the
+    # tmp file (~few KB) is cleaned up by the OS at next /tmp prune. Do
+    # NOT remove the file inline before each return — there are 5 return
+    # paths and `gh issue create` may still be reading body_tmp on async
+    # gh implementations.
     # shellcheck disable=SC2064
-    trap "rm -f '$body_tmp'" RETURN
+    [ -n "${BASH_VERSION:-}" ] && trap "rm -f '$body_tmp'" RETURN
 
     # Try issue create. If fails due to missing labels (404), auto-create + retry.
     local create_err

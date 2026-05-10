@@ -436,7 +436,44 @@ def cmd_run_start(args) -> int:
         # OHOK-4 (2026-04-22): previously blocked forever if prior run crashed
         # without run-complete — user had to manually rm current-run.json.
         # Now: auto-clear stale (>30min) runs + warn, block fresh ones.
-        if _is_run_stale(active):
+        #
+        # Issue #167/#164: ghost active-run with run_row=null. UserPromptSubmit
+        # hook writes the active state file with a fresh run_id, but never
+        # inserted a runs row in events.db (e.g., the user aborted via Ctrl+C
+        # before the orchestrator reached its first DB insert; or run-abort
+        # cleared the row but missed the state file). Symptom: state file
+        # references run_id X but db.run_row_exists(X) is False. Result:
+        # next /vg:<other-cmd> blocks forever on a non-existent run.
+        # Fix: detect run_row=null and auto-clear (treat same as orphan).
+        active_run_id = active.get("run_id")
+        if active_run_id and not db.run_row_exists(active_run_id):
+            print(
+                f"⚠ Clearing ghost active-run (run_row=null): "
+                f"{active.get('command')} phase={active.get('phase')} "
+                f"run_id={active_run_id[:12]}.\n"
+                f"   State file references a run_id absent from events.db — "
+                f"likely from an aborted hook write or partial run-abort.\n"
+                f"   Auto-clearing so the new run can proceed.",
+                file=sys.stderr,
+            )
+            try:
+                db.append_event(
+                    run_id=active_run_id,
+                    event_type="run.ghost_cleared",
+                    phase=active.get("phase", ""),
+                    command=active.get("command", ""),
+                    actor="orchestrator",
+                    outcome="INFO",
+                    payload={"reason": "run_row_null_at_run_start",
+                             "new_command": args.command,
+                             "new_phase": args.phase},
+                )
+            except Exception:
+                # Even append_event may FK-fail if runs row missing; best-effort.
+                pass
+            state_mod.clear_active_run(session_id)
+            # Continue to fresh run-start below
+        elif _is_run_stale(active):
             age_note = f"stale (>{_RUN_STALE_MINUTES}min)"
             print(
                 f"⚠ Clearing {age_note} run: {active.get('command')} "
@@ -1393,7 +1430,16 @@ def cmd_run_complete(args) -> int:
     verdict, violations = _verify_contract(contract, run_id, command, phase,
                                            run_args)
 
-    outcome = "PASS" if verdict else args.outcome or "BLOCK"
+    # Issue #170: when verdict=True (contract gate clean) but caller passed
+    # --outcome BLOCK (phase goal verdict failed), prior code forced
+    # outcome="PASS" and printed `✓ PASS`. That's a false acceptance signal
+    # for users whose phase didn't meet goal coverage. Now: contract verdict
+    # and phase outcome are tracked separately. Contract verdict still gates
+    # event_type (run.completed vs run.blocked) since contract failure means
+    # the run can't even reach a clean stop. But the event's `outcome` field
+    # and DB row reflect the caller's --outcome verbatim (default PASS).
+    caller_outcome = (args.outcome or "PASS").upper()
+    outcome = caller_outcome if verdict else (args.outcome or "BLOCK")
     # {cmd}.completed must be emitted BY THE SKILL before run-complete so we
     # can verify it here. Orchestrator emits only run.completed/run.blocked.
     db.append_event(
@@ -1413,7 +1459,9 @@ def cmd_run_complete(args) -> int:
     _record_rule_outcomes(run_id, command, phase, verdict)
 
     if verdict:
-        db.complete_run(run_id, outcome="PASS")
+        # DB outcome reflects caller's --outcome (not hardcoded PASS).
+        # Contract verdict True ≠ phase goal verdict True.
+        db.complete_run(run_id, outcome=caller_outcome)
         # v2.5.2 Phase O — release repo-lock if we own it
         lock_token = current.get("lock_token")
         if lock_token and _lock_mod is not None:
@@ -1422,7 +1470,16 @@ def cmd_run_complete(args) -> int:
             except Exception:
                 pass
         state_mod.clear_current_run()
-        print(f"✓ {command} phase={phase} PASS")
+        if caller_outcome == "PASS":
+            print(f"✓ {command} phase={phase} PASS")
+        else:
+            # Issue #170: contract clean but phase verdict non-PASS — say so
+            # explicitly so users don't read PASS where outcome was BLOCK.
+            print(
+                f"⚠ {command} phase={phase} contract PASS, "
+                f"outcome={caller_outcome} (run completed but phase verdict "
+                f"is {caller_outcome})"
+            )
         return 0
 
     # Verdict failed — keep current_run so user/AI can inspect + retry

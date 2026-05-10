@@ -1,5 +1,37 @@
 # Changelog
 
+## v2.79.1 — hotfix triage batch: 5 issues closed (2026-05-10)
+
+### Closed issues
+| # | Sig | Type | Sev | Fix |
+|---|---|---|---|---|
+| #171 | 066661d5 | helper_error | medium | bug-reporter `trap RETURN` invalid in zsh — guarded with `[ -n "${BASH_VERSION:-}" ]` |
+| #170 | eeaff650 | ai_inconsistency | medium | run-complete printed `✓ PASS` even when `--outcome BLOCK` — now respects caller outcome and prints `⚠ contract PASS, outcome=BLOCK` separately |
+| #168, #165 (dup) | 6f68995d, 539aa67f | helper_error | high | filter-steps returned 0 after slim/_shared splits — now concatenates `commands/vg/_shared/<cmd>/*.md` sub-files before parsing `<step>` tags |
+| #167, #164 (dup) | 145256fc, 7664c993 | gate_loop, self_discovery | high, medium | ghost active-run with `run_row=null` blocked new runs — `cmd_run_start` now detects via `db.run_row_exists()` and auto-clears with `run.ghost_cleared` telemetry |
+
+### Deferred
+- **#169** (sig `2fabd531`, gate_loop, high) — Codex adapter missing parity events for vg-review (`phase3d_5_qa_checker`, `review.completed`, `recursive_probe`). Needs deeper investigation of Codex adapter contract; deferred to v2.80.x adapter audit.
+
+### Files changed
+- `commands/vg/_shared/lib/bug-reporter.sh` + `.claude` mirror
+- `scripts/vg-orchestrator/__main__.py` + `.claude` mirror (run-start ghost detect, run-complete outcome separation)
+- `scripts/filter-steps.py` + `.claude` mirror (concat _shared sub-files)
+
+### Test coverage
+9 new tests in `tests/test_v2_79_1_issue_fixes.py`, all PASS:
+- 2× bug-reporter trap guard + mirror
+- 2× run-complete outcome handling + mirror
+- 1× run-start ghost clear
+- 4× filter-steps slim split coverage (incl. smoke tests for review/build with non-zero step counts)
+
+Smoke verified: `filter-steps --command commands/vg/review.md --profile web-fullstack --output-count` returns **37** (was 0); `build` returns 22; `deploy` returns 5; `specs` returns 9; `scope-review` returns 8.
+
+### Migration
+None. All fixes backwards-compatible. Existing runs benefit immediately on next `/vg:update`.
+
+---
+
 ## v2.79.0 — symmetric VG_UPDATE_PROJECT_CODEX env var (2026-05-10)
 
 ### Feature

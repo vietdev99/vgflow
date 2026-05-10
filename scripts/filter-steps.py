@@ -235,6 +235,22 @@ def main() -> int:
         print(f"ERROR: read failed: {e}", file=sys.stderr)
         return 1
 
+    # Issue #168/#165: after v2.71+ slim/_shared splits, <step> tags moved
+    # from `commands/vg/<cmd>.md` parent into `commands/vg/_shared/<cmd>/*.md`
+    # sub-files. Reading parent only returns 0 steps → emit-tasklist fails →
+    # full review/build/test runs block. Concat parent + sub-files before
+    # parsing so all extracted steps are visible to the filter.
+    cmd_stem = cmd_path.stem
+    shared_dir = cmd_path.parent / "_shared" / cmd_stem
+    if shared_dir.is_dir():
+        for sub in sorted(shared_dir.rglob("*.md")):
+            try:
+                text += "\n\n" + sub.read_text(encoding="utf-8")
+            except OSError:
+                # Skip unreadable sub-files; parent text alone may still
+                # contain enough for legacy non-split commands.
+                continue
+
     try:
         steps = list(parse_steps(text))
     except ValueError as e:
