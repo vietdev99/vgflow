@@ -5,10 +5,26 @@ After v2.71+ refactors split `commands/vg/<cmd>.md` into slim parent +
 extracted content. This conftest exposes `read_command_full(cmd)` which returns
 parent text concatenated with all `_shared/<cmd>/*.md` sub-files (sorted), so
 content checks remain valid post-split without per-test fixup.
+
+v3.6.3 — Windows bash path normalization. Tests across this tree use
+`subprocess.run(["bash", str(Path)], ...)` to exercise hook + sync scripts.
+On Windows, `str(WindowsPath)` produces `D:\\repo\\file.sh`. Git Bash
+interprets backslashes as escape characters, so the script path collapses
+to `D:repofile.sh` → "No such file or directory". 43 tests fail locally
+on Windows; same code passes on Linux CI.
+
+Fix: autouse fixture wraps `subprocess.run` and `subprocess.Popen` so that
+when args[0] == "bash" on Windows, args[1] is converted to POSIX form
+(forward slashes). Linux/macOS pass-through.
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMMANDS_DIR = REPO_ROOT / "commands" / "vg"
@@ -30,3 +46,88 @@ def read_command_full(cmd: str) -> str:
     for sub in sorted(shared.rglob("*.md")):
         chunks.append(sub.read_text(encoding="utf-8"))
     return "\n\n".join(chunks)
+
+
+def _bash_path(p: str) -> str:
+    """Return a Git-Bash-safe form of a path. On Windows convert backslashes
+    to forward slashes so bash does not interpret them as escape chars.
+    """
+    if os.name != "nt":
+        return p
+    if "\\" not in p:
+        return p
+    return Path(p).as_posix()
+
+
+def _find_git_bash() -> str | None:
+    """Locate Git Bash on Windows. Default `bash` may resolve to WSL launcher,
+    which interprets `D:/path/...` as a non-existent WSL path. Git Bash at
+    `C:/Program Files/Git/bin/bash.exe` accepts Windows-style paths.
+    """
+    if os.name != "nt":
+        return None
+    program_files = [
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        os.environ.get("LocalAppData", ""),
+    ]
+    candidates = []
+    for root in program_files:
+        if not root:
+            continue
+        candidates.extend(
+            [
+                str(Path(root) / "Git" / "bin" / "bash.exe"),
+                str(Path(root) / "Git" / "usr" / "bin" / "bash.exe"),
+                str(Path(root) / "Programs" / "Git" / "bin" / "bash.exe"),
+            ]
+        )
+    for c in candidates:
+        if Path(c).is_file():
+            return c
+    return None
+
+
+_GIT_BASH = _find_git_bash() if os.name == "nt" else None
+
+
+def _normalize_bash_args(args):
+    """If args invokes bash, rewrite to use Git Bash (Windows) and convert
+    script path to POSIX form. Pass-through on Unix.
+    """
+    if not isinstance(args, (list, tuple)) or not args:
+        return args
+    first_str = str(args[0]).lower()
+    if not (first_str == "bash" or first_str.endswith(("bash", "bash.exe"))):
+        return args
+    out = list(args)
+    # Replace `bash` with explicit Git Bash if available (avoids WSL launcher)
+    if os.name == "nt" and _GIT_BASH and first_str == "bash":
+        out[0] = _GIT_BASH
+    # Convert subsequent path-like args to forward-slash form
+    for i in range(1, len(out)):
+        if isinstance(out[i], (str, Path)):
+            s = str(out[i])
+            if "\\" in s:
+                out[i] = _bash_path(s)
+    return out
+
+
+@pytest.fixture(autouse=True)
+def _patch_bash_path_for_windows(monkeypatch):
+    """Autouse fixture: rewrite bash invocations on Windows so script paths
+    use forward slashes. No-op on Unix.
+    """
+    if os.name != "nt":
+        return
+    original_run = subprocess.run
+    original_popen = subprocess.Popen
+
+    def patched_run(args, *a, **kw):
+        return original_run(_normalize_bash_args(args), *a, **kw)
+
+    def patched_popen(args, *a, **kw):
+        return original_popen(_normalize_bash_args(args), *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", patched_run)
+    monkeypatch.setattr(subprocess, "Popen", patched_popen)

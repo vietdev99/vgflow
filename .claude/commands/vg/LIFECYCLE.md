@@ -1,6 +1,6 @@
 ---
 name: vg:LIFECYCLE
-description: VG pipeline taxonomy — single-page mental model of the 7-phase lifecycle. Each phase has its own slash command(s), required artifacts, and gate contract. Cite as the canonical "where am I in the pipeline" reference.
+description: VG pipeline taxonomy — single-page mental model of the 7-phase lifecycle. Each phase has its own slash command(s), required artifacts, and gate contract. Cite as the canonical 'where am I in the pipeline' reference.
 ---
 
 # VG Lifecycle — 7 Phases

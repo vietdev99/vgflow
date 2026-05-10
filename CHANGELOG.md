@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.6.3 — tests: Windows bash path normalization + LIFECYCLE.md mirror (2026-05-11)
+
+### Bug — 43 tests failed locally on Windows; CI Linux passed
+
+Tests using `subprocess.run(["bash", str(Path)], ...)` to exercise hook + sync scripts fell through to WSL bash on Windows. WSL bash receives `D:\Workspace\...` (or even `D:/Workspace/...`) and reports `No such file or directory`. Same code passed Linux CI because there's no WSL launcher in the way.
+
+### Fix — autouse fixture in `tests/conftest.py`
+
+Two patches:
+1. `_find_git_bash()` discovers `C:/Program Files/Git/bin/bash.exe` (and common alternates). When `subprocess.run(["bash", ...])` is invoked, replace `"bash"` with the Git Bash absolute path so WSL is bypassed.
+2. `_bash_path()` converts backslash paths to forward-slash form (Path.as_posix()) so Git Bash doesn't interpret `\W`, `\M` as escape sequences.
+
+Autouse fixture wraps `subprocess.run` + `subprocess.Popen` via monkeypatch — pass-through on Unix, transparent rewrite on Windows. Zero per-test changes needed.
+
+### Result
+Full suite went from **43 failures → 25 failures** on Windows. Remaining 25 are environmental (require `.vg/.evidence-key`, active run state, etc) — separate issue from path mangling. CI Linux continues to pass.
+
+### Plus — `commands/vg/LIFECYCLE.md` mirror sync
+
+`tests/test_v2_86_tier1_docs.py::test_mirror_byte_identity[lifecycle]` was failing because v3.6.1 edited `commands/vg/LIFECYCLE.md` (description quote-style fix) without propagating to `.claude/commands/vg/LIFECYCLE.md` mirror. Synced both sides; mirror byte-identity restored.
+
+### Compatibility
+- Unix/macOS: zero behavior change (fixture is no-op).
+- Windows: tests now find Git Bash + work with absolute paths. If Git Bash isn't installed at the standard locations, `_find_git_bash()` returns None and behavior falls back to the pre-fix state.
+- No production code touched; pure test-infrastructure change.
+
 ## v3.6.2 — followup: generator preserve curated content, /vg:update chmod hooks (2026-05-11)
 
 ### Bug 1 — generator `--force` wipes Codex-curated content
