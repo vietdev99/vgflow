@@ -122,6 +122,102 @@ def _cli_names(output_dir: Path) -> list[str]:
     return sorted(names, key=str.lower)
 
 
+def compute_discourse_verdict(reviewers: list[dict]) -> dict:
+    """v2.68.0 C4: Discourse-based 3-reviewer aggregation.
+
+    Replaces voting (2+ block -> block) with discourse moves:
+    - AGREE: all reviewers same verdict (high confidence)
+    - CHALLENGE: 1 reviewer dissents (surface the dissent for human review)
+    - CONNECT: 2+ reviewers raise overlapping findings (corroboration)
+    - SURFACE: minority view emitted explicitly so human can weigh
+
+    Returns: {verdict, confidence, moves: [{move, reviewer?, finding_id?, note}]}
+    """
+    moves: list[dict] = []
+    verdicts = [r["verdict"] for r in reviewers]
+    n = len(reviewers)
+
+    # Collect overlapping findings
+    finding_groups: dict[str, list[str]] = {}
+    for r in reviewers:
+        for f in r.get("findings", []) or []:
+            key = f.get("id") or f.get("title", "")
+            if not key:
+                continue
+            finding_groups.setdefault(key, []).append(r["name"])
+    overlapping = {k: v for k, v in finding_groups.items() if len(v) >= 2}
+    for key, names in overlapping.items():
+        moves.append({
+            "move": "CONNECT",
+            "finding": key,
+            "reviewers": names,
+            "note": f"{len(names)} reviewers corroborate this finding",
+        })
+
+    # AGREE: all same verdict
+    if n > 0 and len(set(verdicts)) == 1:
+        moves.append({"move": "AGREE", "verdict": verdicts[0], "note": f"All {n} reviewers agree"})
+        return {"verdict": verdicts[0], "confidence": "high", "moves": moves}
+
+    # CHALLENGE/SURFACE: dissent exists
+    block_count = sum(1 for v in verdicts if v == "block")
+    flag_count = sum(1 for v in verdicts if v == "flag")
+    pass_count = sum(1 for v in verdicts if v == "pass")
+
+    # Identify dissenters (minority verdict)
+    from collections import Counter
+    counter = Counter(verdicts)
+    if counter:
+        majority_verdict, _ = counter.most_common(1)[0]
+    else:
+        majority_verdict = None
+    for r in reviewers:
+        if r["verdict"] != majority_verdict:
+            moves.append({
+                "move": "CHALLENGE",
+                "reviewer": r["name"],
+                "verdict": r["verdict"],
+                "note": f"{r['name']} dissents from majority ({majority_verdict})",
+            })
+            for f in r.get("findings", []) or []:
+                key = f.get("id") or f.get("title", "")
+                if key and key not in overlapping:
+                    moves.append({
+                        "move": "SURFACE",
+                        "reviewer": r["name"],
+                        "finding": key,
+                        "note": f"Minority finding from {r['name']} - human review",
+                    })
+
+    # Verdict computation: 2+ block -> block; 1 block + 1+ flag -> flag; etc.
+    if block_count >= 2:
+        verdict = "block"
+        confidence = "medium"
+    elif block_count >= 1 or flag_count >= 2:
+        verdict = "flag"
+        confidence = "medium"
+    elif pass_count >= 2:
+        verdict = "pass"
+        confidence = "low"  # 1 dissent
+    else:
+        verdict = "flag"
+        confidence = "low"
+
+    # SURFACE majority-pass perspective when blocked: the pass reviewer's view
+    # may still be worth surfacing for human triage.
+    if verdict == "block":
+        for r in reviewers:
+            if r["verdict"] == "pass":
+                moves.append({
+                    "move": "SURFACE",
+                    "reviewer": r["name"],
+                    "verdict": "pass",
+                    "note": f"{r['name']} sees no block - human should weigh",
+                })
+
+    return {"verdict": verdict, "confidence": confidence, "moves": moves}
+
+
 def normalize(output_dir: Path, label: str, phase: str = "unknown") -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
@@ -186,18 +282,23 @@ def normalize(output_dir: Path, label: str, phase: str = "unknown") -> dict:
 
     ok = [r for r in results if r["status"] == "ok"]
     verdicts = [r["verdict"] for r in ok]
+    discourse: dict | None = None
     if not results:
         aggregate_verdict = "inconclusive"
     elif not ok:
         aggregate_verdict = "inconclusive"
-    elif verdicts.count("block") >= 2:
-        aggregate_verdict = "block"
-    elif "block" in verdicts or verdicts.count("flag") >= 2:
-        aggregate_verdict = "flag"
-    elif verdicts and all(v == "pass" for v in verdicts):
-        aggregate_verdict = "pass"
     else:
-        aggregate_verdict = "flag"
+        # v2.68.0 C4: discourse-based aggregation replaces voting heuristic.
+        discourse_inputs = [
+            {
+                "name": r.get("name") or r.get("reviewer") or "unknown",
+                "verdict": r["verdict"],
+                "findings": r.get("findings", []) or [],
+            }
+            for r in ok
+        ]
+        discourse = compute_discourse_verdict(discourse_inputs)
+        aggregate_verdict = discourse["verdict"]
 
     aggregate_findings = []
     for r in results:
@@ -218,7 +319,7 @@ def normalize(output_dir: Path, label: str, phase: str = "unknown") -> dict:
     )
     (output_dir / f"{label}.xml").write_text(aggregate_xml, encoding="utf-8")
 
-    return {
+    report: dict = {
         "label": label,
         "phase": phase,
         "verdict": aggregate_verdict,
@@ -227,6 +328,9 @@ def normalize(output_dir: Path, label: str, phase: str = "unknown") -> dict:
         "results": results,
         "aggregate": str(output_dir / f"{label}.xml"),
     }
+    if discourse is not None:
+        report["discourse"] = discourse
+    return report
 
 
 def main() -> int:
