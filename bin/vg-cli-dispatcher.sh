@@ -56,6 +56,8 @@ case "$cmd" in
     ;;
 
   install)
+    # v2.80.0 Stage 4.1/4.2: wire --mode global|project + write
+    # .vg/.install-target marker so find_vg_home() resolves correctly.
     target="global"
     for arg in "$@"; do
       case "$arg" in
@@ -63,25 +65,44 @@ case "$cmd" in
         --project) target="project" ;;
       esac
     done
+    project_root="$(pwd)"
     if [ "$target" = "global" ]; then
-      bash "${VG_HOME}/scripts/hooks/install-hooks.sh" --target "${HOME}/.claude/settings.json"
-      echo "vgflow: hooks installed at ~/.claude/settings.json"
-      echo "vgflow: VG_HOME=${VG_HOME}"
+      bash "${VG_HOME}/scripts/hooks/install-hooks.sh" \
+        --target "${HOME}/.claude/settings.json" \
+        --mode global
+      echo "vgflow: hooks installed at ~/.claude/settings.json (mode=global, VG_HOME=${VG_HOME})"
     else
-      project_root="$(pwd)"
-      bash "${VG_HOME}/scripts/hooks/install-hooks.sh" --target "${project_root}/.claude/settings.json"
-      echo "vgflow: hooks installed at ${project_root}/.claude/settings.json"
+      bash "${VG_HOME}/scripts/hooks/install-hooks.sh" \
+        --target "${project_root}/.claude/settings.json" \
+        --mode project
+      echo "vgflow: hooks installed at ${project_root}/.claude/settings.json (mode=project)"
+    fi
+    # Write project install-target marker when invoked from a git repo.
+    # Skip when cwd is the user's home or has no .git anchor (avoid littering
+    # random dirs with stray .vg/ folders).
+    if [ -d "${project_root}/.git" ] || [ -f "${project_root}/.vg/.install-target" ]; then
+      mkdir -p "${project_root}/.vg"
+      printf '%s\n' "$target" > "${project_root}/.vg/.install-target"
+      echo "vgflow: wrote ${project_root}/.vg/.install-target=${target}"
     fi
     ;;
 
   sync|update)
+    # v2.80.0 Stage 4.4: prefer git pull when VG_HOME is a git clone (dev
+    # install), else hint at npm. Project-mode users should run /vg:update
+    # inside Claude Code/Codex (uses 3-way merge), not this CLI sync which
+    # only refreshes the static harness.
     if [ -d "${VG_HOME}/.git" ]; then
-      echo "vgflow: pulling latest from upstream..."
-      (cd "${VG_HOME}" && git pull origin main)
+      echo "vgflow: pulling latest from upstream (${VG_HOME})..."
+      (cd "${VG_HOME}" && git pull --ff-only origin main)
       echo "vgflow: updated to $(cat "${VG_HOME}/VERSION" 2>/dev/null || echo unknown)"
+    elif command -v npm >/dev/null 2>&1; then
+      echo "vgflow: VG_HOME is not a git clone — upgrading via npm..."
+      npm install -g vgflow@latest
+      echo "vgflow: updated. Run 'vg version' to confirm."
     else
-      echo "vgflow: VG_HOME is not a git clone — re-install via npm:" >&2
-      echo "  npm install -g vgflow@latest" >&2
+      echo "vgflow: VG_HOME=${VG_HOME} is not a git clone and npm not on PATH." >&2
+      echo "  Install npm or re-clone: git clone https://github.com/vietdev99/vgflow ${VG_HOME}" >&2
       exit 1
     fi
     ;;
@@ -116,6 +137,9 @@ case "$cmd" in
     ;;
 
   uninstall)
+    # v2.80.0 Stage 4.3: remove VG hook entries from target settings.json.
+    # Backs the file up first (.bak.<epoch>) and rewrites without VG hooks.
+    # Does NOT delete VG_HOME (~/.vgflow/) or project .vg/ — pure hook removal.
     target="global"
     for arg in "$@"; do
       case "$arg" in
@@ -123,9 +147,53 @@ case "$cmd" in
         --project) target="project" ;;
       esac
     done
-    echo "vgflow: uninstall ${target} not yet implemented"
-    echo "Manual: edit settings.json and remove VG entries"
-    exit 1
+    if [ "$target" = "global" ]; then
+      settings="${HOME}/.claude/settings.json"
+    else
+      settings="$(pwd)/.claude/settings.json"
+    fi
+    if [ ! -f "$settings" ]; then
+      echo "vgflow: nothing to uninstall — ${settings} does not exist"
+      exit 0
+    fi
+    backup="${settings}.bak.$(date +%s)"
+    cp "$settings" "$backup"
+    python3 - "$settings" <<'PY'
+import json, sys
+from pathlib import Path
+
+target = Path(sys.argv[1])
+data = json.loads(target.read_text(encoding="utf-8"))
+hooks = data.get("hooks") or {}
+
+def is_vg_entry(entry):
+    inner = entry.get("hooks") or [] if isinstance(entry, dict) else []
+    return any("vg-" in (h.get("command") or "") for h in inner if isinstance(h, dict))
+
+removed = 0
+for event, entries in list(hooks.items()):
+    if not isinstance(entries, list):
+        continue
+    kept = [e for e in entries if not is_vg_entry(e)]
+    removed += len(entries) - len(kept)
+    if kept:
+        hooks[event] = kept
+    else:
+        del hooks[event]
+
+if hooks:
+    data["hooks"] = hooks
+elif "hooks" in data:
+    del data["hooks"]
+
+target.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+print(f"vgflow: removed {removed} VG hook entr{'y' if removed == 1 else 'ies'} from {target}")
+PY
+    echo "vgflow: backup saved at ${backup}"
+    if [ "$target" = "project" ] && [ -f ".vg/.install-target" ]; then
+      rm -f ".vg/.install-target"
+      echo "vgflow: removed .vg/.install-target (run 'vg install' to re-attach)"
+    fi
     ;;
 
   *)

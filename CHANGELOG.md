@@ -1,5 +1,60 @@
 # Changelog
 
+## v2.80.0 — v3.0.0 Stage 4: vg CLI install/uninstall wire-up (2026-05-10)
+
+### Goal
+Stage 4 of v3.0.0 plan. CLI dispatcher install/uninstall paths now wire up to the new `--mode global|project` flag (added v2.78.0) and write the `.vg/.install-target` marker so `find_vg_home()` (added v2.76.0) resolves correctly per project.
+
+### Changes
+
+**`vg install --global` (Task 4.1)**
+- Calls `install-hooks.sh --mode global` → emits `$HOME/.vgflow/scripts/hooks/<name>` paths in `~/.claude/settings.json`
+- Writes `${cwd}/.vg/.install-target=global` (only inside a `.git` repo or where marker already exists)
+
+**`vg install --project` (Task 4.2)**
+- Calls `install-hooks.sh --mode project` → emits `${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/<name>` paths
+- Writes `${cwd}/.vg/.install-target=project`
+
+**`vg uninstall [--global|--project]` (Task 4.3 — was stub)**
+- Backs up target `settings.json` to `settings.json.bak.<epoch>`
+- Removes all hook entries whose command contains `vg-`
+- Cleans empty `hooks` event arrays + the top-level `hooks` key when empty
+- Project mode: removes `.vg/.install-target` marker
+- Does NOT delete `VG_HOME` (`~/.vgflow/`) or project `.vg/` (pure hook removal)
+
+**`vg sync` / `vg update` (Task 4.4)**
+- When `VG_HOME` is a git clone: `git pull --ff-only origin main`
+- Otherwise: invoke `npm install -g vgflow@latest` (was: error out)
+- Final fallback: stderr hint to clone or install npm
+
+### Test coverage
+7 new tests in `tests/test_vg_cli_dispatcher.py` (Linux-only — skipped on Windows due to WSL path mapping; CI Linux validates):
+- `test_install_global_writes_marker_and_global_paths`
+- `test_install_project_writes_marker_and_project_paths`
+- `test_uninstall_project_removes_hooks_and_marker`
+- `test_uninstall_no_settings_is_noop`
+- `test_install_marker_skipped_when_not_in_git_repo`
+- `test_version_command`
+- `test_help_command`
+
+Manual smoke verified on Git Bash: install --global, install --project, uninstall --project all PASS, settings.json paths correct, marker writes correctly.
+
+### Migration
+None. Default `--global` install behavior unchanged from v2.78.0; only adds marker write + uninstall implementation.
+
+### Roadmap
+- v2.76.0 — Stage 1 resolver dual-mode
+- v2.77.0 — Stage 2 helpers (resolve_vg_doc, gitignore generator)
+- v2.78.0 — Stage 3.1 hook installer dual-mode
+- v2.79.0 — Symmetric VG_UPDATE_PROJECT_CODEX (PR #166)
+- v2.79.1 — Issue triage batch (5 closed)
+- v2.80.0 (this) — Stage 4 vg CLI install/uninstall wire-up
+- v2.81.x — Stage 5: `/vg:install` skill (interactive ASK flow)
+- v2.82.x — Stage 6-7: deploy decouple + consumer migrations
+- **v3.0.0** — Stages 8-9: migration script + npm publish
+
+---
+
 ## v2.79.1 — hotfix triage batch: 5 issues closed (2026-05-10)
 
 ### Closed issues
