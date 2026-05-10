@@ -1,7 +1,7 @@
 ---
 name: vg:build
 description: Execute phase plans with contract-aware wave-based parallel execution
-argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck] [--skip-pre-test] [--skip-spec-review]"
+argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck] [--skip-pre-test] [--skip-spec-review] [--skip-final-review]"
 allowed-tools:
   - Read
   - Write
@@ -103,6 +103,13 @@ runtime_contract:
     # Escape hatch logs override-debt entry.
     - name: "5_1_spec_compliance_review"
       required_unless_flag: "--skip-spec-review"
+    # v2.66.1 B4 — cumulative final review (vg-build-final-reviewer)
+    # runs ONCE at STEP 7.1.5 between postmortem (7.1) and run-complete (7.2).
+    # v2.69.0 T2: marker added to frontmatter (was doc-only) + flipped to
+    # required_unless_flag. Build BLOCKs when reviewer FAILs and
+    # --skip-final-review absent. Escape hatch logs override-debt entry.
+    - name: "7_1_5_final_review"
+      required_unless_flag: "--skip-final-review"
     # Task 18 (pre-test gate) — STEP 6.5 between CrossAI loop and close.
     # Hard contract per Codex round 2 fix #9: NOT severity=warn — required
     # unless --skip-pre-test override is logged via override-use.
@@ -192,6 +199,8 @@ runtime_contract:
     - "--skip-pre-test"
     # v2.69.0 T1 (B1) — escape hatch for STEP 5.1 spec compliance reviewer
     - "--skip-spec-review"
+    # v2.69.0 T2 (B4) — escape hatch for STEP 7.1.5 cumulative final reviewer
+    - "--skip-final-review"
 ---
 
 

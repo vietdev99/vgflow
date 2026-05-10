@@ -148,7 +148,7 @@ vg-orchestrator step-active 1_parse_args
 #   --allow-coverage-regression      (close.md PR-D route schema coverage)
 # All gate-skip flags route through forbidden_without_override (entry
 # frontmatter); --allow-coverage-regression is informational + accept-and-log.
-VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-design-pixel-gate|skip-uimap-injection-audit|skip-task-fidelity-audit|skip-context-rebuild|resume|skip-truthcheck|skip-compliance|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|skip-spec-review|allow-missing-commits|allow-missing-fixtures|allow-r5-violation|allow-verify-divergence|allow-coverage-regression|allow-rule-not-implemented|allow-ux-violations|override-reason|force|help)$'
+VALID_FLAGS_PATTERN='^--(wave|only|status|gaps-only|interactive|auto|reset-queue|skip-design-check|skip-design-pixel-gate|skip-uimap-injection-audit|skip-task-fidelity-audit|skip-context-rebuild|resume|skip-truthcheck|skip-compliance|skip-reflection|skip-cross-phase-ripple|skip-ux-gates|skip-spec-review|skip-final-review|allow-missing-commits|allow-missing-fixtures|allow-r5-violation|allow-verify-divergence|allow-coverage-regression|allow-rule-not-implemented|allow-ux-violations|override-reason|force|help)$'
 UNKNOWN_FLAGS=""
 for tok in ${ARGUMENTS:-}; do
   case "$tok" in
@@ -194,6 +194,18 @@ if [[ " ${ARGUMENTS:-} " =~ [[:space:]]--skip-spec-review([[:space:]]|$) ]]; the
     log_override_debt "skip-spec-review" "${PHASE_NUMBER:-unknown}" "build.spec_review" "${PHASE_DIR:-.}"
 fi
 export SKIP_SPEC_REVIEW
+
+# v2.69.0 T2 (B4) — --skip-final-review escape hatch.
+# When set, STEP 7.1.5 (close.md) short-circuits the vg-build-final-reviewer
+# spawn, touches the marker, and logs an override-debt entry. Cumulative
+# review is bypassed but contract validator still sees the marker.
+SKIP_FINAL_REVIEW=0
+if [[ " ${ARGUMENTS:-} " =~ [[:space:]]--skip-final-review([[:space:]]|$) ]]; then
+  SKIP_FINAL_REVIEW=1
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "skip-final-review" "${PHASE_NUMBER:-unknown}" "build.final_review" "${PHASE_DIR:-.}"
+fi
+export SKIP_FINAL_REVIEW
 if [[ "${ARGUMENTS:-}" =~ --only[[:space:]]*=?[[:space:]]*([0-9,]+) ]]; then
   ONLY_TASKS="${BASH_REMATCH[1]}"
 fi

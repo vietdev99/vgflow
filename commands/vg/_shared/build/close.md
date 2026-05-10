@@ -122,10 +122,14 @@ mkdir -p "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers" 2>/dev/null
 
 ---
 
-## STEP 7.1.5 — B4 cumulative final review (v2.66.1)
+## STEP 7.1.5 — B4 cumulative final review (v2.66.1, hardened v2.69.0)
+
+**v2.69.0 T2 escape hatch:** `SKIP_FINAL_REVIEW=1` short-circuits this
+step (set by preflight when `--skip-final-review` is passed; logs
+override-debt). When unset, full cumulative review runs.
 
 **Cumulative delta review across the entire phase** — runs ONCE between
-postmortem (STEP 7.1) and run-complete (STEP 7.2). Spawns the new
+postmortem (STEP 7.1) and run-complete (next step). Spawns the new
 `vg-build-final-reviewer` subagent (`.claude/agents/vg-build-final-reviewer/SKILL.md`)
 which reads PLAN.md goal + the entire phase commit range + L-gate
 results, then emits a `PASS | PARTIAL | FAIL` verdict.
@@ -136,34 +140,42 @@ B4 catches cross-task integration gaps that no single task review can
 see (e.g. FE Task 3 consumes an API endpoint Task 2 BE never actually
 shipped).
 
-**Severity: warn (advisory) in v2.66.1.** Build CONTINUES regardless of
-verdict — operator gets the report but is not blocked. Severity will
-flip to `block` in v2.67.0 after dogfood telemetry calibrates the
-verdict distribution + false-positive rate. The `7_1_5_final_review`
-step marker is informational and never gates `run-complete`.
+**v2.69.0 T2 — flipped warn → block.** Marker `7_1_5_final_review` was
+added to `must_touch_markers` (was doc-only) with
+`required_unless_flag: "--skip-final-review"`. Build BLOCKs when the
+reviewer FAILs and the flag is absent. Escape hatch logs override-debt.
 
 ```bash
 vg-orchestrator step-active 7_1_5_final_review
 
-# Resolve commit range covering the entire phase build
-BUILD_START_SHA=$(cat "${PHASE_DIR}/.build-start-sha" 2>/dev/null || git rev-parse HEAD~10)
-COMMIT_RANGE="${BUILD_START_SHA}..HEAD"
+# v2.69.0 T2 — --skip-final-review escape hatch (debt-tracked in preflight).
+# When set, short-circuit reviewer spawn, touch marker, proceed.
+if [ "${SKIP_FINAL_REVIEW:-0}" = "1" ]; then
+  echo "▸ STEP 7.1.5: --skip-final-review set (debt-tracked); skipping cumulative review" >&2
+  mkdir -p "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers" 2>/dev/null
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "7_1_5_final_review" "${PHASE_DIR}") || touch "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers/7_1_5_final_review.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build 7_1_5_final_review 2>/dev/null || true
+else
+  # Resolve commit range covering the entire phase build
+  BUILD_START_SHA=$(cat "${PHASE_DIR}/.build-start-sha" 2>/dev/null || git rev-parse HEAD~10)
+  COMMIT_RANGE="${BUILD_START_SHA}..HEAD"
 
-bash scripts/vg-narrate-spawn.sh vg-build-final-reviewer spawning "cumulative review ${COMMIT_RANGE}"
+  bash scripts/vg-narrate-spawn.sh vg-build-final-reviewer spawning "cumulative review ${COMMIT_RANGE}"
 
-# Then the orchestrator dispatches:
-#   Agent(subagent_type="vg-build-final-reviewer",
-#         prompt=<rendered with phase_dir + commit_range>)
-# The agent's verdict text (PASS|PARTIAL|FAIL + gaps) is written to
-# ${PHASE_DIR}/.final-review/verdict.md for downstream /vg:review/test.
+  # Then the orchestrator dispatches:
+  #   Agent(subagent_type="vg-build-final-reviewer",
+  #         prompt=<rendered with phase_dir + commit_range>)
+  # The agent's verdict text (PASS|PARTIAL|FAIL + gaps) is written to
+  # ${PHASE_DIR}/.final-review/verdict.md for downstream /vg:review/test.
 
-mkdir -p "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers" 2>/dev/null
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "7_1_5_final_review" "${PHASE_DIR}") || touch "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers/7_1_5_final_review.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build 7_1_5_final_review 2>/dev/null || true
+  mkdir -p "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers" 2>/dev/null
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "7_1_5_final_review" "${PHASE_DIR}") || touch "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers/7_1_5_final_review.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build 7_1_5_final_review 2>/dev/null || true
+fi
 ```
 
-**Marker:** `7_1_5_final_review` — severity `warn`, informational only
-in v2.66.1; will flip to `block` in v2.67.0.
+**Marker:** `7_1_5_final_review` — v2.69.0
+`required_unless_flag: "--skip-final-review"` (was doc-only severity warn).
 
 ---
 
