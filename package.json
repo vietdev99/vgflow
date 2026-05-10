@@ -1,6 +1,6 @@
 {
   "name": "vgflow",
-  "version": "2.82.1",
+  "version": "2.83.0",
   "description": "VGFlow — deterministic AI-driven development harness for Claude Code + Codex",
   "keywords": [
     "claude",

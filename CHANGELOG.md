@@ -1,5 +1,72 @@
 # Changelog
 
+## v2.83.0 — v3.0.0 Stage 8: vg-migrate-v3.sh migration script (2026-05-10)
+
+### Goal
+Stage 8 of v3.0.0 plan. Adds the headline migration tool that converts existing v2.x projects to v3 layout in one atomic command. Stage 7 (consumer migrations across ~10 sites) deferred — not blocking v3.0.0 ship since v2.7x dual-mode resolver + helpers transparently handle both layouts.
+
+### Changes
+
+**`scripts/migrate/vg-migrate-v3.sh` NEW (Task 8)**
+
+7-step migration pipeline:
+
+| Step | Action |
+|---|---|
+| 0 | Pre-flight: refuse if not git repo or working tree dirty |
+| 1 | Backup `.claude/{commands,skills,scripts}` + `settings.json` → `.vg/.backup-<ts>/` |
+| 2 | Move root docs → `.vg/`: `ROADMAP.md`, `FOUNDATION.md`, `vg.config.md` → `.vg/config.md`, `OVERRIDE-DEBT.md` (if present) |
+| 3 | Apply target via `vg-cli-dispatcher.sh install --<target>` (global removes legacy `.claude/{commands/vg, skills/vg-*, scripts}`; project keeps mirror) |
+| 4 | Append `.vg/` whitelist to `.gitignore` via `generate-gitignore-v3.py` (idempotent — skips if marker present) |
+| 5 | Verify `.vg/.install-target` marker (writes directly if dispatcher write didn't land) |
+| 6 | Smoke test via `vg doctor` (non-fatal) |
+| 7 | Stage all changes (auto-commit when `--commit` passed) |
+
+**Flags:**
+- `--target=global|project` (required)
+- `--dry-run` — print actions without mutating
+- `--yes` / `-y` — skip interactive confirmation
+- `--commit` — atomic commit of staged changes
+
+**Exit codes:** 0 success, 1 bad args, 2 dirty tree, 3 backup failed, 4 doc move failed, 5 hook install failed, 6 smoke (warning only).
+
+### Test coverage
+6 new tests in `tests/test_vg_migrate_v3.py` (Linux-only — skipped on Windows due to WSL path mapping; CI Linux validates):
+- requires `--target` arg
+- rejects invalid target value
+- `--dry-run` does NOT mutate filesystem
+- dirty tree refused (exit 2)
+- full migration to global moves docs + marker + backup + .gitignore
+- idempotent when already at target (exit 0 with no-op message)
+
+Manual smoke verified on Git Bash:
+- T1 dry-run preserves ROADMAP.md, no marker written: PASS
+- T2 full migration: docs moved to `.vg/`, marker=global, backup created, `.gitignore` whitelist appended: PASS
+
+### Migration
+**For users:** to migrate an existing v2.x project, run:
+
+```bash
+# Inspect plan first
+bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global --dry-run
+
+# Apply (interactive confirm)
+bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global
+
+# Apply + auto-commit
+bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global --yes --commit
+```
+
+Refuses to run on a dirty working tree. Backs up everything to `.vg/.backup-<ts>/` before mutating — recovery is `cp -r .vg/.backup-<ts>/* .` + `git checkout`.
+
+### Roadmap
+- v2.76.0–v2.82.1 — Stages 1-6 (resolver, helpers, hook installer, vg CLI, install skill, deploy decouple)
+- v2.83.0 (this) — Stage 8 migration script
+- v2.84.x — Stage 7 consumer migrations (deploy.md + scope env-preference + build pre-test gate + ~7 more readers)
+- **v3.0.0** — Stage 9: VERSION 3.0.0, README rewrite, npm publish, GitHub release
+
+---
+
 ## v2.82.1 — v3.0.0 Stage 6 finish: flock + phase auto-detect (2026-05-10)
 
 ### Goal
