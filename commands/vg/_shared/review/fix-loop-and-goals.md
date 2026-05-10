@@ -922,11 +922,12 @@ if type -t merge_and_write_matrix >/dev/null 2>&1; then
   VERDICT=$(echo "$MERGE_OUTPUT" | grep '^VERDICT=' | cut -d= -f2)
   READY=$(echo "$MERGE_OUTPUT" | grep '^READY=' | cut -d= -f2)
   BLOCKED=$(echo "$MERGE_OUTPUT" | grep '^BLOCKED=' | cut -d= -f2)
+  TEST_PENDING=$(echo "$MERGE_OUTPUT" | grep '^TEST_PENDING=' | cut -d= -f2)
   NOT_SCANNED=$(echo "$MERGE_OUTPUT" | grep '^NOT_SCANNED=' | cut -d= -f2)
   INTERMEDIATE=$(echo "$MERGE_OUTPUT" | grep '^INTERMEDIATE=' | cut -d= -f2)
-  export VERDICT READY BLOCKED NOT_SCANNED INTERMEDIATE
+  export VERDICT READY BLOCKED TEST_PENDING NOT_SCANNED INTERMEDIATE
 
-  echo "✓ GOAL-COVERAGE-MATRIX.md: VERDICT=$VERDICT (ready=$READY blocked=$BLOCKED not_scanned=$NOT_SCANNED)"
+  echo "✓ GOAL-COVERAGE-MATRIX.md: VERDICT=$VERDICT (ready=$READY blocked=$BLOCKED test_pending=$TEST_PENDING not_scanned=$NOT_SCANNED)"
 else
   echo "⚠ matrix-merger.sh missing — falling back to manual matrix write (legacy path)"
   # Legacy path: orchestrator writes matrix directly using template below

@@ -255,7 +255,7 @@ def test_structural_fallback_still_blocks_mutation_missing_sequence(tmp_path: Pa
     assert "runtime_crud_sequence_missing" in _evidence_types(payload)
 
 
-def test_matrix_merger_downgrades_list_only_crud_goal(tmp_path: Path) -> None:
+def test_matrix_merger_marks_list_only_crud_goal_test_pending(tmp_path: Path) -> None:
     bash = _bash()
     if bash is None:
         pytest.skip("bash is required for matrix-merger integration test")
@@ -305,8 +305,74 @@ def test_matrix_merger_downgrades_list_only_crud_goal(tmp_path: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     matrix = output.read_text(encoding="utf-8")
+    assert "VERDICT=TEST_PENDING" in proc.stdout
+    assert "TEST_PENDING=1" in proc.stdout
+    assert "## Gate: 🧪 **TEST_PENDING**" in matrix
+    assert "| G-01 | important | ui | TEST_PENDING | shallow CRUD evidence" in matrix
+
+def test_matrix_merger_keeps_real_runtime_error_blocked(tmp_path: Path) -> None:
+    bash = _bash()
+    if bash is None:
+        pytest.skip("bash is required for matrix-merger integration test")
+
+    phase = _phase(tmp_path)
+    _write_goals(
+        phase,
+        (
+            "## Goal G-01: Campaign create handles API\n\n"
+            "**Surface:** ui\n\n"
+            "**Start view:** /campaigns\n\n"
+            "**Success criteria:** Campaign API saves cleanly.\n\n"
+            "**Mutation evidence:** none\n"
+        ),
+    )
+    _write_runtime(
+        phase,
+        {
+            "result": "failed",
+            "start_view": "/campaigns",
+            "failure_reason": "POST /api/campaigns returned 500 API error",
+            "steps": [{"action": "click", "target": "Save"}],
+            "network": [{"method": "POST", "url": "/api/campaigns", "status": 500}],
+        },
+    )
+    phase.joinpath(".surface-probe-results.json").write_text("{}", encoding="utf-8")
+    output = phase / "GOAL-COVERAGE-MATRIX.md"
+    runner = tmp_path / "run-matrix-runtime-block.sh"
+    runner.write_text(
+        "\n".join(
+            [
+                "set -euo pipefail",
+                f'source "{_shell_path(REPO_ROOT / "commands/vg/_shared/lib/matrix-merger.sh")}"',
+                "PYTHON_BIN=python",
+                (
+                    f'merge_and_write_matrix "{_shell_path(phase)}" '
+                    f'"{_shell_path(phase / "TEST-GOALS.md")}" '
+                    f'"{_shell_path(phase / "RUNTIME-MAP.json")}" '
+                    f'"{_shell_path(phase / ".surface-probe-results.json")}" '
+                    f'"{_shell_path(output)}"'
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [bash, str(runner)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    matrix = output.read_text(encoding="utf-8")
     assert "VERDICT=BLOCK" in proc.stdout
-    assert "| G-01 | important | ui | BLOCKED | shallow CRUD evidence" in matrix
+    assert "TEST_PENDING=0" in proc.stdout
+    assert "| G-01 | important | ui | BLOCKED | browser failed: POST /api/campaigns returned 500 API error |" in matrix
 
 
 def test_matrix_merger_ignores_none_mutation_evidence(tmp_path: Path) -> None:
