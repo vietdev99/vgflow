@@ -154,6 +154,8 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-scope-review`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+
+
 <rules>
 1. **VG-native** — no GSD delegation. This command is self-contained.
 2. **Config-driven** — read .claude/vg.config.md for project paths, profile, models.
@@ -181,27 +183,26 @@ Pipeline position: specs -> scope -> **scope-review** -> blueprint -> build -> r
 ### Preflight section (extracted v2.74.0 T1)
 
 Read `_shared/scope-review/preflight.md` and follow it exactly.
-Includes 2 steps: 0_parse_and_collect (parse --skip-crossai / --phases / --full flags, scan ${PHASES_DIR} for scoped phases, extract decisions/endpoints/modules/test scenarios/dependencies from CONTEXT.md, also enumerate DONE phases for scope-creep Check E) and incremental_check (read .scope-review-baseline.json to compute changed/new/dependent SCAN_SET, default-on incremental mode, --full forces complete rescan).
+Includes 2 steps: 0_parse_and_collect, incremental_check.
 
 Step coverage: 0_parse_and_collect, incremental_check.
+
 
 ### Cross-ref + review + write (extracted v2.74.0 T2)
 
 Read `_shared/scope-review/cross-ref-review-write.md` and follow it exactly.
-Includes 3 steps: 1_cross_reference (5 deterministic checks A-E across SCAN_SET — decision conflicts, module overlaps, endpoint collisions, dependency gaps, scope creep vs DONE phases), 2_crossai_review (config-driven CrossAI fan-out — skip if --skip-crossai / no CLIs / single phase), and 3_write_report (write ${PLANNING_DIR}/SCOPE-REVIEW.md with structured findings + delta summary header + gate verdict).
+Includes 3 steps: 1_cross_reference, 2_crossai_review, 3_write_report.
 
 Step coverage: 1_cross_reference, 2_crossai_review, 3_write_report.
 
-CODEX NOTE: Step 2's CrossAI fan-out uses the shared CrossAI engine. On Codex, follow the adapter contract above (Tool mapping table) — spawn configured CLI agents in the main Codex thread, do not delegate to a Claude subagent.
 
 ### Resolve + close (extracted v2.74.0 T3 — final)
 
 Read `_shared/scope-review/resolve-and-close.md` and follow it exactly.
-Includes 3 closing steps: 4_resolution (interactive — present blocking conflicts/gaps to user with resolution options, never AI auto-fix), 4.5_baseline_write_and_telemetry (atomic write of .scope-review-baseline.json after every run including BLOCK + emit scope-review-incremental telemetry with changed/new/conflicts counts), and 5_commit_and_next (commit SCOPE-REVIEW.md + baseline to git, suggest /vg:blueprint for first unblueprinted phase).
+Includes 3 steps: 4_resolution, 4.5_baseline_write_and_telemetry, 5_commit_and_next.
 
 Step coverage: 4_resolution, 4.5_baseline_write_and_telemetry, 5_commit_and_next.
 
-CODEX NOTE: Step 4's interactive resolution prompts use AskUserQuestion on Claude. On Codex, ask the same Yes/No / multiple-choice questions inline in the main Codex thread per the adapter contract above (Tool mapping table).
 
 </process>
 

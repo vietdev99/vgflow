@@ -4,7 +4,7 @@ Closes 5 gaps from Codex audit (PR #N):
 1. /vg:update reads .vg/.install-target marker
 2. When marker=global: refresh ~/.vgflow/ via git pull or npm install -g
 3. After global refresh: re-install hooks at ~/.claude/settings.json --mode global
-4. After global refresh: clean up stale .claude/{commands/vg, skills/vg-*, scripts, schemas, templates/vg}
+4. After global refresh: clean up stale project-local VG-owned Claude/Codex surfaces
 5. Project-mode rotate-and-repair passes --mode matching marker (default project)
 """
 from __future__ import annotations
@@ -64,20 +64,34 @@ def test_marker_branch_reinstalls_hooks_with_mode_global():
 
 def test_marker_branch_cleans_stale_project_local_dirs():
     body = PREFLIGHT.read_text(encoding="utf-8")
+    helper = (REPO_ROOT / "scripts" / "vg_uninstall.py").read_text(encoding="utf-8")
     for d in (
         ".claude/commands/vg",
         ".claude/scripts",
         ".claude/schemas",
         ".claude/templates/vg",
     ):
-        assert d in body, f"stale cleanup must enumerate: {d}"
-    assert ".claude/skills/vg-*" in body, "stale cleanup must include skills/vg-* glob"
+        assert d in helper, f"stale cleanup helper must enumerate: {d}"
+    assert "vg_uninstall.py" in body, "global cleanup must use canonical uninstall helper"
+    assert "api-contract, flow-*, test-*" in body, (
+        "global cleanup must include non-vg support skill removal"
+    )
+
+
+def test_marker_branch_refreshes_global_codex_before_exit():
+    body = PREFLIGHT.read_text(encoding="utf-8")
+    assert "${HOME_VGFLOW}/codex-skills" in body
+    assert "${HOME}/.codex/skills" in body
+    assert "global Codex refreshed" in body
 
 
 def test_marker_branch_backs_up_before_cleanup():
     body = PREFLIGHT.read_text(encoding="utf-8")
-    assert "STALE_BACKUP=" in body
-    assert ".vg/.backup-" in body, "stale cleanup must backup to .vg/.backup-<ts>-stale-cleanup"
+    helper = (REPO_ROOT / "scripts" / "vg_uninstall.py").read_text(encoding="utf-8")
+    assert "vg_uninstall.py" in body
+    assert ".vgflow-uninstall-backup" in helper, (
+        "stale cleanup helper must backup removed files"
+    )
 
 
 def test_marker_branch_exits_after_global_path():

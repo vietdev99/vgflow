@@ -149,12 +149,6 @@ orchestrator and only delegates read-only classification after snapshots are
 captured. This preserves MCP access and avoids false confidence from a child
 process that cannot see browser tools.
 
-### Codex runtime note (consolidate-all)
-
-This subcommand is pure Python script invocation — no Codex/Claude
-divergence. The same `bootstrap-consolidate.py --consolidate-all`
-command works identically under both adapters.
-
 ## Invocation
 
 Invoke this skill as `$vg-learn`. Treat all user text after the skill name as arguments.

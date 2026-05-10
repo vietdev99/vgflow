@@ -38,7 +38,6 @@ HOOK_SCRIPT_MARKERS = (
 
 CLAUDE_PATHS = (
     ".claude/commands/vg",
-    ".claude/skills",
     ".claude/scripts",
     ".claude/schemas",
     ".claude/templates/vg",
@@ -63,6 +62,9 @@ CODEX_SKILL_EXACT = {
     "sandbox-test",
     "write-test-spec",
 }
+
+CLAUDE_SKILL_PREFIXES = CODEX_SKILL_PREFIXES
+CLAUDE_SKILL_EXACT = CODEX_SKILL_EXACT
 
 CODEX_AGENT_PREFIXES = (
     "vgflow-",
@@ -174,6 +176,15 @@ def _remove_agent_entries_from_toml(config_path: Path, *, apply: bool) -> bool:
 
 def _collect_paths(root: Path, purge_state: bool) -> list[Path]:
     paths = [root / rel for rel in (*CLAUDE_PATHS, *CODEX_PATHS, *ROOT_FILES)]
+
+    claude_skills = root / ".claude" / "skills"
+    if claude_skills.exists():
+        for child in claude_skills.iterdir():
+            if not child.is_dir():
+                continue
+            name = child.name
+            if name in CLAUDE_SKILL_EXACT or any(name.startswith(p) for p in CLAUDE_SKILL_PREFIXES):
+                paths.append(child)
 
     claude_agents = root / ".claude" / "agents"
     if claude_agents.exists():

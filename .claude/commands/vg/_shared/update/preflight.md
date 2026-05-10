@@ -111,38 +111,71 @@ if [ "$INSTALL_TARGET" = "global" ]; then
     fi
   fi
 
-  # Clean up stale project-local files that should not exist in global mode.
-  # Backup first to .vg/.backup-<ts>/ in case user wants to revert.
-  STALE_TS="$(date -u +%Y%m%dT%H%M%SZ)"
-  STALE_BACKUP="${REPO_ROOT}/.vg/.backup-${STALE_TS}-stale-cleanup"
-  STALE_FOUND=0
-  for d in ".claude/commands/vg" ".claude/scripts" ".claude/schemas" ".claude/templates/vg"; do
-    if [ -d "${REPO_ROOT}/${d}" ]; then
-      STALE_FOUND=$((STALE_FOUND + 1))
+  # Refresh global Codex skills/agents from the updated global harness.
+  # The global update branch exits before sync-and-report, so it must keep
+  # ~/.codex current here instead of relying on the later Codex deploy step.
+  CODEX_DEPLOYED=0
+  if [ -d "${HOME_VGFLOW}/codex-skills" ]; then
+    mkdir -p "${HOME}/.codex/skills" "${HOME}/.codex/agents"
+    while IFS= read -r skill_dir; do
+      [ -f "$skill_dir/SKILL.md" ] || continue
+      skill="$(basename "$skill_dir")"
+      rm -rf "${HOME}/.codex/skills/${skill}"
+      mkdir -p "${HOME}/.codex/skills/${skill}"
+      cp -R "$skill_dir"/. "${HOME}/.codex/skills/${skill}/"
+      CODEX_DEPLOYED=$((CODEX_DEPLOYED + 1))
+    done < <(find "${HOME_VGFLOW}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+    if [ -d "${HOME_VGFLOW}/templates/codex-agents" ]; then
+      cp "${HOME_VGFLOW}/templates/codex-agents/"*.toml "${HOME}/.codex/agents/" 2>/dev/null || true
+    fi
+    CODEX_CONFIG="${HOME}/.codex/config.toml"
+    touch "$CODEX_CONFIG"
+    codex_config_path() {
+      local path="$1"
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$path"
+      else
+        printf '%s\n' "$path"
+      fi
+    }
+    register_codex_agent() {
+      local name="$1"
+      local desc="$2"
+      local config_file
+      config_file="$(codex_config_path "${HOME}/.codex/agents/${name}.toml")"
+      if ! grep -q "^\[agents\.${name}\]" "$CODEX_CONFIG" 2>/dev/null; then
+        cat >> "$CODEX_CONFIG" <<EOF
+
+[agents.${name}]
+description = "${desc}"
+config_file = "${config_file}"
+EOF
+      fi
+    }
+    register_codex_agent "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+    register_codex_agent "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
+    register_codex_agent "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+    echo "  ✓ global Codex refreshed (${CODEX_DEPLOYED} skill dirs)"
+  fi
+
+  # Clean project-local Claude/Codex VG surfaces. This must remove all
+  # VG-owned support skills too (api-contract, flow-*, test-*, etc.), not
+  # only .claude/skills/vg-*.
+  UNINSTALL_HELPER=""
+  for candidate in \
+    "${HOME_VGFLOW}/scripts/vg_uninstall.py" \
+    "${REPO_ROOT}/.claude/scripts/vg_uninstall.py"; do
+    if [ -f "$candidate" ]; then
+      UNINSTALL_HELPER="$candidate"
+      break
     fi
   done
-  for d in "${REPO_ROOT}"/.claude/skills/vg-*; do
-    [ -d "$d" ] && STALE_FOUND=$((STALE_FOUND + 1))
-  done
-
-  if [ "$STALE_FOUND" -gt 0 ]; then
-    echo "  Cleaning ${STALE_FOUND} stale project-local dir(s) (backup → ${STALE_BACKUP})..."
-    mkdir -p "$STALE_BACKUP"
-    for d in ".claude/commands/vg" ".claude/scripts" ".claude/schemas" ".claude/templates/vg"; do
-      if [ -d "${REPO_ROOT}/${d}" ]; then
-        mkdir -p "$(dirname "${STALE_BACKUP}/${d}")"
-        mv "${REPO_ROOT}/${d}" "${STALE_BACKUP}/${d}" 2>/dev/null || true
-        echo "    moved ${d} → backup"
-      fi
-    done
-    for d in "${REPO_ROOT}"/.claude/skills/vg-*; do
-      [ -d "$d" ] || continue
-      base="$(basename "$d")"
-      mkdir -p "${STALE_BACKUP}/.claude/skills"
-      mv "$d" "${STALE_BACKUP}/.claude/skills/${base}" 2>/dev/null || true
-      echo "    moved .claude/skills/${base} → backup"
-    done
-    echo "  ✓ stale cleanup done. Recover via: cp -r ${STALE_BACKUP}/* ${REPO_ROOT}/"
+  if [ -n "$UNINSTALL_HELPER" ]; then
+    echo "  Cleaning stale project-local VG files via vg_uninstall.py..."
+    python3 "$UNINSTALL_HELPER" --root "$REPO_ROOT" --apply
+    echo "  ✓ stale project-local VG cleanup done"
+  else
+    echo "  ⚠ vg_uninstall.py not found — stale project-local VG files may remain"
   fi
 
   # Bump VGFLOW-VERSION marker for global mode tracking

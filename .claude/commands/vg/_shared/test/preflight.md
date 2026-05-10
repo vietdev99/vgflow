@@ -265,6 +265,24 @@ if [ -f "$CRUD_DEPTH_VAL" ]; then
   fi
 fi
 
+# Lifecycle spec-depth gate: mutation/multi-actor goals need closed-loop
+# fixture dependency specs before codegen/replay. RUNTIME-MAP depth proves
+# review observed a flow; this gate proves /vg:test has enough fixture DAG,
+# actor, artifact-capture, and cleanup information to generate a real test.
+LIFECYCLE_DEPTH_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-lifecycle-spec-depth.py"
+if [ -f "$LIFECYCLE_DEPTH_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp"
+  "${PYTHON_BIN:-python3}" "$LIFECYCLE_DEPTH_VAL" --phase "${PHASE_NUMBER}" \
+    > "${PHASE_DIR}/.tmp/lifecycle-spec-depth-test.json" 2>&1
+  LIFECYCLE_DEPTH_RC=$?
+  if [ "$LIFECYCLE_DEPTH_RC" != "0" ]; then
+    echo "⛔ Lifecycle spec-depth gate failed — see ${PHASE_DIR}/.tmp/lifecycle-spec-depth-test.json"
+    echo "   Mutation/multi-actor goals need LIFECYCLE-SPECS.json with fixture_dag, actors, full RCRURDR stages, artifact_capture when applicable, and cleanup."
+    echo "   Repair blueprint/test goals before /vg:test can generate closed-loop lifecycle specs."
+    exit 1
+  fi
+fi
+
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_parse_and_validate 2>/dev/null || true

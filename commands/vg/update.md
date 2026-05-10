@@ -94,7 +94,7 @@ Step coverage: 8_sync_codex, 8b_repair_playwright_mcp, 8c_ensure_graphify, 9_rep
 - Major-version bump blocked unless `--accept-breaking` is passed AND migration doc displayed.
 - `.claude/VGFLOW-VERSION` bumped to `${LATEST}`; old `vgflow-ancestor/v{INSTALLED}` removed; new `vgflow-ancestor/v{LATEST}` populated.
 - Claude Code hooks are installed/repaired after update (`UserPromptSubmit`, `Stop`, `PostToolUse` edit warning, `PostToolUse` Bash step tracker).
-- Project-local Codex mirrors in `.codex/skills` and `.codex/agents` are refreshed directly from the updated release assets. Global `~/.codex` deploy is OFF by default (matches `install.sh` + `sync.sh` convention); opt in via `VG_UPDATE_GLOBAL_CODEX=1 /vg:update` when global Codex install is desired.
+- Project-local Codex mirrors in `.codex/skills` and `.codex/agents` follow `VG_UPDATE_PROJECT_CODEX`: `auto` means auto-detect prior project install, `1` forces deploy, `0` skips. Global `~/.codex` mirrors follow `VG_UPDATE_GLOBAL_CODEX` with the same auto-detect prior install semantics.
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Playwright MCP workers are verified/repaired after update for both Claude and Codex (`playwright1`..`playwright5`) and stale hardcoded lock scripts are replaced.
 - Graphify tooling is verified/repaired after update when `graphify.enabled=true`; missing package installs `graphifyy[mcp]`, `.mcp.json` is repaired, and `.graphifyignore` / `.gitignore` are maintained.

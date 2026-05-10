@@ -236,6 +236,62 @@ Each goal:
     Mutation goals WITHOUT this structured block fail Rule 3b extended →
     blueprint BLOCKED. The unstructured **Persistence check:** prose still
     required for human readability, but the YAML block is the machine contract.
+3d. **Closed-loop lifecycle specs (REQUIRED for side-effecting or multi-actor goals).**
+    Generate `${PHASE_DIR}/LIFECYCLE-SPECS.json` for every goal whose title,
+    goal_type, mutation evidence, persistence check, or dependencies imply a
+    state change, role switch, invite/accept, token/email artifact, realtime
+    emission, or CRUD lifecycle. If no goal needs lifecycle handling, still
+    write `{"schema_version":"1.0","goals":{}}`.
+
+    Shape:
+    ```json
+    {
+      "schema_version": "1.0",
+      "goals": {
+        "G-56": {
+          "actors": [
+            {"id": "owner", "role": "owner", "session": "owner_session"},
+            {"id": "invitee", "role": "invitee", "session": "invitee_session"}
+          ],
+          "fixture_dag": [
+            {"id": "owner_user", "kind": "user", "depends_on": [], "cleanup": "delete"},
+            {"id": "invitee_user", "kind": "user", "depends_on": [], "cleanup": "delete"}
+          ],
+          "preconditions": [
+            {"id": "owner_authenticated", "assert": "owner session can access resource"},
+            {"id": "invitee_absent", "assert": "invitee is not already active member"}
+          ],
+          "steps": [
+            {"stage": "read_before", "actor": "owner", "assertions": ["baseline state recorded"]},
+            {"stage": "create", "actor": "owner", "action": "perform create/invite/submit"},
+            {"stage": "read_after_create", "actor": "owner", "assertions": ["created state visible"]},
+            {"stage": "update", "actor": "owner", "action": "patch/edit/role-change"},
+            {"stage": "read_after_update", "actor": "owner", "assertions": ["updated state persisted"]},
+            {"stage": "delete", "actor": "owner", "action": "delete/revoke/cancel"},
+            {"stage": "read_after_delete", "actor": "owner", "assertions": ["deleted/revoked state enforced"]}
+          ],
+          "artifact_capture": [
+            {"id": "invite_token", "source": "email_or_test_inbox", "consumer_step": "create"}
+          ],
+          "cleanup": [
+            {"target": "owner_user", "action": "delete"},
+            {"target": "invitee_user", "action": "delete"}
+          ]
+        }
+      }
+    }
+    ```
+
+    Rules:
+    - `fixture_dag[]` must model prerequisite order, not only test data names.
+    - Multi-actor goals must list each actor/session explicitly.
+    - Email/token/websocket/realtime/invite/notification/callback flows need
+      `artifact_capture[]` showing how the emitted artifact is captured and
+      consumed.
+    - `read_before` must reflect domain truth. Do not assert empty baselines
+      unless contracts prove emptiness; assert "target entity absent" instead
+      when owners/default rows should exist.
+    - `cleanup[]` must remove or revoke every test-owned fixture/resource.
 4. Dependencies reference goal IDs (G-XX).
 5. Priority assignment (deterministic, evaluate in order):
    a. Endpoints matching config `routing.critical_goal_domains`

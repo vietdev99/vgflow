@@ -39,6 +39,94 @@ Issues:        https://github.com/vietdev99/vgflow/issues
 EOF
 }
 
+ensure_home_vgflow() {
+  local home_vgflow="${HOME}/.vgflow"
+
+  if [ -e "$home_vgflow" ] && [ ! -L "$home_vgflow" ]; then
+    local home_real vg_real
+    home_real="$(cd "$home_vgflow" 2>/dev/null && pwd -P || true)"
+    vg_real="$(cd "$VG_HOME" 2>/dev/null && pwd -P || true)"
+    if [ -n "$home_real" ] && [ "$home_real" = "$vg_real" ]; then
+      return 0
+    fi
+    echo "vgflow: ~/.vgflow exists and is not this install; leaving it in place (${home_vgflow})"
+    return 0
+  fi
+
+  mkdir -p "${HOME}"
+  ln -sfn "$VG_HOME" "$home_vgflow"
+  echo "vgflow: linked ~/.vgflow -> ${VG_HOME}"
+}
+
+run_project_uninstall_helper() {
+  local project_root="$1"
+  local py=""
+  for cand in python3 python py; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      py="$cand"
+      break
+    fi
+  done
+  if [ -z "$py" ] || [ ! -f "${VG_HOME}/scripts/vg_uninstall.py" ]; then
+    echo "vgflow: project cleanup helper unavailable; skipping project-local file cleanup"
+    return 0
+  fi
+  "$py" "${VG_HOME}/scripts/vg_uninstall.py" --root "$project_root" --apply
+}
+
+codex_config_path() {
+  local path="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+register_global_codex_agent() {
+  local name="$1"
+  local desc="$2"
+  local config="$HOME/.codex/config.toml"
+  local config_file
+  mkdir -p "$HOME/.codex"
+  touch "$config"
+  config_file="$(codex_config_path "$HOME/.codex/agents/${name}.toml")"
+  if ! grep -q "^\[agents\.${name}\]" "$config" 2>/dev/null; then
+    cat >> "$config" <<EOF
+
+[agents.${name}]
+description = "${desc}"
+config_file = "${config_file}"
+EOF
+  fi
+}
+
+refresh_global_codex() {
+  local skills_src="${VG_HOME}/codex-skills"
+  local agents_src="${VG_HOME}/templates/codex-agents"
+  local deployed=0
+
+  mkdir -p "$HOME/.codex/skills" "$HOME/.codex/agents"
+  if [ -d "$skills_src" ]; then
+    while IFS= read -r skill_dir; do
+      [ -f "$skill_dir/SKILL.md" ] || continue
+      local skill
+      skill="$(basename "$skill_dir")"
+      rm -rf "$HOME/.codex/skills/$skill"
+      mkdir -p "$HOME/.codex/skills/$skill"
+      cp -R "$skill_dir"/. "$HOME/.codex/skills/$skill/"
+      deployed=$((deployed + 1))
+    done < <(find "$skills_src" -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
+  if [ -d "$agents_src" ]; then
+    cp "$agents_src/"*.toml "$HOME/.codex/agents/" 2>/dev/null || true
+  fi
+  register_global_codex_agent "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+  register_global_codex_agent "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
+  register_global_codex_agent "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+  echo "vgflow: refreshed ${deployed} global Codex skill(s) in ~/.codex/skills"
+}
+
 cmd="${1:-help}"
 shift || true
 
@@ -67,6 +155,9 @@ case "$cmd" in
     done
     project_root="$(pwd)"
     if [ "$target" = "global" ]; then
+      ensure_home_vgflow
+      run_project_uninstall_helper "$project_root"
+      refresh_global_codex
       bash "${VG_HOME}/scripts/hooks/install-hooks.sh" \
         --target "${HOME}/.claude/settings.json" \
         --mode global
@@ -104,6 +195,15 @@ case "$cmd" in
       echo "vgflow: VG_HOME=${VG_HOME} is not a git clone and npm not on PATH." >&2
       echo "  Install npm or re-clone: git clone https://github.com/vietdev99/vgflow ${VG_HOME}" >&2
       exit 1
+    fi
+    ensure_home_vgflow
+    refresh_global_codex
+    if [ -f ".vg/.install-target" ] && [ "$(tr -d '[:space:]' < .vg/.install-target 2>/dev/null || true)" = "global" ]; then
+      run_project_uninstall_helper "$(pwd)"
+      bash "${VG_HOME}/scripts/hooks/install-hooks.sh" \
+        --target "${HOME}/.claude/settings.json" \
+        --mode global
+      echo "vgflow: global hooks refreshed and project-local VG files pruned"
     fi
     ;;
 
@@ -153,6 +253,13 @@ case "$cmd" in
       settings="$(pwd)/.claude/settings.json"
     fi
     if [ ! -f "$settings" ]; then
+      if [ "$target" = "project" ]; then
+        run_project_uninstall_helper "$(pwd)"
+        if [ -f ".vg/.install-target" ]; then
+          rm -f ".vg/.install-target"
+          echo "vgflow: removed .vg/.install-target (run 'vg install' to re-attach)"
+        fi
+      fi
       echo "vgflow: nothing to uninstall — ${settings} does not exist"
       exit 0
     fi
@@ -190,9 +297,12 @@ target.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 print(f"vgflow: removed {removed} VG hook entr{'y' if removed == 1 else 'ies'} from {target}")
 PY
     echo "vgflow: backup saved at ${backup}"
-    if [ "$target" = "project" ] && [ -f ".vg/.install-target" ]; then
-      rm -f ".vg/.install-target"
-      echo "vgflow: removed .vg/.install-target (run 'vg install' to re-attach)"
+    if [ "$target" = "project" ]; then
+      run_project_uninstall_helper "$(pwd)"
+      if [ -f ".vg/.install-target" ]; then
+        rm -f ".vg/.install-target"
+        echo "vgflow: removed .vg/.install-target (run 'vg install' to re-attach)"
+      fi
     fi
     ;;
 

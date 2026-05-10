@@ -58,6 +58,15 @@ def _make_project(tmp_path: Path) -> tuple[Path, Path]:
 
 def test_install_global_writes_marker_and_global_paths(tmp_path):
     proj, fake_home = _make_project(tmp_path)
+    (proj / ".claude" / "commands" / "vg").mkdir(parents=True)
+    (proj / ".claude" / "commands" / "vg" / "build.md").write_text("stale", encoding="utf-8")
+    (proj / ".claude" / "skills" / "api-contract").mkdir(parents=True)
+    (proj / ".claude" / "skills" / "api-contract" / "SKILL.md").write_text("stale", encoding="utf-8")
+    (proj / ".claude" / "skills" / "custom-skill").mkdir(parents=True)
+    (proj / ".claude" / "skills" / "custom-skill" / "SKILL.md").write_text("keep", encoding="utf-8")
+    (proj / ".codex" / "skills" / "vg-update").mkdir(parents=True)
+    (proj / ".codex" / "skills" / "vg-update" / "SKILL.md").write_text("stale", encoding="utf-8")
+
     rc, out, err = _run_dispatcher(["install", "--global"], proj, fake_home)
     assert rc == 0, f"err={err}"
     settings = fake_home / ".claude" / "settings.json"
@@ -68,6 +77,12 @@ def test_install_global_writes_marker_and_global_paths(tmp_path):
     assert "$HOME/.vgflow/scripts/hooks/" in cmd
     marker = proj / ".vg" / ".install-target"
     assert marker.exists() and marker.read_text(encoding="utf-8").strip() == "global"
+    assert (fake_home / ".vgflow").is_symlink()
+    assert (fake_home / ".codex" / "skills" / "vg-update" / "SKILL.md").exists()
+    assert not (proj / ".claude" / "commands" / "vg").exists()
+    assert not (proj / ".claude" / "skills" / "api-contract").exists()
+    assert not (proj / ".codex" / "skills" / "vg-update").exists()
+    assert (proj / ".claude" / "skills" / "custom-skill" / "SKILL.md").read_text(encoding="utf-8") == "keep"
 
 
 def test_install_project_writes_marker_and_project_paths(tmp_path):
@@ -88,6 +103,10 @@ def test_uninstall_project_removes_hooks_and_marker(tmp_path):
     proj, fake_home = _make_project(tmp_path)
     # Install first
     _run_dispatcher(["install", "--project"], proj, fake_home)
+    (proj / ".claude" / "commands" / "vg").mkdir(parents=True)
+    (proj / ".claude" / "commands" / "vg" / "build.md").write_text("stale", encoding="utf-8")
+    (proj / ".codex" / "skills" / "vg-build").mkdir(parents=True)
+    (proj / ".codex" / "skills" / "vg-build" / "SKILL.md").write_text("stale", encoding="utf-8")
     settings = proj / ".claude" / "settings.json"
     before = json.loads(settings.read_text(encoding="utf-8"))
     assert any(
@@ -109,6 +128,8 @@ def test_uninstall_project_removes_hooks_and_marker(tmp_path):
     assert not (proj / ".vg" / ".install-target").exists(), (
         "project marker should be removed"
     )
+    assert not (proj / ".claude" / "commands" / "vg").exists()
+    assert not (proj / ".codex" / "skills" / "vg-build").exists()
     # Backup file must exist
     backups = list((proj / ".claude").glob("settings.json.bak.*"))
     assert len(backups) == 1, f"expected 1 backup; got {backups}"
