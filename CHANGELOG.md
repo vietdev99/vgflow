@@ -1,5 +1,79 @@
 # Changelog
 
+## v3.6.0 — Issue #173 Stage 6 / #169: Codex adapter telemetry parity (2026-05-11)
+
+### Bug — Codex skipped lifecycle event emission, forced manual repair
+
+GitHub Issue #169 (`gate_loop sig 2fabd531`): Codex `vg-review` Phase 6 run-complete blocked because Codex adapter did NOT auto-emit `phase3d_5_qa_checker` + `review.completed` + `recursive_probe` telemetry. Operator had to manually inject events via raw db writes before the contract validator would accept the run.
+
+Root cause: the markdown command bodies (e.g. `commands/vg/_shared/review/close.md`) ended with explicit bash blocks:
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.completed" --payload "..."
+```
+Claude's bash sandbox + step-active gates kept these blocks visible and reliable. Codex's runtime tended to skip them when context pressure rose — the marker file got touched (via `mark-step`) but the matching lifecycle event never landed.
+
+This is **#173 acceptance criterion E**:
+> *Codex/Claude adapters should not require manual telemetry repair. If events are missing: emit mandatory lifecycle events automatically from step markers, or fail with one exact repair command.*
+
+### Fix — two layers, adapter-agnostic
+
+**Layer 1 (proactive) — `mark-step` auto-emits lifecycle events:**
+
+`scripts/vg-orchestrator/__main__.py` now declares `MARKER_TO_AUTO_EVENT`:
+
+| (namespace, step_name) | Event auto-emitted |
+|---|---|
+| `(build, complete)` | `build.completed` |
+| `(review, complete)` | `review.completed` |
+| `(test, complete)` | `test.completed` |
+| `(accept, complete)` | `accept.completed` |
+| `(blueprint, complete)` | `blueprint.completed` |
+| `(deploy, complete)` | `deploy.completed` |
+| `(next, complete)` | `next.completed` |
+| `(review, phase3d_5_qa_checker)` | `review.qa_check_completed` |
+| `(review, phase2_5_recursive_lens_probe)` | `review.recursive_probe_completed` |
+| `(review, phase2c_pre_dispatch_gates)` | `review.pre_dispatch_passed` |
+| `(review, phase4_goal_comparison)` | `review.goal_comparison_completed` |
+
+`cmd_mark_step()` looks up the marker, probes events.db (`_has_event_for_run`) for idempotency, and appends the lifecycle event with `auto_emitted: true, trigger_marker: <step>` payload if it's not already present. Works for both Claude (where explicit emit also fires — second call no-ops via idempotency) and Codex (where the auto-emit IS the only source).
+
+**Layer 2 (reactive) — `vg-orchestrator-telemetry-repair.py` repair script:**
+
+For legacy phases / pre-v3.6.0 events.db, the standalone script scans `.step-markers/` and `.vg/events.db`, identifies missing events, and emits them with `auto_emitted: true, repaired: true, source: vg-orchestrator-telemetry-repair`. Modes:
+
+- `--check` → exit 1 if repair needed (CI-friendly probe)
+- `--dry-run` → print missing events, write nothing
+- `--json` → machine-readable diagnostic
+
+### Compatibility
+- `commands/vg/_shared/review/close.md` still explicitly emits `review.completed` — the auto-emit is the fallback safety net, not a replacement. Older harness installs that haven't rebased onto v3.6.0 continue to work.
+- Idempotency guarantees no double-emission: if `close.md`'s explicit emit fires first, mark-step's auto-emit detects the existing event and skips.
+- Legacy events.db files (phases reviewed before v3.6.0) can be repaired with one command:
+  ```
+  python scripts/vg-orchestrator-telemetry-repair.py --phase <N>
+  ```
+
+### Test coverage
+8 tests in `tests/test_v3_6_codex_telemetry_parity.py` (all platforms, all pass):
+- `MARKER_TO_AUTO_EVENT` mapping covers all 11 required events
+- `cmd_mark_step` references the mapping + idempotency probe + sets `auto_emitted: true`
+- `_has_event_for_run` defined
+- canonical/mirror byte-identity for `__main__.py`
+- telemetry-repair script exists with `--check` / `--dry-run` / `--json`
+- repair script mapping matches orchestrator mapping (no divergence)
+- canonical/mirror byte-identity for repair script
+- `close.md` still emits `review.completed` (proves auto-emit is fallback, not replacement)
+
+### Closes
+- **Issue #169** — gate_loop signature 2fabd531 from Codex review-contract-close-missing-codex-parity-events.
+- **Issue #173** — six-stage workflow hardening for UI-heavy phases. All six stages shipped:
+  - Stage 1 (v3.1.0): matrix taxonomy
+  - Stage 2 (v3.2.0): UI-RUNTIME-CONTRACT.md emission
+  - Stage 3 (v3.3.0): build pre-test-gate consumes contract
+  - Stage 4 (v3.4.0): review route inventory hard-block
+  - Stage 5 (v3.5.0): /vg:test codegen auto-route + contract consumption
+  - Stage 6 (this release): Codex telemetry parity
+
 ## v3.5.0 — Issue #173 Stage 5: /vg:test codegen auto-route + UI-RUNTIME-CONTRACT consumption (2026-05-11)
 
 ### Bug — TEST_SPEC_MISSING goals had no automatic next-action surface

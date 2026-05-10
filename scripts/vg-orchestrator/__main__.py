@@ -1750,6 +1750,47 @@ def cmd_emit_crossai_terminal(args) -> int:
     return 0
 
 
+# v3.6.0 (#173 Stage 6 / #169) — marker → lifecycle event auto-emission.
+#
+# Issue #169 root cause: Codex adapter relied on bash blocks in close.md / etc.
+# to call `vg-orchestrator emit-event review.completed` after touching the
+# terminal step marker. If Codex skipped the bash block (or the LLM lost
+# focus), the marker existed but the event didn't — run-complete contract
+# violation, manual telemetry repair required.
+#
+# Fix: when mark-step is called for a known terminal step, AUTO-emit the
+# corresponding `.completed` (or related lifecycle) event in the same
+# transaction. Idempotent — only fires if the event hasn't been emitted
+# for this run yet. Works for both Claude and Codex without adapter-side
+# wiring.
+#
+# Mapping: (namespace, step_name) → (event_type, outcome)
+MARKER_TO_AUTO_EVENT: dict[tuple[str, str], tuple[str, str]] = {
+    # Terminal step markers across the 7 lifecycle commands.
+    ("build", "complete"): ("build.completed", "INFO"),
+    ("review", "complete"): ("review.completed", "INFO"),
+    ("test", "complete"): ("test.completed", "INFO"),
+    ("accept", "complete"): ("accept.completed", "INFO"),
+    ("blueprint", "complete"): ("blueprint.completed", "INFO"),
+    ("deploy", "complete"): ("deploy.completed", "INFO"),
+    ("next", "complete"): ("next.completed", "INFO"),
+    # Mid-pipeline parity events flagged in #169.
+    ("review", "phase3d_5_qa_checker"): ("review.qa_check_completed", "INFO"),
+    ("review", "phase2_5_recursive_lens_probe"): ("review.recursive_probe_completed", "INFO"),
+    ("review", "phase2c_pre_dispatch_gates"): ("review.pre_dispatch_passed", "INFO"),
+    ("review", "phase4_goal_comparison"): ("review.goal_comparison_completed", "INFO"),
+}
+
+
+def _has_event_for_run(run_id: str, event_type: str) -> bool:
+    """Idempotency probe — returns True if event already in db for this run."""
+    try:
+        rows = db.query_events(run_id=run_id, event_type=event_type, limit=1)
+        return bool(rows)
+    except Exception:
+        return False
+
+
 def cmd_mark_step(args) -> int:
     current = state_mod.read_current_run()
     if not current:
@@ -1789,6 +1830,34 @@ def cmd_mark_step(args) -> int:
         step=args.step_name,
         payload={"namespace": args.namespace, "marker": str(marker)},
     )
+
+    # v3.6.0 (#173 Stage 6 / #169) — auto-emit lifecycle event for known
+    # terminal/mid steps. Idempotent: skip when already emitted (prevents
+    # double-emission when both bash close.md and mark-step fire it).
+    auto_key = (args.namespace, args.step_name)
+    if auto_key in MARKER_TO_AUTO_EVENT:
+        ev_type, outcome = MARKER_TO_AUTO_EVENT[auto_key]
+        if not _has_event_for_run(current["run_id"], ev_type):
+            try:
+                db.append_event(
+                    run_id=current["run_id"],
+                    event_type=ev_type,
+                    phase=current["phase"],
+                    command=current["command"],
+                    actor="orchestrator",
+                    outcome=outcome,
+                    payload={
+                        "auto_emitted": True,
+                        "trigger_marker": args.step_name,
+                        "trigger_namespace": args.namespace,
+                    },
+                )
+            except Exception as exc:
+                print(
+                    f"\033[33mwarn: auto-emit {ev_type} failed: {exc}\033[0m",
+                    file=sys.stderr,
+                )
+
     if current.get("active_step") == args.step_name:
         current.pop("active_step", None)
         current.pop("active_step_at", None)
