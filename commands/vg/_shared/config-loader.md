@@ -33,10 +33,10 @@ VG_TMP="${TMPDIR:-/tmp}"
 mkdir -p "$VG_TMP" 2>/dev/null
 
 # --- Graphify detection (single source of truth) ---
-GRAPHIFY_ENABLED=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /enabled:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "false")
+GRAPHIFY_ENABLED=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /enabled:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "false")
 
 # graph_path from config, then resolve to absolute via $REPO_ROOT
-GRAPH_REL=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /graph_path:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r')
+GRAPH_REL=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /graph_path:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r')
 GRAPH_REL="${GRAPH_REL:-graphify-out/graph.json}"
 if [[ "$GRAPH_REL" = /* ]] || [[ "$GRAPH_REL" =~ ^[A-Za-z]: ]]; then
   GRAPHIFY_GRAPH_PATH="$GRAPH_REL"   # already absolute
@@ -44,11 +44,11 @@ else
   GRAPHIFY_GRAPH_PATH="${REPO_ROOT}/${GRAPH_REL}"
 fi
 
-GRAPHIFY_FALLBACK=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /fallback_to_grep:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "true")
-GRAPHIFY_STALE_WARN=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /staleness_warn_commits:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '\r' || echo "50")
+GRAPHIFY_FALLBACK=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /fallback_to_grep:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "true")
+GRAPHIFY_STALE_WARN=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /staleness_warn_commits:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '\r' || echo "50")
 
 GRAPHIFY_ACTIVE="false"
-GRAPHIFY_BLOCK_ON_STALE=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /block_on_stale:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "false")
+GRAPHIFY_BLOCK_ON_STALE=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /block_on_stale:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "false")
 if [ "$GRAPHIFY_ENABLED" = "true" ] && [ -f "$GRAPHIFY_GRAPH_PATH" ]; then
   GRAPH_BUILD_EPOCH=$(stat -c %Y "$GRAPHIFY_GRAPH_PATH" 2>/dev/null || stat -f %m "$GRAPHIFY_GRAPH_PATH" 2>/dev/null)
   if [ -n "$GRAPH_BUILD_EPOCH" ]; then
@@ -112,25 +112,44 @@ fi
 ```bash
 # --- Model selection (per pipeline role) ---
 # Parse models section from config. Commands use these to set Agent model: parameter.
-MODEL_PLANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /planner:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "opus")
-MODEL_CONTRACT_GEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /contract_gen:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
-MODEL_TEST_GOALS=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_goals:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
-MODEL_EXECUTOR=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /executor:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
-MODEL_DEBUGGER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /debugger:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "opus")
-MODEL_SCANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /scanner:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "haiku")
-MODEL_TEST_CODEGEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_codegen:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"\r' || echo "sonnet")
+MODEL_PLANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /planner:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "opus")
+MODEL_CONTRACT_GEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /contract_gen:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "sonnet")
+MODEL_TEST_GOALS=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_goals:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "sonnet")
+MODEL_EXECUTOR=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /executor:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "sonnet")
+MODEL_DEBUGGER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /debugger:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "opus")
+MODEL_SCANNER=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /scanner:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "haiku")
+MODEL_TEST_CODEGEN=$(awk '/^models:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /test_codegen:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "sonnet")
 ```
 
 After sourcing: all bash blocks MUST use `${PYTHON_BIN}`, `${VG_TMP}/`, `${REPO_ROOT}`, `${GRAPHIFY_GRAPH_PATH}`, `${GRAPHIFY_ACTIVE}`, and model variables `${MODEL_PLANNER}`, `${MODEL_EXECUTOR}`, etc. (instead of duplicating detection logic).
 
 ## How to Load Config
 
-1. **Read** `.claude/vg.config.md` — parse YAML frontmatter into variables
-2. **If file missing** → STOP: "Config not found. Run `/vg:init` to create `.claude/vg.config.md`"
+1. **Resolve config path** — v2.84.0 dual-mode lookup (v3 layout first, legacy fallback):
+   - **NEW v3 layout:** `.vg/config.md` (post `vg-migrate-v3.sh` migration)
+   - **LEGACY:** `.claude/vg.config.md` (v2.x project-local install)
+2. **If neither exists** → STOP: "Config not found. Run `/vg:init` to create config."
 
 ### BOM Strip + Required Field Validation
 
 ```bash
+# v2.84.0 Stage 7 critical: dual-mode config path resolution.
+# Post `vg-migrate-v3.sh` migration, vg.config.md moves to .vg/config.md
+# (vg. prefix dropped inside .vg/ — see resolve_vg_doc()). Legacy projects
+# still have .claude/vg.config.md. Probe both, prefer new layout.
+VG_CONFIG_PATH=""
+for candidate in ".vg/config.md" ".claude/vg.config.md"; do
+  if [ -f "$candidate" ]; then
+    VG_CONFIG_PATH="$candidate"
+    break
+  fi
+done
+if [ -z "$VG_CONFIG_PATH" ]; then
+  echo "⛔ CONFIG ERROR: neither .vg/config.md nor .claude/vg.config.md found."
+  echo "  Run /vg:init to generate config."
+  exit 1
+fi
+
 # Strip BOM + CRLF (Windows editors may add UTF-8 BOM and CR line endings)
 # — tightened 2026-04-17, CR strip added 2026-05-02 (Issue #88).
 # Write stripped content to a clean temp file so downstream parsers can use it.
@@ -139,13 +158,13 @@ After sourcing: all bash blocks MUST use `${PYTHON_BIN}`, `${VG_TMP}/`, `${REPO_
 # with embedded \r — e.g. PLANNING_DIR=".vg\r" → resolve_phase_dir looked for
 # `.vg\r/phases/<phase>` which never exists → BLOCK on every Codex review.
 CONFIG_CLEAN="${VG_TMP:-/tmp}/vg.config.clean.md"
-sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' .claude/vg.config.md > "$CONFIG_CLEAN"
+sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' "$VG_CONFIG_PATH" > "$CONFIG_CLEAN"
 CONFIG_RAW=$(cat "$CONFIG_CLEAN")
 
 # Check required fields — use CLEAN file (grep on raw file misses first-field if BOM present)
 for FIELD in project_name package_manager profile; do
   if ! grep -q "^${FIELD}:" "$CONFIG_CLEAN"; then
-    echo "⛔ CONFIG ERROR: required field '${FIELD}' missing in .claude/vg.config.md"
+    echo "⛔ CONFIG ERROR: required field '${FIELD}' missing in ${VG_CONFIG_PATH}"
     echo "  Run /vg:init to generate config."
     exit 1
   fi
@@ -186,7 +205,7 @@ done
 
 if [ "$DRIFT_COUNT" -gt 0 ]; then
   echo ""
-  echo "⚠ CONFIG DRIFT — ${DRIFT_COUNT} v1.9.x sections missing from .claude/vg.config.md:"
+  echo "⚠ CONFIG DRIFT — ${DRIFT_COUNT} v1.9.x sections missing from ${VG_CONFIG_PATH}:"
   echo -e "$DRIFT_MSG"
   echo "  Impact: workflow falls back to defaults — features may silent-skip (e.g., review fix routing fallback)"
   echo "  Fix: run '/vg:init' to regenerate config OR manually add sections from vgflow/vg.config.template.md"
@@ -478,7 +497,7 @@ their `.claude/vg.config.md`.
 **Read pattern (used by every inject site + reflector trigger):**
 
 ```bash
-META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" .claude/vg.config.md 2>/dev/null \
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null \
                    | awk '{print $2}' | tr -d '"\r' || echo "disabled")
 # Defaults to disabled when key absent — fail-safe.
 ```
@@ -638,17 +657,32 @@ bash "$LOCK_SCRIPT" cleanup   # remove locks older than 1 hour
 
 **Problem**: skills had `${config.design_assets.paths[0]}` / `${config.semantic_regression.enabled}` / `${config.contract_format.compile_cmd}` — all INVALID bash (dots aren't valid in variable names). Config-loader parses many values via awk but lacked a generic accessor for arbitrary dotted paths. Skills that tried to reference `${config.X.Y.Z}` directly produced empty strings AND broke downstream bash parsing.
 
-**Fix**: add `vg_config_get <dotted.path> [default]` — reads `.claude/vg.config.md` YAML, returns scalar value at that path or default if missing. Plus `vg_config_get_array` for list fields.
+**Fix**: add `vg_config_get <dotted.path> [default]` — reads `${VG_CONFIG_PATH}` (v2.84.0 dual-mode: `.vg/config.md` then `.claude/vg.config.md`), returns scalar value at that path or default if missing. Plus `vg_config_get_array` for list fields.
 
 ```bash
+# v2.84.0: probe new layout first, legacy fallback. Prefer caller-supplied
+# VG_CONFIG_PATH env if BOM-strip section already resolved it.
+_vg_config_resolve() {
+  if [ -n "${VG_CONFIG_PATH:-}" ] && [ -f "$VG_CONFIG_PATH" ]; then
+    echo "$VG_CONFIG_PATH"
+    return
+  fi
+  for candidate in ".vg/config.md" ".claude/vg.config.md"; do
+    if [ -f "$candidate" ]; then
+      echo "$candidate"
+      return
+    fi
+  done
+}
+
 vg_config_get() {
   # Usage: vg_config_get design_assets.output_dir ".vg/design-normalized"
   #        vg_config_get semantic_regression.enabled true
   # Scalar values only. For arrays use vg_config_get_array.
   local path="${1:-}" default="${2:-}"
   [ -z "$path" ] && { echo "$default"; return; }
-  local config=".claude/vg.config.md"
-  [ ! -f "$config" ] && { echo "$default"; return; }
+  local config="$(_vg_config_resolve)"
+  [ -z "$config" ] && { echo "$default"; return; }
   local top="${path%%.*}" field="${path#*.}"
   if [ "$top" = "$field" ]; then
     local val=$(awk -v k="^${top}:" '$0 ~ k { sub(/^[^:]+:[[:space:]]*/,""); gsub(/["]/,""); print; exit }' "$config" 2>/dev/null)
@@ -669,8 +703,8 @@ vg_config_get_array() {
   # Returns newline-separated values. Caller iterates with `while read -r`.
   local path="${1:-}"
   [ -z "$path" ] && return
-  local config=".claude/vg.config.md"
-  [ ! -f "$config" ] && return
+  local config="$(_vg_config_resolve)"
+  [ -z "$config" ] && return
   local top="${path%%.*}" field="${path#*.}"
   awk -v t="^${top}:" -v f="^[[:space:]]+${field}:" '
     $0 ~ t {in_top=1; next}

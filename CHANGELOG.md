@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.84.0 — v3.0.0 Stage 7 critical: config-loader dual-mode read (2026-05-10)
+
+### Goal
+Stage 7 critical-path piece: every skill loads config via `commands/vg/_shared/config-loader.md`. Without dual-mode read, post `vg-migrate-v3.sh` projects break instantly because the file moved from `.claude/vg.config.md` to `.vg/config.md`. This unblocks v3.0.0 ship for the highest-fanout consumer.
+
+### Changes
+
+**`commands/vg/_shared/config-loader.md` updated**
+- BOM-strip section now probes `.vg/config.md` first, falls back to `.claude/vg.config.md`. Resolved path stored in `VG_CONFIG_PATH` for downstream parsers.
+- All 13 model `awk` parsers (planner, contract_gen, test_goals, executor, debugger, scanner, test_codegen + graphify section) now reference `"${VG_CONFIG_PATH:-.claude/vg.config.md}"` — same value when legacy-only, new path when migrated.
+- `meta_memory_mode` grep uses `${VG_CONFIG_PATH}`.
+- `vg_config_get` / `vg_config_get_array` helpers refactored to call new `_vg_config_resolve()` shell function — same dual-mode probe, allows ad-hoc callers (skills referencing `${config.X.Y.Z}`) to work post-migration without re-running BOM-strip.
+- Drift detection error messages reference `${VG_CONFIG_PATH}` instead of hardcoded legacy path.
+
+### Test coverage
+10 new tests in `tests/test_config_loader_dual_mode.py` (8 PASS all platforms, 2 skipped on Windows due to WSL bash path mapping fragility — CI Linux validates):
+- structural: probe order, path var capture, error message, model parsers, vg_config_get resolver, drift message, mirror byte-identity
+- functional smoke (Linux): new layout wins, legacy fallback works
+
+Smoke verified on Git Bash (3/3): new wins → `.vg/config.md`; remove new → `.claude/vg.config.md` falls back; neither → empty.
+
+### Migration
+None required. Default `${VG_CONFIG_PATH:-.claude/vg.config.md}` preserves existing behavior for unmigrated projects (no `.vg/config.md` present). Post-migration projects automatically pick up new path.
+
+### Roadmap
+- v2.76.0–v2.82.1 — Stages 1-6 (resolver / helpers / hook installer / vg CLI / install skill / deploy decouple)
+- v2.83.0 — Stage 8 vg-migrate-v3.sh
+- v2.84.0 (this) — Stage 7 critical: config-loader dual-mode (highest-fanout consumer)
+- v2.84.x — Stage 7 remaining: ~9 lower-fanout consumers (deploy.md, scope env-preference, build pre-test gate, etc.)
+- **v3.0.0** — Stage 9: VERSION 3.0.0 + README rewrite + npm publish
+
+---
+
 ## v2.83.0 — v3.0.0 Stage 8: vg-migrate-v3.sh migration script (2026-05-10)
 
 ### Goal
