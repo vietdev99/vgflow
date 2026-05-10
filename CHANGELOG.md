@@ -1,5 +1,81 @@
 # Changelog
 
+## v3.4.0 — Issue #173 Stage 4: review route inventory hard-block (2026-05-11)
+
+### Bug — review missed route divergence
+
+GitHub Issue #173 acceptance criterion:
+- *"/vg:review --with-deep-scan blocks when route inventory, env preflight, lens dispatch, or lens coverage artifacts are missing."*
+
+Pre-v3.4.0 status of those four hard-blocks:
+
+| Hard-block | Status before this release |
+|---|---|
+| env preflight | ✅ already enforced — `verify-env-contract.py` (severity=block) in Phase 2c-pre |
+| lens dispatch coverage | ✅ already enforced — `verify-lens-runs-coverage.py` in Phase 2b-2.5 |
+| lens coverage matrix | ✅ already rendered — `lens-coverage-matrix.py` |
+| **route inventory divergence** | ❌ **missing** — runtime route discovery (RUNTIME-MAP.views[]) was never diffed against blueprint declared routes |
+
+The route inventory gap meant `/vg:review` could PASS even when:
+- A view rendered at runtime had no corresponding route declared in PLAN/blueprint (scope creep)
+- A contract route was never visited during browser discovery (under-coverage)
+
+### Fix — new validator `verify-route-inventory.py`
+
+Diffs `UI-RUNTIME-CONTRACT.route_inventory[].path` against `RUNTIME-MAP.views[<url>]` keys. Two divergence classes:
+
+| Evidence type | Meaning | Default |
+|---|---|---|
+| `route_inventory_undeclared` | Runtime view absent from contract | BLOCK |
+| `route_inventory_unreached` | Contract route never visited | BLOCK |
+| `route_inventory_match` | All routes accounted for both directions | PASS |
+
+Path normalization handles common runtime URL forms:
+- Strip scheme + host + query string + fragment (`https://app.example.com/sites?page=2` → `/sites`)
+- Numeric segments collapse to `:id` (`/sites/42` matches contract `/sites/:id`)
+- UUID segments collapse to `:id`
+- Trailing slash stripped (`/sites/` matches `/sites`)
+- Case-insensitive
+
+### Review wiring
+
+`commands/vg/_shared/review/fix-loop-and-goals.md` — added `verify-route-inventory` to the v2.35.0 verdict-gate validator loop (the same loop that already runs `verify-interface-standards`, `verify-runtime-map-coverage`, `verify-crud-runs-coverage`, etc.). Inherits the loop's:
+- Override flag: `--skip-content-invariants=<reason>` logs OVERRIDE-DEBT
+- Telemetry: `review_verdict_invariant_failed` with validator name
+- Diagnostic emission via `review-block-diagnostic.py`
+
+### Skip semantics (PASS, no enforcement)
+- `UI-RUNTIME-CONTRACT.json` missing (pre-v3.2.0 phase) → PASS skip
+- `contract.skip_reason` populated (backend-only / no FE tasks) → PASS skip
+- `--severity warn` flag → BLOCK downgraded to WARN
+
+### Test coverage
+13 tests in `tests/test_v3_4_review_route_inventory.py` (all platforms, all pass):
+- validator + mirror byte-identity
+- review fix-loop wires validator
+- routes match → PASS
+- undeclared route → BLOCK
+- unreached route → BLOCK
+- no contract → PASS skip
+- skip_reason set → PASS skip
+- severity=warn downgrades
+- path normalization: numeric / UUID / query string / trailing slash
+
+### Compatibility
+- Phases without `UI-RUNTIME-CONTRACT.json` (everything pre-v3.2.0 + non-UI) unaffected — gate skips on missing contract.
+- Override flag inherited from existing verdict-gate loop (`--skip-content-invariants=<reason>`).
+- Severity config: same loop semantics (gate is block-level by default).
+
+### Stage 4 of 6 (Issue #173)
+- ✅ Stage 1 (v3.1.0): matrix status taxonomy (7-reason BLOCKED)
+- ✅ Stage 2 (v3.2.0): UI-RUNTIME-CONTRACT.md emission
+- ✅ Stage 3 (v3.3.0): build pre-test-gate consumes contract (token + spec count)
+- ✅ Stage 4 (this release): review route inventory hard-block
+- ⏳ Stage 5: `/vg:test` codegen from TEST-GOALS + CRUD-SURFACES + route inventory
+- ⏳ Stage 6: Codex adapter telemetry parity (closes #169)
+
+Note: env preflight + lens dispatch/coverage hard-blocks were already enforced — this release verifies that with a regression-coverage test acknowledging their existence and closes the last missing gate (route inventory) per #173 acceptance.
+
 ## v3.3.0 — Issue #173 Stage 3: build pre-test-gate consumes UI-RUNTIME-CONTRACT (2026-05-11)
 
 ### Bug — build closed even when runtime contract violated
