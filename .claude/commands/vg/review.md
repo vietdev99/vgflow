@@ -6231,6 +6231,26 @@ After fix+redeploy, spawn Sonnet agents to re-verify affected views + ripple zon
    - Log current build SHA in PIPELINE-STATE.json `steps.review.last_fix_sha`
 ```
 
+### 3d.5: QA-Checker meta-verification (v2.68.0 C2)
+
+After Phase 3 fix-loop converges (verdict=ok or max_iter reached), spawn QA-Checker
+to verify each fix commit ACTUALLY addresses the original review finding it was
+meant to fix — not just makes tests pass. Detects suppression hacks, false fixes,
+and test reverts.
+
+```bash
+bash scripts/vg-narrate-spawn.sh vg-review-qa-checker spawning "QA-check ${PHASE_NUMBER} fix commits"
+```
+
+Then: `Agent(subagent_type="vg-review-qa-checker", prompt=<rendered with phase_dir + fix_commits list>)`.
+
+Marker: `phase3d_5_qa_checker` (severity=warn — advisory in v2.68.0; will flip to
+block in v2.69.0 after telemetry shows verdict distribution + false-positive rate).
+
+The QA-Checker returns PASS|PARTIAL|FAIL per fix and a cumulative verdict.
+PARTIAL/FAIL findings surface for operator review but do NOT block the build in
+v2.68.0 — telemetry only.
+
 ### 3e: Iterate
 
 Repeat 3a-3d until:
