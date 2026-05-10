@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.71.0 — project.md full split (2026-05-10)
+
+### Refactor
+Extracted `commands/vg/project.md` (1590 lines monolithic) into `commands/vg/_shared/project/` subdir mirroring v2.70.0 review.md split + build.md slim entry pattern. **project.md slim to 222 lines (86% reduction).**
+
+### Sub-files (5 new in `commands/vg/_shared/project/`)
+- `preflight.md` (467 lines) — 3 gate/parse steps (0_parse_args, 0b_print_state_summary, 0c_scan_existing_docs)
+- `routing.md` (182 lines) — 4 mode-routing steps (1_route_mode, 2a_resume_check, 2b_mode_menu, 3_mode_view)
+- `first-time-rounds.md` (544 lines) — **largest** — 4_mode_first_time + 9 rounds (capture, parse, dialog, confirmation gate, constraints, auto-derive, architecture lock, security strategy, atomic write)
+- `update-modes.md` (100 lines) — 3 update steps (5_mode_update, 6_mode_milestone, 7_mode_rewrite)
+- `migrate-and-init.md` (100 lines) — 3 migrate/init/complete steps (8_mode_migrate, 9_mode_init_only, 10_complete)
+
+### project.md slim entry
+project.md retains frontmatter + HARD-GATE + STEP routing. Each STEP block replaced with: "Read `_shared/project/X.md` and follow it exactly."
+
+### Behavior
+**Zero behavior change.** Extracted content is verbatim. Markers, telemetry, bash logic preserved exactly. Mirror byte-identity verified for all canonical/.claude pairs.
+
+### Test coverage
+**33 new tests across 6 suites** (5 split tests × 6 each + 3 ceiling tests). All pass.
+
+### Migration
+No migration. Operators continue calling `/vg:project` — entry routes through slim project.md → extracted sub-files transparently.
+
 ## v2.70.0 — review.md full split (2026-05-10)
 
 ### Refactor
