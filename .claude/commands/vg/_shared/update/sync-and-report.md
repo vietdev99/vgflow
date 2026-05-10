@@ -15,28 +15,85 @@ CODEX_SOURCE="${NEW_ANCESTOR}"
 CODEX_SKILLS_UPDATED=0
 CODEX_AGENTS_UPDATED=0
 
-if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
-  mkdir -p "${REPO_ROOT}/.codex/skills"
-  while IFS= read -r skill_dir; do
-    [ -f "$skill_dir/SKILL.md" ] || continue
-    skill="$(basename "$skill_dir")"
-    rm -rf "${REPO_ROOT}/.codex/skills/${skill}"
-    mkdir -p "${REPO_ROOT}/.codex/skills/${skill}"
-    cp -R "$skill_dir"/. "${REPO_ROOT}/.codex/skills/${skill}/"
-    CODEX_SKILLS_UPDATED=$((CODEX_SKILLS_UPDATED + 1))
-  done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+# Project .codex deploy tri-state (v2.76.0+, symmetric with VG_UPDATE_GLOBAL_CODEX):
+# Tri-state VG_UPDATE_PROJECT_CODEX:
+#   1     -> always deploy to project .codex (legacy default — backwards compat)
+#   0     -> never deploy to project .codex (opt-out — useful when user keeps
+#            vgflow in ~/.codex global only; prevents duplicate-flow bug at
+#            project-side instead of global-side)
+#   unset -> auto: deploy ONLY if .codex/skills/vg-update already exists
+#            (i.e., project previously had vgflow installed locally)
+#
+# Default 'auto' makes /vg:update non-destructive: if user opted out of project
+# install (e.g. after running cleanup to keep global only), /vg:update will not
+# silently re-create the duplicate. install.sh remains the canonical first-time
+# project installer — it always populates .codex/skills/vg-update, which then
+# auto-detects on subsequent updates.
+PROJECT_CODEX_HAS_VGFLOW=0
+if [ -d "${REPO_ROOT}/.codex/skills/vg-update" ]; then
+  PROJECT_CODEX_HAS_VGFLOW=1
 fi
 
-if [ -d "${CODEX_SOURCE}/templates/codex-agents" ]; then
-  mkdir -p "${REPO_ROOT}/.codex/agents"
-  cp "${CODEX_SOURCE}/templates/codex-agents/"*.toml "${REPO_ROOT}/.codex/agents/" 2>/dev/null || true
-  CODEX_AGENTS_UPDATED=$(ls "${REPO_ROOT}/.codex/agents/"*.toml 2>/dev/null | wc -l | tr -d ' ')
-fi
+VG_PROJECT_CODEX_DECISION="skip"
+case "${VG_UPDATE_PROJECT_CODEX:-auto}" in
+  1)
+    VG_PROJECT_CODEX_DECISION="deploy-explicit"
+    ;;
+  0)
+    VG_PROJECT_CODEX_DECISION="skip-explicit"
+    ;;
+  auto)
+    if [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ]; then
+      VG_PROJECT_CODEX_DECISION="deploy-auto"
+    else
+      VG_PROJECT_CODEX_DECISION="skip-auto"
+    fi
+    ;;
+esac
 
-if [ -d "${CODEX_SOURCE}/templates/codex" ]; then
-  mkdir -p "${REPO_ROOT}/.codex"
-  cp "${CODEX_SOURCE}/templates/codex/"* "${REPO_ROOT}/.codex/" 2>/dev/null || true
-fi
+case "$VG_PROJECT_CODEX_DECISION" in
+  deploy-explicit|deploy-auto)
+    if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
+      mkdir -p "${REPO_ROOT}/.codex/skills"
+      while IFS= read -r skill_dir; do
+        [ -f "$skill_dir/SKILL.md" ] || continue
+        skill="$(basename "$skill_dir")"
+        rm -rf "${REPO_ROOT}/.codex/skills/${skill}"
+        mkdir -p "${REPO_ROOT}/.codex/skills/${skill}"
+        cp -R "$skill_dir"/. "${REPO_ROOT}/.codex/skills/${skill}/"
+        CODEX_SKILLS_UPDATED=$((CODEX_SKILLS_UPDATED + 1))
+      done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+    fi
+
+    if [ -d "${CODEX_SOURCE}/templates/codex-agents" ]; then
+      mkdir -p "${REPO_ROOT}/.codex/agents"
+      cp "${CODEX_SOURCE}/templates/codex-agents/"*.toml "${REPO_ROOT}/.codex/agents/" 2>/dev/null || true
+      CODEX_AGENTS_UPDATED=$(ls "${REPO_ROOT}/.codex/agents/"*.toml 2>/dev/null | wc -l | tr -d ' ')
+    fi
+
+    if [ -d "${CODEX_SOURCE}/templates/codex" ]; then
+      mkdir -p "${REPO_ROOT}/.codex"
+      cp "${CODEX_SOURCE}/templates/codex/"* "${REPO_ROOT}/.codex/" 2>/dev/null || true
+    fi
+
+    if [ "$VG_PROJECT_CODEX_DECISION" = "deploy-auto" ]; then
+      echo "Codex project deploy: refreshed .codex skills/agents (auto-detected prior project install)"
+    else
+      echo "Codex project deploy: VG_UPDATE_PROJECT_CODEX=1 — refreshed .codex skills/agents"
+    fi
+    ;;
+  skip-explicit)
+    echo "Codex project deploy: skipped (VG_UPDATE_PROJECT_CODEX=0 — explicit opt-out)"
+    if [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ]; then
+      echo "  ⚠ Stale vgflow detected at .codex/skills — Codex CLI may register each flow TWICE."
+      echo "    Resolve: rerun without VG_UPDATE_PROJECT_CODEX=0 (auto-refresh) OR manually:"
+      echo "      rm -rf .codex/skills/vg-* && rm -rf .codex/skills/{api-contract,flow-codegen,flow-runner,flow-scan,flow-spec,sandbox-test,test-depth,test-gen,test-review,test-scan,write-test-spec} && rm -f .codex/agents/vgflow-*.toml"
+    fi
+    ;;
+  skip-auto)
+    echo "Codex project deploy: skipped (no prior project vgflow detected; set VG_UPDATE_PROJECT_CODEX=1 to deploy)"
+    ;;
+esac
 
 codex_config_path() {
   local path="$1"

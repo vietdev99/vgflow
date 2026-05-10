@@ -218,7 +218,7 @@ Step coverage: 7_rotate_ancestor_and_version, 7b_repair_hooks.
 ### Sync + report (extracted v2.73.0 T10 — final)
 
 Read `_shared/update/sync-and-report.md` and follow it exactly.
-Includes 4 closing steps: 8_sync_codex (deploy Codex skills + agents + templates from rotated release ancestor into .codex/, optional global ~/.codex via VG_UPDATE_GLOBAL_CODEX=1, verify mirror equivalence), 8b_repair_playwright_mcp (verify/repair playwright1-5 MCP workers via verify-playwright-mcp-config.py), 8c_ensure_graphify (verify/install Graphify tooling when graphify.enabled=true, soft-fail), and 9_report (final counts + NEXT_ACTION directive when conflicts parked, restart reminder).
+Includes 4 closing steps: 8_sync_codex (deploy Codex skills + agents + templates from rotated release ancestor into .codex/ via tri-state VG_UPDATE_PROJECT_CODEX [auto-detect prior project install by default; 1=force, 0=opt-out], optional global ~/.codex via tri-state VG_UPDATE_GLOBAL_CODEX [auto-detect prior global install by default; 1=force, 0=opt-out], verify mirror equivalence), 8b_repair_playwright_mcp (verify/repair playwright1-5 MCP workers via verify-playwright-mcp-config.py), 8c_ensure_graphify (verify/install Graphify tooling when graphify.enabled=true, soft-fail), and 9_report (final counts + NEXT_ACTION directive when conflicts parked, restart reminder).
 
 Step coverage: 8_sync_codex, 8b_repair_playwright_mcp, 8c_ensure_graphify, 9_report.
 
@@ -233,7 +233,7 @@ CODEX NOTE: The final report's AI directive (`▶ NEXT_ACTION=/vg:reapply-patche
 - Major-version bump blocked unless `--accept-breaking` is passed AND migration doc displayed.
 - `.claude/VGFLOW-VERSION` bumped to `${LATEST}`; old `vgflow-ancestor/v{INSTALLED}` removed; new `vgflow-ancestor/v{LATEST}` populated.
 - Claude Code hooks are installed/repaired after update (`UserPromptSubmit`, `Stop`, `PostToolUse` edit warning, `PostToolUse` Bash step tracker).
-- Project-local Codex mirrors in `.codex/skills` and `.codex/agents` are refreshed directly from the updated release assets. Global `~/.codex` deploy is OFF by default (matches `install.sh` + `sync.sh` convention); opt in via `VG_UPDATE_GLOBAL_CODEX=1 /vg:update` when global Codex install is desired.
+- Project-local Codex mirrors in `.codex/skills` and `.codex/agents` are refreshed from the updated release assets only when project install is detected (presence of `.codex/skills/vg-update`) OR `VG_UPDATE_PROJECT_CODEX=1` is set. Set `VG_UPDATE_PROJECT_CODEX=0` to permanently opt the project out (useful when keeping vgflow in `~/.codex` global only). Global `~/.codex` deploy follows the same auto-detect rule via `VG_UPDATE_GLOBAL_CODEX` (auto-detects prior global install; `1`/`0` to force/skip). Both env vars default to `auto` for symmetric, non-destructive behavior.
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Playwright MCP workers are verified/repaired after update for both Claude and Codex (`playwright1`..`playwright5`) and stale hardcoded lock scripts are replaced.
 - Graphify tooling is verified/repaired after update when `graphify.enabled=true`; missing package installs `graphifyy[mcp]`, `.mcp.json` is repaired, and `.graphifyignore` / `.gitignore` are maintained.
