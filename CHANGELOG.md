@@ -1,5 +1,151 @@
 # Changelog
 
+## v3.0.0 — Major / breaking (2026-05-11)
+
+### Headline
+**Global install at `~/.vgflow/`. Project state at `.vg/`. Marker-driven dual-mode resolver lets v2.x coexist with v3 layout transparently.**
+
+### Why upgrade
+- Single source of truth for VG harness on every machine instead of N project-local copies
+- `/vg:update` works correctly across mode switches without leaving stale files
+- Project repos shrink: `commands/`, `skills/`, `scripts/`, `schemas/`, `templates/vg/` move out of `.claude/` (still works for project-local opt-out)
+- `npm install -g vgflow` first-class distribution
+- Migration: one command (`vg-migrate-v3.sh`) — auto-merges per-phase deploy state, backs up everything
+
+### Layout
+
+| What | v2.x | v3.0.0 (default) |
+|---|---|---|
+| Harness assets (commands/skills/scripts/schemas) | `${project}/.claude/` | `~/.vgflow/` (global) |
+| Hooks | `${project}/.claude/settings.json` (per-project) | `~/.claude/settings.json` (global) |
+| Project state (events.db, runs/, phases/, bootstrap/) | `${project}/.vg/` | `${project}/.vg/` (unchanged) |
+| Root docs (ROADMAP.md, FOUNDATION.md, vg.config.md) | `${project}/` | `${project}/.vg/{ROADMAP,FOUNDATION,config}.md` |
+| Deploy state | `${project}/.vg/phases/{N}/DEPLOY-STATE.json` (per-phase) | `${project}/.vg/deploy/STATE.json` (project-level) |
+| Install marker | none | `${project}/.vg/.install-target` ∈ `{global,project}` |
+
+### Install (new)
+
+```bash
+# Recommended — npm public package
+npm install -g vgflow
+cd /path/to/your-project
+vg install --global
+
+# Or — one-line installer
+curl -fsSL https://raw.githubusercontent.com/vietdev99/vgflow/main/install.sh | bash
+cd /path/to/your-project
+vg install --global
+```
+
+`vg install --global` writes `${cwd}/.vg/.install-target=global` so subsequent VG commands resolve `VG_HOME=~/.vgflow/` automatically. Uninstall via `vg uninstall --global`.
+
+### Migrate from v2.x
+
+```bash
+# Inspect plan first
+bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global --dry-run
+
+# Apply (interactive confirm)
+bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global
+
+# Apply + auto-commit
+bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global --yes --commit
+```
+
+7-step pipeline:
+1. Pre-flight (refuse if dirty working tree)
+2. Backup `.claude/{commands,skills,scripts}` + `settings.json` → `.vg/.backup-<ts>/`
+3. Move root docs → `.vg/`
+4. **Auto-merge legacy per-phase `DEPLOY-STATE.json` → `.vg/deploy/STATE.json`** (preserves deploy history)
+5. Apply target via `vg-cli-dispatcher.sh install --<target>`
+6. Append `.vg/` whitelist to `.gitignore`
+7. `vg doctor` smoke + stage all changes
+
+Recovery (if needed): `cp -r .vg/.backup-<ts>/* .` + `git checkout`.
+
+### Backwards compatibility
+
+- **Project mode opt-out preserved.** Pass `vg install --project` (or `vg-migrate-v3.sh --target=project`) to keep legacy per-project layout. Marker = `project`. Hooks at `${project}/.claude/settings.json` referencing `${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/...`.
+- **Resolver dual-mode.** `find_repo_root()` walks cwd first, falls back to `__file__` (legacy). `find_vg_home()` reads marker, falls back to `~/.vgflow/` then `.claude/`. Existing scripts work unchanged.
+- **Config loader dual-mode.** `commands/vg/_shared/config-loader.md` probes `.vg/config.md` first, falls back to `.claude/vg.config.md`. Every skill loading config benefits transparently.
+- **Doc resolver.** `resolve_vg_doc("ROADMAP.md")` returns `.vg/ROADMAP.md` when present, falls back to root.
+
+### Stage map (v2.76.0 → v3.0.0)
+
+| Stage | Version | Component |
+|---|---|---|
+| 1 | v2.76.0 | Resolver dual-mode (`find_repo_root` + `find_vg_home` + `vg_resolve_project_root`) |
+| 2 | v2.77.0 | `resolve_vg_doc()` helper + `generate-gitignore-v3.py` |
+| 3.1 | v2.78.0 | `install-hooks.sh --mode global\|project` |
+| 4 | v2.80.0 | `vg` CLI install/uninstall/sync wire-up |
+| 5 | v2.81.0 | `/vg:install` skill (first-run / re-install / switch / repair) |
+| 6 | v2.82.0–v2.82.1 | Deploy decouple foundation (`schemas/deploy-state.v1.json` + `state.py` + `history.py` + `lock.py` + `phase_context.py`) |
+| 7 critical | v2.84.0 | Config-loader dual-mode read |
+| 7 followups | v2.84.2, v2.85.0 | `review_batch.py` dual-mode + `merge-deploy-states.py` |
+| 7 chained | v2.87.0 | `vg-migrate-v3.sh` auto-merges deploy state at step 2.5 |
+| 8 | v2.83.0 | `vg-migrate-v3.sh` migration script |
+| 9 | v2.88.0 | Marker-aware `/vg:update` (closes 5 audit gaps) |
+| 9 ship | v3.0.0 (this) | VERSION bump + README + GitHub release |
+
+### Bonus — cognitive scaffolding (v2.86.0)
+
+Inspired by audit of [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) (38k stars), 4 new docs:
+
+- `commands/vg/LIFECYCLE.md` — 8-phase taxonomy (Init / Define / Scope / Plan / Build / Verify / Test / Accept + optional Deploy) with contract table per phase
+- `commands/vg/_shared/discovery-flowchart.md` — visual Mermaid flowchart + alphabetical lookup mapping user intent → which `/vg:*`
+- `commands/vg/_shared/eng-principles.md` — Hyrum's Law / Beyonce Rule / Shift Left / Test Pyramid / Trunk-Based / Fail-Closed / Provenance Binding / Idempotency, each mapped to VG gate locations
+- `commands/vg/_shared/rationalization-tables.md` — 6 categories × ~26 rows of Excuse vs Reality, augmenting runtime `rationalization-guard.md`
+
+### PR #172 bundled — TEST_PENDING gate
+
+Splits review verdict types so lifecycle evidence gaps that belong to `/vg:test` route via `TEST_PENDING` instead of generic `BLOCK`. `/vg:next` routes `TEST_PENDING` reviews to `/vg:test` directly. `verify-matrix-evidence-link.py` now accepts both verdicts. New regression tests in `scripts/tests/test_runtime_map_crud_depth.py` + `scripts/tests/test_matrix_evidence_link_test_pending.py`.
+
+### Test coverage cumulative
+
+~150+ new tests across the v2.76 → v3.0.0 stages. Highlights:
+- Resolver dual-mode (17 tests)
+- Helpers + gitignore generator (14)
+- Hook installer + vg CLI (13)
+- /vg:install skill (13)
+- Deploy decouple (29) + flock + phase context (17)
+- Migration script (6) + chain merge-deploy-states (7) + merge-deploy-states helper (9)
+- Config-loader dual-mode (10) + review_batch dual-mode (3)
+- Tier 1 docs (26)
+- Marker-aware /vg:update (12)
+
+CI Test on Linux: full suite green from v2.84.1 onward (one regression in v2.84.0 fixed at v2.84.1).
+
+### Migration checklist for users on v2.x
+
+1. **Backup current project:** `git status` clean? Commit pending changes first.
+2. **Install vgflow globally:** `npm install -g vgflow` (or `curl … | bash`).
+3. **Inspect dry-run:** `bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global --dry-run`. Review what would change.
+4. **Apply migration:** `bash ~/.vgflow/scripts/migrate/vg-migrate-v3.sh --target=global --yes --commit`.
+5. **Restart Claude Code / Codex session.** Hooks and skill paths re-resolve.
+6. **Verify:** `vg doctor`. Should show `marker: global`, `VG_HOME: ~/.vgflow/`, hook count > 0.
+7. **First update post-migration:** `/vg:update` now refreshes `~/.vgflow/` via `git pull --ff-only origin main` (or `npm install -g vgflow@latest`), re-installs hooks with `--mode global`, cleans any stale project-local stragglers.
+
+### What if migration goes wrong
+
+- `git checkout main` discards working-tree changes (migration leaves changes staged unless `--commit` passed)
+- `cp -r .vg/.backup-<ts>/* .` restores pre-migration state
+- `git revert <migration-commit-sha>` if `--commit` was passed
+- `npm install -g vgflow@2.43.1` (or older) downgrades global harness if needed
+
+### Known limitations / deferred work
+
+- **Stage 7 final consumer migrations** (`commands/vg/deploy.md` + build pre-test gate runtime updates) — deferred. Dual-mode helpers (`resolve_vg_doc`, `find_repo_root`, marker-aware update) bridge layouts transparently, so deferred work is not blocking. Will land in v3.1.x.
+- **Self-repair stale-hook detector** — only partial. Cleanup covers most cases via `/vg:update` global path, but no proactive detector at session start. Will land in v3.1.x.
+- **Multi-version global install** — single-version only in v3.0.0. Multi-version pinning (`~/.vgflow/versions/`) will land in v3.1.x.
+
+### Roadmap forward
+
+- **v3.0.x** — bug fixes, doc polish
+- **v3.1.x** — Stage 7 consumer migrations + self-repair detector + multi-version pinning
+- **v4.0.0** — drop legacy `__file__`-walk fallback, drop `.claude/vg.config.md` legacy reads (forced migration)
+
+---
+
 ## v2.88.0 — marker-aware /vg:update (closes 5 v3.0.0 audit gaps) (2026-05-10)
 
 ### Bug
