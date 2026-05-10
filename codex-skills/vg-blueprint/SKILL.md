@@ -212,53 +212,11 @@ Claude Code docs). DO NOT generate PLAN.md or API-CONTRACTS.md inline.
 | "Spawn Task() như cũ" | Tool name is `Agent`, not `Task` (Codex fix #3) |
 | "Block message bỏ qua, retry là xong" | §4.5 Layer 2: vg.block.fired must pair with vg.block.handled or Stop blocks |
 
-<HARD-GATE-CODEX>
-Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
-hook auto-emits `must_touch_markers` declared in `commands/vg/blueprint.md`;
-Codex does NOT receive that signal. AI MUST emit each HARD marker manually
-after the corresponding STEP's primary action completes — failure to do so
-causes the contract validator to reject the run with "8/N markers found".
-
-After each STEP's primary action completes, run:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint <marker>
-```
-
-Required HARD markers for /vg:blueprint (v2.65.0 A9):
-
-| STEP | Marker(s) to emit |
-|---|---|
-| STEP 1 (preflight) | `0_amendment_preflight`, `0_design_discovery`, `1_parse_args`, `create_task_tracker`, `2_verify_prerequisites` |
-| STEP 3 (plan, subagent) | `2a_plan`, `2a5_cross_system_check` |
-| STEP 4 (contracts, subagent) | `2b_contracts`, `2b5_test_goals`, `2b5d_expand_from_crud_surfaces` |
-| STEP 5 (verify) | `2c_verify`, `2c_verify_plan_paths`, `2c_utility_reuse`, `2c_compile_check` |
-| STEP 6 (close) | `2d_validation_gate`, `2d_test_type_coverage`, `2d_goal_grounding`, `2e_bootstrap_reflection`, `3_complete` |
-
-Profile-gated markers (`2_fidelity_profile_lock`, `2b6c_view_decomposition`,
-`2b6_ui_spec`, `2b6b_ui_map`, `2b7_flow_detect`, `2b6d_fe_contracts`,
-`2b9_workflows`) and severity:warn markers (`2b5e_a_lens_walk`,
-`2b5e_edge_cases`, `2b8_rcrurdr_invariants`, `2b5a_codex_test_goal_lane`,
-`2d_crossai_review`) are advisory; emit them when the matching profile
-branch executes.
-</HARD-GATE-CODEX>
-
 ## Steps (6 checklist groups)
 
 ### STEP 1 — preflight
 Read `_shared/blueprint/preflight.md` and follow it exactly.
 This step includes the IMPERATIVE TodoWrite call after emit-tasklist.py.
-
-After STEP 1 finishes (Codex hook fallback — these markers fire only on
-Claude via hooks):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 0_amendment_preflight
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 0_design_discovery
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 1_parse_args
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint create_task_tracker
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2_verify_prerequisites
-```
 
 ### `--only=<step>` (selective re-run, Codex round-2 Amendment D)
 
@@ -287,26 +245,10 @@ Read `_shared/blueprint/plan-overview.md` AND `_shared/blueprint/plan-delegation
 Then call `Agent(subagent_type="vg-blueprint-planner", prompt=<from delegation>)`.
 DO NOT plan inline.
 
-After the planner subagent returns (PLAN.md written + cross-system check done):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2a_plan
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2a5_cross_system_check
-```
-
 ### STEP 4 — contracts (HEAVY)
 Read `_shared/blueprint/contracts-overview.md` AND `_shared/blueprint/contracts-delegation.md`.
 Then call `Agent(subagent_type="vg-blueprint-contracts", prompt=<from delegation>)`.
 DO NOT generate contracts inline.
-
-After the contracts subagent returns (API-CONTRACTS.md, TEST-GOALS, expand
-from CRUD surfaces complete):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b_contracts
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b5_test_goals
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b5d_expand_from_crud_surfaces
-```
 
 After contracts subagent returns, run `2b5e_a_lens_walk` then `2b5e_edge_cases`:
 
@@ -326,28 +268,8 @@ EDGE-CASES table. Output: `EDGE-CASES.md` (Layer 3) + `EDGE-CASES/index.md`
 ### STEP 5 — verify (7 grep/path checks)
 Read `_shared/blueprint/verify.md` and follow it exactly.
 
-After STEP 5's verify checks all pass:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2c_verify
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2c_verify_plan_paths
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2c_utility_reuse
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2c_compile_check
-```
-
 ### STEP 6 — close (reflection + run-complete + tasklist clear)
 Read `_shared/blueprint/close.md` and follow it exactly.
-
-After STEP 6 finishes (validation gate, type coverage, goal grounding,
-reflection, run-complete):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2d_validation_gate
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2d_test_type_coverage
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2d_goal_grounding
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2e_bootstrap_reflection
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 3_complete
-```
 
 ## Diagnostic flow (5 layers — see vg-meta-skill.md)
 

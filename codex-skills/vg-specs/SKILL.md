@@ -154,6 +154,8 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-specs`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+
+
 <objective>
 Generate a concise SPECS.md defining phase goal, scope, constraints, and success criteria. This is the FIRST step of the VG pipeline — specs must be locked before scope, blueprint, or build can proceed.
 
@@ -241,27 +243,26 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
 ### Preflight section (extracted v2.75.0 T1)
 
 Read `_shared/specs/preflight.md` and follow it exactly.
-Includes 3 steps: create_task_tracker (prepare TodoWrite tracker for the SPECS workflow so progress is visible end-to-end), parse_args (parse {phase_number} positional + auto-discover phase directory and resolve naming/numbering), and check_existing (detect existing SPECS.md and ask before overwriting).
+Includes 3 steps: create_task_tracker, parse_args, check_existing.
 
 Step coverage: create_task_tracker, parse_args, check_existing.
 
-CODEX NOTE: TodoWrite is Claude-only. On Codex, follow the adapter contract above (Tool mapping table) — emit progress inline in the main thread instead of using TodoWrite.
 
 ### Mode + guided + draft (extracted v2.75.0 T2)
 
 Read `_shared/specs/mode-and-draft.md` and follow it exactly.
-Includes 3 steps: choose_mode (interactive choice between AI-draft vs guided vs hybrid mode), guided_questions (structured user questionnaire when guided mode is selected), and generate_draft (produce SPECS.md draft tailored to the chosen mode).
+Includes 3 steps: choose_mode, guided_questions, generate_draft.
 
 Step coverage: choose_mode, guided_questions, generate_draft.
 
-CODEX NOTE: Step choose_mode + guided_questions use AskUserQuestion on Claude. On Codex, ask the same options inline in the main thread per the adapter contract above (Tool mapping table).
 
 ### Write + interface standards + commit (extracted v2.75.0 T3 — final)
 
 Read `_shared/specs/write-and-commit.md` and follow it exactly.
-Includes 3 closing steps: write_specs (atomic write of ${PHASE_DIR}/SPECS.md with required sections), write_interface_standards (emit INTERFACE-STANDARDS.md when the phase exposes API or UI surfaces), and commit_and_next (commit SPECS.md + INTERFACE-STANDARDS.md to git and route to /vg:scope).
+Includes 3 steps: write_specs, write_interface_standards, commit_and_next.
 
 Step coverage: write_specs, write_interface_standards, commit_and_next.
+
 
 </process>
 

@@ -70,40 +70,6 @@ Codex hook parity is evidence-based: `.vg/events.db`, step markers,
 `must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
 run is not complete just because the model says it is complete.
 
-<HARD-GATE-CODEX>
-Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
-hook auto-emits `must_touch_markers` declared in `commands/vg/review.md`;
-Codex does NOT receive that signal. AI MUST emit each HARD marker manually
-after the corresponding STEP's primary action completes — failure to do so
-causes the contract validator to reject the run with "8/N markers found".
-
-After each STEP's primary action completes, run:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review <marker>
-```
-
-Required HARD markers for /vg:review (v2.65.0 A9):
-
-| STEP | Marker |
-|---|---|
-| Pre-STEP 0 (integrity precheck) | `00_gate_integrity_precheck` |
-| STEP 0 (parse + validate) | `0_parse_and_validate` |
-| STEP 0b (goal coverage gate) | `0b_goal_coverage_gate` |
-| Final close | `complete` |
-
-The remaining markers in `must_touch_markers:` (phase1_*, phase2_*, phaseP_*,
-crossai_review, write_artifacts, bootstrap_reflection, env-mode-gate, etc.)
-are advisory (severity: warn) or flag-gated; emit them when the matching
-profile branch executes.
-
-v2.67.0 #158 — lens telemetry parity: the body below explicitly calls
-`mark-step review 2b3_lens_dispatch_complete` and
-`mark-step review 2b3_lens_matrix_rendered` after the matching steps so
-Codex matches the Claude PostToolUse hook's marker coverage on the
-LENS-DISPATCH-PLAN.json + LENS-COVERAGE-MATRIX.md must_write artifacts.
-</HARD-GATE-CODEX>
-
 Before executing command bash blocks from a Codex skill, export
 `VG_RUNTIME=codex`. This is an adapter signal, not a source replacement:
 Claude/unknown runtime keeps the canonical `AskUserQuestion` + Haiku path,
@@ -323,7 +289,7 @@ Pipeline: specs → scope → blueprint → build → **review** → test → ac
 4 Phases:
 - Phase 1: CODE SCAN — grep contracts + count elements (fast, automated, <10 sec)
 - Phase 2: BROWSER DISCOVERY — MCP Playwright organic exploration → RUNTIME-MAP
-- Phase 3: FIX LOOP — errors found → fix → redeploy → re-discover (max 3 iterations)
+- Phase 3: FIX LOOP — errors found → fix → redeploy → re-discover (max 5 iterations, v2.65.0 A4)
 - Phase 4: GOAL COMPARISON — map TEST-GOALS to discovered paths → weighted gate
 </objective>
 
@@ -349,130 +315,56 @@ If ALL 5 servers locked → BLOCK. The lock manager auto-sweeps stale locks (TTL
 on every claim — if still no slot free, it's genuinely contended. Do NOT manually cleanup other sessions' locks.
 </CRITICAL_MCP_RULE>
 
-### Pre-STEP — integrity precheck (HARD)
-
-Before any other STEP runs, the canonical command body's preflight invokes
-the integrity precheck. On Codex, after the precheck completes, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 00_gate_integrity_precheck
-```
-
 ### Preflight section (extracted v2.70.0)
 
 Read `_shared/review/preflight.md` and follow it exactly.
 Includes 7 steps: 00_gate_integrity_precheck, 00_session_lifecycle, 0_parse_and_validate, 0a_env_mode_gate, 0b_goal_coverage_gate, 0c_telemetry_suggestions, create_task_tracker.
-
-After preflight's primary actions complete (args parsed, env-mode gate satisfied,
-goal coverage gate green, task tracker emitted), emit the HARD markers manually
-(Codex hook fallback):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 0_parse_and_validate
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 0b_goal_coverage_gate
-```
-
-WARN markers (`00_session_lifecycle`, `0a_env_mode_gate`,
-`0c_telemetry_suggestions`, `create_task_tracker`) are advisory — emit when the
-matching code path runs, but missing them does not fail the contract.
 
 ### Phase profile branch (Section 2 — extracted v2.70.0)
 
 Read `_shared/review/phase-p-variants.md` and follow it exactly.
 Includes 6 steps: phase_profile_branch, phaseP_infra_smoke, phaseP_delta, phaseP_regression, phaseP_schema_verify, phaseP_link_check.
 
-phaseP_* markers are flag-gated; emit only when the matching profile branch
-executes (e.g. `phaseP_delta` for `--mode delta`, `phaseP_infra_smoke` for
-`--mode infra-smoke`).
 
 ### Code scan section (extracted v2.70.0 T3)
 
 Read `_shared/review/code-scan.md` and follow it exactly.
 Includes 2 steps: phase1_code_scan, phase1_5_ripple_and_god_node.
 
-After code scan + ripple/god-node analysis complete, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase1_code_scan
-```
 
 ### API contract probe + browser discovery (extracted v2.70.0 T4)
 
 Read `_shared/review/api-and-discovery.md` and follow it exactly.
 Includes 2 steps: phase2a_api_contract_probe, phase2_browser_discovery.
 
-CODEX NOTE: For browser discovery, the main Codex orchestrator owns
-Playwright MCP; do NOT spawn `codex exec` for MCP-heavy work. After API
-probe + browser discovery complete, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2a_api_contract_probe
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2_browser_discovery
-```
 
 ### Lens probe + findings derivation (extracted v2.70.0 T5)
 
 Read `_shared/review/lens-and-findings.md` and follow it exactly.
 Includes 8 steps: phase2_5_recursive_lens_probe, phase2b_collect_merge, phase2c_enrich_test_goals, phase2c_pre_dispatch_gates, phase2d_crud_roundtrip_dispatch, phase2e_findings_merge, phase2e_post_challenge, phase2f_route_auto_fix.
 
-After LENS-DISPATCH-PLAN.json + LENS-COVERAGE-MATRIX.md must_write artifacts
-land, emit (v2.67.0 #158 lens telemetry parity — matches Claude PostToolUse
-hook's marker coverage):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 2b3_lens_dispatch_complete
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 2b3_lens_matrix_rendered
-```
 
 ### Exploration limits + mobile + visual checks (extracted v2.70.0 T6)
 
 Read `_shared/review/limits-and-mobile.md` and follow it exactly.
 Includes 4 steps: phase2_exploration_limits, phase2_mobile_discovery, phase2_5_visual_checks, phase2_5_mobile_visual_checks.
 
-Mobile/visual markers are profile-gated (`mobile-*` profile for mobile
-discovery, `web-fullstack`/`web-frontend-only` for visual checks). Emit only
-when the matching profile branch executes.
 
 ### URL state + error message runtime (extracted v2.70.0 T7)
 
 Read `_shared/review/url-and-error.md` and follow it exactly.
 Includes 3 steps: phase2_7_url_state_sync, phase2_8_url_state_runtime, phase2_9_error_message_runtime.
 
-These steps are `web-fullstack,web-frontend-only` profile-gated. Emit when
-matching profile branch executes; advisory severity (warn).
-
 ### Fix loop + goal comparison (extracted v2.70.0 T8 — largest section)
 
 Read `_shared/review/fix-loop-and-goals.md` and follow it exactly.
 Includes 2 steps: phase3_fix_loop (max 5 iterations), phase4_goal_comparison.
-
-CODEX NOTE: For fix loop, source `Agent(...)` calls map to
-`codex-spawn.sh --tier executor --sandbox workspace-write` (per
-codex_spawn_precedence table above — `/vg:review` fix agents). After fix loop
-+ goal comparison complete, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase3_fix_loop
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase4_goal_comparison
-```
 
 ### Close section (extracted v2.70.0 T9 — final extraction)
 
 Read `_shared/review/close.md` and follow it exactly.
 Includes 5 steps: unreachable_triage, crossai_review, write_artifacts, bootstrap_reflection, complete.
 
-After write_artifacts persists RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md and
-crossai_review consensus completes (final-wave only), emit the HARD markers
-+ run-complete:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review crossai_review
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review write_artifacts
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review complete
-```
-
-The terminal `vg-orchestrator run-complete` MUST be called by `_shared/review/close.md`;
-on non-zero exit, fix evidence and retry per Stop hook parity contract above.
 </process>
 
 <success_criteria>

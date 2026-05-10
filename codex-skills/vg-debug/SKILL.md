@@ -154,6 +154,9 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-debug`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+
+
+
 <LANGUAGE_POLICY>
 You MUST follow `_shared/language-policy.md`. **NON-NEGOTIABLE.**
 
@@ -171,6 +174,7 @@ File paths, code identifiers (G-04, Wave 9, getUserById), commit messages,
 CLI commands stay English. AskUserQuestion title + options + question prose:
 ngôn ngữ config.
 </LANGUAGE_POLICY>
+
 
 <rules>
 1. **Standalone session** — debug session lives in `.vg/debug/<id>/`, not phase-scoped (Q1 user choice).
@@ -202,25 +206,26 @@ Output: `.vg/debug/<id>/DEBUG-LOG.md` + atomic commits. If detected spec gap →
 ### Preflight section (extracted v2.75.0 T6)
 
 Read `_shared/debug/preflight.md` and follow it exactly.
-Includes 1 step: 0_parse_and_classify (parse the bug description from arguments, classify by surface area / severity / scope, decide single-phase vs multi-phase debug strategy).
+Includes 1 step: 0_parse_and_classify.
 
 Step coverage: 0_parse_and_classify.
+
 
 ### Discovery + hypothesize + fix (extracted v2.75.0 T7)
 
 Read `_shared/debug/discovery-and-fix.md` and follow it exactly.
-Includes 2 steps: 1_discovery (locate the bug origin via grep / graph queries / log inspection — never apply fixes during discovery) and 2_hypothesize_and_fix (rank candidate root causes, implement smallest-impact fix, write minimal regression test).
+Includes 2 steps: 1_discovery, 2_hypothesize_and_fix.
 
 Step coverage: 1_discovery, 2_hypothesize_and_fix.
+
 
 ### Verify + close (extracted v2.75.0 T8 — final)
 
 Read `_shared/debug/verify-and-close.md` and follow it exactly.
-Includes 2 closing steps: 3_verify_and_loop (run regression + full test suite, loop back to discovery if a different failure surfaces — max 3 loops before escalating) and 4_complete (commit fix + test atomically, emit debug.completed telemetry, suggest next pipeline step).
+Includes 2 steps: 3_verify_and_loop, 4_complete.
 
 Step coverage: 3_verify_and_loop, 4_complete.
 
-CODEX NOTE: Step 4_complete's commit + telemetry emission must happen in the main Codex thread per the adapter contract above (Tool mapping table). Do not delegate to a Claude subagent.
 
 </process>
 

@@ -250,6 +250,15 @@ write_codex_skill() {
     description="VGFlow skill generated from ${src#$REPO_ROOT/}"
   fi
 
+  # v3.6.1 — escape double-quote and backslash in description before
+  # emitting into a YAML double-quoted string. Without this, source
+  # descriptions containing embedded `"..."` (e.g. LIFECYCLE.md cites
+  # `"where am I in the pipeline"`) produce invalid frontmatter that
+  # Codex CLI rejects with `did not find expected key` at SKILL load.
+  local description_yaml
+  description_yaml="${description//\\/\\\\}"
+  description_yaml="${description_yaml//\"/\\\"}"
+
   if [ -f "$target" ] && [ "$FORCE" = "false" ]; then
     SKIPPED=$((SKIPPED + 1))
     return
@@ -264,9 +273,9 @@ write_codex_skill() {
     cat <<EOF
 ---
 name: "${skill_name}"
-description: "${description}"
+description: "${description_yaml}"
 metadata:
-  short-description: "${description}"
+  short-description: "${description_yaml}"
 ---
 
 EOF

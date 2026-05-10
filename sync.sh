@@ -137,6 +137,64 @@ sync_codex_skills_exact() {
   done < <(find "$SCRIPT_DIR/codex-skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
 }
 
+# v3.6.1 — prune duplicate Codex skills when global + project both populated.
+#
+# Bug: Codex picker reads BOTH ~/.codex/skills/ AND <project>/.codex/skills/.
+# When sync deployed to both (--global-codex previously, then default project
+# sync), every vg-* skill shows up twice in the picker. Users can't tell which
+# is current.
+#
+# Fix: when both have the same skill name, prune one. Resolution rule:
+#   - If $TARGET_ROOT/.vg/.install-target == "global" → prune project copy (~/.codex wins)
+#   - If $TARGET_ROOT/.vg/.install-target == "project" → prune global copy if it matches our codex-skills/ source list
+#   - No marker → prune project copy (default: prefer global, matches v3.0.0 architecture)
+prune_duplicate_codex_skills() {
+  local target_root="$1"
+  local home_codex="$HOME/.codex/skills"
+  local proj_codex="$target_root/.codex/skills"
+  local marker_file="$target_root/.vg/.install-target"
+  local install_target=""
+  [ -f "$marker_file" ] && install_target="$(tr -d '[:space:]' < "$marker_file" 2>/dev/null || true)"
+
+  [ -d "$home_codex" ] || [ -d "$proj_codex" ] || return 0
+  if [ "$MODE_CHECK" = "true" ]; then
+    return 0
+  fi
+
+  local pruned=0
+  local prune_target=""
+  case "$install_target" in
+    project)
+      # Project install — global ~/.codex skill that overlaps our deployed list is stale
+      prune_target="$home_codex"
+      ;;
+    global|"")
+      # Global install (or unmarked legacy) — prune project copy
+      prune_target="$proj_codex"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  # Build list of skills WE own (canonical names from $SCRIPT_DIR/codex-skills)
+  while IFS= read -r src_skill_dir; do
+    [ -d "$src_skill_dir" ] || continue
+    local skill_name
+    skill_name="$(basename "$src_skill_dir")"
+    local dup_dir="$prune_target/$skill_name"
+    if [ -d "$dup_dir" ] && [ "$prune_target" != "$home_codex" ] || \
+       { [ "$prune_target" = "$home_codex" ] && [ -d "$dup_dir" ] && [ -d "$proj_codex/$skill_name" ]; }; then
+      rm -rf "$dup_dir" 2>/dev/null && pruned=$((pruned + 1))
+    fi
+  done < <(find "$SCRIPT_DIR/codex-skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+
+  if [ "$pruned" -gt 0 ]; then
+    note "PRUNED ${pruned} duplicate Codex skill dirs from ${prune_target} (install_target=${install_target:-unset})"
+    CHANGED=$((CHANGED + 1))
+  fi
+}
+
 codex_config_path() {
   local path="$1"
   if command -v cygpath >/dev/null 2>&1; then
@@ -436,9 +494,15 @@ echo ""
 echo "2b-r1a. Sync R1a subagents + install R1a hooks"
 if [ -d "$SCRIPT_DIR/agents" ]; then
   sync_tree "$SCRIPT_DIR/agents" "$TARGET_ROOT/.claude/agents" "claude-agent"
-  if [ "$MODE_CHECK" = "false" ]; then
-    chmod +x "$TARGET_ROOT/.claude/scripts/hooks/"*.sh 2>/dev/null || true
-  fi
+fi
+# v3.6.1 — chmod +x for .claude/scripts/hooks/*.sh ALWAYS runs (was previously
+# nested under agents/ existence check, which left hooks non-executable on
+# fresh installs). Stop hook on Mac/Linux fails with `Permission denied` if
+# this is skipped because Claude Code falls back to /bin/sh + the script
+# isn't marked +x.
+if [ "$MODE_CHECK" = "false" ]; then
+  chmod +x "$TARGET_ROOT/.claude/scripts/hooks/"*.sh 2>/dev/null || true
+  chmod +x "$TARGET_ROOT/.claude/scripts/hooks/"*.py 2>/dev/null || true
 fi
 # Install R1a hooks into .claude/settings.json (idempotent merge).
 # Disable with VG_INSTALL_HOOKS=0 if user manages settings.json manually.
@@ -527,6 +591,14 @@ else
   echo "4. Global Codex deploy skipped (default; pass --global-codex to opt in)"
   echo ""
 fi
+
+# v3.6.1 — dedupe Codex skills if both global + project populated.
+# Codex picker reads both dirs and shows duplicate entries; this removes
+# the duplicate copy per .vg/.install-target marker (or default to pruning
+# project copy when marker absent / global install).
+echo "4b. Dedupe Codex skills (global vs project)"
+prune_duplicate_codex_skills "$TARGET_ROOT"
+echo ""
 
 echo "5. Functional Codex mirror check"
 if [ -z "$PYTHON_BIN" ]; then

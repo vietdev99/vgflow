@@ -1,5 +1,57 @@
 # Changelog
 
+## v3.6.1 — bugfix: vg-LIFECYCLE YAML, Stop hook permission, Codex skill duplicates (2026-05-11)
+
+### Bug 1 — vg-LIFECYCLE/SKILL.md frontmatter invalid YAML
+
+Codex CLI on every machine that ran `/vg:update` after v3.0.x rejected:
+```
+~/.codex/skills/vg-LIFECYCLE/SKILL.md: invalid YAML: did not find expected
+key at line 2 column 192, while parsing a block mapping
+<project>/.codex/skills/vg-LIFECYCLE/SKILL.md: same error
+```
+
+Root cause: `commands/vg/LIFECYCLE.md` description referenced the canonical phrase as `"where am I in the pipeline"` (double quotes inside the description scalar). `scripts/generate-codex-skills.sh` wrapped the description in YAML double quotes without escaping, producing `description: "VG ... canonical "where am I" reference."` — invalid YAML.
+
+Fix:
+- `commands/vg/LIFECYCLE.md` — embedded phrase switched to single quotes (`'where am I in the pipeline'`). Source-side defensive change.
+- `scripts/generate-codex-skills.sh` `write_codex_skill()` — bash parameter expansion `${description//\\/\\\\}` then `${description_yaml//\"/\\\"}` escapes both backslash and double-quote before YAML emission. Future source drift can no longer reintroduce the bug.
+
+### Bug 2 — Stop hook `Permission denied` on macOS
+
+On freshly synced macOS projects, every Claude Code session ended with:
+```
+Stop hook error: Failed with non-blocking status code:
+/bin/sh: <project>/.claude/scripts/hooks/vg-stop.sh: Permission denied
+```
+
+Root cause: `sync.sh` chmod block for hooks was nested inside `if [ -d "$SCRIPT_DIR/agents" ]` — installs without custom `agents/` directory left every `.claude/scripts/hooks/*.sh` non-executable. Claude Code's Stop hook fell back to `/bin/sh <path>` which respected POSIX execute bits and refused.
+
+Fix: `sync.sh` chmod block lifted to top level, runs unconditionally when `MODE_CHECK=false`. Also added `chmod +x` for `*.py` hook files (vg-run-bash-hook.py is invoked by Stop hook on Windows + needs the bit on Unix too).
+
+### Bug 3 — Codex picker duplicates every `vg-*` skill
+
+When a project had been synced once with `--global-codex` and then again with default flags, both `~/.codex/skills/vg-accept/` and `<project>/.codex/skills/vg-accept/` ended up populated. Codex's skill picker reads BOTH directories and concatenates results, so every `$vg-` autocomplete showed `vg-accept` × 2, `vg-amend` × 2, … User couldn't tell which was authoritative.
+
+Fix: `sync.sh` adds new step **4b. Dedupe Codex skills** invoking `prune_duplicate_codex_skills()` after both deploy phases. Resolution rule:
+
+| `.vg/.install-target` marker | Action |
+|---|---|
+| `project` | Prune `~/.codex/skills/<name>` for any name we own (project-local install wins) |
+| `global` | Prune `<project>/.codex/skills/<name>` (global install wins) |
+| absent / unknown | Default to pruning project copy (matches v3.0.0 architecture) |
+
+Idempotent. Operators on `/vg:update` will see `PRUNED N duplicate Codex skill dirs from <path>` on first repair run, then no-op thereafter.
+
+### Test coverage
+11 tests across two new files, all pass:
+- `tests/test_v3_6_1_skill_yaml_validity.py` (4 tests): every codex-skills SKILL.md parses; vg-LIFECYCLE description survives load; generator has escape logic; source LIFECYCLE.md has no unescaped `"` inside description.
+- `tests/test_v3_6_1_sync_fixes.py` (7 tests): chmod hooks block runs unconditionally; chmod covers .py too; prune function exists; step 4b wired; marker-aware branching; LIFECYCLE.md description hygiene; generator escape pattern present.
+
+### Compatibility
+- `/vg:update` from any pre-v3.6.1 install repairs both bugs in one pass: regenerates SKILL.md (fixes Bug 1), chmods hooks (fixes Bug 2), prunes duplicate skill dirs (fixes Bug 3).
+- No schema changes, no flag changes, no breaking changes to existing workflows.
+
 ## v3.6.0 — Issue #173 Stage 6 / #169: Codex adapter telemetry parity (2026-05-11)
 
 ### Bug — Codex skipped lifecycle event emission, forced manual repair

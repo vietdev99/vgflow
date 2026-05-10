@@ -154,6 +154,8 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-migrate`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+
+
 <rules>
 1. **Non-destructive** — never delete GSD originals. Move to `.gsd-backup/` within phase dir.
 2. **MERGE, DO NOT OVERWRITE (tightened 2026-04-17)** — any existing artifact with user-authored content must be merged, not replaced. Agent writes to `{file}.staged` (not target). Before promoting staging → target, run preservation gates:
@@ -182,33 +184,25 @@ When to use:
 
 **Config:** Read .claude/commands/vg/_shared/config-loader.md first.
 
-### Preflight section (extracted v2.72.0)
+### Preflight section (extracted v2.72.0 T1)
 
 Read `_shared/migrate/preflight.md` and follow it exactly.
-Includes 3 steps: parse_args (--dry-run, --force, --skip-prompt flags), detect_artifacts (scan .planning/ + .gsd/ legacy paths), backup_originals (copy GSD originals into .gsd-backup/).
+Includes 3 steps: 1_parse_args, 2_detect_artifacts, 3_backup_originals.
 
-Step coverage: 1_parse_args, 2_detect_artifacts, 3_backup_originals.
-
-### Enrich section (extracted v2.72.0)
+### Enrich section (extracted v2.72.0 T2)
 
 Read `_shared/migrate/enrich.md` and follow it exactly.
-Includes 2 steps: enrich_context (project metadata + decision IDs + platform inference), generate_contracts (synthesize API-CONTRACTS.md shells from legacy SPECS).
+Includes 2 steps: 4_enrich_context, 5_generate_contracts.
 
-Step coverage: 4_enrich_context, 5_generate_contracts.
-
-### Goals + plans section (extracted v2.72.0)
+### Goals + plans (extracted v2.72.0 T3)
 
 Read `_shared/migrate/goals-plans.md` and follow it exactly.
-Includes 3 steps: generate_goals (TEST-GOALS.md from SPECS success criteria), link_plan_goals (G-NN ↔ plan binding), attribute_plans (PLAN.md ownership + wave-execution metadata).
+Includes 3 steps: 6_generate_goals, 6_5_link_plan_goals, 7_attribute_plans.
 
-Step coverage: 6_generate_goals, 6_5_link_plan_goals, 7_attribute_plans.
-
-### Pipeline + validate section (extracted v2.72.0)
+### Pipeline + validate (extracted v2.72.0 T4 — final)
 
 Read `_shared/migrate/pipeline-and-validate.md` and follow it exactly.
-Includes 3 closing steps: write_pipeline_state (PIPELINE-STATE.json with step markers), backfill_infra (infra-only profile detection + step skips), validate_and_report (artifact integrity + final migration summary).
-
-Step coverage: 8_write_pipeline_state, 8b_backfill_infra, 9_validate_and_report.
+Includes 3 steps: 8_write_pipeline_state, 8b_backfill_infra, 9_validate_and_report.
 
 </process>
 
