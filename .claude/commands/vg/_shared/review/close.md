@@ -309,6 +309,20 @@ Next (pick one):
   edit {file:line}; git commit; /vg:next    # fix flags first, then continue
 ```
 
+### When verdict = TEST_PENDING (runtime clear, lifecycle proof belongs to test)
+```
+Review complete for Phase {N} — TEST_PENDING.
+  Goals: {ready}/{total} READY ({test_pending} TEST_PENDING, 0 runtime blockers)
+  Gate: TEST_PENDING (review rendered routes/API clean; lifecycle evidence pending)
+  Runtime blockers: 0 API/render/route blockers
+  Coverage pending: mutation/realtime/multi-step lifecycle proof
+
+Next:
+  /vg:test {phase}            # codegen + Playwright proves lifecycle evidence
+
+Do not loop back to /vg:review unless /vg:test surfaces a concrete runtime/code blocker.
+```
+
 ### When verdict = BLOCK (cannot proceed)
 ```
 Review complete for Phase {N} — BLOCK.
@@ -359,6 +373,7 @@ Per CONTEXT.md D-XX OR Per API-CONTRACTS.md"  # body must cite
 
 ### Hard rules for AI orchestrator (Claude/Codex/Gemini)
 1. **Never end a BLOCK review without listing per-finding fixes + verify steps.** Bare list of issues = user has to re-derive next action — anti-pattern.
+   BLOCK means runtime/code/spec/infra blocker. Missing lifecycle proof with runtime blockers cleared MUST be TEST_PENDING.
 2. **Use RELATIVE paths** in narration (`apps/api/src/plugins/health.ts:23`), NOT absolute (`/D/Workspace/...`). Absolute paths waste 60% of terminal width on repeated prefixes.
 3. **Per-finding format MUST be:**
    ```
@@ -379,6 +394,35 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 0_parse_and_validate 2>/dev/null || true
 READY_COUNT=$(grep -c "READY" "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" 2>/dev/null || echo 0)
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.completed" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goals_ready\":${READY_COUNT}}" >/dev/null
+
+# v3.5.0 (#173 Stage 5) — auto-route TEST_SPEC_MISSING goals to /vg:test codegen.
+# When review classifies goals as TEST_SPEC_MISSING (taxonomy from v3.1.0
+# Stage 1), surface the exact /vg:test command operators should run next.
+# Goal IDs come from the matrix Status column; codegen subagent
+# (vg-test-codegen) reads them via vg-load + matrix scan.
+TEST_SPEC_MISSING_GOALS=$(grep -oE '^\| (G-[A-Z0-9-]+)[^|]*\|[^|]*\|[^|]*\|[[:space:]]*TEST_SPEC_MISSING[[:space:]]*\|' "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" 2>/dev/null | grep -oE 'G-[A-Z0-9-]+' | sort -u | tr '\n' ',' | sed 's/,$//')
+TEST_SPEC_MISSING_COUNT=$(echo "$TEST_SPEC_MISSING_GOALS" | tr ',' '\n' | grep -cE '^G-' 2>/dev/null || echo 0)
+if [ "${TEST_SPEC_MISSING_COUNT:-0}" -gt 0 ]; then
+  echo ""
+  echo "━━━ TEST_SPEC_MISSING goals (v3.5.0 #173 Stage 5 — auto-route) ━━━"
+  echo "  ${TEST_SPEC_MISSING_COUNT} goal(s) classified as TEST_SPEC_MISSING (no Playwright/lifecycle spec exists):"
+  echo "    ${TEST_SPEC_MISSING_GOALS}"
+  echo ""
+  echo "  Run the codegen command below to generate skeleton specs from TEST-GOALS + CRUD-SURFACES + route_inventory:"
+  echo ""
+  echo "    /vg:test ${PHASE_NUMBER} --codegen-from-goals --filter=test-spec-missing"
+  echo ""
+  echo "  /vg:test consumes:"
+  echo "    - ${PHASE_DIR}/TEST-GOALS.md (per-goal slice via vg-load)"
+  echo "    - ${PHASE_DIR}/CRUD-SURFACES.md (resources × roles)"
+  echo "    - ${PHASE_DIR}/UI-RUNTIME-CONTRACT.json (route inventory + first-viewport surfaces — v3.2.0+)"
+  echo "    - ${PHASE_DIR}/RUNTIME-MAP.json (goal_sequences for replay context)"
+  echo ""
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.test_spec_missing_routed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goal_count\":${TEST_SPEC_MISSING_COUNT},\"goal_ids\":\"${TEST_SPEC_MISSING_GOALS}\"}" \
+    2>/dev/null || true
+fi
 
 # v2.38.0 — Flow compliance audit
 if [[ "$ARGUMENTS" =~ --skip-compliance=\"([^\"]*)\" ]]; then

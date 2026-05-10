@@ -1,5 +1,72 @@
 # Changelog
 
+## v3.5.0 — Issue #173 Stage 5: /vg:test codegen auto-route + UI-RUNTIME-CONTRACT consumption (2026-05-11)
+
+### Bug — TEST_SPEC_MISSING goals had no automatic next-action surface
+
+GitHub Issue #173 acceptance criterion:
+- *"VGFlow can generate or recommend exact Playwright spec-generation commands from missing test coverage."*
+
+v3.1.0 Stage 1 introduced the `TEST_SPEC_MISSING` matrix status, but at `/vg:review` exit operators saw the classification without a concrete next command. The auto-fix routing (Phase 2f reason switch) listed `→ /vg:test ${PHASE_NUMBER} --codegen-from-goals` as hint text, but it was buried in the non-routed-reason summary and not surfaced at the canonical review-exit narration.
+
+### Fix — auto-route at review close + codegen inputs from contract
+
+`commands/vg/_shared/review/close.md` `complete` step now scans `GOAL-COVERAGE-MATRIX.md` for rows with `Status=TEST_SPEC_MISSING`, prints the exact `/vg:test` command, lists the codegen inputs, and emits `review.test_spec_missing_routed` telemetry with the count + goal IDs:
+
+```
+━━━ TEST_SPEC_MISSING goals (v3.5.0 #173 Stage 5 — auto-route) ━━━
+  3 goal(s) classified as TEST_SPEC_MISSING (no Playwright/lifecycle spec exists):
+    G-04,G-08,G-12
+
+  Run the codegen command below to generate skeleton specs:
+
+    /vg:test 7 --codegen-from-goals --filter=test-spec-missing
+
+  /vg:test consumes:
+    - dev-phases/7/TEST-GOALS.md
+    - dev-phases/7/CRUD-SURFACES.md
+    - dev-phases/7/UI-RUNTIME-CONTRACT.json (v3.2.0+ — route_inventory + first_viewport_surfaces + env_contract + min_spec_count)
+    - dev-phases/7/RUNTIME-MAP.json
+```
+
+### Codegen consumes UI-RUNTIME-CONTRACT
+
+`commands/vg/_shared/test/codegen/delegation.md` (the spawn payload for `vg-test-codegen`) extended:
+
+- `<inputs>` block lists `UI-RUNTIME-CONTRACT.json` as required when present.
+- New `<ui_runtime_contract>` directive instructs the subagent to:
+  - Cover every `contract.route_inventory[].path` with at least one route-smoke spec
+  - Emit at least one computed-style assertion spec per `first_viewport_surfaces[].surface_name`
+  - Hit `contract.min_spec_count.count` so the Stage 3 build pre-test-gate (`verify-ui-runtime-contract.py`) passes
+  - Pin Playwright context to `contract.env_contract.cookie_domain`/`auth_host` to pre-empt ENV_MISMATCH at next review
+- New `<test_spec_missing_filter>` directive: when `--filter=test-spec-missing` arg passed (forwarded from review auto-route), restrict codegen to the TEST_SPEC_MISSING goal subset by grepping the matrix.
+
+### Telemetry
+New event: `review.test_spec_missing_routed` (payload: phase, goal_count, comma-separated goal_ids).
+
+### Test coverage
+7 tests in `tests/test_v3_5_test_spec_missing_routing.py` (all platforms, all pass):
+- close.md surfaces TEST_SPEC_MISSING + `--codegen-from-goals` + `--filter=test-spec-missing`
+- close.md emits `review.test_spec_missing_routed` telemetry
+- close.md lists 4 codegen inputs (TEST-GOALS, CRUD-SURFACES, UI-RUNTIME-CONTRACT, RUNTIME-MAP)
+- close.md canonical/mirror byte-identity
+- delegation.md references UI-RUNTIME-CONTRACT.json + route_inventory + first_viewport_surfaces + min_spec_count
+- delegation.md declares test_spec_missing_filter section
+- delegation.md canonical/mirror byte-identity
+
+### Compatibility
+- Phases without TEST_SPEC_MISSING rows: auto-route block is silent (count=0).
+- Phases without UI-RUNTIME-CONTRACT.json: codegen ignores the missing input (delegation directive is conditional `when present`).
+- `vg-test-codegen` subagent is text-driven by the delegation prompt — no breaking change to existing spec generation paths.
+
+### Stage 5 of 6 (Issue #173)
+- ✅ Stage 1 (v3.1.0): matrix status taxonomy (7-reason BLOCKED)
+- ✅ Stage 2 (v3.2.0): UI-RUNTIME-CONTRACT.md emission
+- ✅ Stage 3 (v3.3.0): build pre-test-gate consumes contract
+- ✅ Stage 4 (v3.4.0): review route inventory hard-block
+- ✅ Stage 5 (this release): /vg:test codegen auto-route + UI-RUNTIME-CONTRACT consumption
+- ⏳ Stage 6: Codex adapter telemetry parity (closes #169)
+
 ## v3.4.0 — Issue #173 Stage 4: review route inventory hard-block (2026-05-11)
 
 ### Bug — review missed route divergence

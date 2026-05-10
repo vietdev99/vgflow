@@ -71,11 +71,38 @@ Do NOT browse files outside input. Do NOT ask user — input is the contract.
 <inputs>
 @${PHASE_DIR}/RUNTIME-MAP.json            (review-discovered paths — read-only)
 @${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md    (review verdicts — read-only)
+@${PHASE_DIR}/UI-RUNTIME-CONTRACT.json   (v3.2.0+ — route_inventory + first_viewport_surfaces + env_contract + min_spec_count; spec count gate target)
 @${PHASE_DIR}/FIXTURES-CACHE.json        (if exists — fixture inject)
 @${PHASE_DIR}/CRUD-SURFACES.md           (if exists — CRUD structural fallback)
 @${PHASE_DIR}/TEST-GOALS-DISCOVERED.md   (if exists — G-AUTO-* skeleton specs)
 @${PHASE_DIR}/TEST-GOALS-EXPANDED.md     (if exists — G-CRUD-* skeleton specs)
 </inputs>
+
+<ui_runtime_contract>
+v3.5.0 (#173 Stage 5) — when ${PHASE_DIR}/UI-RUNTIME-CONTRACT.json exists and
+contract.skip_reason is null:
+  - Generated specs MUST cover every contract.route_inventory[].path
+    (each route gets at least one route-smoke spec).
+  - For each contract.first_viewport_surfaces[].surface_name, emit at least
+    one computed-style assertion spec (assert presence + non-empty bounding box).
+  - Generated spec count MUST be ≥ contract.min_spec_count.count. Validator
+    scripts/validators/verify-ui-runtime-contract.py (Stage 3) will enforce
+    this at /vg:build pre-test-gate; pre-empt by generating enough specs.
+  - When contract.env_contract.cookie_domain or auth_host is set, helper
+    fixtures should pin Playwright context to that domain to avoid future
+    ENV_MISMATCH classification at /vg:review.
+</ui_runtime_contract>
+
+<test_spec_missing_filter>
+v3.5.0 (#173 Stage 5) — when `--filter=test-spec-missing` arg passed
+(forwarded from /vg:review auto-route in close.md), restrict codegen to the
+goal IDs flagged Status=TEST_SPEC_MISSING in GOAL-COVERAGE-MATRIX.md. Parse
+those rows:
+  grep '^\| (G-[A-Z0-9-]+).*\|[[:space:]]*TEST_SPEC_MISSING[[:space:]]*\|'
+Only generate specs for that subset. Skip all other goal_ids. Emit a
+return JSON note `test_spec_missing_filtered_count` so the orchestrator
+can confirm coverage.
+</test_spec_missing_filter>
 
 <config>
 phase_number: ${PHASE_NUMBER}
