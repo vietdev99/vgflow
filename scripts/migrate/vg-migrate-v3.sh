@@ -161,6 +161,40 @@ move_doc "FOUNDATION.md"    ".vg/FOUNDATION.md"
 move_doc "vg.config.md"     ".vg/config.md"
 move_doc "OVERRIDE-DEBT.md" ".vg/OVERRIDE-DEBT.md"
 
+# ── 2.5. merge per-phase deploy state → project-level (v2.87.0) ──
+echo ""
+echo "[2.5] Merge per-phase DEPLOY-STATE.json → .vg/deploy/STATE.json"
+MERGE_DEPLOY_PY=""
+for candidate in \
+  "${REPO_ROOT}/.claude/scripts/migrate/merge-deploy-states.py" \
+  "${HOME}/.vgflow/scripts/migrate/merge-deploy-states.py" \
+  "${VG_HOME:-}/scripts/migrate/merge-deploy-states.py"; do
+  if [ -f "$candidate" ]; then
+    MERGE_DEPLOY_PY="$candidate"
+    break
+  fi
+done
+if [ -n "$MERGE_DEPLOY_PY" ]; then
+  if [ "$DRY_RUN" = "0" ]; then
+    # rc 0 = wrote project STATE.json; rc 2 = no per-phase state found (fine,
+    # nothing to merge). Any other rc → warn but continue (deploy state isn't
+    # blocking for the rest of migration).
+    set +e
+    python3 "$MERGE_DEPLOY_PY" --project-root "$REPO_ROOT" --backup
+    MERGE_RC=$?
+    set -e
+    case "$MERGE_RC" in
+      0) echo "  ✓ deploy state merged → .vg/deploy/STATE.json" ;;
+      2) echo "  (no per-phase DEPLOY-STATE.json — nothing to merge)" ;;
+      *) echo "  ⚠ merge-deploy-states rc=${MERGE_RC} — continue, run manually if needed" ;;
+    esac
+  else
+    echo "  [dry-run] python3 ${MERGE_DEPLOY_PY} --project-root ${REPO_ROOT} --backup"
+  fi
+else
+  echo "  ⚠ merge-deploy-states.py not found — skipping (run manually if needed)"
+fi
+
 # ── 3. branch by target ───────────────────────────────────────────
 echo ""
 echo "[3/7] Apply target=${TARGET}"

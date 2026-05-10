@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.87.0 — v3.0.0 Stage 7 chained: vg-migrate-v3 auto-merges deploy state (2026-05-10)
+
+### Goal
+Wire `merge-deploy-states.py` (v2.85.0) into `vg-migrate-v3.sh` (v2.83.0) at step 2.5. Post-migration projects now automatically have `.vg/deploy/STATE.json` populated from legacy per-phase data, no manual step required.
+
+### Changes
+
+**`scripts/migrate/vg-migrate-v3.sh` updated**
+- Adds new step 2.5 between "move root docs" (step 2) and "apply target" (step 3).
+- Probes 3 locations for `merge-deploy-states.py`: project `.claude/scripts/migrate/`, `~/.vgflow/scripts/migrate/`, `${VG_HOME}/scripts/migrate/`.
+- Calls helper with `--backup` flag (preserves prior STATE.json if any).
+- rc=0 → "deploy state merged"; rc=2 → "no per-phase state — nothing to merge" (legitimate no-op); other rc → warn but continue (deploy state isn't blocking for rest of migration).
+
+### Test coverage
+7 new tests in `tests/test_v2_87_migrate_chains_deploy_merge.py`:
+- 5× content-only (run all platforms): step 2.5 block present, rc=2 no-op handling, 3 probe locations, --backup flag, mirror byte-identity
+- 2× functional (Linux-only): full migration writes `.vg/deploy/STATE.json` from per-phase data + handles "no per-phase state" gracefully
+
+Manual smoke verified on Git Bash:
+- 2 phases with deploy state → `STATE.json` has both envs (`prod`, `staging`), `preferred_env_for_phase[5]=prod` carried over.
+
+### Migration
+None for end-users. Existing `vg-migrate-v3.sh` users automatically benefit on next migration run.
+
+### Stage 7 Status
+- ✓ config-loader.md (v2.84.0) — biggest fanout
+- ✓ review_batch.py (v2.84.2)
+- ✓ merge-deploy-states.py migration helper (v2.85.0)
+- ✓ vg-migrate-v3.sh chains deploy merge (this v2.87.0)
+- Deferred: deploy.md / pre-test-gate / enrich-env-question.py runtime updates — these can ship post-v3.0.0 since dual-mode helpers transparently bridge layouts
+
+### Roadmap
+- v2.76.0–v2.86.0 — Stages 1-6 + Tier 1 audit + Stage 7 partial
+- v2.87.0 (this) — Stage 7 final wiring (auto-deploy-merge in migrate)
+- **v3.0.0** — Stage 9: VERSION 3.0.0 + README rewrite + npm publish
+
+---
+
 ## v2.86.0 — Tier 1 from agent-skills audit: lifecycle taxonomy + anti-rationalization tables + eng-principles + discovery flowchart (2026-05-10)
 
 ### Goal
