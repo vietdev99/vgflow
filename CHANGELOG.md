@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.75.0 — specs + debug splits + codex sync (2026-05-10)
+
+### Refactor
+Continue codex-skills/claude-commands sync. specs + debug pairs now slim.
+
+### Claude-side splits
+- **commands/vg/specs.md: 589 → 183 lines** — extracted into NEW `_shared/specs/`:
+  - `preflight.md` — create_task_tracker, parse_args, check_existing
+  - `mode-and-draft.md` — choose_mode, guided_questions, generate_draft
+  - `write-and-commit.md` — write_specs, write_interface_standards, commit_and_next
+- **commands/vg/debug.md: 570 → 121 lines** — extracted into NEW `_shared/debug/`:
+  - `preflight.md` — 0_parse_and_classify
+  - `discovery-and-fix.md` — 1_discovery, 2_hypothesize_and_fix
+  - `verify-and-close.md` — 3_verify_and_loop, 4_complete
+
+### Codex slims
+- **codex-skills/vg-specs/SKILL.md: 684 → 277 lines** — routes to v2.75.0 `_shared/specs/*`
+- **codex-skills/vg-debug/SKILL.md: 690 → 236 lines** — routes to v2.75.0 `_shared/debug/*`
+
+### Bug fix
+- `scripts/tests/test_bypass_negative.py:145` — updated assertion to also accept new error text "Another session already owns phase 99" (cross-session conflict path); preserves backwards compat with same-session "Active run exists" path.
+
+### Test coverage
+**~50 new tests across 8 suites.** All pass.
+
+### Migration
+No migration. Operators continue calling `/vg:specs`, `/vg:debug` — entries route through slim files.
+
 ## v2.74.1 — Hotfix CI release codex equivalence (2026-05-10)
 
 ### Bug fix
