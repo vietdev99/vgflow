@@ -783,7 +783,7 @@ fi
 
 Reads `REVIEW-FINDINGS.json` and emits `AUTO-FIX-TASKS.md` for findings meeting the conservative gate (severity ≥ high, confidence == high, cleanup_status == completed). `/vg:build` consumes via `--include-auto-fix` flag (opt-in v2.37, may default-on v2.38 after dogfood).
 
-### v2.67.0 #160 — BLOCKED 5-reason taxonomy + reason-based routing
+### v2.67.0 #160 + v3.1.0 #173 — BLOCKED 7-reason taxonomy + reason-based routing
 
 GOAL-COVERAGE-MATRIX BLOCKED status is no longer monolithic. `scripts/challenge-coverage.py` now exposes `BlockedReason` enum + `classify_blocked()` so each BLOCKED goal carries one of:
 
@@ -794,8 +794,10 @@ GOAL-COVERAGE-MATRIX BLOCKED status is no longer monolithic. `scripts/challenge-
 | `PREREQ_MISSING` | propose `/vg:amend ${owner_phase}` — upstream patch was DEFERRED |
 | `EXTERNAL_REQUIRED` | operator action — OAuth/WS/reset token needed before re-probe |
 | `PROBE_INVALID` | flag probe bug (e.g., WS endpoint hit as GET) — fix probe, re-run; do NOT route |
+| `TEST_SPEC_MISSING` *(v3.1.0 #173)* | route to `/vg:test ${PHASE_NUMBER} --codegen-from-goals` — generate Playwright/lifecycle spec from `TEST-GOALS.md` + `CRUD-SURFACES.md` + route inventory; do NOT route to /vg:build |
+| `ENV_MISMATCH` *(v3.1.0 #173)* | env-contract repair (cookie domain / auth host / sandbox vs local) — surface fix command; do NOT route to /vg:build (not an app bug) |
 
-Auto-fix routing in this phase only sends `APP_BLOCKED` goals to `/vg:build`. Other reasons are surfaced as separate handling text in `AUTO-FIX-TASKS.md` and not pushed to the build queue. This prevents the auto-fix loop from looping on goals where /vg:build cannot help (probe bugs, missing OAuth, deferred upstream).
+Auto-fix routing in this phase only sends `APP_BLOCKED` goals to `/vg:build`. Other reasons are surfaced as separate handling text in `AUTO-FIX-TASKS.md` and not pushed to the build queue. This prevents the auto-fix loop from looping on goals where /vg:build cannot help (probe bugs, missing OAuth, deferred upstream, missing test specs, env-contract mismatches).
 
 ```bash
 echo ""
@@ -812,9 +814,10 @@ if [ -f "${PHASE_DIR}/REVIEW-FINDINGS.json" ]; then
     echo "  ✓ ${TASK_COUNT} auto-fix task group(s) → AUTO-FIX-TASKS.md"
     echo "    Run /vg:build ${PHASE_NUMBER} --include-auto-fix to consume"
 
-    # v2.67.0 #160 — surface BLOCKED reason taxonomy if present in COVERAGE-CHALLENGE.json
-    # so the user knows which BLOCKED goals are NOT routed (PREREQ_MISSING / EXTERNAL_REQUIRED /
-    # PROBE_INVALID / WORKFLOW_BLOCKED) and need separate handling.
+    # v2.67.0 #160 + v3.1.0 #173 — surface BLOCKED reason taxonomy if present in
+    # COVERAGE-CHALLENGE.json so the user knows which BLOCKED goals are NOT routed
+    # (PREREQ_MISSING / EXTERNAL_REQUIRED / PROBE_INVALID / WORKFLOW_BLOCKED /
+    # TEST_SPEC_MISSING / ENV_MISMATCH) and need separate handling.
     COVERAGE_CHALLENGE="${PHASE_DIR}/COVERAGE-CHALLENGE.json"
     if [ -f "$COVERAGE_CHALLENGE" ]; then
       ${PYTHON_BIN:-python3} - "$COVERAGE_CHALLENGE" <<'PY' 2>/dev/null || true
@@ -842,6 +845,10 @@ for reason, count in non_app.items():
         hint = "→ probe bug — fix probe + re-run"
     elif reason == "WORKFLOW_BLOCKED":
         hint = "→ workflow/tool issue — file bug"
+    elif reason == "TEST_SPEC_MISSING":
+        hint = "→ /vg:test ${PHASE_NUMBER} --codegen-from-goals"
+    elif reason == "ENV_MISMATCH":
+        hint = "→ env-contract repair (cookie domain / auth host)"
     else:
         hint = ""
     print(f"    {reason}: {count} {hint}")
