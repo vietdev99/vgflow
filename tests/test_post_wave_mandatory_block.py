@@ -2,6 +2,8 @@
 import re
 from pathlib import Path
 
+from conftest import read_command_full
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 COMMANDS = ["build", "test", "accept", "deploy"]
@@ -9,7 +11,7 @@ COMMANDS = ["build", "test", "accept", "deploy"]
 
 def test_each_command_has_mandatory_block():
     for cmd in COMMANDS:
-        body = (REPO_ROOT / "commands" / "vg" / f"{cmd}.md").read_text(encoding="utf-8")
+        body = read_command_full(cmd)
         assert "MANDATORY POST-WAVE CONTINUATION" in body, (
             f"commands/vg/{cmd}.md must have MANDATORY POST-WAVE CONTINUATION block (v2.61.0 L3)"
         )
@@ -17,7 +19,7 @@ def test_each_command_has_mandatory_block():
 
 def test_mandatory_block_cites_meta_skill():
     for cmd in COMMANDS:
-        body = (REPO_ROOT / "commands" / "vg" / f"{cmd}.md").read_text(encoding="utf-8")
+        body = read_command_full(cmd)
         # MANDATORY block should reference vg-meta-skill or Post-wave continuation Red Flags
         m = re.search(
             r"MANDATORY POST-WAVE CONTINUATION.*?(?=^##|\Z)",
@@ -32,7 +34,7 @@ def test_mandatory_block_cites_meta_skill():
 
 def test_mandatory_block_warns_against_ending_turn():
     for cmd in COMMANDS:
-        body = (REPO_ROOT / "commands" / "vg" / f"{cmd}.md").read_text(encoding="utf-8")
+        body = read_command_full(cmd)
         m = re.search(
             r"MANDATORY POST-WAVE CONTINUATION.*?(?=^##|\Z)",
             body, re.DOTALL | re.MULTILINE,

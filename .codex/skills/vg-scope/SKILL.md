@@ -236,12 +236,47 @@ Tool name is `Agent`, NOT `Task` (Codex correction #1).
 | "Per-decision split overkill" | UX baseline R1 — blueprint already consumes via vg-load.sh; missing = build context overflow |
 | "Sẵn ngữ cảnh, sinh luôn API-CONTRACTS / TEST-GOALS / PLAN cho nhanh" | Rule 4: scope = DISCUSSION only. Sinh artifact đó là job của /vg:blueprint — write từ scope = lệch contract, blueprint sẽ overwrite gây mất công |
 
+<HARD-GATE-CODEX>
+Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
+hook auto-emits `must_touch_markers` declared in `commands/vg/scope.md`;
+Codex does NOT receive that signal. AI MUST emit each HARD marker manually
+after the corresponding STEP's primary action completes — failure to do so
+causes the contract validator to reject the run with "8/N markers found".
+
+After each STEP's primary action completes, run:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope <marker>
+```
+
+Required HARD markers for /vg:scope (v2.65.0 A9):
+
+| STEP | Marker |
+|---|---|
+| STEP 1 (preflight) | `0_parse_and_validate` |
+| STEP 2 (deep discussion) | `1_deep_discussion` |
+| STEP 3 (env preference) | `1b_env_preference` |
+| STEP 4 (artifact generation) | `2_artifact_generation` |
+| STEP 5 (completeness validation) | `3_completeness_validation` |
+| STEP 7 (close) | `5_commit_and_next` |
+
+The CrossAI markers (`4_crossai_review`, `4_5_bootstrap_reflection`,
+`4_6_test_strategy`) are flag-gated — required unless `--skip-crossai` is
+passed with `--override-reason`. Emit them when STEP 6 actually executes.
+</HARD-GATE-CODEX>
+
 ## Steps (7 checklist groups — wired into native tasklist via emit-tasklist.py CHECKLIST_DEFS["vg:scope"])
 
 ### STEP 1 — preflight
 Read `_shared/scope/preflight.md` and follow it exactly.
 This step parses args, validates SPECS.md exists, runs emit-tasklist.py,
 and includes the IMPERATIVE TodoWrite call after evidence is signed.
+
+After STEP 1 finishes (Codex hook fallback):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 0_parse_and_validate
+```
 
 ### STEP 2 — deep discussion (HEAVY, INLINE — interactive UX)
 Read `_shared/scope/discussion-overview.md` first (sources wrappers,
@@ -272,9 +307,21 @@ For EACH round end (after all answers + challengers):
 
 DO NOT skip rounds. DO NOT skip challenger or expander.
 
+After all 5 rounds + deep-probe finish (challenger + expander returned):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 1_deep_discussion
+```
+
 ### STEP 3 — env preference
 Read `_shared/scope/env-preference.md` and follow it exactly.
 Captures sandbox/staging/prod target for downstream commands.
+
+After env target is captured (or `--skip-env-preference` clears the gate):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 1b_env_preference
+```
 
 ### STEP 4 — artifact generation
 Read `_shared/scope/artifact-write.md` and follow it exactly.
@@ -282,10 +329,33 @@ Atomic group commit: writes CONTEXT.md (Layer 3 flat) + CONTEXT/D-NN.md
 per decision (Layer 1) + CONTEXT/index.md (Layer 2) + DISCUSSION-LOG.md
 (append-only). MUST emit `2_artifact_generation` step marker.
 
+After atomic group commit succeeds:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 2_artifact_generation
+```
+
 ### STEP 5 — completeness validation
 Read `_shared/scope/completeness-validation.md` and follow it exactly.
-Runs 4 checks (decision count, endpoint coverage, UI components,
-test scenarios) and surfaces warnings.
+Runs 5 checks (A endpoint coverage, B design ref, C decision completeness,
+D orphan detection, E upstream prereq verification) and surfaces warnings.
+
+**v2.66.0 BREAKING:** prereq strict default ON — Check B/D WARNs now exit 1.
+Pass `--lenient-prereqs` for v2.65.x WARN-only behavior.
+
+**Check E enforcement (v2.66.0 #156):** when you author a `## Prerequisites`
+table in CONTEXT.md, every `phase | artifact | symbol` row MUST already
+exist in the owner phase's SPECS.md or PLAN.md. If owner is missing the
+symbol, STOP and propose `/vg:amend ${owner_phase}` (or insert a patch
+phase) before continuing scope. Check E **cannot be `--lenient-prereqs`
+exempted** — upstream prereqs are strict-only because they were the
+cascade root cause behind the v2.66.0 PrintwayV3 31×404 incident.
+
+After all 5 checks complete (warnings surfaced, blocking violations resolved):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 3_completeness_validation
+```
 
 ### STEP 6 — CrossAI review (skippable with --skip-crossai + --override-reason)
 Read `_shared/scope/crossai.md` and follow it exactly.
@@ -296,6 +366,12 @@ TEST-STRATEGY draft (4_6). Skipping requires override-debt entry.
 Read `_shared/scope/close.md` and follow it exactly.
 Writes contract pin, runs decisions-trace gate, marks `5_commit_and_next`,
 emits `scope.completed`, calls run-complete.
+
+After contract pin written + decisions-trace gate passes + run-complete:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step scope 5_commit_and_next
+```
 
 ## Diagnostic flow (5 layers — see vg-meta-skill.md)
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.75.2 — hotfix: CI Test workflow green (2026-05-10)
+
+### Bug fix
+**Test CI workflow has been failing on `main` since v2.73.0** (5 consecutive releases). 11 tests fail because content extracted into `_shared/<cmd>/*.md` sub-files during v2.73.0 (deploy), v2.74.0 (scope-review), v2.75.0 (specs/debug) splits — but tests still scan only `commands/vg/<cmd>.md` slim parent. Plus 1 codex mirror byte-identity test failed because `.codex/skills/vg-learn/SKILL.md` had drifted 17 bytes from canonical.
+
+### Fixes
+
+**Codex mirror sync (`.codex/skills/`)**
+Refreshed all 71 skill bodies under `.codex/skills/<X>/SKILL.md` from canonical `codex-skills/<X>/SKILL.md`. 16 skills had drift, including 818-line stale `vg-update` (now 242). This unblocks `test_learn_consolidate_mode::test_codex_skill_mirror_byte_identical` and prevents future false drift reports.
+
+**Test helper `tests/conftest.py` (NEW)**
+`read_command_full(cmd)` returns slim parent + all `_shared/<cmd>/*.md` sub-files concatenated. Use for content scans (regex/substring) that must find text regardless of slim split.
+
+**Tests broadened to scan parent + `_shared/<cmd>/`:**
+- `tests/test_post_wave_mandatory_block.py` — MANDATORY POST-WAVE CONTINUATION block now found in `_shared/deploy/execute.md`
+- `tests/e2e/test_meta_memory_loop.py` — `meta_memory_mode` gate now found in `_shared/deploy/execute.md` + `_shared/deploy/persist-and-close.md`
+- `tests/test_bug_d_universal_tasklist.py::test_specs_md_has_create_task_tracker_step` — `<step name="create_task_tracker">` now found in `_shared/specs/preflight.md`
+- `tests/test_codex_inline_parallel.py` — `codex-spawn.sh --tier scanner`, MCP/browser inline note, Haiku warning now found in `_shared/review/*`
+- `tests/test_deepscan_default_on.py` — `--skip-deepscan` flag, `CONFIG_REVIEW_DEEPSCAN_DEFAULT` now found in `_shared/review/*`. Also fixed `test_changelog_documents_breaking_change` regex (was matching `v2.65.0` substring inside other prose; now anchored to `^## v2.65.0` header).
+
+### Test coverage
+All 11 originally-failing CI tests now pass. Local Ubuntu-equivalent run: full pytest tree green for previously-failing tests.
+
+### Migration
+None. Test refactor only. No production behavior change.
+
+---
+
 ## v2.75.1 — hotfix: auto-refresh global ~/.codex on /vg:update (2026-05-10)
 
 ### Bug fix

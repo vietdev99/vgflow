@@ -302,6 +302,41 @@ tool name per Claude Code docs).
 | "Subagent overkill cho step nặng" | Heavy step empirical 96.5% skip rate without subagent (Codex review confirmed) |
 | "Spawn Task() như cũ" | Tool name is `Agent`, not `Task` (Codex fix #3) |
 
+<HARD-GATE-CODEX>
+Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
+hook auto-emits `must_touch_markers` declared in `commands/vg/test.md`;
+Codex does NOT receive that signal. AI MUST emit each HARD marker manually
+after the corresponding STEP's primary action completes — failure to do so
+causes the contract validator to reject the run with "8/N markers found".
+
+After each STEP's primary action completes, run:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test <marker>
+```
+
+Required HARD markers for /vg:test (v2.65.0 A9):
+
+| STEP | Marker(s) to emit |
+|---|---|
+| Pre-STEP 1 (integrity precheck) | `00_gate_integrity_precheck`, `00_session_lifecycle` |
+| STEP 1 (preflight) | `0_parse_and_validate`, `0c_telemetry_suggestions`, `create_task_tracker`, `0_state_update` |
+| STEP 4 (goal verification subagent) | `5c_goal_verification`, `5c_fix`, `5c_auto_escalate` |
+| STEP 7 (regression + security) | `5e_regression`, `5f_security_audit` |
+| STEP 8 (close) | `write_report`, `complete` |
+
+`5c_fix` and `5c_auto_escalate` are emitted by the goal-verifier subagent
+(STEP 4) when its dual-mode flow detects fixable findings. STEP 6 (fix loop)
+re-emits them only if STEP 4 didn't. Both markers are HARD — at least one
+codepath must touch them, or the close gate blocks.
+
+Profile-gated markers (`5a_deploy`, `5b_runtime_contract_verify`, `5c_smoke`,
+`5c_flow`, `5d_codegen`, `5d_deep_probe`, `5d_mobile_codegen`,
+`5f_mobile_security_audit`, `5g_performance_check`, `5h_security_dynamic`)
+are advisory (severity: warn); emit them when their corresponding profile
+branch executes.
+</HARD-GATE-CODEX>
+
 ## Steps
 
 ### STEP 1 — preflight
@@ -312,6 +347,18 @@ This step covers: gate integrity precheck, session lifecycle, config-loader,
 bug-detection-guide, MCP server claim, parse + validate args, state update,
 telemetry suggestions, and `create_task_tracker` (emit-tasklist.py). MUST
 call TodoWrite immediately after `create_task_tracker` completes.
+
+After preflight returns (Codex hook fallback — these markers fire only on
+Claude via hooks):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 00_gate_integrity_precheck
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 00_session_lifecycle
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_parse_and_validate
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_state_update
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test create_task_tracker
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0c_telemetry_suggestions
+```
 
 ### STEP 2 — deploy
 
@@ -342,6 +389,17 @@ DO NOT run goal verification inline. The subagent enforces dual-mode
 console monitoring, minor-fix gate (`severity-classify.py`), auto-escalate
 MODERATE/MAJOR back to review, and `5c_goal_verification` / `5c_fix` /
 `5c_auto_escalate` marker emission.
+
+After the goal-verifier subagent returns (Codex hook fallback — STEP 4
+markers must be persisted by the orchestrator since the subagent runs in
+its own process and its `mark-step` calls don't surface to the parent
+contract validator):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_goal_verification
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_fix
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_auto_escalate
+```
 
 ### STEP 5 — codegen (HEAVY, subagent + L1/L2 binding gate)
 
@@ -385,6 +443,13 @@ Covers 5e (npx playwright test — full regression suite), 5f (security audit
 (profile-gated), 5g_performance_check (profile-gated), 5h_security_dynamic
 (flag-gated). All findings written to SANDBOX-TEST.md security section.
 
+After STEP 7 finishes (regression + security audit done):
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5e_regression
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5f_security_audit
+```
+
 ### STEP 8 — close
 
 Read `_shared/test/close.md` and follow it exactly.
@@ -393,6 +458,44 @@ Covers: write_report (SANDBOX-TEST.md final verdict), complete marker
 (profile-filtered marker gate — BLOCKS if any required marker missing),
 bootstrap_reflection (vg-reflector subagent call — non-blocking severity:warn),
 telemetry `test.completed`, tasklist clear, run-complete signal.
+
+After SANDBOX-TEST.md is written (write_report) and BEFORE run-complete:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test write_report
+```
+
+After `vg-orchestrator run-complete` returns 0:
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test complete
+```
+
+
+### Post-test reflector trigger (Section 13.5 / meta-memory v1.1)
+
+After `phase.test_completed` emits, spawn vg-reflector subagent IF
+`meta_memory_mode != "disabled"`:
+
+```bash
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+
+if [ "$META_MEMORY_MODE" != "disabled" ] && [ "$EVENT_TYPE" = "phase.test_completed" ]; then
+  bash scripts/vg-narrate-spawn.sh vg-reflector spawning "post-test candidate draft"
+  ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+    "reflection.trigger_requested" --actor "test" --outcome "INFO" \
+    --metadata "{\"step\":\"test\",\"phase\":\"${PHASE_NUMBER}\",\"trigger\":\"post-test\"}"
+fi
+```
+
+**Inputs to reflector:**
+- events.db query: test.* + codegen.* for current phase
+- TEST-GOALS.md per-goal verdicts
+- fix-loop iteration count
+
+**Candidate target:** `target_step=test`, `type=declarative|procedural` (auto-detect by reflector heuristic).
+
+**Fingerprint:** `hash(framework + selector_strategy + repo_id)`.
 
 ## Diagnostic flow (5 layers)
 

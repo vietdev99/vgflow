@@ -135,13 +135,19 @@ def test_preflight_has_explicit_tasklist_projected_bash_call(cmd: str) -> None:
 
 def test_specs_md_has_create_task_tracker_step() -> None:
     """specs.md was the worst Bug D gap: no TodoWrite, no create_task_tracker
-    step. Pin: specs.md MUST contain the create_task_tracker step block."""
-    text = (COMMANDS_DIR / "specs.md").read_text(encoding="utf-8")
+    step. Pin: specs.md (slim + _shared/specs/) MUST contain the
+    create_task_tracker step block. After v2.75.0 specs split, the step
+    body lives in _shared/specs/preflight.md."""
+    chunks = [(COMMANDS_DIR / "specs.md").read_text(encoding="utf-8")]
+    specs_shared = SHARED_DIR / "specs"
+    if specs_shared.is_dir():
+        chunks.extend(sub.read_text(encoding="utf-8") for sub in sorted(specs_shared.rglob("*.md")))
+    text = "\n\n".join(chunks)
     assert '<step name="create_task_tracker">' in text, (
-        "specs.md missing create_task_tracker step — Bug D regression risk."
+        "specs.md (slim + _shared/specs/) missing create_task_tracker step — Bug D regression risk."
     )
     assert "tasklist-projected" in text, (
-        "specs.md missing tasklist-projected reference — Bug D regression risk."
+        "specs.md (slim + _shared/specs/) missing tasklist-projected reference — Bug D regression risk."
     )
 
 

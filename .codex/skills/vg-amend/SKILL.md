@@ -472,6 +472,33 @@ Amendment #${NEXT_AMENDMENT} applied to Phase ${PHASE_NUMBER}
 ```
 </step>
 
+### Post-amend reflector trigger (Section 13.5 / meta-memory v1.1)
+
+After `phase.amend_committed` emits, spawn vg-reflector subagent IF
+`meta_memory_mode != "disabled"`:
+
+```bash
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+
+if [ "$META_MEMORY_MODE" != "disabled" ] && [ "$EVENT_TYPE" = "phase.amend_committed" ]; then
+  bash scripts/vg-narrate-spawn.sh vg-reflector spawning "post-amend retract draft"
+  ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+    "reflection.trigger_requested" --actor "amend" --outcome "INFO" \
+    --metadata "{\"step\":\"amend\",\"phase\":\"${PHASE_NUMBER}\",\"trigger\":\"post-amend\"}"
+fi
+```
+
+**Inputs to reflector:**
+- AMENDMENT-LOG.md
+- diff between old/new CONTEXT.md decisions
+
+**Candidate target:** `type=retract` — invalidate rules whose preconditions reference removed decisions.
+
+**Fingerprint:** `hash(removed_decision_ids + repo_id)`.
+
+Critical: without this, rules learned from prior scope persist after scope change → contradiction (Codex #2).
+
+
 </process>
 
 <success_criteria>

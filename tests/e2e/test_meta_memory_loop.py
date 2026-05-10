@@ -134,8 +134,15 @@ def test_full_loop_meta_memory_mode_gates_inject_sites():
         "build/preflight.md must reference meta_memory_mode to gate the "
         "Stage 4 inject block"
     )
-    deploy = (REPO / "commands" / "vg" / "deploy.md").read_text(encoding="utf-8")
+    # v2.71+ split: meta_memory_mode lives in _shared/deploy/{execute,persist-and-close}.md
+    deploy_chunks = [(REPO / "commands" / "vg" / "deploy.md").read_text(encoding="utf-8")]
+    deploy_shared = REPO / "commands" / "vg" / "_shared" / "deploy"
+    if deploy_shared.is_dir():
+        deploy_chunks.extend(
+            sub.read_text(encoding="utf-8") for sub in sorted(deploy_shared.rglob("*.md"))
+        )
+    deploy = "\n\n".join(deploy_chunks)
     assert "meta_memory_mode" in deploy, (
-        "deploy.md must reference meta_memory_mode to gate the Stage 4 "
-        "inject block + reflector spawn"
+        "deploy.md (slim + _shared/deploy/) must reference meta_memory_mode to "
+        "gate the Stage 4 inject block + reflector spawn"
     )

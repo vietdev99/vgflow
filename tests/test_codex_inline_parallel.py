@@ -3,10 +3,13 @@ import re
 from pathlib import Path
 import pytest
 
+from conftest import read_command_full
+
 
 @pytest.fixture
 def review_md_text():
-    return Path("commands/vg/review.md").read_text(encoding="utf-8")
+    # v2.71+ split: review.md slim + _shared/review/*.md sub-files.
+    return read_command_full("review")
 
 
 def test_codex_inline_supports_parallel_codex_spawn(review_md_text):
