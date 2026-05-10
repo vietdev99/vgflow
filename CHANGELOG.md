@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.74.1 — Hotfix CI release codex equivalence (2026-05-10)
+
+### Bug fix
+- `scripts/verify-codex-mirror-equivalence.py` updated to skip skills with `commands/vg/_shared/<name>/` subdir (split skills intentionally diverge for Codex hook parity — mirror byte-identity enforced separately via per-split test suites).
+- Synced 3 pre-existing drifts that had been failing release CI for past 2 days:
+  - **vg-lesson**: claude `target_step` enum extended to match codex (added test/accept/deploy/roam/amend)
+  - **vg-learn**: relocated Codex-specific runtime note INSIDE `<codex_skill_adapter>` block so verifier strips it
+  - **vg-reflector**: claude side updated with procedural/declarative types + conditions DSL + sequence/success_signals + fingerprint section (codex side was newer)
+
+### Why CI was failing
+v2.70.0+ split work added `_shared/<name>/` subdirs with slim routing on both claude AND codex sides. Codex slim added HARD-GATE-CODEX + per-route mark-step fallbacks (Codex has no PreToolUse/PostToolUse hooks). The legacy P19 verifier (added in v2.13.0) compared sha256 of claude command body vs codex SKILL body — split skills intentionally diverge so the gate failed every release tag since v2.70.0. Plus 3 unrelated pre-existing drifts that should have been synced earlier.
+
 ## v2.74.0 — scope-review split + codex sync (2026-05-10)
 
 ### Refactor
