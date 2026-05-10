@@ -5,17 +5,29 @@
 set -euo pipefail
 
 target=""
+# v2.78.0 Stage 3.1: --mode global|project for v3.0.0 dual-mode install.
+#   project (default) — emit ${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/<name>
+#                       (backwards compat — existing project-local installs)
+#   global            — emit $HOME/.vgflow/scripts/hooks/<name>
+#                       (v3.0.0 single-version global install)
+mode="project"
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) target="$2"; shift 2 ;;
+    --mode)   mode="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
 
 if [ -z "$target" ]; then
-  echo "usage: install-hooks.sh --target <path-to-settings.json>" >&2
+  echo "usage: install-hooks.sh --target <path-to-settings.json> [--mode global|project]" >&2
   exit 1
 fi
+
+case "$mode" in
+  global|project) ;;
+  *) echo "invalid --mode '$mode': expected 'global' or 'project'" >&2; exit 1 ;;
+esac
 
 # Plugin root: directory containing this script's parent (e.g., scripts/hooks/.. = scripts/..).
 PLUGIN_ROOT="${VG_PLUGIN_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -40,7 +52,7 @@ if [ -z "$PYTHON_CMD" ]; then
 fi
 PYTHON_CMD="${PYTHON_CMD:-python3}"
 
-python3 - "$target" "$HOOKS_DIR" "$HOOKS_PATH_MODE" "$PYTHON_CMD" <<'PY'
+python3 - "$target" "$HOOKS_DIR" "$HOOKS_PATH_MODE" "$PYTHON_CMD" "$mode" <<'PY'
 import json, os, shlex, sys
 from pathlib import Path
 
@@ -48,6 +60,7 @@ target = Path(sys.argv[1])
 hooks_dir = sys.argv[2]
 mode = sys.argv[3]
 python_cmd = sys.argv[4]
+install_mode = sys.argv[5]   # v2.78.0: "global" or "project"
 
 if target.exists():
     settings = json.loads(target.read_text())
@@ -76,6 +89,9 @@ def _cmd(script_name: str) -> str:
     # `vg-run-bash-hook.py` is missing.
     if mode == "absolute":
         return shlex.quote(f"{hooks_dir}/{script_name}")
+    # v2.78.0 Stage 3.1: emit $HOME/.vgflow/... for global v3 install.
+    if install_mode == "global":
+        return f'"$HOME/.vgflow/scripts/hooks/{script_name}"'
     return f'"${{CLAUDE_PROJECT_DIR}}/.claude/scripts/hooks/{script_name}"'
 
 VG_ENTRIES = {
