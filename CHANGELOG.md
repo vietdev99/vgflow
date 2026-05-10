@@ -1,5 +1,67 @@
 # Changelog
 
+## v2.81.0 — v3.0.0 Stage 5: /vg:install skill (interactive ASK + switch + repair) (2026-05-10)
+
+### Goal
+Stage 5 of v3.0.0 plan. Adds interactive `/vg:install` skill that handles first-run, re-install, switch, and repair flows uniformly. Routes through `bin/vg-cli-dispatcher.sh` (Stage 4) — single source of truth for hook installation.
+
+### Changes
+
+**`commands/vg/install.md` NEW (Tasks 5.1, 5.2, 5.3)**
+
+Decision matrix:
+
+| Marker | Legacy `.claude/VGFLOW-VERSION` | `--target` | `--repair` | Action |
+|---|---|---|---|---|
+| absent | absent | unset | 0 | First-run → AskUserQuestion (global vs project) |
+| absent | present | unset | 0 | Default to `project` (preserve legacy) |
+| present | * | unset | 0 | Re-install matching marker silently |
+| * | * | `global` \| `project` | 0 | Switch to specified target |
+| * | * | `switch` | 0 | Toggle current marker |
+| * | * | * | 1 | Re-apply current target (repair) |
+
+**Frontmatter:**
+- allowed-tools: `AskUserQuestion`, `Bash`, `Read`, `Write`
+- runtime_contract: `install.started` + `install.completed` telemetry
+- mutates_repo: true
+
+**Backup-on-switch:** when switching marker (e.g., `project → global`), snapshot `.claude/{commands,skills,scripts}` + `.claude/settings.json` to `.vg/.backup-<ts>/` before applying new target.
+
+**Drift detection:** if dispatcher write didn't update `.vg/.install-target` (older dispatcher or non-git cwd), skill writes marker directly.
+
+Files:
+- `commands/vg/install.md` NEW + `.claude` mirror (byte-identical)
+- `codex-skills/vg-install/SKILL.md` regenerated via `scripts/generate-codex-skills.sh --force` (Codex adapter prefix added automatically) + `.codex` mirror
+
+### Test coverage
+13 new tests in `tests/test_vg_install_skill.py`, all PASS:
+- structure (frontmatter, telemetry contract, allowed-tools)
+- decision matrix tokens (first-run / re-install / switch / repair)
+- argument flags (`--target=global|project|switch`, `--repair`)
+- routing through `vg-cli-dispatcher.sh`
+- marker drift fallback (`printf '%s\n' "$RESOLVED" > "$MARKER"`)
+- backup pattern `.vg/.backup-<ts>/`
+- 4× mirror byte-identity (Claude + Codex)
+
+Codex equivalence verifier: 59 pairs OK (no drift).
+
+### Migration
+None. New skill — existing flows unaffected. Run `/vg:install` to opt into v3 marker-driven layout (writes `.vg/.install-target`); subsequent `find_vg_home()` resolves correctly per project.
+
+### Roadmap
+- v2.76.0 — Stage 1 resolver dual-mode
+- v2.77.0 — Stage 2 helpers
+- v2.78.0 — Stage 3.1 hook installer dual-mode
+- v2.79.0 — Symmetric VG_UPDATE_PROJECT_CODEX (PR #166)
+- v2.79.1 — Issue triage batch (5 closed)
+- v2.80.0 — Stage 4 vg CLI install/uninstall wire-up
+- v2.81.0 (this) — Stage 5 /vg:install skill
+- v2.82.x — Stage 6: deploy decouple `.vg/deploy/STATE.json`
+- v2.83.x — Stage 7: deploy migration + consumer migrations
+- **v3.0.0** — Stages 8-9: migration script `vg-migrate-v3.sh` + npm publish
+
+---
+
 ## v2.80.0 — v3.0.0 Stage 4: vg CLI install/uninstall wire-up (2026-05-10)
 
 ### Goal
