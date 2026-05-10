@@ -309,6 +309,20 @@ Next (pick one):
   edit {file:line}; git commit; /vg:next    # fix flags first, then continue
 ```
 
+### When verdict = TEST_PENDING (runtime clear, lifecycle proof belongs to test)
+```
+Review complete for Phase {N} — TEST_PENDING.
+  Goals: {ready}/{total} READY ({test_pending} TEST_PENDING, 0 runtime blockers)
+  Gate: TEST_PENDING (review rendered routes/API clean; lifecycle evidence pending)
+  Runtime blockers: 0 API/render/route blockers
+  Coverage pending: mutation/realtime/multi-step lifecycle proof
+
+Next:
+  /vg:test {phase}            # codegen + Playwright proves lifecycle evidence
+
+Do not loop back to /vg:review unless /vg:test surfaces a concrete runtime/code blocker.
+```
+
 ### When verdict = BLOCK (cannot proceed)
 ```
 Review complete for Phase {N} — BLOCK.
@@ -359,6 +373,7 @@ Per CONTEXT.md D-XX OR Per API-CONTRACTS.md"  # body must cite
 
 ### Hard rules for AI orchestrator (Claude/Codex/Gemini)
 1. **Never end a BLOCK review without listing per-finding fixes + verify steps.** Bare list of issues = user has to re-derive next action — anti-pattern.
+   BLOCK means runtime/code/spec/infra blocker. Missing lifecycle proof with runtime blockers cleared MUST be TEST_PENDING.
 2. **Use RELATIVE paths** in narration (`apps/api/src/plugins/health.ts:23`), NOT absolute (`/D/Workspace/...`). Absolute paths waste 60% of terminal width on repeated prefixes.
 3. **Per-finding format MUST be:**
    ```

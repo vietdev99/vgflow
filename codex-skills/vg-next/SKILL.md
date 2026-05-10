@@ -291,7 +291,7 @@ Display only — không block. User decision: re-migrate (recommended) hay skip.
 - `NEXT_STEP == "blueprint"` → Next: `/vg:blueprint {phase}`
 - `NEXT_STEP == "build"` → Next: `/vg:build {phase}`
 - `NEXT_STEP == "review"` → Next: `/vg:review {phase}` (see Cross-CLI option below)
-- `NEXT_STEP == "test"` → Next: `/vg:test {phase}` (UNLESS prior review verdict ∈ FAIL/BLOCK — see verdict gate)
+- `NEXT_STEP == "test"` → Next: `/vg:test {phase}` (UNLESS prior review verdict ∈ FAIL/BLOCK — see verdict gate; TEST_PENDING may advance)
 - `NEXT_STEP == "accept"` → Next: `/vg:accept {phase}` (UNLESS prior test verdict ∈ GAPS_FOUND/FAILED — see verdict gate)
 - `NEXT_STEP == "complete"` → Phase done (check Route 8/9)
 
@@ -300,6 +300,10 @@ Display only — không block. User decision: re-migrate (recommended) hay skip.
 Before routing to `/vg:test` or `/vg:accept`, read PIPELINE-STATE.json verdict
 of the prior step. If non-PASS verdict, do NOT auto-advance — show the same
 verdict-aware guidance the prior skill printed at exit:
+
+Exception: review verdict `TEST_PENDING` is allowed to advance to `/vg:test`.
+It means runtime/code/spec/infra blockers are clear and remaining lifecycle
+evidence is owned by test/codegen.
 
 ```bash
 PRIOR_REVIEW_VERDICT=$(${PYTHON_BIN:-python3} -c "
@@ -374,11 +378,12 @@ Display cross-CLI option:
 ```
 
 **Route 5b:** `RUNTIME-MAP.json` exists + `GOAL-COVERAGE-MATRIX.md` exists + gate = BLOCK (goals < 100%)
-→ Review ran but goals not met. Auto-detect cause from artifacts:
+→ Review ran but runtime/code/spec/infra blockers remain. Auto-detect cause from artifacts.
+If gate = TEST_PENDING, skip this route and use Route 6.
 
 ```
 Read discovery-state.json → completed_phase field
-Read GOAL-COVERAGE-MATRIX.md → goal statuses (READY / BLOCKED / UNREACHABLE / FAILED)
+Read GOAL-COVERAGE-MATRIX.md → goal statuses (READY / TEST_PENDING / BLOCKED / UNREACHABLE / FAILED)
 Read RUNTIME-MAP.json → goal_sequences[goal_id].start_view for each failed goal
 
 SIGNAL 1 — discovery-state.json.completed_phase ≠ "investigate":
@@ -394,6 +399,7 @@ SIGNAL 2 — completed_phase == "investigate" (review fully completed):
                   (review didn't replay — multi-step wizard, orphan route, timeout, retry-scope miss)
     BLOCKED/FAILED = goal has start_view but result=failed
                      (view found, scan ran, criteria not met → code bug)
+    TEST_PENDING = review found no runtime blocker, but lifecycle proof belongs to /vg:test
 ```
 
 **Display to user (explain, then action):**
@@ -416,6 +422,9 @@ SIGNAL 2 — completed_phase == "investigate" (review fully completed):
 │                    (form didn't submit, API error, etc.)      │
 │                    → Code has a bug — fix and re-scan         │
 │                                                               │
+│ TEST_PENDING ({N}) Runtime clean; lifecycle proof pending     │
+│                    → Fix: /vg:test {phase}                    │
+│                                                               │
 │ INTERRUPTED        Review died mid-scan (token/timeout)       │
 │                    → Just resume where it left off            │
 └───────────────────────────────────────────────────────────────┘
@@ -423,6 +432,7 @@ SIGNAL 2 — completed_phase == "investigate" (review fully completed):
 Failed goals:
   [UNREACHABLE] {goal_id}: {goal_desc}
   [NOT_SCANNED] {goal_id}: {goal_desc} (code: {path/to/page.tsx})
+  [TEST_PENDING] {goal_id}: {goal_desc}
   [BLOCKED]     {goal_id}: {goal_desc} (view: {start_view})
   ...
 ```
@@ -446,6 +456,11 @@ IF all NOT_SCANNED (code exists, review skipped):
         (fresh re-scan of only failed views)
     DO NOT run /vg:build --gaps-only — code already exists.
 
+IF all TEST_PENDING:
+  Print: "Runtime blockers clear — lifecycle evidence belongs to test."
+  Display:
+    /vg:test {phase}
+
 IF all BLOCKED (code bugs — user fix required first):
   Print: "All failures BLOCKED — code bugs in {N} views. Workflow:"
   Display (do NOT auto-invoke):
@@ -464,7 +479,7 @@ IF mix (any combination):
     Step 4: /vg:review {phase} --retry-failed   ← re-verify everything
 ```
 
-**Route 6:** `RUNTIME-MAP.json` + `RUNTIME-MAP.md` exist + GOAL-COVERAGE-MATRIX gate = PASS + no `*-SANDBOX-TEST.md`
+**Route 6:** `RUNTIME-MAP.json` + `RUNTIME-MAP.md` exist + GOAL-COVERAGE-MATRIX gate = PASS or TEST_PENDING + no `*-SANDBOX-TEST.md`
 → Next: `/vg:test {phase}`
 Note: RUNTIME-MAP.json is the canonical artifact — .md alone is NOT sufficient for /vg:test.
 

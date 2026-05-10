@@ -31,7 +31,7 @@
 #
 # Exposed functions:
 #   - merge_and_write_matrix PHASE_DIR TEST_GOALS RUNTIME_MAP PROBE_RESULTS OUTPUT_MD
-#       → stdout: "PASS|BLOCK|INTERMEDIATE" + counts in $MERGE_*
+#       → stdout: "PASS|BLOCK|INTERMEDIATE|TEST_PENDING" + counts in $MERGE_*
 #       → writes OUTPUT_MD
 #
 # Usage in review.md Phase 4b + 4d:
@@ -45,6 +45,7 @@
 #     PASS) echo "✓ Gate PASS" ;;
 #     BLOCK) echo "⛔ Gate BLOCK" ;;
 #     INTERMEDIATE) echo "⚠ Gate: intermediate goals present" ;;
+#     TEST_PENDING) echo "🧪 Gate: runtime clear, test coverage pending" ;;
 #   esac
 
 merge_and_write_matrix() {
@@ -270,6 +271,56 @@ def _has_persistence_proof(seq):
             return True
     return False
 
+TEST_PENDING_PATTERNS = (
+    'not exercised',
+    'not observed',
+    'not proven',
+    'not prove',
+    'did not prove',
+    'proof missing',
+    'lifecycle',
+    'multi-step',
+    'mutation evidence',
+    'realtime evidence',
+    'without a successful post/put/patch/delete',
+    'no persistence_probe',
+    'persistence proof',
+    'needs dedicated browser session',
+    'acceptance-grade proof',
+)
+
+RUNTIME_BLOCKER_PATTERNS = (
+    'api error',
+    ' 400',
+    ' 401',
+    ' 403',
+    ' 404',
+    ' 409',
+    ' 422',
+    ' 500',
+    ' 502',
+    ' 503',
+    'exception',
+    'crash',
+    'cannot render',
+    'failed to render',
+    'route missing',
+    'not found',
+    'redirected to login',
+    'auth failed',
+    'nan',
+    'raw i18n',
+    'placeholder',
+)
+
+def _is_test_pending_evidence(text):
+    compact = re.sub(r'\s+', ' ', str(text or '').strip()).lower()
+    if not compact:
+        return False
+    if any(pattern in compact for pattern in RUNTIME_BLOCKER_PATTERNS):
+        return False
+    return any(pattern in compact for pattern in TEST_PENDING_PATTERNS)
+
 # ─── Load surface probe results ───────────────────────────────────
 probe_results = {}
 if Path(probe_path).exists():
@@ -292,8 +343,13 @@ for g in goals:
                 g['status'] = 'READY'
                 g['evidence'] = f"browser: {len(seq.get('steps',[]))} steps"
             elif result == 'failed':
-                g['status'] = 'BLOCKED'
-                g['evidence'] = f"browser failed: {seq.get('failure_reason','?')[:80]}"
+                reason = str(seq.get('failure_reason', '?'))
+                g['status'] = 'TEST_PENDING' if _is_test_pending_evidence(reason) else 'BLOCKED'
+                g['evidence'] = f"browser failed: {reason[:80]}"
+            elif result == 'partial':
+                reason = str(seq.get('failure_reason', '?'))
+                g['status'] = 'TEST_PENDING' if _is_test_pending_evidence(reason) else 'BLOCKED'
+                g['evidence'] = f"browser partial: {reason[:80]}"
             else:
                 g['status'] = 'FAILED'
                 g['evidence'] = f"browser result unknown"
@@ -309,14 +365,14 @@ for g in goals:
         # assertion or "row visible" snapshot is not CRUD evidence.
         if g['status'] == 'READY' and _meaningful(g.get('mutation_evidence')):
             if not _has_mutation_step(seq):
-                g['status'] = 'BLOCKED'
+                g['status'] = 'TEST_PENDING'
                 g['evidence'] = (
                     "shallow CRUD evidence: goal_sequence passed without a successful "
                     "POST/PUT/PATCH/DELETE observation; list-only review cannot satisfy "
                     "Mutation evidence"
                 )
             elif not _has_persistence_proof(seq):
-                g['status'] = 'BLOCKED'
+                g['status'] = 'TEST_PENDING'
                 g['evidence'] = (
                     "ghost-save risk: mutation observed but no persistence_probe.persisted=true; "
                     "Layer 4 verify (refresh + re-read + diff) missing"
@@ -338,7 +394,7 @@ for g in goals:
         g['evidence'] = 'no probe result; surface probe phase may not have run'
 
 # ─── Aggregate counts ────────────────────────────────────────────
-total_by_status = {'READY': 0, 'BLOCKED': 0, 'NOT_SCANNED': 0, 'UNREACHABLE': 0, 'INFRA_PENDING': 0, 'FAILED': 0}
+total_by_status = {'READY': 0, 'BLOCKED': 0, 'TEST_PENDING': 0, 'NOT_SCANNED': 0, 'UNREACHABLE': 0, 'INFRA_PENDING': 0, 'FAILED': 0}
 by_priority = {
     'critical':     {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 100},
     'important':    {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 80},
@@ -358,6 +414,7 @@ for g in goals:
 
 # ─── Gate verdict ────────────────────────────────────────────────
 # 4 conclusion statuses: READY, BLOCKED, UNREACHABLE, INFRA_PENDING
+# 1 coverage-pending status: TEST_PENDING → may advance to /vg:test
 # 2 intermediate: NOT_SCANNED, FAILED → force INTERMEDIATE verdict
 intermediate = total_by_status['NOT_SCANNED'] + total_by_status['FAILED']
 
@@ -372,13 +429,15 @@ elif total_by_status['BLOCKED'] > 0 or total_by_status['UNREACHABLE'] > 0:
     # priority threshold — pre-fix: weighted gate masked BLOCKED < threshold pct
     # and emitted PASS. Now blocks first.
     verdict = 'BLOCK'
+elif total_by_status['TEST_PENDING'] > 0:
+    verdict = 'TEST_PENDING'
 else:
     # Compute weighted gate (only if 0 BLOCKED + 0 UNREACHABLE)
     for prio, info in by_priority.items():
         if info['total'] == 0: continue
         pct = 100 * info['ready'] / info['total']
         if pct < info['threshold']:
-            verdict = 'BLOCK'
+            verdict = 'TEST_PENDING' if info['other'] > 0 and total_by_status['TEST_PENDING'] > 0 else 'BLOCK'
             info['failed_gate'] = True
 
 # ─── Write GOAL-COVERAGE-MATRIX.md ───────────────────────────────
@@ -394,6 +453,7 @@ lines = [
     f'- **Total goals:** {len(goals)}',
     f'- **READY:** {total_by_status["READY"]}',
     f'- **BLOCKED:** {total_by_status["BLOCKED"]}',
+    f'- **TEST_PENDING:** {total_by_status["TEST_PENDING"]} (test coverage pending)',
     f'- **NOT_SCANNED:** {total_by_status["NOT_SCANNED"]} (intermediate)',
     f'- **UNREACHABLE:** {total_by_status["UNREACHABLE"]}',
     f'- **INFRA_PENDING:** {total_by_status["INFRA_PENDING"]}',
@@ -410,7 +470,12 @@ for prio in ('critical', 'important', 'nice-to-have'):
         lines.append(f'| {prio} | 0 | 0 | 0 | 0 | {info["threshold"]}% | n/a | — |')
         continue
     pct = 100 * info['ready'] / info['total']
-    status_icon = '✅ PASS' if pct >= info['threshold'] else '⛔ BLOCK'
+    if pct >= info['threshold']:
+        status_icon = '✅ PASS'
+    elif info['blocked'] == 0 and total_by_status['TEST_PENDING'] > 0:
+        status_icon = '🧪 TEST_PENDING'
+    else:
+        status_icon = '⛔ BLOCK'
     lines.append(f'| {prio} | {info["ready"]} | {info["blocked"]} | {info["other"]} | {info["total"]} | {info["threshold"]}% | {pct:.1f}% | {status_icon} |')
 
 lines += ['', '## Goal Details', '', '| Goal | Priority | Surface | Status | Evidence |', '|------|----------|---------|--------|----------|']
@@ -419,7 +484,7 @@ for g in goals:
     lines.append(f'| {g["id"]} | {g["priority"]} | {g["surface"]} | {g["status"]} | {ev} |')
 
 # Gate verdict section
-gate_icon = {'PASS': '✅', 'BLOCK': '⛔', 'INTERMEDIATE': '⚠️'}[verdict]
+gate_icon = {'PASS': '✅', 'BLOCK': '⛔', 'INTERMEDIATE': '⚠️', 'TEST_PENDING': '🧪'}[verdict]
 lines += ['', f'## Gate: {gate_icon} **{verdict}**', '']
 if verdict == 'INTERMEDIATE':
     lines += [
@@ -443,7 +508,13 @@ elif verdict == 'BLOCK':
             'Fix blockers or escalate to /vg:accept with debt entry.',
         ]
 else:
-    lines += [f'All priority thresholds met. {total_by_status["READY"]}/{len(goals)} READY — proceed to /vg:test.']
+    if verdict == 'TEST_PENDING':
+        lines += [
+            f'Review runtime blockers clear. {total_by_status["TEST_PENDING"]} goals still need lifecycle/test evidence.',
+            'Proceed to /vg:test; do not loop back to /vg:review unless test finds a concrete runtime/code blocker.',
+        ]
+    else:
+        lines += [f'All priority thresholds met. {total_by_status["READY"]}/{len(goals)} READY — proceed to /vg:test.']
 
 lines.append('')
 Path(out_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
@@ -454,6 +525,7 @@ print(f"VERDICT={verdict}")
 print(f"TOTAL={len(goals)}")
 print(f"READY={total_by_status['READY']}")
 print(f"BLOCKED={total_by_status['BLOCKED']}")
+print(f"TEST_PENDING={total_by_status['TEST_PENDING']}")
 print(f"NOT_SCANNED={total_by_status['NOT_SCANNED']}")
 print(f"UNREACHABLE={total_by_status['UNREACHABLE']}")
 print(f"INFRA_PENDING={total_by_status['INFRA_PENDING']}")
