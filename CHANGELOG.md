@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.70.0 — review.md full split (2026-05-10)
+
+### Refactor
+Extracted `commands/vg/review.md` (8159 lines monolithic) into `commands/vg/_shared/review/` subdir mirroring build.md slim entry + delegation files pattern. **review.md slim to 539 lines (93.4% reduction).**
+
+### Sub-files (9 new in `commands/vg/_shared/review/`)
+- `preflight.md` (851 lines) — 7 gate/parse/profile steps (00_gate_integrity, 00_session_lifecycle, 0_parse_and_validate, 0a_env_mode_gate, 0b_goal_coverage_gate, 0c_telemetry_suggestions, create_task_tracker)
+- `phase-p-variants.md` (862 lines) — 6 phaseP variants (profile_branch, infra_smoke, delta, regression, schema_verify, link_check)
+- `code-scan.md` (656 lines) — phase1_code_scan + phase1_5_ripple_and_god_node
+- `api-and-discovery.md` (1161 lines) — phase2a_api_contract_probe + phase2_browser_discovery
+- `lens-and-findings.md` (862 lines) — 8 phase2.5/2b/c/d/e/f steps (lens probe, findings derivation, auto-fix routing)
+- `limits-and-mobile.md` (681 lines) — exploration limits + mobile discovery + visual checks
+- `url-and-error.md` (321 lines) — phase2.7/2.8/2.9 URL state + error message runtime
+- `fix-loop-and-goals.md` (1443 lines) — phase3_fix_loop + phase4_goal_comparison (largest combined section)
+- `close.md` (823 lines) — unreachable_triage + crossai_review + write_artifacts + bootstrap_reflection + complete
+
+### review.md slim entry
+review.md retains frontmatter + LANGUAGE_POLICY + HARD-GATE + STEP routing. Each STEP block replaced with: "Read `_shared/review/X.md` and follow it exactly." Pattern matches `commands/vg/build.md` slim entry style.
+
+### Behavior
+**Zero behavior change.** Extracted content is verbatim. Step markers, telemetry events, bash logic preserved exactly. Mirror byte-identity verified for all canonical/.claude pairs.
+
+### Test impact
+**60 new tests across 10 suites** (54 split tests + 3 ceiling tests + 3 helper updates). Tests previously grep'ing review.md body content updated to use `review_text_full()` helper that concatenates review.md + `_shared/review/*.md`. All v2.65.0-v2.69.0 tests still pass. Zero regression.
+
+### Migration
+No migration. Operators continue calling `/vg:review {phase}` — entry routes through slim review.md → extracted sub-files transparently. No behavioral change.
+
 ## v2.69.0 — Flip B1+B4+C2 advisory gates to blocking (2026-05-10)
 
 ### Behavioral changes (3 gates flip warn→block) — BREAKING
