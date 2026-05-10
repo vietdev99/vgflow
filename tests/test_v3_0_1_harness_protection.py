@@ -10,6 +10,7 @@ Two layers:
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -104,7 +105,10 @@ _skipif_no_bash = pytest.mark.skipif(
 
 
 def _run_hook(file_path: str, cwd: Path, env_extra: dict | None = None) -> int:
-    payload = f'{{"tool_input":{{"file_path":{file_path!r}}}}}'
+    # JSON-encode the payload — Python repr() emits single quotes which is
+    # invalid JSON; the hook's `json.load(sys.stdin)` then silently swallows
+    # the exception via `|| true` and file_path resolves to "" → exit 0.
+    payload = json.dumps({"tool_input": {"file_path": file_path}})
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
