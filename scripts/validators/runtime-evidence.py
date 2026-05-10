@@ -27,6 +27,7 @@ Output: standard validator JSON
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -35,6 +36,31 @@ from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 PHASES_DIR = REPO_ROOT / ".vg" / "phases"
+
+
+def _write_evidence(phase_dir: Path, gate_id: str, verdict: str,
+                    findings: list, extra: dict | None = None) -> Path:
+    """v2.68.0 C1 — write structured evidence JSON to ${PHASE_DIR}/.evidence/<gate_id>.json.
+
+    Audit trail companion to stdout JSON. Other consumers (gate aggregator,
+    accept-step audit) read the .evidence/ file directly without re-running
+    the validator. Payload includes verdict + findings + signed_at timestamp
+    + validator name.
+    """
+    evidence_dir = phase_dir / ".evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "gate_id": gate_id,
+        "verdict": verdict,
+        "findings": findings,
+        "signed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "validator": Path(__file__).name,
+    }
+    if extra:
+        payload.update(extra)
+    out_path = evidence_dir / f"{gate_id}.json"
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return out_path
 
 
 def find_phase_dir(phase: str) -> Path | None:
@@ -348,6 +374,14 @@ def main() -> int:
                        f"{', '.join(code_only_critical)}. Run Playwright specs "
                        f"or mark as deferred|manual with reason.",
         })
+
+    # v2.68.0 C1 — write structured evidence JSON to ${PHASE_DIR}/.evidence/.
+    try:
+        _write_evidence(phase_dir, "runtime-evidence", verdict, evidence)
+    except OSError:
+        # Best-effort: stdout JSON is the primary contract; .evidence/
+        # write failure must not block the validator output.
+        pass
 
     print(json.dumps({
         "validator": "runtime-evidence",

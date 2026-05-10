@@ -41,6 +41,31 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+
+def _write_evidence(phase_dir: Path, gate_id: str, verdict: str,
+                    findings: list, extra: dict | None = None) -> Path:
+    """v2.68.0 C1 — write structured evidence JSON to ${PHASE_DIR}/.evidence/<gate_id>.json.
+
+    Companion to per-workflow JSONs in WORKFLOW-EVIDENCE/. The .evidence/<gate_id>.json
+    is the standardized gate-level digest (verdict + findings + signed_at) that
+    downstream aggregators and the audit pipeline consume uniformly across all
+    L-gate validators.
+    """
+    evidence_dir = phase_dir / ".evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "gate_id": gate_id,
+        "verdict": verdict,
+        "findings": findings,
+        "signed_at": datetime.now(timezone.utc).isoformat(),
+        "validator": Path(__file__).name,
+    }
+    if extra:
+        payload.update(extra)
+    out_path = evidence_dir / f"{gate_id}.json"
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return out_path
+
 # YAML loader: prefer pyyaml, fall back to a minimal hand parser for the
 # narrow subset of WORKFLOW-SPECS YAML (id/name/actors/steps[].actor/.action).
 try:
@@ -678,6 +703,17 @@ def main() -> int:
         )
 
     if not drift_workflows:
+        # v2.68.0 C1 — write structured evidence JSON.
+        try:
+            _write_evidence(
+                phase_dir,
+                "workflow-evidence",
+                "PASS",
+                [],
+                extra={"summary": aggregate["summary"]},
+            )
+        except OSError:
+            pass
         print(
             f"OK: {len(all_workflows)} workflow(s) traced, all steps found "
             f"(or skipped/ambiguous)"
@@ -689,6 +725,26 @@ def main() -> int:
         f"{len(drift_workflows)}/{len(all_workflows)} workflow(s) have drift: "
         f"{', '.join(drift_workflows)}"
     )
+    # v2.68.0 C1 — write structured evidence JSON. verdict mirrors severity:
+    # BLOCK in strict mode, WARN otherwise.
+    drift_findings = [
+        {
+            "workflow_id": wf_id,
+            "type": "drift",
+            "message": f"workflow {wf_id} has missing/divergent step(s)",
+        }
+        for wf_id in drift_workflows
+    ]
+    try:
+        _write_evidence(
+            phase_dir,
+            "workflow-evidence",
+            "BLOCK" if args.strict else "WARN",
+            drift_findings,
+            extra={"summary": aggregate["summary"]},
+        )
+    except OSError:
+        pass
     if args.strict:
         print(f"BLOCK: {summary}", file=sys.stderr)
         return 1

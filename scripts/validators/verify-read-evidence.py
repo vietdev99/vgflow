@@ -44,12 +44,37 @@ import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from design_ref_resolver import first_screenshot, resolve_design_assets  # noqa: E402
 
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$", re.IGNORECASE)
+
+
+def _write_evidence(phase_dir: Path, gate_id: str, verdict: str,
+                    findings: list, extra: dict | None = None) -> Path:
+    """v2.68.0 C1 — write structured evidence JSON to ${PHASE_DIR}/.evidence/<gate_id>.json.
+
+    Companion to the per-task sentinel files. The .evidence/<gate_id>.json is
+    the gate-level digest (verdict + findings + signed_at) consumed by audit
+    pipelines uniformly across all L-gate validators.
+    """
+    evidence_dir = phase_dir / ".evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "gate_id": gate_id,
+        "verdict": verdict,
+        "findings": findings,
+        "signed_at": datetime.now(timezone.utc).isoformat(),
+        "validator": Path(__file__).name,
+    }
+    if extra:
+        payload.update(extra)
+    out_path = evidence_dir / f"{gate_id}.json"
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return out_path
 
 
 def file_sha256(path: Path) -> str | None:
@@ -65,12 +90,38 @@ def file_sha256(path: Path) -> str | None:
     return h.hexdigest()
 
 
-def emit(result: dict, output: str | None) -> int:
+def emit(result: dict, output: str | None, phase_dir: Path | None = None) -> int:
     payload = json.dumps(result, indent=2, ensure_ascii=False)
     if output:
         out = Path(output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(payload, encoding="utf-8")
+    # v2.68.0 C1 — write structured evidence JSON to ${PHASE_DIR}/.evidence/.
+    # Per-task gate digest aggregated across all task invocations within phase.
+    if phase_dir is not None:
+        try:
+            findings: list = []
+            verdict = result.get("verdict", "UNKNOWN")
+            if verdict == "BLOCK":
+                findings.append({
+                    "task": result.get("task"),
+                    "slug": result.get("slug"),
+                    "type": "read_evidence_block",
+                    "reason": result.get("reason", ""),
+                    "mismatches": result.get("mismatches", []),
+                })
+            _write_evidence(
+                phase_dir,
+                "read-evidence",
+                verdict,
+                findings,
+                extra={
+                    "task": result.get("task"),
+                    "slug": result.get("slug"),
+                },
+            )
+        except OSError:
+            pass
     print(payload)
     return 0 if result["verdict"] in ("PASS", "SKIP") else 1
 
@@ -115,30 +166,30 @@ def main() -> int:
 
     if not expected_png.exists():
         result["reason"] = f"baseline PNG missing at {expected_png} — L1 gate should have caught earlier"
-        return emit(result, args.output)
+        return emit(result, args.output, phase_dir)
 
     if not sentinel.exists():
         if args.require == "false":
             result["reason"] = "sentinel not required for this task"
-            return emit(result, args.output)
+            return emit(result, args.output, phase_dir)
         result["verdict"] = "BLOCK"
         result["reason"] = (
             f"executor did not write {sentinel.name} after Read PNG — D-09 forcing function failed"
         )
-        return emit(result, args.output)
+        return emit(result, args.output, phase_dir)
 
     try:
         data = json.loads(sentinel.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         result["verdict"] = "BLOCK"
         result["reason"] = f"sentinel parse error: {type(exc).__name__}: {exc}"
-        return emit(result, args.output)
+        return emit(result, args.output, phase_dir)
 
     declared_paths = data.get("read_paths") or []
     if not isinstance(declared_paths, list):
         result["verdict"] = "BLOCK"
         result["reason"] = "sentinel.read_paths must be an array"
-        return emit(result, args.output)
+        return emit(result, args.output, phase_dir)
 
     declared_normalised: list[dict] = []
     for entry in declared_paths:
@@ -177,12 +228,12 @@ def main() -> int:
             f"required PNG {expected_png.name} not in sentinel.read_paths — executor did not Read it"
         )
         result["declared_paths"] = [e["path"] for e in declared_normalised]
-        return emit(result, args.output)
+        return emit(result, args.output, phase_dir)
 
     if result["mismatches"]:
         result["verdict"] = "BLOCK"
         result["reason"] = f"{len(result['mismatches'])} sha256 issue(s) — likely fabricated sentinel"
-        return emit(result, args.output)
+        return emit(result, args.output, phase_dir)
 
     result["verdict"] = "PASS"
     result["expected_sha256"] = expected_sha
