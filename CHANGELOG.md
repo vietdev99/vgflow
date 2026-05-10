@@ -1,5 +1,48 @@
 # Changelog
 
+## v2.72.0 — Codex-skills sync + migrate.md split (2026-05-10)
+
+### Refactor — eliminates codex-skills/claude-commands drift after v2.70.0/v2.71.0
+**User-flagged critical issue:** Codex CLI handles review pipeline. After v2.70.0 split (review.md 8159→539), codex-skills/vg-review/SKILL.md remained 7757 lines monolithic — context-budget bug.
+
+### Claude-side migrate.md split (T1-T4)
+- `commands/vg/migrate.md`: **1301 → 79 lines (94% reduction)**
+- 4 new sub-files in `_shared/migrate/`:
+  - `preflight.md` (178 lines) — 1_parse_args, 2_detect_artifacts, 3_backup_originals
+  - `enrich.md` (301 lines) — 4_enrich_context, 5_generate_contracts
+  - `goals-plans.md` (356 lines) — 6_generate_goals, 6_5_link_plan_goals, 7_attribute_plans
+  - `pipeline-and-validate.md` (403 lines) — 8_write_pipeline_state, 8b_backfill_infra, 9_validate_and_report
+
+### Codex-skills slim (T6-T8) — context-budget fix
+- **codex-skills/vg-review/SKILL.md: 7757 → 488 lines (94% reduction)** — routes to v2.70.0 `_shared/review/*` (9 sub-files). Critical for Codex review runtime.
+- **codex-skills/vg-project/SKILL.md: 1728 → 363 lines (79% reduction)** — routes to v2.71.0 `_shared/project/*` (5 sub-files).
+- **codex-skills/vg-migrate/SKILL.md: 1440 → 224 lines (84% reduction)** — routes to NEW v2.72.0 `_shared/migrate/*` (4 sub-files).
+
+### Preserved across all codex slims
+- Frontmatter (name/description/metadata)
+- `<codex_skill_adapter>` envelope (runtime contract, tool mapping, spawn precedence, tier mapping, caveats)
+- `<HARD-GATE-CODEX>` block (where present — v2.65.0 A9 manual mark-step list)
+- `<LANGUAGE_POLICY>`, `<TASKLIST_POLICY>`, `<rules>`, `<objective>`, `<success_criteria>`
+- v2.65.0 A9 manual `mark-step` calls per routing entry (Codex hook fallback)
+- v2.67.0 #158 lens telemetry parity calls
+
+### Behavior
+**Zero behavior change.** Codex skills load `_shared/X/Y.md` files transparently via "Read X.md and follow it exactly." instruction (mirror `codex-skills/vg-build/SKILL.md` pattern from earlier). Markers, telemetry, bash logic preserved exactly.
+
+### Test coverage
+**42 new tests across 8 suites** (T1-T4: 25 split tests, T5: 3 ceiling, T6-T8: 14 slim coverage). All pass. Zero regression.
+
+### Migration
+No migration. Operators continue calling `/vg:migrate`, `/vg:review`, `/vg:project` — entries route through slim files transparently.
+
+### Total reduction across v2.70.0+v2.71.0+v2.72.0
+| Side | review | project | migrate | Total saved |
+|---|---|---|---|---|
+| Claude before | 8159 | 1590 | 1301 | 11050 |
+| Claude after | 539 | 222 | 79 | 840 (-92%) |
+| Codex before | 7757 | 1728 | 1440 | 10925 |
+| Codex after | 488 | 363 | 224 | 1075 (-90%) |
+
 ## v2.71.0 — project.md full split (2026-05-10)
 
 ### Refactor
