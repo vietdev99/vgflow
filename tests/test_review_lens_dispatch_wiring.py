@@ -8,9 +8,19 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
+def _review_md_full_text() -> str:
+    """Concatenate review.md + all _shared/review/*.md sub-files (v2.70.0 split)."""
+    parts = [(REPO / "commands/vg/review.md").read_text(encoding="utf-8")]
+    shared_review = REPO / "commands" / "vg" / "_shared" / "review"
+    if shared_review.is_dir():
+        for p in sorted(shared_review.glob("*.md")):
+            parts.append(p.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
 def test_review_md_calls_emit_dispatch_plan() -> None:
     """review.md Phase 2.5 must call emit-dispatch-plan.py before spawn loop."""
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    text = _review_md_full_text()
     assert "emit-dispatch-plan.py" in text, (
         "review.md Phase 2.5 must call scripts/lens-dispatch/emit-dispatch-plan.py"
     )
@@ -26,18 +36,18 @@ def test_review_md_calls_emit_dispatch_plan() -> None:
 
 def test_review_md_calls_verify_lens_runs_coverage() -> None:
     """review.md must call verify-lens-runs-coverage.py after spawn loop."""
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    text = _review_md_full_text()
     assert "verify-lens-runs-coverage.py" in text
 
 
 def test_review_md_renders_coverage_matrix() -> None:
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    text = _review_md_full_text()
     assert "lens-coverage-matrix.py" in text or "LENS-COVERAGE-MATRIX.md" in text
 
 
 def test_review_md_routes_coverage_block_through_wrapper() -> None:
     """Coverage gate failure must route through Task 33 wrapper, not exit 1."""
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    text = _review_md_full_text()
     # When verify-lens-runs-coverage exits non-zero, must call wrapper
     import re
     # Look for verify-lens-runs-coverage block followed by wrapper invocation within 30 lines
@@ -67,13 +77,13 @@ def test_spawn_recursive_probe_writes_plan_hash_in_artifacts() -> None:
 
 def test_review_md_skip_mode_shortcuts_coverage() -> None:
     """When --probe-mode skip set, coverage gate skipped (legitimate user decision)."""
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    text = _review_md_full_text()
     # Look for .recursive-probe-skipped.yaml check before coverage gate
     assert ".recursive-probe-skipped.yaml" in text
 
 
 def test_telemetry_events_declared_in_frontmatter() -> None:
     """review.md must declare review.lens_dispatch_emitted + review.lens_coverage_blocked."""
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    text = _review_md_full_text()
     assert "review.lens_dispatch_emitted" in text
     assert "review.lens_coverage_blocked" in text

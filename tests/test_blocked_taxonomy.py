@@ -68,8 +68,18 @@ def test_classifier_distinguishes_app_vs_workflow():
     assert "EXTERNAL_REQUIRED" in str(res), f"expected EXTERNAL_REQUIRED, got {res}"
 
 
+def _review_md_full_text() -> str:
+    """Concatenate review.md + all _shared/review/*.md sub-files (v2.70.0 split)."""
+    parts = [(REPO_ROOT / "commands" / "vg" / "review.md").read_text(encoding="utf-8")]
+    shared_review = REPO_ROOT / "commands" / "vg" / "_shared" / "review"
+    if shared_review.is_dir():
+        for p in sorted(shared_review.glob("*.md")):
+            parts.append(p.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
 def test_review_md_routes_by_blocked_reason():
-    body = (REPO_ROOT / "commands" / "vg" / "review.md").read_text(encoding="utf-8")
+    body = _review_md_full_text()
     # Auto-fix routing must reference BLOCKED reason taxonomy keywords
     assert re.search(
         r"APP_BLOCKED|WORKFLOW_BLOCKED|PREREQ_MISSING|EXTERNAL_REQUIRED|PROBE_INVALID",
