@@ -331,3 +331,34 @@ written here, indexed and concatenated by the post-executor
 read `BUILD-LOG/index.md` (Layer 2, ~30 lines) to plan their work
 without loading the full `BUILD-LOG.md` (Layer 3, 1000+ lines for
 25-task phase).
+
+## Sandbox runtime (v2.68.0 C5)
+
+When running tests that touch shared state (DB connections, ports, filesystem
+outside repo), wrap the test exec in a sandbox tempdir. Pattern (mirrors the
+mkdtemp + env scrub used by CrossAI runners in `scripts/crossai-runner.py`):
+
+```python
+import tempfile
+import os
+import subprocess
+from pathlib import Path
+
+with tempfile.TemporaryDirectory(prefix="vg-test-sandbox-") as sandbox:
+    env = os.environ.copy()
+    env["TMPDIR"] = sandbox
+    env["XDG_CACHE_HOME"] = sandbox
+    # Do NOT chdir — keep cwd at repo root for relative imports
+    subprocess.run(["pytest", "..."], env=env, check=True)
+```
+
+**When to sandbox** (test exec specifically — not the whole task):
+- pytest / jest / vitest tests that write to `/tmp` or `~/.cache`
+- Tests that bind to network ports (use sandbox-allocated port)
+- Tests that touch DB (use ephemeral schema/db_name in sandbox)
+
+**When NOT to sandbox:**
+- Pure unit tests with no I/O — sandbox overhead unnecessary
+- Tests that need real repo state (e.g., git history, file fingerprints) — these are NOT isolatable
+
+Document choice in commit message if you sandboxed: `(sandbox: tmpdir for DB exec)`.

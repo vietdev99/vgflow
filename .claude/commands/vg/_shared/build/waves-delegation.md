@@ -407,3 +407,5 @@ reconcile, UI-MAP injection audit, task-fidelity audit) provides the
 secondary safety net — even if a subagent's return JSON looks valid,
 the wave gates catch parallel-executor races, paraphrase, and
 attribution corruption that single-task validation cannot see.
+
+**Sandbox note (v2.68.0 C5):** Tests touching shared state (DB, ports, /tmp) should run in tempdir sandbox per `.claude/agents/vg-build-task-executor/SKILL.md` "Sandbox runtime" section.
