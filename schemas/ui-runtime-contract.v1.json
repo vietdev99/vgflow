@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/ui-runtime-contract.v1.json",
+  "title": "VG UI-RUNTIME-CONTRACT (v1) — runtime acceptance criteria for UI-heavy phases",
+  "description": "Schema for the JSON code block embedded in UI-RUNTIME-CONTRACT.md. Emitted by /vg:blueprint step 2b6d_ui_runtime_contract when phase is UI-heavy (web-fullstack / web-frontend-only profile + ≥1 FE task touching .tsx/.jsx/.vue/.svelte). Consumed by /vg:build pre-test-gate (CSS-token presence + spec-count) and /vg:review (computed-style + env-host checks). Closes Issue #173 root cause: UI-heavy phases passed build/review with Tailwind token drift and missing Playwright lifecycle specs because no contract listed the runtime invariants the design demanded.",
+  "type": "object",
+  "required": [
+    "version",
+    "phase_id",
+    "generated_at",
+    "required_tailwind_tokens",
+    "first_viewport_surfaces",
+    "route_inventory",
+    "env_contract",
+    "min_spec_count",
+    "acceptance_criteria"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "const": "1"
+    },
+    "phase_id": {
+      "type": "string",
+      "description": "Phase id this contract belongs to."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_artifacts": {
+      "type": "object",
+      "description": "Provenance — paths the generator consumed.",
+      "additionalProperties": true,
+      "properties": {
+        "view_components": {"type": ["string", "null"]},
+        "ui_spec_dir": {"type": ["string", "null"]},
+        "env_contract": {"type": ["string", "null"]},
+        "test_goals": {"type": ["string", "null"]},
+        "plan": {"type": ["string", "null"]}
+      }
+    },
+    "required_tailwind_tokens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["class_name", "evidence_source"],
+        "additionalProperties": true,
+        "properties": {
+          "class_name": {
+            "type": "string",
+            "description": "Tailwind utility class name (e.g. 'brand-primary', 'bg-brand-500'). Must appear in generated CSS at build time."
+          },
+          "evidence_source": {
+            "type": "string",
+            "description": "Where the class was discovered (e.g. 'UI-SPEC/sites.md verbatim form markup', 'VIEW-COMPONENTS.md TopBar component')."
+          },
+          "occurrences": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many distinct sites used the class."
+          }
+        }
+      },
+      "description": "Brand/theme tokens that MUST appear in compiled CSS. Build validator greps generated CSS for each class_name; missing classes block build."
+    },
+    "first_viewport_surfaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["surface_name", "slug"],
+        "additionalProperties": true,
+        "properties": {
+          "surface_name": {
+            "type": "string",
+            "description": "Canonical surface name from VIEW-COMPONENTS.md (e.g. AppShell, Sidebar, TopBar, MainContent)."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Design slug from VIEW-COMPONENTS.md."
+          },
+          "expected_layout": {
+            "type": ["string", "null"],
+            "description": "Optional layout summary (e.g. 'sidebar 240px + flex-1 main')."
+          },
+          "computed_style_assertions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["selector", "property", "expected"],
+              "additionalProperties": false,
+              "properties": {
+                "selector": {"type": "string"},
+                "property": {"type": "string"},
+                "expected": {"type": "string"}
+              }
+            },
+            "description": "Optional computed-style invariants Playwright will assert at runtime."
+          }
+        }
+      },
+      "description": "Surfaces rendered on first viewport (above the fold). Review computed-style smoke targets these per slug."
+    },
+    "route_inventory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "source"],
+        "additionalProperties": true,
+        "properties": {
+          "path": {"type": "string"},
+          "source": {
+            "type": "string",
+            "description": "Where the route was discovered (PLAN task, UI-SPEC slug, etc.)."
+          },
+          "auth_required": {"type": "boolean"}
+        }
+      },
+      "description": "All routes the phase introduces. Review hard-blocks if a discovered route is absent here, or vice-versa."
+    },
+    "env_contract": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["present", "missing", "skipped"],
+          "description": "present = ENV-CONTRACT.md consumed; missing = legacy phase, gate downgraded; skipped = phase opted out via override."
+        },
+        "base_url": {"type": ["string", "null"]},
+        "auth_host": {"type": ["string", "null"]},
+        "cookie_domain": {"type": ["string", "null"]},
+        "disposable_seed_data": {"type": ["boolean", "null"]},
+        "third_party_stubs_count": {"type": ["integer", "null"], "minimum": 0}
+      },
+      "description": "Distilled env-contract surface for downstream review env-preflight + ENV_MISMATCH classification (#173 Stage 1 introduced the matrix status)."
+    },
+    "min_spec_count": {
+      "type": "object",
+      "required": ["count", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum number of Playwright/lifecycle specs the phase must ship at /vg:build close. Derived from goal_type=mutation goals in TEST-GOALS.md (one spec per mutation goal at minimum)."
+        },
+        "source": {
+          "type": "string",
+          "description": "Derivation rule (e.g. 'TEST-GOALS.md goal_type:mutation count')."
+        }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "description": "Human-readable acceptance bullets composed from above. Surfaced in /vg:build BUILD-LOG + /vg:review GOAL-COVERAGE-MATRIX as the runtime contract operators sign off against."
+    },
+    "skip_reason": {
+      "type": ["string", "null"],
+      "description": "Set when generator decided to skip (no FE tasks, legacy phase, etc.). When set, the contract exists as a stub with empty arrays + skip_reason populated."
+    }
+  }
+}

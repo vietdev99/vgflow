@@ -1,5 +1,61 @@
 # Changelog
 
+## v3.2.0 — Issue #173 Stage 2: UI-RUNTIME-CONTRACT emission in blueprint (2026-05-11)
+
+### Bug — blueprint had no runtime invariants for UI-heavy phases
+
+GitHub Issue #173 root cause analysis: `/vg:blueprint` for UI-heavy phases emitted UI-SPEC (design tokens, typography) + UI-MAP (component tree) but never recorded the **runtime invariants** the design demanded:
+
+| Invariant | Pre-v3.2.0 location | Consequence |
+|---|---|---|
+| Required Tailwind/brand tokens that MUST appear in compiled CSS | Implicit in UI-SPEC verbatim markup; never extracted into an executable list | Build passed even when CSS lacked tokens; FE rendered with broken brand styling |
+| First-viewport surfaces (AppShell, Sidebar, TopBar, MainContent) requiring computed-style assertions | Implicit in VIEW-COMPONENTS.md | Review computed-style smoke missing or scoped wrong |
+| Route inventory (all paths the phase introduces) | Buried in PLAN.md task descriptions | Review couldn't hard-block when discovered routes diverged from intent |
+| Env contract (auth host, cookie domain, base_url) | ENV-CONTRACT.md (YAML) — read by review preflight but not surfaced as part of phase contract | Auth/cookie/host mismatches mis-classified as APP_BLOCKED |
+| Minimum spec count (≥ goal_type=mutation count) | Nowhere | Build closed with zero Playwright specs |
+
+### Fix — emit `UI-RUNTIME-CONTRACT.md` + `.json` per phase
+
+New blueprint step `2b6d_ui_runtime_contract` (after `2b6b_ui_map`) invokes `scripts/blueprint/emit-ui-runtime-contract.py`, which reads VIEW-COMPONENTS.md + UI-SPEC/*.md + ENV-CONTRACT.md + TEST-GOALS.md + PLAN*.md + .phase-profile and emits the contract.
+
+Contract schema: `schemas/ui-runtime-contract.v1.json` (draft-07). Required fields:
+
+| Field | Source | Downstream consumer |
+|---|---|---|
+| `required_tailwind_tokens[]` | Grep UI-SPEC + VIEW-COMPONENTS for `(bg-/text-/border-/ring-/fill-/stroke-)?(brand|theme)-[a-z0-9-]+` | Stage 3 build CSS-token gate (deferred) |
+| `first_viewport_surfaces[]` | VIEW-COMPONENTS root-level layout components (AppShell, Sidebar, TopBar, MainContent, Header, NavBar, Layout) | Stage 4 review computed-style smoke (deferred) |
+| `route_inventory[]` | Grep PLAN*.md for `/path` strings (code-fence stripped) | Stage 4 review route divergence hard-block (deferred) |
+| `env_contract` | Best-effort YAML parse of ENV-CONTRACT.md `target.{base_url,auth_host,cookie_domain}`, plus `disposable_seed_data` + `third_party_stubs` count | Stage 4 review env preflight + ENV_MISMATCH classification (v3.1.0 taxonomy) |
+| `min_spec_count.count` | Count `Goal type: mutation` entries in TEST-GOALS.md (flat + per-goal split) | Stage 3 build spec-count gate (deferred) |
+| `acceptance_criteria[]` | Human-readable bullets composed from above | Surfaced in BUILD-LOG + matrix |
+
+### Skip semantics
+- `phase_profile ∈ {backend-only, cli-tool, library}` → stub contract with `skip_reason` populated (no FE tokens).
+- PLAN has zero `.tsx/.jsx/.vue/.svelte/.css` references → stub contract.
+- VIEW-COMPONENTS / UI-SPEC missing → contract written with empty arrays + warning.
+
+### Test coverage
+8 tests in `tests/test_v3_2_ui_runtime_contract.py` (all platforms, all pass):
+- Schema parses + lists all v1 required sections
+- Emitter exists, mirror byte-identity
+- Blueprint design.md declares step + invokes emitter + emits telemetry event
+- Happy-path fixture (web-fullstack + 2 mutation goals + 4 surfaces + ENV-CONTRACT) produces valid contract with extracted tokens, surfaces, routes, env, min_spec_count
+- Backend-only profile → skip path with `skip_reason`
+- No-FE-tasks phase → skip path with `skip_reason`
+
+### Compatibility
+- Stage 2 is **informational only**: the contract is emitted but no downstream gate consumes it yet.
+- Stages 3 (build), 4 (review), 5 (test codegen) will harden gates against the contract.
+- Pre-v3.2.0 callers / phases without the contract continue to work — emitter is invoked from blueprint step 2b6d which is itself optional (warns + skips if script missing).
+
+### Stage 2 of 6 (Issue #173)
+- ✅ Stage 1 (v3.1.0): matrix status taxonomy (7-reason BLOCKED)
+- ✅ Stage 2 (this release): UI-RUNTIME-CONTRACT.md emission
+- ⏳ Stage 3: build validator (CSS token grep + spec count gate)
+- ⏳ Stage 4: review hard-blocks (route inventory + env preflight + lens artifacts)
+- ⏳ Stage 5: `/vg:test` codegen from TEST-GOALS + CRUD-SURFACES + route inventory
+- ⏳ Stage 6: Codex adapter telemetry parity (closes #169)
+
 ## v3.1.0 — Issue #173 Stage 1: 7-reason BLOCKED taxonomy (2026-05-11)
 
 ### Bug — review matrix conflated test-coverage gaps with app bugs

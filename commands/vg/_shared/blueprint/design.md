@@ -568,4 +568,87 @@ fi
 **Gate (chưa block, chỉ warn):** nếu phase có task FE nhưng UI-MAP.md không
 có, in warning — step 2d validation sẽ escalate.
 
-After all 4 markers touched, return to entry SKILL.md → STEP 3 (plan).
+---
+
+## STEP 2.5 — UI runtime contract (2b6d_ui_runtime_contract)
+
+**Mục tiêu (v3.2.0 / #173 Stage 2):** Emit `${PHASE_DIR}/UI-RUNTIME-CONTRACT.md` + `.json` capturing
+the runtime invariants design demands. Closes Issue #173 root cause: UI-heavy phases passed
+build/review with Tailwind token drift and missing Playwright lifecycle specs because no
+contract listed the design's runtime requirements. Build/review will consume this contract:
+
+- `/vg:build` pre-test-gate (Stage 3) greps generated CSS for `required_tailwind_tokens[].class_name`.
+- `/vg:build` pre-test-gate (Stage 3) asserts ≥ `min_spec_count.count` Playwright spec files.
+- `/vg:review` hard-blocks (Stage 4) if discovered routes diverge from `route_inventory[]`.
+- `/vg:review` uses `env_contract.cookie_domain` / `auth_host` to classify ENV_MISMATCH
+  (Stage 1 #173 taxonomy — landed in v3.1.0).
+
+**Skip conditions (`.phase-profile` + PLAN heuristic):**
+- `phase_profile ∈ {backend-only, cli-tool, library}` → exit 0, no contract written.
+- PLAN*.md has zero `.tsx`/`.jsx`/`.vue`/`.svelte`/`.css` references → exit 0, no contract written.
+- VIEW-COMPONENTS.md AND UI-SPEC/ both missing → write stub contract with `skip_reason` populated.
+
+```bash
+vg-orchestrator step-active 2b6d_ui_runtime_contract
+
+EMITTER="${REPO_ROOT}/.claude/scripts/blueprint/emit-ui-runtime-contract.py"
+[ -f "$EMITTER" ] || EMITTER="${REPO_ROOT}/scripts/blueprint/emit-ui-runtime-contract.py"
+
+if [ ! -f "$EMITTER" ]; then
+  echo "⚠ emit-ui-runtime-contract.py missing — skip UI runtime contract (v3.2.0 #173 Stage 2)"
+else
+  "${PYTHON_BIN:-python3}" "$EMITTER" --phase-dir "${PHASE_DIR}" 2>&1 | sed 's/^/▸ /'
+  RC=$?
+  if [ "$RC" -ne 0 ]; then
+    echo "⚠ emit-ui-runtime-contract.py exit=${RC} — continuing (contract is informational at Stage 2; Stages 3-4 will harden gates)"
+  fi
+  if [ -f "${PHASE_DIR}/UI-RUNTIME-CONTRACT.json" ]; then
+    TOKEN_COUNT=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${PHASE_DIR}/UI-RUNTIME-CONTRACT.json', encoding='utf-8'))
+    print(len(d.get('required_tailwind_tokens') or []))
+except Exception:
+    print(0)
+" 2>/dev/null)
+    ROUTE_COUNT=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${PHASE_DIR}/UI-RUNTIME-CONTRACT.json', encoding='utf-8'))
+    print(len(d.get('route_inventory') or []))
+except Exception:
+    print(0)
+" 2>/dev/null)
+    MIN_SPEC=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${PHASE_DIR}/UI-RUNTIME-CONTRACT.json', encoding='utf-8'))
+    print((d.get('min_spec_count') or {}).get('count', 0))
+except Exception:
+    print(0)
+" 2>/dev/null)
+    echo "✓ UI-RUNTIME-CONTRACT emitted — tokens=${TOKEN_COUNT}, routes=${ROUTE_COUNT}, min_specs=${MIN_SPEC}"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "blueprint.ui_runtime_contract_emitted" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"tokens\":${TOKEN_COUNT:-0},\"routes\":${ROUTE_COUNT:-0},\"min_specs\":${MIN_SPEC:-0}}" \
+      >/dev/null 2>&1 || true
+  fi
+fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6d_ui_runtime_contract" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6d_ui_runtime_contract.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b6d_ui_runtime_contract 2>/dev/null || true
+```
+
+**Hardening roadmap (deferred to later stages):**
+- Stage 3 (build): pre-test-gate greps `apps/*/dist/**/*.css` for each `required_tailwind_tokens[].class_name`; missing → BLOCK.
+- Stage 3 (build): spec-count gate counts `apps/*/tests/**/*.{spec,test}.{ts,tsx}` ≥ `min_spec_count.count`; missing → matrix Status=TEST_SPEC_MISSING + auto-route to /vg:test codegen (Stage 5).
+- Stage 4 (review): runtime route discovery diffed against `route_inventory[]`; divergence → hard-block.
+- Stage 4 (review): env preflight matches `env_contract.cookie_domain` against actual browser context; mismatch → ENV_MISMATCH (taxonomy lives in v3.1.0).
+
+At Stage 2 the contract is **informational**: present in the phase directory, consumed by downstream stages
+as they ship. Pre-Stage 3 callers ignoring the contract will not break.
+
+---
+
+After all 5 markers touched, return to entry SKILL.md → STEP 3 (plan).
