@@ -79,10 +79,26 @@ def test_severity_vocab_mapping(tmp_path: Path) -> None:
     assert result.stdout.strip() == "high medium critical", result.stdout
 
 
+def _review_md_full_text() -> str:
+    """Concatenate review.md + all _shared/review/*.md sub-files.
+
+    v2.70.0 split moved chunks of review.md into _shared/review/*.md.
+    These tests count semantic things (wrapper invocations, gate patterns)
+    that span the entire review pipeline, so the source-of-truth is the
+    concatenation, not the routing shell.
+    """
+    parts = [(REPO / "commands/vg/review.md").read_text(encoding="utf-8")]
+    shared_review = REPO / "commands" / "vg" / "_shared" / "review"
+    if shared_review.is_dir():
+        for p in sorted(shared_review.glob("*.md")):
+            parts.append(p.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
 def test_review_md_wrapper_call_sites_count() -> None:
-    """After refactor, review.md must have >=10 wrapper invocations
-    matching `blocking_gate_prompt_emit`."""
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    """After refactor, review.md (incl. _shared/review sub-files) must have
+    >=10 wrapper invocations matching `blocking_gate_prompt_emit`."""
+    text = _review_md_full_text()
     invocations = text.count("blocking_gate_prompt_emit")
     assert invocations >= 10, (
         f"expected >=10 wrapper invocations after refactor, found {invocations}"
@@ -92,7 +108,7 @@ def test_review_md_wrapper_call_sites_count() -> None:
 def test_review_md_no_orphan_blocked_exit_1() -> None:
     """No `emit-event review.<X>_blocked` should be immediately followed
     by `exit 1` after refactor — must call wrapper instead."""
-    text = (REPO / "commands/vg/review.md").read_text(encoding="utf-8")
+    text = _review_md_full_text()
     # Find every emit-event review.X_blocked, look for exit 1 within 6 lines after
     bad_patterns = re.findall(
         r'emit-event "review\.[a-z_]+_blocked"[^\n]*\n(?:[^\n]*\n){0,6}\s*exit 1',
