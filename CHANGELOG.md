@@ -1,5 +1,49 @@
 # Changelog
 
+## v2.78.0 — v3.0.0 Stage 3.1: hook installer dual-mode (2026-05-10)
+
+### Goal
+Stage 3.1 of v3.0.0 plan. Hook installer can now emit `$HOME/.vgflow/...` paths for global v3 installs while preserving the legacy `${CLAUDE_PROJECT_DIR}/.claude/...` default for project-local installs.
+
+### Changes
+
+**`install-hooks.sh --mode global|project` (Task 3.1)**
+
+| `--mode` | Emitted path | Use case |
+|---|---|---|
+| `project` (default) | `"${CLAUDE_PROJECT_DIR}/.claude/scripts/hooks/<name>"` | Backwards compat — existing v2.x project-local installs |
+| `global` (NEW) | `"$HOME/.vgflow/scripts/hooks/<name>"` | v3.0.0 single-version global install |
+
+Invalid mode value rejected with stderr message + exit 1.
+
+Files:
+- `scripts/hooks/install-hooks.sh` + `.claude` mirror
+- `tests/test_install_hooks_mode.py` NEW (6 tests, Linux-only — skipped on Windows due to WSL path mapping fragility; CI Linux validates)
+
+### Test coverage
+6 new tests, all PASS on Linux:
+- `test_default_mode_emits_claude_project_dir`
+- `test_project_mode_explicit_matches_default`
+- `test_global_mode_emits_home_vgflow`
+- `test_invalid_mode_errors`
+- `test_global_mode_all_events_use_home_path`
+- `test_idempotent_re_install`
+
+Verified via manual Git Bash smoke test (3/3 PASS).
+
+### Migration
+None. Default mode = `project` preserves existing behavior. v3.0.0 migration script (Stage 8) will pass `--mode global` when user opts into global install.
+
+### Roadmap
+- v2.76.0 — Stage 1 resolver dual-mode
+- v2.77.0 — Stage 2 helpers (`resolve_vg_doc`, gitignore generator)
+- v2.78.0 (this) — Stage 3.1 hook installer dual-mode
+- v2.79.x — Stage 3.2 codex hooks dual-mode + Stage 4 npm wire-up
+- v2.7x.x — Stage 5-7: `/vg:install` skill + deploy decouple
+- **v3.0.0** — Stages 8-9 migration + npm publish
+
+---
+
 ## v2.77.0 — v3.0.0 Stage 2 (helpers): resolve_vg_doc + gitignore generator (2026-05-10)
 
 ### Goal
