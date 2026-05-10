@@ -41,7 +41,15 @@ def test_skip_qa_check_flag():
 
 
 def test_review_parse_loop_handles_skip_qa_check():
-    body = (REPO_ROOT / "commands/vg/review.md").read_text(encoding="utf-8")
+    # v2.70.0 split: parse loop lives in _shared/review/preflight.md after T1.
+    # Concatenate review.md + all _shared/review/*.md to keep the assertion
+    # independent of the split layout.
+    parts = [(REPO_ROOT / "commands/vg/review.md").read_text(encoding="utf-8")]
+    shared_review = REPO_ROOT / "commands/vg/_shared/review"
+    if shared_review.is_dir():
+        for p in sorted(shared_review.glob("*.md")):
+            parts.append(p.read_text(encoding="utf-8"))
+    body = "\n".join(parts)
     # Find parse loop region
     parse_region = re.search(r"for tok in.*?esac.*?done", body, re.DOTALL)
     assert parse_region
