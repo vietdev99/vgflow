@@ -1,5 +1,41 @@
 # Changelog
 
+## v3.6.4 — bugfix: /vg:update prunes duplicate Codex skills (2026-05-11)
+
+### Bug — /vg:update left duplicate Codex skills even after v3.6.1 dedupe
+
+v3.6.1 added `prune_duplicate_codex_skills()` to `sync.sh` step 4b — but `sync.sh` is NOT the path operators use day-to-day. `/vg:update` runs its own merge pipeline (`commands/vg/_shared/update/{fetch-and-merge,rotate-and-repair,sync-and-report}.md`) and never calls `sync.sh`. So even after the v3.6.1 fix, anyone running `/vg:update` (not `sync.sh`) still saw vgflow flows listed twice in the Codex picker — once from `~/.codex/skills/`, once from `<project>/.codex/skills/`.
+
+User reproduction: *"đã chạy update, code install của codex không xoá các flow của VG codex trong project đang hiện hành"* (ran update, Codex install code doesn't delete VG codex flows in current project).
+
+### Fix — dedupe pass in /vg:update step 8_sync_codex
+
+`commands/vg/_shared/update/sync-and-report.md` step 8_sync_codex now adds a marker-driven dedupe block AFTER both project + global deploy phases complete. Resolution rule mirrors `sync.sh`:
+
+| `.vg/.install-target` marker | Pruned directory |
+|---|---|
+| `project` | `~/.codex/skills/<vgflow-name>/` (global side) |
+| `global` | `<project>/.codex/skills/<vgflow-name>/` (project side) |
+| absent | default to project (v3.0.0 architecture: global is canonical) |
+
+The prune helper iterates over `${CODEX_SOURCE}/codex-skills` to enumerate vgflow-owned skill names, then deletes the matching directory from the losing side. Non-vgflow skills in the same `.codex/skills/` tree are untouched.
+
+Gated on `PROJECT_CODEX_HAS_VGFLOW=1 && GLOBAL_CODEX_HAS_VGFLOW=1` — if only one side is populated, there's nothing to dedupe and the block silently skips. Runs BEFORE `verify-codex-mirror-equivalence.py` so the mirror-verify pass sees a clean state.
+
+### Test coverage
+5 tests in `tests/test_v3_6_4_vg_update_codex_dedupe.py`:
+- dedupe block present + helper function declared
+- case statement handles `project` / `global` / unset marker states
+- correct prune direction for each marker value
+- gates on both PROJECT + GLOBAL flags
+- order: dedupe runs AFTER deploy summary, BEFORE mirror-verify
+- canonical/mirror byte-identity
+
+### Compatibility
+- Single-sided installs (only global OR only project) unaffected — dedupe block early-returns.
+- Operators on `/vg:update` see `Codex dedupe (global-side): pruned N duplicate skill dir(s) from <path>` on first repair run, then no-op on subsequent updates.
+- `sync.sh` users continue to use the v3.6.1 prune path (functionally equivalent, different code path).
+
 ## v3.6.3 — tests: Windows bash path normalization + LIFECYCLE.md mirror (2026-05-11)
 
 ### Bug — 43 tests failed locally on Windows; CI Linux passed

@@ -198,6 +198,65 @@ esac
 
 echo "Codex mirror: skills=${CODEX_SKILLS_UPDATED} agents=${CODEX_AGENTS_UPDATED}"
 
+# v3.6.4 — marker-driven dedupe of Codex skills.
+#
+# Bug: even with tri-state VG_UPDATE_{PROJECT,GLOBAL}_CODEX, an operator
+# who started with project-local install + later opted into global
+# (`install.sh --global-codex`) ended up with vgflow skills in BOTH
+# ~/.codex/skills/ AND <project>/.codex/skills/. Codex CLI's skill picker
+# reads both → every $vg- flow shows up twice. /vg:update did not clean
+# this even though sync.sh already had prune_duplicate_codex_skills()
+# (v3.6.1) — sync.sh path is not exercised by /vg:update.
+#
+# Fix: respect .vg/.install-target marker. After both project + global
+# deploy steps above, prune the duplicate side so Codex picker sees one
+# canonical flow per name. Marker resolution:
+#   global    → prune <project>/.codex/skills/vg-*
+#   project   → prune ~/.codex/skills/vg-*
+#   absent    → default to pruning project (v3.0.0 architecture preference)
+INSTALL_TARGET=""
+if [ -f "${REPO_ROOT}/.vg/.install-target" ]; then
+  INSTALL_TARGET="$(tr -d '[:space:]' < "${REPO_ROOT}/.vg/.install-target" 2>/dev/null || true)"
+fi
+
+prune_codex_dir() {
+  local dir="$1"
+  local label="$2"
+  [ -d "$dir" ] || return 0
+  local pruned=0
+  if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
+    while IFS= read -r src_skill_dir; do
+      [ -d "$src_skill_dir" ] || continue
+      local name
+      name="$(basename "$src_skill_dir")"
+      if [ -d "${dir}/${name}" ]; then
+        rm -rf "${dir}/${name}" 2>/dev/null && pruned=$((pruned + 1))
+      fi
+    done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+  fi
+  if [ "$pruned" -gt 0 ]; then
+    echo "Codex dedupe (${label}): pruned ${pruned} duplicate skill dir(s) from ${dir}"
+  fi
+}
+
+# Only run dedupe when both sides actually had vgflow content; otherwise
+# there's nothing to dedupe and we skip silently.
+if [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ] && [ "$GLOBAL_CODEX_HAS_VGFLOW" = "1" ]; then
+  case "$INSTALL_TARGET" in
+    project)
+      prune_codex_dir "$HOME/.codex/skills" "global-side (install-target=project)"
+      ;;
+    global|"")
+      prune_codex_dir "${REPO_ROOT}/.codex/skills" "project-side (install-target=${INSTALL_TARGET:-unset})"
+      ;;
+    *)
+      echo "Codex dedupe: unknown install-target=${INSTALL_TARGET} — leaving both sides intact"
+      ;;
+  esac
+elif [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ] || [ "$GLOBAL_CODEX_HAS_VGFLOW" = "1" ]; then
+  echo "Codex dedupe: only one side has vgflow content — nothing to prune"
+fi
+
 if [ -f "${REPO_ROOT}/.claude/scripts/verify-codex-mirror-equivalence.py" ]; then
   VERIFY_OUT="${PATCHES_DIR}/codex-mirror-verify.json"
   if REPO_ROOT="${REPO_ROOT}" python3 "${REPO_ROOT}/.claude/scripts/verify-codex-mirror-equivalence.py" --json > "$VERIFY_OUT"; then
