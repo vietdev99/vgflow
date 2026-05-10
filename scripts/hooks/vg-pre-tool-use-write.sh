@@ -21,7 +21,12 @@ if [ -z "$file_path" ]; then
 fi
 
 # Protected path patterns.
-protected_patterns=(
+# v3.0.1: split into two groups:
+#   - evidence_patterns: ALWAYS blocked (signed-evidence integrity)
+#   - harness_patterns: blocked only in DEPENDENT projects (allowed in vgflow-repo
+#     itself, where editing the harness IS the workflow). Detection via
+#     package.json `"name": "vgflow"` at repo root.
+evidence_patterns=(
   '\.vg/runs/[^/]+/\.tasklist-projected\.evidence\.json$'
   '\.vg/runs/[^/]+/evidence-.*\.json$'
   '\.vg/runs/[^/]+/.*evidence.*'
@@ -29,6 +34,34 @@ protected_patterns=(
   '\.vg/events\.db$'
   '\.vg/events\.jsonl$'
 )
+
+# Harness source paths — read-only in dependent projects (use /vg:update).
+# Path-relative regexes; matches anywhere under the project tree.
+harness_patterns=(
+  '\.claude/commands/vg/.*'
+  '\.claude/skills/vg-[^/]+/.*'
+  '\.claude/scripts/.*'
+  '\.claude/schemas/.*\.json$'
+  '\.claude/templates/vg/.*'
+  '\.codex/skills/.*'
+  '\.codex/agents/.*\.toml$'
+)
+
+# Also catch global ~/.vgflow/ writes (anyone editing global harness in place).
+home_vgflow_pattern='(^|/)\.vgflow/(commands|skills|scripts|schemas|templates|codex-skills|bin)/'
+
+# Detect: is cwd the vgflow source repo? If so, allow harness edits.
+# Probe: presence of root package.json with "name": "vgflow".
+is_vgflow_source_repo=0
+if [ -f "package.json" ]; then
+  if grep -q '"name"[[:space:]]*:[[:space:]]*"vgflow"' package.json 2>/dev/null; then
+    is_vgflow_source_repo=1
+  fi
+fi
+# Also allow if VG_HARNESS_DEV=1 env override is set (CI / dev flows).
+if [ "${VG_HARNESS_DEV:-0}" = "1" ]; then
+  is_vgflow_source_repo=1
+fi
 
 # HOTFIX session 2 (2026-05-05) — universal mutating-tool tasklist gate.
 # Codex insight #1: bash gate alone doesn't stop Edit/Write; AI can skip
@@ -175,7 +208,7 @@ sys.stdout.write(json.dumps({
   fi
 fi
 
-for pattern in "${protected_patterns[@]}"; do
+for pattern in "${evidence_patterns[@]}"; do
   if [[ "$file_path" =~ $pattern ]]; then
     gate_id="PreToolUse-Write-protected"
     session_id="$(vg_resolve_session_id)"
@@ -222,5 +255,50 @@ EOF
     exit 2
   fi
 done
+
+# v3.0.1: harness-source protection. Skip when cwd IS the vgflow source repo
+# (editing harness IS the workflow there).
+if [ "$is_vgflow_source_repo" = "0" ]; then
+  for pattern in "${harness_patterns[@]}"; do
+    if [[ "$file_path" =~ $pattern ]]; then
+      gate_id="PreToolUse-Write-harness-readonly"
+      cause="direct write to VGFlow harness file: $file_path"
+      printf "\033[38;5;208m%s: %s\033[0m\n" "$gate_id" "$cause" >&2
+      cat >&2 <<EOF
+→ This file is part of the VGFlow harness, not your project. Editing it
+  here corrupts the installation and gets clobbered on next \`/vg:update\`
+  3-way merge.
+→ To upgrade: run \`/vg:update\` (pulls latest from vgflow upstream).
+→ To customize harness: fork https://github.com/vietdev99/vgflow, patch
+  the canonical source, then \`/vg:update --repo=<your-fork>\`.
+→ To override THIS one write: set VG_HARNESS_DEV=1 (CI/dev only).
+EOF
+      if command -v vg-orchestrator >/dev/null 2>&1; then
+        vg-orchestrator emit-event vg.block.fired \
+          --gate "$gate_id" --cause "$cause" >/dev/null 2>&1 || true
+      fi
+      exit 2
+    fi
+  done
+
+  if [[ "$file_path" =~ $home_vgflow_pattern ]]; then
+    gate_id="PreToolUse-Write-global-vgflow-readonly"
+    cause="direct write to global ~/.vgflow/ harness path: $file_path"
+    printf "\033[38;5;208m%s: %s\033[0m\n" "$gate_id" "$cause" >&2
+    cat >&2 <<EOF
+→ ~/.vgflow/ holds the global VGFlow install (single-version). Direct
+  edits will be overwritten on next \`/vg:update\` (which pulls upstream
+  via git pull or npm install -g).
+→ To upgrade harness: run \`/vg:update\` from any project.
+→ To customize: fork vgflow, edit canonical, point /vg:update at fork.
+→ To override THIS one write: set VG_HARNESS_DEV=1 (CI/dev only).
+EOF
+    if command -v vg-orchestrator >/dev/null 2>&1; then
+      vg-orchestrator emit-event vg.block.fired \
+        --gate "$gate_id" --cause "$cause" >/dev/null 2>&1 || true
+    fi
+    exit 2
+  fi
+fi
 
 exit 0

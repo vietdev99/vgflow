@@ -1,5 +1,87 @@
 # Changelog
 
+## v3.0.1 — Harness-readonly protection (2026-05-11)
+
+### Bug
+User flagged: "tôi vẫn thấy codex sửa được file của VGFlow mà không bị chặn". Confirmed via inspection of `vg-pre-tool-use-write.sh`:
+
+| Layer | Protected | Not protected |
+|---|---|---|
+| `evidence_patterns` | `.vg/events.db`, `.vg/runs/*/evidence-*.json`, step markers | — |
+| Harness source | — | `.claude/commands/vg/`, `.claude/skills/vg-*`, `.claude/scripts/`, `.codex/skills/`, `~/.vgflow/` |
+
+Plus Codex has no PreToolUse hooks at all — completely bypasses Claude-side gates.
+
+Result: AI agents (Claude AND Codex) could freely edit VGFlow harness files in dependent projects, corrupting installations.
+
+### Fix — two layers
+
+**Layer 1 — Claude PreToolUse Write/Edit hook:**
+`scripts/hooks/vg-pre-tool-use-write.sh` extended with `harness_patterns` array covering:
+- `.claude/commands/vg/.*`
+- `.claude/skills/vg-[^/]+/.*`
+- `.claude/scripts/.*`
+- `.claude/schemas/.*\.json$`
+- `.claude/templates/vg/.*`
+- `.codex/skills/.*`
+- `.codex/agents/.*\.toml$`
+- `~/.vgflow/{commands,skills,scripts,schemas,templates,codex-skills,bin}/...`
+
+Allow logic:
+- vgflow source repo (cwd has `package.json` with `"name": "vgflow"`) → allowed (editing harness IS the workflow there)
+- `VG_HARNESS_DEV=1` env → allowed (CI / dev override per-invocation)
+- Else → BLOCK with diagnostic suggesting `/vg:update` or fork workflow
+
+**Layer 2 — Per-project git pre-commit hook (catches Codex):**
+`scripts/hooks/install-pre-commit-harness-guard.sh` installs a `.git/hooks/pre-commit` that rejects commits touching harness files. Same allow logic as Layer 1. Catches:
+- Codex (no PreToolUse hooks)
+- Any tool / human bypassing Claude PreToolUse
+- Cross-runtime edits via shared filesystem
+
+Install in any dependent project: `bash ~/.vgflow/scripts/hooks/install-pre-commit-harness-guard.sh`. Refuses to install in vgflow source repo (defensive).
+
+### Test coverage
+18 new tests in `tests/test_v3_0_1_harness_protection.py`:
+- 9× content checks (run all platforms): patterns present, vgflow detection probe, VG_HARNESS_DEV override flag, mirror byte-identity for both files
+- 9× functional smoke (Linux-only): hook blocks/allows correctly per scenario; pre-commit installer rejects harness commits in dependent project, skips vgflow source repo
+
+Smoke verified Git Bash:
+- T1 foreign project harness write → rc=2 (blocked) ✓
+- T2 regular file write → rc=0 (allowed) ✓
+- T3 vgflow-repo harness edit → rc=0 (allowed) ✓
+- T4 VG_HARNESS_DEV=1 override → rc=0 (allowed) ✓
+- T5 ~/.vgflow path → rc=2 (blocked) ✓
+- Pre-commit installer T1 (foreign project): commit rejected ✓
+- Pre-commit installer T2 (override): commit allowed ✓
+- Pre-commit installer T3 (regular file): commit allowed ✓
+- Pre-commit installer T4 (vgflow source): install skipped ✓
+
+### Migration
+
+**For users on v3.0.0** dependent project (any project where you ran `vg install`):
+
+```bash
+# Layer 1 (Claude hook) auto-active on next /vg:update — no action needed.
+
+# Layer 2 (pre-commit, catches Codex):
+bash ~/.vgflow/scripts/hooks/install-pre-commit-harness-guard.sh
+
+# Override per-commit when needed (CI / approved harness fork):
+VG_HARNESS_DEV=1 git commit -m "..."
+```
+
+### Known limitations
+
+- Layer 1 only fires on Claude `Write`/`Edit` tools. Bash-driven writes (`echo > file`) bypass — but these are detected by `vg-pre-tool-use-bash.sh` separately.
+- Layer 2 catches commits, not pre-commit unstaged edits. AI tools that stash edits without committing slip through. v3.1.x will add a session-end-hook to detect uncommitted harness drift.
+
+### Roadmap
+- v3.0.x — bug fixes
+- v3.1.x — Stage 7 final consumer migrations + self-repair stale-hook detector + multi-version pinning + uncommitted-harness-drift session-end check
+- v4.0.0 — drop legacy `__file__`-walk fallback
+
+---
+
 ## v3.0.0 — Major / breaking (2026-05-11)
 
 ### Headline
