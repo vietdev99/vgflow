@@ -63,6 +63,49 @@ def _write_evidence(phase_dir: Path, gate_id: str, verdict: str,
     return out_path
 
 
+def classify_evidence_match(found_files: list, expected_pattern: str,
+                            age_seconds: int) -> tuple[str, str]:
+    """v2.68.0 C3 — hybrid (deterministic + LLM-fallback) verdict classifier.
+
+    Returns (verdict, confidence) where verdict is one of PASS|AMBIGUOUS|FAIL
+    and confidence is one of high|medium|low.
+
+    Deterministic rules:
+      - found_files empty                       → FAIL,      confidence=high
+      - found_files exact match + age < 1h      → PASS,      confidence=high
+      - found_files match but age 1-24h         → PASS,      confidence=medium (stale-ish)
+      - found_files partial match (≥half of
+        expected components, ages ok)           → AMBIGUOUS, confidence=low
+      - otherwise (small partial, old)          → FAIL,      confidence=medium
+
+    AMBIGUOUS verdict is the LLM-fallback hook: defer to a reviewer (CrossAI
+    judge) for tie-breaking. Validator emits AMBIGUOUS evidence; downstream
+    review aggregator runs an LLM judgment over the same files to break the
+    tie. This hybridizes the previously pure-deterministic gate with an
+    LLM-judge fallback path while keeping the cheap fast-path for
+    unambiguous cases.
+
+    Args:
+      found_files: paths whose modtime/existence proves runtime evidence
+      expected_pattern: comma-separated expected components (e.g. spec list)
+      age_seconds: age (seconds) of newest evidence entry
+
+    Returns:
+      (verdict, confidence)
+    """
+    if not found_files:
+        return "FAIL", "high"
+    if age_seconds < 3600:
+        return "PASS", "high"
+    if age_seconds < 86400:
+        return "PASS", "medium"
+    expected_parts = [p for p in expected_pattern.split(",") if p.strip()]
+    half = max(1, len(expected_parts) // 2) if expected_parts else 1
+    if len(found_files) >= half:
+        return "AMBIGUOUS", "low"
+    return "FAIL", "medium"
+
+
 def find_phase_dir(phase: str) -> Path | None:
     if not PHASES_DIR.exists():
         return None
@@ -375,9 +418,75 @@ def main() -> int:
                        f"or mark as deferred|manual with reason.",
         })
 
+    # v2.68.0 C3 — hybrid classification: compute confidence + AMBIGUOUS
+    # branch via classify_evidence_match(). Hard BLOCK signals (failed/
+    # interrupted Playwright runs, per-spec failure folders, missing
+    # last-run.json) keep their deterministic verdict — these are
+    # high-confidence failures and should NOT be deferred to LLM judgment.
+    # Soft signals (some specs unexecuted, partial coverage) get the
+    # hybrid treatment: AMBIGUOUS → LLM fallback at downstream review.
+    hard_block_types = {
+        "playwright_failed",
+        "playwright_interrupted",
+        "per_spec_failure_folder",
+        "missing_last_run_json",
+    }
+    has_hard_block = any(e.get("type") in hard_block_types for e in evidence)
+
+    confidence = "high"
+    if specs:
+        # Reference point for age-of-evidence computation: SPECS.md mtime.
+        specs_md = phase_dir / "SPECS.md"
+        since_mtime = specs_md.stat().st_mtime if specs_md.exists() else 0
+        executed = [
+            e for e in evidence if e.get("type") == "execution_proof"
+        ]
+        # Newest evidence age (seconds). 0 means we don't know — treat as
+        # very old so the partial-match branch gets a chance.
+        newest_age = 0
+        if executed:
+            try:
+                import time as _time
+                newest_age = max(0, int(_time.time() - since_mtime))
+            except Exception:
+                newest_age = 86_400
+        else:
+            newest_age = 86_400 + 1  # force partial-match branch when nothing ran
+        expected_pattern = ",".join(s.name for s in specs)
+        hybrid_verdict, confidence = classify_evidence_match(
+            found_files=[Path(e["file"]) for e in executed if e.get("file")],
+            expected_pattern=expected_pattern,
+            age_seconds=newest_age,
+        )
+        # Only apply hybrid downgrade-to-AMBIGUOUS when there is no hard
+        # block. Hard blocks remain BLOCK + high confidence.
+        if not has_hard_block and hybrid_verdict == "AMBIGUOUS" and verdict == "BLOCK":
+            verdict = "AMBIGUOUS"
+            evidence.append({
+                "type": "hybrid_ambiguous",
+                "message": (
+                    "Runtime evidence is partial — defer to CrossAI reviewer "
+                    "(LLM fallback) for judgment. Found execution proof for "
+                    f"{len(executed)}/{len(specs)} spec(s); confidence=low."
+                ),
+                "hint": (
+                    "Downstream /vg:review aggregator should request an LLM "
+                    "judge review of the same files to break the tie."
+                ),
+            })
+        elif has_hard_block:
+            confidence = "high"
+
     # v2.68.0 C1 — write structured evidence JSON to ${PHASE_DIR}/.evidence/.
+    # v2.68.0 C3 — also emit confidence alongside verdict.
     try:
-        _write_evidence(phase_dir, "runtime-evidence", verdict, evidence)
+        _write_evidence(
+            phase_dir,
+            "runtime-evidence",
+            verdict,
+            evidence,
+            extra={"confidence": confidence},
+        )
     except OSError:
         # Best-effort: stdout JSON is the primary contract; .evidence/
         # write failure must not block the validator output.
@@ -386,6 +495,7 @@ def main() -> int:
     print(json.dumps({
         "validator": "runtime-evidence",
         "verdict": verdict,
+        "confidence": confidence,
         "evidence": evidence,
         "duration_ms": 0,
     }))
