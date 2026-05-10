@@ -101,10 +101,18 @@ def _resolve_phases_explicit(spec: str) -> list[str]:
 
 
 def _resolve_phases_milestone(repo: Path, milestone: str) -> list[str]:
-    roadmap = repo / "ROADMAP.md"
+    # v2.84.x dual-mode: prefer .vg/ROADMAP.md (post-vg-migrate-v3), fall
+    # back to root ROADMAP.md (legacy v2.x project layout).
+    roadmap = repo / ".vg" / "ROADMAP.md"
     if not roadmap.is_file():
-        sys.stderr.write(f"ROADMAP.md not found at {roadmap}\n")
-        return []
+        legacy = repo / "ROADMAP.md"
+        if legacy.is_file():
+            roadmap = legacy
+        else:
+            sys.stderr.write(
+                f"ROADMAP.md not found at .vg/ROADMAP.md or {legacy}\n"
+            )
+            return []
     text = roadmap.read_text(encoding="utf-8")
     # Locate the milestone section + grab everything until the next ## heading.
     m = re.search(rf"##\s+Milestone\s+{re.escape(milestone)}\b(.+?)(?=\n##\s|\Z)",

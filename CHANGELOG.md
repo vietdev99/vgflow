@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.84.2 — Stage 7 follow-up: review_batch dual-mode (2026-05-10)
+
+### Goal
+Continue Stage 7 consumer migrations. Fix `scripts/review_batch.py::_resolve_phases_milestone()` — was hardcoding root `ROADMAP.md`, would break post-migration projects.
+
+### Changes
+
+**`scripts/review_batch.py`** — `_resolve_phases_milestone()` now probes `.vg/ROADMAP.md` first, falls back to root `ROADMAP.md`. Error message lists both paths when neither exists.
+
+Files: `scripts/review_batch.py` + `.claude` mirror.
+
+### Test coverage
+3 new tests in `tests/test_review_batch_dual_mode.py`, all PASS:
+- `test_prefers_new_layout` — `.vg/ROADMAP.md` wins over root
+- `test_falls_back_to_legacy` — root works when `.vg/` absent
+- `test_returns_empty_when_neither_exists` — empty + stderr both paths
+
+### Stage 7 Status
+- ✓ config-loader.md (v2.84.0) — biggest fanout
+- ✓ review_batch.py (v2.84.2)
+- Deferred: deploy state migration (~3 sites — deploy.md, build pre-test gate, enrich-env-question.py) — contract change requiring per-phase → project-level state merge; defer to dedicated v2.85.x
+
+### Migration
+None required — backwards-compatible probe order.
+
+---
+
 ## v2.84.1 — hotfix: vg-migrate-v3 detects untracked files (2026-05-10)
 
 ### Bug
