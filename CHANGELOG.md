@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.74.0 — scope-review split + codex sync (2026-05-10)
+
+### Refactor
+Continue codex-skills/claude-commands sync after v2.73.0.
+
+### Claude-side scope-review.md split
+- **commands/vg/scope-review.md: 670 → 83 lines (~88% reduction)** — extracted into NEW `_shared/scope-review/`:
+  - `preflight.md` (265 lines) — 0_parse_and_collect, incremental_check
+  - `cross-ref-review-write.md` (216 lines) — 1_cross_reference, 2_crossai_review, 3_write_report
+  - `resolve-and-close.md` (148 lines) — 4_resolution, 4.5_baseline_write_and_telemetry, 5_commit_and_next
+
+### Codex slim
+- **codex-skills/vg-scope-review/SKILL.md: 809 → 221 lines (~73% reduction)** — routes to NEW v2.74.0 `_shared/scope-review/*`
+
+### Behavior
+**Zero behavior change.** Verbatim extraction (CRLF preserved via Python). Mirror byte-identity verified.
+
+### Test coverage
+**25 new tests across 5 suites** (T1: 6 preflight split, T2: 6 cross-ref-review-write split, T3: 6 resolve-and-close split, T4: 3 ceiling, T5: 4 codex slim). All pass.
+
+### Migration
+No migration. Operators continue calling `/vg:scope-review` — entries route through slim files transparently.
+
 ## v2.73.0 — Deploy sync + update.md split (2026-05-10)
 
 ### Refactor
