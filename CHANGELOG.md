@@ -1,5 +1,61 @@
 # Changelog
 
+## v2.76.0 — v3.0.0 Stage 1: resolver dual-mode (2026-05-10)
+
+### Goal
+Foundation for v3.0.0 global install (`~/.vgflow/`). Stage 1 of [v3 implementation plan](docs/plans/2026-05-09-vg-global-install-implementation.md). Backwards compatible — existing project-local installs continue working unchanged.
+
+### Why
+v3.0.0 ships VG harness as global install. Scripts in `~/.vgflow/` cannot walk `__file__` to find the user's project `.git`. Solution: cwd-walk takes priority over `__file__`-walk; `__file__`-walk retained as legacy fallback.
+
+### Changes
+
+**`find_repo_root()` priority swap (Task 1.1)**
+Resolution priority changed from (1, 3, 4) to (1, 2, 3, 4):
+1. `VG_REPO_ROOT` env or `VG_PROJECT` alias (NEW v2.76.0+)
+2. **Walk cwd → ancestor with `.git/` (NEW)**
+3. Walk `__file__` anchor → ancestor with `.git/` (legacy fallback)
+4. cwd with stderr warning (last resort)
+
+Files: `scripts/vg-orchestrator/_repo_root.py` + `.claude` mirror.
+
+**`find_vg_home()` helper NEW (Task 1.2)**
+Distinct from `find_repo_root()`:
+- `VG_HOME` → static assets (skills, commands, scripts, schemas)
+- `VG_PROJECT` → project state (`.vg/`)
+
+Resolution priority:
+1. `VG_HOME` env
+2. Project marker `.vg/.install-target` → `"global"|"project"`
+3. Legacy `.claude/VGFLOW-VERSION` → project mode
+4. `~/.vgflow/` fallback if exists
+5. `RuntimeError("VG not installed. Run: npm install -g vgflow")`
+
+Files: `scripts/vg-orchestrator/_vg_home.py` NEW + `.claude` mirror.
+
+**`vg_resolve_project_root()` shell helper (Task 1.3)**
+Bash-side mirror of `find_repo_root()` for hooks. Resolves project root from cwd-walk + env, returns 1 with stderr message on failure.
+
+Files: `scripts/hooks/_lib.sh` + `.claude` mirror (37 lines appended).
+
+### Test coverage
+17 new tests across 3 files:
+- `tests/test_resolver_dual_mode.py` — 4 tests, all PASS
+- `tests/test_find_vg_home.py` — 7 tests, all PASS
+- `tests/test_resolve_project_root_shell.py` — 6 tests (Linux); skipped on Windows due to WSL path mapping; CI validates
+
+Regression check: `tests/test_worktree_isolation.py` 4/4 PASS (no break).
+
+### Migration
+None. Backwards compatible. Existing project-local installs continue using `__file__`-walk fallback when cwd-walk doesn't find `.git/` (e.g., temp-dir hook spawns).
+
+### Roadmap
+- v2.76.0 (this) — Stage 1: resolver dual-mode
+- v2.7x.x — Stage 2-7: layout migration helpers, hook installer dual-mode, npm install/update wire-up, `/vg:install` skill, deploy decouple, consumer migrations
+- **v3.0.0** (major, breaking) — Stage 8-9: migration script `vg-migrate-v3.sh`, E2E + npm publish, full ~/.vgflow/ rollout
+
+---
+
 ## v2.75.2 — hotfix: CI Test workflow green (2026-05-10)
 
 ### Bug fix
