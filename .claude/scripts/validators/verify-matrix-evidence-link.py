@@ -19,6 +19,7 @@ Allowed Status values that DON'T require a runtime sequence:
   - INFRA_PENDING — goal needs infra not available, deferred to UAT
   - UNREACHABLE   — code not in repo
   - DEFERRED      — phase target not yet deployed
+  - TEST_PENDING  — runtime is clear, lifecycle evidence belongs to /vg:test
 
 Any other Status (READY, MANUAL_VERIFIED, etc.) requires a non-empty
 goal_sequences entry whose result is "passed" / "ready" / "ok".
@@ -61,7 +62,22 @@ MATRIX_ROW_RE = re.compile(
 # are semantically aligned and should NOT trigger
 # matrix_status_contradicts_runtime_result. Pre-fix: workflow forced
 # DEFERRED workaround instead of the natural BLOCKED.
-STATUSES_WITHOUT_RUNTIME = {"INFRA_PENDING", "UNREACHABLE", "DEFERRED", "BLOCKED"}
+#
+# v3.1.0 (Issue #173) — TEST_SPEC_MISSING + ENV_MISMATCH added:
+#   - TEST_SPEC_MISSING: no Playwright/lifecycle spec covers the goal yet;
+#     a runtime sequence isn't expected because no spec to replay.
+#     Distinct from TEST_PENDING (specs exist, awaiting /vg:test run).
+#   - ENV_MISMATCH: env-contract failure (cookie domain, auth host,
+#     sandbox vs local), not a runtime contradiction in the spec.
+STATUSES_WITHOUT_RUNTIME = {
+    "INFRA_PENDING",
+    "UNREACHABLE",
+    "DEFERRED",
+    "BLOCKED",
+    "TEST_PENDING",
+    "TEST_SPEC_MISSING",  # v3.1.0 #173
+    "ENV_MISMATCH",       # v3.1.0 #173
+}
 RUNTIME_FAILURE_RESULTS = {"blocked", "failed", "error"}
 RUNTIME_PASS_RESULTS = {"passed", "ready", "ok", "deferred-structural"}
 

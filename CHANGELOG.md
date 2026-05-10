@@ -1,5 +1,58 @@
 # Changelog
 
+## v3.1.0 — Issue #173 Stage 1: 7-reason BLOCKED taxonomy (2026-05-11)
+
+### Bug — review matrix conflated test-coverage gaps with app bugs
+
+GitHub Issue #173 dogfood report: `/vg:review` emitted `STATUS=BLOCKED` for goals where the failure was actually one of two non-app conditions:
+
+| Real condition | Pre-v3.1.0 classification | Routing consequence |
+|---|---|---|
+| No Playwright/lifecycle spec covers goal | `BLOCKED` (treated as APP_BLOCKED if no other heuristic matched) | Auto-fix loop tried `/vg:build` → no fix possible (the *spec* is missing, not the code) |
+| Cookie domain / auth host / sandbox env mismatch | `BLOCKED` (treated as APP_BLOCKED) | Auto-fix loop tried `/vg:build` → no fix possible (env-contract repair needed) |
+
+Result: the auto-fix routing burned iterations on goals where `/vg:build` could not help, and operators had to manually re-classify before downstream runs.
+
+### Fix — extend BlockedReason from 5 → 7 reasons
+
+`scripts/challenge-coverage.py` `BlockedReason` enum now has two new values:
+
+| Reason | Trigger key in evidence dict | Routing |
+|---|---|---|
+| `TEST_SPEC_MISSING` (NEW) | `missing_spec: true` | `/vg:test ${PHASE_NUMBER} --codegen-from-goals` (Stage 5 of #173 will wire codegen) |
+| `ENV_MISMATCH` (NEW) | `env_mismatch: true` (optional `env_mismatch_reason: cookie_domain | auth_host | …`) | env-contract repair — surface fix command, do NOT route to `/vg:build` |
+
+Classifier precedence (`classify_blocked()`): `env_mismatch → missing_spec → probe_error → upstream_deferred → requires_external → runtime_response_present+!matches_contract → APP_BLOCKED`.
+
+`scripts/validators/verify-matrix-evidence-link.py` `STATUSES_WITHOUT_RUNTIME` set extended with `TEST_SPEC_MISSING` and `ENV_MISMATCH` so a matrix row using either status no longer triggers a false-positive `matrix_status_without_runtime_sequence` error.
+
+`commands/vg/_shared/review/lens-and-findings.md` Phase 2f reason table + non-routed-reason hint Python switch updated:
+- Table now lists 7 reasons with routing column
+- Hint switch surfaces the new commands (`/vg:test ... --codegen-from-goals` for TEST_SPEC_MISSING, env-contract repair text for ENV_MISMATCH)
+
+### Test coverage
+9 tests in `tests/test_blocked_taxonomy.py` (all platforms, all pass):
+- enum has 7 reasons (was 5)
+- classifier returns TEST_SPEC_MISSING / ENV_MISMATCH for the new evidence keys
+- env_mismatch and missing_spec dominate other heuristics (precedence guard)
+- review.md routing surfaces both new reason names
+- matrix-evidence-link STATUSES_WITHOUT_RUNTIME contains both
+- canonical / `.claude/` mirror byte-identity for both modified scripts
+
+### Compatibility
+Backwards-compatible. Existing 5-reason classification paths unchanged — TEST_SPEC_MISSING / ENV_MISMATCH only fire when the evidence dict includes `missing_spec: true` or `env_mismatch: true`. Pre-v3.1.0 callers that don't set those keys keep the old 5-way routing.
+
+### Stage 1 of 6 (Issue #173)
+This release ships the **foundational taxonomy** — Stage 1 of the 6-stage plan:
+- ✅ Stage 1 (this release): matrix status taxonomy
+- ⏳ Stage 2: UI-RUNTIME-CONTRACT.md emission in blueprint for UI-heavy phases
+- ⏳ Stage 3: build validator (CSS token grep + spec count gate)
+- ⏳ Stage 4: review hard-blocks (route inventory + env preflight + lens artifacts)
+- ⏳ Stage 5: `/vg:test` codegen from TEST-GOALS + CRUD-SURFACES + route inventory
+- ⏳ Stage 6: Codex adapter telemetry parity (closes #169)
+
+Closes part of #173.
+
 ## v3.0.1 — Harness-readonly protection (2026-05-11)
 
 ### Bug
