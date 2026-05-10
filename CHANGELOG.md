@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.68.0 — C-tier strict review research adoptions (2026-05-10)
+
+### Features (research-driven hardening — 6 patterns adopted)
+- **C1 Evidence Gate (obra/superpowers):** Retrofitted 3 missing validators (`runtime-evidence.py`, `verify-workflow-evidence.py`, `verify-read-evidence.py`) to write structured `${PHASE_DIR}/.evidence/<gate_id>.json` with verdict/findings/signed_at fields. Audit trail now complete across all L-gate validators.
+- **C2 QA-Checker meta-agent (CodeAgent paper):** New `.claude/agents/vg-review-qa-checker/SKILL.md`. Verifies fix commits actually address original issue claims (not just tests pass). Detects suppression hacks (`@ts-ignore`, `noqa` without justification), false fixes (commit doesn't touch finding files), test reverts. Verdict: PASS/PARTIAL/FAIL. Wired in review Phase 3d.5 (after fix-loop converges). Severity=warn in v2.68.0 (advisory), will flip to block in v2.69.0.
+- **C3 Hybrid gate:** Hybridized `runtime-evidence.py` with deterministic-then-LLM-fallback pattern. New verdicts: PASS (high confidence), AMBIGUOUS (defer to LLM judgment), FAIL. Confidence score (high/medium/low) emitted alongside verdict. Hard-block signals (playwright_failed, missing_last_run_json, etc.) preserved deterministic — only soft signals get hybrid downgrade.
+- **C4 Discourse phase (open-code-review):** Replaced voting-based aggregator at `crossai-normalize-results.py:188-210` with `compute_discourse_verdict()` that emits AGREE/CHALLENGE/CONNECT/SURFACE moves. AGREE: all 3 reviewers concur (high confidence). CHALLENGE: dissent identified. CONNECT: 2+ reviewers raise overlapping findings (corroboration). SURFACE: minority view emitted explicitly so human can weigh. Verdict + confidence + moves array emitted for richer downstream triage.
+- **C5 Sandbox runtime:** Documented sandbox tempdir pattern in `.claude/agents/vg-build-task-executor/SKILL.md` for tests touching shared state (DB, ports, /tmp). Mirrors mkdtemp + env scrub from CrossAI runners. Build executor delegation reminds about sandbox choice.
+- **C6 Min-budget floor:** New `scripts/vg-budget-tracker.py` tracks token cost per phase across 6 model classes (Opus 4.7, Sonnet 4.6, Haiku 4.5, gpt-5.5, gpt-5.4, gemini-2.5-pro). New `min_budget_floor_usd: 10.00` field synced across 3 vg.config template copies. Subcommands: `track` (record event), `check` (return rc=1 + cost when over floor). Hook for orchestrator abort on overrun.
+
+### Test coverage
+**25 new tests across 6 suites.** All pass. Zero regression.
+
+### Migration
+- **C1-C3:** Transparent enhancements. No migration.
+- **C4 discourse:** Aggregator output shape extended (now includes `moves` array). Downstream consumers reading `verdict` continue to work; tools wanting discourse detail read new `moves`.
+- **C5 sandbox:** Documentation only — implementers opt in per task.
+- **C6 budget:** Per-config opt-in via `min_budget_floor_usd` field. Default behavior unchanged (no floor → no abort).
+- **C2 QA-Checker:** severity=warn (advisory) in v2.68.0. Will flip to block in v2.69.0 after telemetry shows verdict distribution + false-positive rate.
+
 ## v2.67.0 — Dogfood Issues Batch 2 (2026-05-10)
 
 ### Bug fixes (closes 7 PrintwayV3 dogfood issues batch 2)
