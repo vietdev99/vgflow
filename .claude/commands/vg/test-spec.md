@@ -84,6 +84,14 @@ if [ -z "${PHASE_NUMBER:-}" ]; then
   exit 1
 fi
 
+VG_HOME="${VG_HOME:-${HOME}/.vgflow}"
+ORCH="${REPO_ROOT}/.claude/scripts/vg-orchestrator"
+[ -e "$ORCH" ] || ORCH="${VG_HOME}/scripts/vg-orchestrator"
+if [ ! -e "$ORCH" ]; then
+  echo "⛔ vg-orchestrator missing. Re-sync VGFlow global install."
+  exit 1
+fi
+
 MAX_FILES="1200"
 for tok in ${ARGUMENTS:-}; do
   case "$tok" in
@@ -93,7 +101,9 @@ for tok in ${ARGUMENTS:-}; do
   esac
 done
 
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/phase-resolver.sh" 2>/dev/null || true
+PHASE_RESOLVER="${REPO_ROOT}/.claude/commands/vg/_shared/lib/phase-resolver.sh"
+[ -f "$PHASE_RESOLVER" ] || PHASE_RESOLVER="${VG_HOME}/commands/vg/_shared/lib/phase-resolver.sh"
+source "$PHASE_RESOLVER" 2>/dev/null || true
 if type -t resolve_phase_dir >/dev/null 2>&1; then
   PHASE_DIR="$(resolve_phase_dir "$PHASE_NUMBER")"
 else
@@ -104,14 +114,14 @@ if [ -z "${PHASE_DIR:-}" ] || [ ! -d "$PHASE_DIR" ]; then
   exit 1
 fi
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-start vg:test-spec "${PHASE_NUMBER}" "${ARGUMENTS:-}" || {
+"${PYTHON_BIN:-python3}" "$ORCH" run-start vg:test-spec "${PHASE_NUMBER}" "${ARGUMENTS:-}" || {
   echo "⛔ vg-orchestrator run-start failed — cannot proceed" >&2
   exit 1
 }
 mkdir -p "${PHASE_DIR}/.step-markers/test-spec"
 touch "${PHASE_DIR}/.step-markers/test-spec/0_parse_and_validate.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test-spec 0_parse_and_validate 2>/dev/null || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 0_parse_and_validate 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "$ORCH" emit-event \
   "test_spec.started" --step "0_parse_and_validate" --actor "llm-claimed" \
   --outcome "INFO" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 ```
@@ -135,7 +145,7 @@ if [ ! -f "${PHASE_DIR}/TEST-GOALS.md" ] && [ ! -d "${PHASE_DIR}/TEST-GOALS" ]; 
 fi
 
 touch "${PHASE_DIR}/.step-markers/test-spec/1_build_artifact_gate.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test-spec 1_build_artifact_gate 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 1_build_artifact_gate 2>/dev/null || true
 ```
 </step>
 
@@ -143,6 +153,7 @@ touch "${PHASE_DIR}/.step-markers/test-spec/1_build_artifact_gate.done"
 ```bash
 SCRIPT="${REPO_ROOT}/.claude/scripts/generate-deep-test-specs.py"
 [ -f "$SCRIPT" ] || SCRIPT="${REPO_ROOT}/scripts/generate-deep-test-specs.py"
+[ -f "$SCRIPT" ] || SCRIPT="${VG_HOME}/scripts/generate-deep-test-specs.py"
 if [ ! -f "$SCRIPT" ]; then
   echo "⛔ generate-deep-test-specs.py missing. Re-sync VGFlow."
   exit 1
@@ -155,12 +166,12 @@ fi
   --max-files "${MAX_FILES}" \
   --json > "${PHASE_DIR}/.deep-test-spec-summary.json"
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" "$ORCH" emit-event \
   "test_spec.generated" --step "2_generate_deep_specs" --actor "llm-claimed" \
   --outcome "PASS" --payload "$(cat "${PHASE_DIR}/.deep-test-spec-summary.json")" >/dev/null 2>&1 || true
 
 touch "${PHASE_DIR}/.step-markers/test-spec/2_generate_deep_specs.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test-spec 2_generate_deep_specs 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 2_generate_deep_specs 2>/dev/null || true
 ```
 </step>
 
@@ -168,6 +179,7 @@ touch "${PHASE_DIR}/.step-markers/test-spec/2_generate_deep_specs.done"
 ```bash
 VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-deep-test-specs.py"
 [ -f "$VALIDATOR" ] || VALIDATOR="${REPO_ROOT}/scripts/validators/verify-deep-test-specs.py"
+[ -f "$VALIDATOR" ] || VALIDATOR="${VG_HOME}/scripts/validators/verify-deep-test-specs.py"
 if [ ! -f "$VALIDATOR" ]; then
   echo "⛔ verify-deep-test-specs.py missing. Re-sync VGFlow."
   exit 1
@@ -177,7 +189,7 @@ fi
   > "${PHASE_DIR}/.deep-test-spec-verify.json" 2>&1
 
 touch "${PHASE_DIR}/.step-markers/test-spec/3_validate_deep_specs.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test-spec 3_validate_deep_specs 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 3_validate_deep_specs 2>/dev/null || true
 ```
 </step>
 
@@ -201,11 +213,11 @@ p.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 PY
 
 touch "${PHASE_DIR}/.step-markers/test-spec/4_complete.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test-spec 4_complete 2>/dev/null || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_complete 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "$ORCH" emit-event \
   "test_spec.completed" --step "4_complete" --actor "llm-claimed" \
   --outcome "PASS" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete --outcome PASS 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "$ORCH" run-complete --outcome PASS 2>/dev/null || true
 
 echo "✓ /vg:test-spec complete"
 echo "  Wrote: ${PHASE_DIR}/DEEP-TEST-SPECS.md"

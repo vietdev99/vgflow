@@ -118,3 +118,14 @@ def test_pipeline_wiring_places_test_spec_between_build_and_review() -> None:
     assert "/vg:test-spec" in lifecycle
     assert '"build", "test-spec", "review"' in phase_recon
     assert "/vg:test-spec ${PHASE_NUMBER} before /vg:review" in review_preflight
+
+def test_test_spec_command_supports_global_only_install() -> None:
+    command = (REPO_ROOT / "commands" / "vg" / "test-spec.md").read_text(encoding="utf-8")
+
+    assert 'VG_HOME="${VG_HOME:-${HOME}/.vgflow}"' in command
+    assert 'ORCH="${REPO_ROOT}/.claude/scripts/vg-orchestrator"' in command
+    assert 'ORCH="${VG_HOME}/scripts/vg-orchestrator"' in command
+    assert '"$ORCH" run-start vg:test-spec' in command
+    assert 'PHASE_RESOLVER="${VG_HOME}/commands/vg/_shared/lib/phase-resolver.sh"' in command
+    assert 'SCRIPT="${VG_HOME}/scripts/generate-deep-test-specs.py"' in command
+    assert 'VALIDATOR="${VG_HOME}/scripts/validators/verify-deep-test-specs.py"' in command
