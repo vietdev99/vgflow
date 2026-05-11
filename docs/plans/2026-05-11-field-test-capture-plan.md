@@ -1,45 +1,51 @@
-# /vg:field-test Implementation Plan
+# /vg:field-test Implementation Plan (v2)
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Build new VGFlow skill `/vg:field-test` so the user can manually roam the deployed app in an MCP-playwright browser while AI silently captures multi-source telemetry (browser console + network + clicks + nav chain + per-Mark notes + correlated API server log tails). On Stop, an analyzer subagent produces `FIELD-REPORT.md` and appends entries to `.vg/KNOWN-ISSUES.json`.
 
-**Architecture:** 3-tier — AI orchestrator (skill body) injects a floating overlay JS via `mcp__playwright1__browser_evaluate`; overlay emits markers via `console.log('[VG_FT] ...')`; AI polls `browser_console_messages` every 2s. Per-source API log tails (config-driven file or command sources) run as background subprocesses for the session window. On Stop, `build-bundle.py` correlates streams ±N seconds per Mark, then `vg-field-test-analyzer` subagent writes the human report and KNOWN-ISSUES entries.
+**Revision:** v2 — supersedes v1 plan after Codex GPT-5.5 review found 10 critical issues (race conditions, broken redaction, dead presets, missing `--resume`, cross-platform `date` bug, TOCTOU lock, contract mismatch). All 10 addressed below.
 
-**Tech Stack:** Python 3.11+ (orchestrator scripts + analyzer logic), bash (tail wrapper), vanilla browser JS (overlay, no deps), JSON Schema draft-07, MCP playwright1 (already configured), VGFlow runtime_contract + telemetry hash chain (existing).
+**v1 scope cuts** (per design v2): drop `quick`/`deep` presets, drop `--resume`, drop `dev-phases/<N>/` mirror, drop `--non-interactive`, drop crash-recovery aborted-bundle flow.
 
-**Design doc:** [`docs/plans/2026-05-11-field-test-capture-design.md`](./2026-05-11-field-test-capture-design.md)
+**Architecture:** AI orchestrator injects overlay JS via `browser_evaluate`. AI polls overlay state via `browser_evaluate(() => ({len: __VG_FT_STATE.marks.length, status: __VG_FT_STATE.status}))` — NOT console messages (which are snapshot reads that replay; would duplicate marks). Console messages used only for Start/Stop edge events with offset tracking. Per-source API log tails pipe through `redact-stream.py` at capture time (not at build time). Atomic lock via `mkdir`. Python timestamp wrapper replaces GNU `date %3N` for portability.
 
-**Working directory:** stay on `main` per project rule (memory: `feedback_main_branch_only.md`). Commit + push direct.
+**Tech Stack:** Python 3.11+, vanilla browser JS, JSON Schema draft-07, MCP playwright1.
+
+**Design doc:** [`docs/plans/2026-05-11-field-test-capture-design.md`](./2026-05-11-field-test-capture-design.md) (v2)
+
+**Working directory:** `main` per project rule.
 
 ---
 
-## Conventions for every task below
+## Conventions
 
-- All Python = Python 3.11+, type-hinted, follows existing `scripts/` style (`from __future__ import annotations` header, no third-party deps unless already vendored).
-- All bash = `set -euo pipefail` header.
-- Every script written under `scripts/` MUST be mirrored to `.claude/scripts/` (byte-identical) per existing VGFlow convention. Same for `commands/vg/` → `.claude/commands/vg/`.
-- Every test imports `from pathlib import Path` and `REPO_ROOT = Path(__file__).resolve().parents[1]` (or `.parents[2]` for tests/<sub>/).
-- Commits use the existing project trailer:
+- Python: `from __future__ import annotations`, type-hinted, no third-party deps.
+- Bash: `set -euo pipefail`.
+- Every `scripts/` file mirrored to `.claude/scripts/` byte-identical. Same for `commands/vg/` → `.claude/commands/vg/` and `agents/` → `.claude/agents/`.
+- Commits use:
   ```
   Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
   ```
-- Run full regression sweep before each commit:
+- Regression sweep before each commit:
   ```
   python -m pytest tests/ -q --tb=no
   ```
-  Document any newly green / newly red counts in the commit body.
 
 ---
 
-## Task 1: Add `field_test` block to vg.config schema
+## Task 1: Schema v1 + vg.config block (no preset enum)
 
 **Files:**
 - Create: `schemas/field-test-session.v1.json`
-- Modify: `vg.config.template.md` (add commented `field_test:` block in same style as existing review/test sections)
+- Modify: `vg.config.template.md`
 - Test: `tests/test_field_test_config_schema.py`
 
-**Step 1: Write the failing test**
+**Key diff vs v1 plan:**
+- Drop `preset` from schema (no longer a field).
+- Schema validation test seeds a real session.json and asserts jsonschema validation (not just substring check).
+
+**Step 1: Failing test**
 
 ```python
 """tests/test_field_test_config_schema.py — schema + config block contracts."""
@@ -49,73 +55,87 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = REPO_ROOT / "schemas" / "field-test-session.v1.json"
 CONFIG_TEMPLATE = REPO_ROOT / "vg.config.template.md"
 
 
 def test_schema_exists_and_parses():
-    assert SCHEMA.is_file(), "schemas/field-test-session.v1.json must exist"
+    assert SCHEMA.is_file()
     data = json.loads(SCHEMA.read_text(encoding="utf-8"))
     assert data["$schema"] == "http://json-schema.org/draft-07/schema#"
     required = set(data["required"])
-    expected = {
-        "version", "sid", "phase", "preset", "base_url",
-        "ts_started", "sources", "redaction",
+    expected = {"version", "sid", "phase", "base_url", "ts_started", "sources", "redaction"}
+    assert expected <= required
+
+
+def test_schema_rejects_invalid_session():
+    """Schema must actually reject malformed session.json — not just declare required fields."""
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    # Missing `sid`
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {"version": "1", "base_url": "http://x", "ts_started": "2026-05-11T00:00:00Z",
+             "sources": [], "redaction": "password"},
+            schema,
+        )
+    # Bad sources type
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {"version": "1", "sid": "ft-2026", "phase": None, "base_url": "http://x",
+             "ts_started": "2026-05-11T00:00:00Z", "sources": "not-a-list", "redaction": "password"},
+            schema,
+        )
+
+
+def test_schema_accepts_real_session():
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    valid = {
+        "version": "1", "sid": "ft-2026-05-11T10-00-00Z", "phase": None,
+        "base_url": "http://localhost:3000", "ts_started": "2026-05-11T10:00:00Z",
+        "sources": [{"type": "file", "target": "/var/log/api.log", "label": "api"}],
+        "redaction": "password|token|secret",
     }
-    missing = expected - required
-    assert not missing, f"schema must require all v1 fields, missing: {missing}"
+    jsonschema.validate(valid, schema)
 
 
-def test_config_template_advertises_field_test_block():
+def test_config_template_advertises_field_test_block_no_preset():
     body = CONFIG_TEMPLATE.read_text(encoding="utf-8")
-    # Block must be present (commented or uncommented)
-    assert re.search(r"^#?\s*field_test\s*:", body, re.MULTILINE), (
-        "vg.config.template.md must include a field_test: block"
-    )
+    assert re.search(r"^#?\s*field_test\s*:", body, re.MULTILINE)
     for key in [
-        "api_log_sources", "default_preset", "default_redaction",
-        "default_base_url", "mark_window_sec", "session_max_size_mb",
-        "max_session_hours",
+        "api_log_sources", "default_redaction", "default_base_url",
+        "mark_window_sec", "session_max_size_mb", "max_session_hours",
     ]:
-        assert key in body, f"field_test block must document `{key}`"
+        assert key in body, f"missing config key: {key}"
+    # v2: preset must NOT appear (deferred to v2)
+    assert "default_preset" not in body, (
+        "v1 ships only the standard capture profile — no preset enum in config"
+    )
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run** → FAIL.
 
-```
-python -m pytest tests/test_field_test_config_schema.py -v
-```
-Expected: FAIL both tests (schema + template not yet present).
-
-**Step 3: Write minimal implementation — create schema**
-
-`schemas/field-test-session.v1.json`:
+**Step 3: Write schema** — `schemas/field-test-session.v1.json`:
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://vgflow.dev/schemas/field-test-session.v1.json",
   "title": "VG field-test session (v1) — user-driven roam capture",
-  "description": "Schema for .vg/field-test/<sid>/session.json — written at session start, mutated on stop. Validated by build-bundle.py + analyzer subagent.",
   "type": "object",
-  "required": [
-    "version", "sid", "phase", "preset", "base_url",
-    "ts_started", "sources", "redaction"
-  ],
+  "required": ["version", "sid", "phase", "base_url", "ts_started", "sources", "redaction"],
   "additionalProperties": true,
   "properties": {
     "version": {"const": "1"},
-    "sid": {
-      "type": "string",
-      "pattern": "^ft-(p[0-9A-Z._-]+-)?[0-9TZ:.-]+$",
-      "description": "Session id. Phase-less: ft-<iso_ts>. Phase-bound: ft-p<N>-<iso_ts>."
-    },
+    "sid": {"type": "string", "pattern": "^ft-(p[A-Za-z0-9._-]+-)?[0-9TZ:.-]+$"},
     "phase": {"type": ["string", "null"]},
-    "preset": {"enum": ["quick", "standard", "deep"]},
     "base_url": {"type": "string"},
     "ts_started": {"type": "string", "format": "date-time"},
-    "ts_stopped": {"type": ["string", "null"], "format": "date-time"},
+    "ts_stopped": {"type": ["string", "null"]},
     "sources": {
       "type": "array",
       "items": {
@@ -129,546 +149,440 @@ Expected: FAIL both tests (schema + template not yet present).
         }
       }
     },
-    "redaction": {"type": "string", "description": "Compiled regex pattern actually applied"},
+    "redaction": {"type": "string"},
     "mark_count": {"type": "integer", "minimum": 0},
-    "aborted": {"type": "boolean"},
-    "abort_reason": {"type": ["string", "null"]},
     "bundle_path": {"type": ["string", "null"]}
   }
 }
 ```
 
-**Step 4: Modify `vg.config.template.md`** — append (or merge into existing config block):
+**Step 4: Modify `vg.config.template.md`**:
 
 ```markdown
-## field_test (v3.7+ — /vg:field-test skill)
+## field_test (v3.7+ — /vg:field-test skill, v1 scope)
 
 ```yaml
 field_test:
-  # API log sources to tail during a field-test session. Each source
-  # produces one .vg/field-test/<sid>/api-<n>.log file.
   api_log_sources:
-    # - { type: file,    target: /var/log/api.log,                    label: api-stdout }
-    # - { type: command, target: "docker logs -f my-api-container",   label: docker-api }
-    # - { type: command, target: "kubectl logs -f pod/api -n prod",   label: k8s-api }
+    # - { type: file,    target: /var/log/api.log,                  label: api }
+    # - { type: command, target: "docker logs -f my-api",           label: docker-api }
+    # - { type: command, target: "kubectl logs -f pod/api -n prod", label: k8s-api }
 
-  default_preset: standard       # quick | standard | deep
-  default_redaction: 'password|token|secret|api[_-]?key|email|phone'
-  default_base_url: ""           # fallback if ENV-CONTRACT.md target.base_url missing
-  mark_window_sec: 30            # ±sec correlated window per Mark
-  screenshot_quality: 80         # jpeg quality 0-100
-  session_max_size_mb: 200       # hard cap before forced stop
-  max_session_hours: 4           # absolute wall-clock cap
+  default_redaction: 'password|token|secret|api[_-]?key|email|phone|bearer\s+[A-Za-z0-9._-]+|authorization:\s*\S+'
+  default_base_url: ""
+  mark_window_sec: 30
+  screenshot_quality: 80
+  session_max_size_mb: 200
+  max_session_hours: 4
 ```
 
-**Step 5: Re-run test**
-
-```
-python -m pytest tests/test_field_test_config_schema.py -v
-```
-Expected: PASS both.
+**Step 5: Run** → PASS.
 
 **Step 6: Commit**
 
 ```bash
 git add tests/test_field_test_config_schema.py schemas/field-test-session.v1.json vg.config.template.md
-git commit -m "feat(field-test): schema v1 + vg.config.template block
+git commit -m "feat(field-test): schema v1 + vg.config.template block (no preset enum)
 
-scaffolds /vg:field-test from docs/plans/2026-05-11-field-test-capture-design.md.
-Adds JSON schema draft-07 for session.json + documents config block users
-need (api_log_sources, default_preset, default_redaction, base_url,
-window/size/duration caps).
+Schema draft-07 with jsonschema validation tests (not substring tautology).
+Tests assert rejection of malformed sessions + acceptance of real session.
+Config block declares api_log_sources + redaction + caps. No preset field
+in v1 — deferred per design v2 scope cut.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 2: Browser overlay JS (vanilla, IIFE)
+## Task 2: Redact-stream helper (single source of truth)
 
 **Files:**
-- Create: `scripts/field-test/overlay.js`
-- Create: `.claude/scripts/field-test/overlay.js` (byte-identical mirror)
-- Test: `tests/test_field_test_overlay_js.py`
+- Create: `scripts/field-test/redact-stream.py`
+- Create: `.claude/scripts/field-test/redact-stream.py`
+- Test: `tests/test_field_test_redact_stream.py`
 
-**Step 1: Write the failing test**
+**Key:** Single helper applied BOTH at tail capture time (via stdin pipe) AND at build-bundle window correlation. Source of truth for redaction logic. Multi-form patterns: `key=value`, `key: value`, JSON `"key": "value"`, bare `Bearer <jwt>`, `Authorization: Bearer …`.
+
+**Step 1: Failing test**
 
 ```python
-"""tests/test_field_test_overlay_js.py — overlay.js structural + syntactic checks."""
+"""tests/test_field_test_redact_stream.py — capture-time redaction helper."""
 from __future__ import annotations
 
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OVERLAY = REPO_ROOT / "scripts" / "field-test" / "overlay.js"
-MIRROR = REPO_ROOT / ".claude" / "scripts" / "field-test" / "overlay.js"
+REDACT = REPO_ROOT / "scripts" / "field-test" / "redact-stream.py"
+MIRROR = REPO_ROOT / ".claude" / "scripts" / "field-test" / "redact-stream.py"
 
 
-def test_overlay_exists():
-    assert OVERLAY.is_file()
-
-
-def test_overlay_uses_namespaced_state():
-    body = OVERLAY.read_text(encoding="utf-8")
-    assert "window.__VG_FT_STATE" in body
-    assert "[VG_FT]" in body, "must emit markers with [VG_FT] prefix for AI poller"
-
-
-def test_overlay_exports_init():
-    body = OVERLAY.read_text(encoding="utf-8")
-    assert "window.__VG_FT_INIT" in body, (
-        "overlay must expose __VG_FT_INIT so AI can verify injection"
+def _run(stdin: str, pattern: str = "password|token|secret|api[_-]?key|email|bearer\\s+[A-Za-z0-9._-]+|authorization:\\s*\\S+") -> str:
+    r = subprocess.run(
+        [sys.executable, str(REDACT), "--pattern", pattern],
+        input=stdin, capture_output=True, text=True, encoding="utf-8", check=True,
     )
+    return r.stdout
 
 
-def test_overlay_namespace_does_not_collide():
-    body = OVERLAY.read_text(encoding="utf-8")
-    # No bare global identifiers (defensive). Crude but catches common mistakes.
-    for forbidden in ["var FT_", "let FT_", "const FT_", "function FT_"]:
-        assert forbidden not in body, f"overlay must namespace all identifiers under __VG_FT_*; found {forbidden}"
+def test_kv_equals_form():
+    out = _run("login: password=hunter2 success\n")
+    assert "hunter2" not in out
+    assert "[REDACTED]" in out
 
 
-def test_overlay_no_eval():
-    body = OVERLAY.read_text(encoding="utf-8")
-    assert "eval(" not in body
-    assert "new Function(" not in body
+def test_kv_colon_header_form():
+    out = _run("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.xxxx\n")
+    assert "eyJhbGc" not in out
 
 
-def test_overlay_no_cross_origin_fetch():
-    body = OVERLAY.read_text(encoding="utf-8")
-    # Overlay must never reach out to non-same-origin endpoints
-    assert "fetch('http" not in body
-    assert 'fetch("http' not in body
+def test_json_body_form():
+    out = _run('POST /api/login {"email":"u@x.com","password":"hunter2"}\n')
+    assert "hunter2" not in out
+    assert "u@x.com" not in out
+
+
+def test_url_query_form():
+    out = _run("GET /api/things?api_key=ABCDEF&page=2\n")
+    assert "ABCDEF" not in out
+    assert "page=2" in out, "non-sensitive query params must pass through"
+
+
+def test_bare_bearer_form():
+    out = _run("Got header Bearer eyJhbGc.deadbeef.signature\n")
+    assert "deadbeef" not in out
+
+
+def test_safe_input_passes_through():
+    safe = "INFO order created id=42 status=ok\n"
+    out = _run(safe)
+    assert out.strip() == safe.strip()
+
+
+def test_idempotency():
+    """Re-redacting redacted output should not change it."""
+    once = _run("password=hunter2\n")
+    twice = _run(once)
+    assert once == twice
+
+
+def test_bad_user_regex_falls_back_to_default():
+    """An invalid regex must fall back to default + emit warning to stderr, not crash."""
+    r = subprocess.run(
+        [sys.executable, str(REDACT), "--pattern", "[unclosed"],
+        input="password=hunter2\n", capture_output=True, text=True,
+        encoding="utf-8",
+    )
+    assert r.returncode == 0
+    assert "hunter2" not in r.stdout, "default regex must still apply"
+    assert "warning" in r.stderr.lower() or "fallback" in r.stderr.lower()
 
 
 def test_mirror_byte_identity():
-    assert OVERLAY.read_bytes() == MIRROR.read_bytes()
-
-
-_node = pytest.mark.skipif(not shutil.which("node"), reason="node required for --check")
-
-
-@_node
-def test_overlay_node_check_passes():
-    r = subprocess.run(
-        ["node", "--check", str(OVERLAY)],
-        capture_output=True,
-        text=True,
-    )
-    assert r.returncode == 0, f"node --check failed:\n{r.stderr}"
+    assert REDACT.read_bytes() == MIRROR.read_bytes()
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run** → FAIL.
 
-```
-python -m pytest tests/test_field_test_overlay_js.py -v
-```
-Expected: FAIL (file missing).
+**Step 3: Write `scripts/field-test/redact-stream.py`**:
 
-**Step 3: Write overlay.js**
+```python
+#!/usr/bin/env python3
+"""redact-stream.py — line-oriented redactor for /vg:field-test.
 
-`scripts/field-test/overlay.js`:
+Reads stdin line-by-line, applies a multi-form redaction regex, writes
+stdout. Used in two places:
 
-```javascript
-/* eslint-disable */
-// VGFlow /vg:field-test overlay — vanilla browser JS, no deps.
-// Injected via mcp__playwright1__browser_evaluate at session start.
-// Emits markers via console.log('[VG_FT] <json>') for AI to poll.
+  1. tail-source.sh pipes API log lines through this BEFORE writing to
+     disk (capture-time redaction — closes the design v2 disk-exposure
+     window).
+  2. build-bundle.py runs each correlated window line through this for
+     idempotent re-application during Stop-time bundle assembly.
 
-(function () {
-  "use strict";
-  if (window.__VG_FT_STATE) return; // idempotent
+Patterns covered:
+  - key=value         (URL query / CLI arg)
+  - key: value        (HTTP header)
+  - "key": "value"    (JSON body)
+  - Bearer <token>    (Authorization value)
+  - Authorization: ...
 
-  var BUFFER_CAP = 10000;
-  var CLICK_CAP = 200;
-  var NAV_CAP = 100;
+Bad user regex → warn on stderr, fall back to default. Never crash.
+"""
+from __future__ import annotations
 
-  function nowIso() { return new Date().toISOString(); }
-  function emit(event, payload) {
-    try {
-      console.log("[VG_FT] " + JSON.stringify({ event: event, ts: nowIso(), payload: payload || {} }));
-    } catch (e) { /* swallow */ }
-  }
+import argparse
+import re
+import sys
 
-  var state = {
-    status: "idle",
-    sid: null,
-    start_ts: null,
-    marks: [],
-    buffer: {
-      console: [],
-      network: [],
-      nav: [],
-      clicks: []
-    },
-    drops: { console: 0, network: 0 }
-  };
-  window.__VG_FT_STATE = state;
 
-  function pushBuffer(name, entry) {
-    var b = state.buffer[name];
-    b.push(entry);
-    var cap = (name === "clicks") ? CLICK_CAP : (name === "nav" ? NAV_CAP : BUFFER_CAP);
-    while (b.length > cap) { b.shift(); state.drops[name] = (state.drops[name] || 0) + 1; }
-  }
+DEFAULT_KEYS = r"password|token|secret|api[_-]?key|email|phone"
+DEFAULT_PATTERN = (
+    r"(?i)("
+    r"(?:" + DEFAULT_KEYS + r")\s*[:=]\s*\"?[^\"\s,&}]+"
+    r"|\"(?:" + DEFAULT_KEYS + r")\"\s*:\s*\"[^\"]*\""
+    r"|bearer\s+[A-Za-z0-9._\-]+"
+    r"|authorization:\s*\S+"
+    r")"
+)
 
-  // ── console monkeypatch ─────────────────────────────────────────────
-  ["log", "info", "warn", "error", "debug"].forEach(function (lvl) {
-    var orig = console[lvl].bind(console);
-    console[lvl] = function () {
-      try {
-        var args = Array.prototype.slice.call(arguments);
-        var text = args.map(function (a) {
-          if (typeof a === "string") return a;
-          try { return JSON.stringify(a); } catch (_) { return String(a); }
-        }).join(" ");
-        if (text.indexOf("[VG_FT]") !== 0) {
-          pushBuffer("console", { ts: nowIso(), level: lvl, text: text });
-        }
-      } catch (e) { /* swallow */ }
-      return orig.apply(null, arguments);
-    };
-  });
+SENTINEL = "[REDACTED]"
 
-  // ── fetch + XHR monkeypatch ─────────────────────────────────────────
-  var _fetch = window.fetch;
-  if (_fetch) {
-    window.fetch = function (input, init) {
-      var startTs = nowIso();
-      var t0 = performance.now();
-      var method = (init && init.method) || (input && input.method) || "GET";
-      var url = (typeof input === "string") ? input : (input && input.url) || "";
-      return _fetch.apply(this, arguments).then(function (resp) {
-        pushBuffer("network", {
-          ts: startTs, method: method, url: url, status: resp.status,
-          duration_ms: Math.round(performance.now() - t0)
-        });
-        return resp;
-      }).catch(function (err) {
-        pushBuffer("network", {
-          ts: startTs, method: method, url: url, status: 0,
-          duration_ms: Math.round(performance.now() - t0),
-          error: String(err && err.message || err)
-        });
-        throw err;
-      });
-    };
-  }
-  var _open = XMLHttpRequest.prototype.open;
-  var _send = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) {
-    this.__vg_ft_method = method;
-    this.__vg_ft_url = url;
-    return _open.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function () {
-    var xhr = this;
-    var startTs = nowIso();
-    var t0 = performance.now();
-    xhr.addEventListener("loadend", function () {
-      pushBuffer("network", {
-        ts: startTs,
-        method: xhr.__vg_ft_method,
-        url: xhr.__vg_ft_url,
-        status: xhr.status,
-        duration_ms: Math.round(performance.now() - t0)
-      });
-    });
-    return _send.apply(this, arguments);
-  };
 
-  // ── navigation tracking ─────────────────────────────────────────────
-  function recordNav(reason) {
-    pushBuffer("nav", { ts: nowIso(), url: location.href, reason: reason });
-  }
-  recordNav("init");
-  var _push = history.pushState;
-  var _replace = history.replaceState;
-  history.pushState = function () { var r = _push.apply(this, arguments); recordNav("push"); return r; };
-  history.replaceState = function () { var r = _replace.apply(this, arguments); recordNav("replace"); return r; };
-  window.addEventListener("popstate", function () { recordNav("popstate"); });
+def build_pattern(user: str | None) -> tuple[re.Pattern[str], bool]:
+    """Return (compiled, used_default). Falls back to default on bad regex."""
+    if not user or user == "default":
+        return re.compile(DEFAULT_PATTERN), True
+    # Compose user keys with multi-form template (same shape as DEFAULT_PATTERN)
+    try:
+        composed = (
+            r"(?i)("
+            r"(?:" + user + r")\s*[:=]\s*\"?[^\"\s,&}]+"
+            r"|\"(?:" + user + r")\"\s*:\s*\"[^\"]*\""
+            r"|bearer\s+[A-Za-z0-9._\-]+"
+            r"|authorization:\s*\S+"
+            r")"
+        )
+        return re.compile(composed), False
+    except re.error as exc:
+        print(f"redact-stream: warning: invalid user regex '{user}': {exc}; falling back to default", file=sys.stderr)
+        return re.compile(DEFAULT_PATTERN), True
 
-  // ── click capture ───────────────────────────────────────────────────
-  document.addEventListener("click", function (ev) {
-    try {
-      var el = ev.target;
-      if (!el || !el.tagName) return;
-      var sel = el.tagName.toLowerCase();
-      if (el.id) sel += "#" + el.id;
-      if (el.className && typeof el.className === "string") sel += "." + el.className.trim().split(/\s+/).slice(0, 3).join(".");
-      var text = (el.innerText || el.value || "").slice(0, 80);
-      pushBuffer("clicks", { ts: nowIso(), selector: sel, text: text });
-    } catch (e) { /* swallow */ }
-  }, true);
 
-  // ── overlay UI ──────────────────────────────────────────────────────
-  function render() {
-    var existing = document.getElementById("__vg-ft-overlay");
-    if (existing) existing.remove();
-    var root = document.createElement("div");
-    root.id = "__vg-ft-overlay";
-    root.style.cssText = [
-      "position:fixed", "top:12px", "right:12px",
-      "z-index:2147483647", "font:13px/1.3 system-ui,sans-serif",
-      "background:#0b1220", "color:#e5e7eb",
-      "padding:10px 12px", "border-radius:8px",
-      "box-shadow:0 4px 12px rgba(0,0,0,.4)", "min-width:220px"
-    ].join(";");
-    var pillBg = state.status === "recording" ? "#16a34a" : (state.status === "idle" ? "#475569" : "#dc2626");
-    root.innerHTML =
-      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
-      '<span id="__vg-ft-pill" style="background:' + pillBg + ';padding:2px 8px;border-radius:999px;font-size:11px">' + state.status + '</span>' +
-      '<span style="font-size:11px;opacity:.7">marks: ' + state.marks.length + '</span>' +
-      '</div>' +
-      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-      '<button id="__vg-ft-start" style="background:#16a34a;color:#fff;border:0;padding:6px 10px;border-radius:6px;cursor:pointer">▶ Start</button>' +
-      '<button id="__vg-ft-mark" style="background:#f59e0b;color:#000;border:0;padding:6px 10px;border-radius:6px;cursor:pointer">⚑ Mark</button>' +
-      '<button id="__vg-ft-stop" style="background:#dc2626;color:#fff;border:0;padding:6px 10px;border-radius:6px;cursor:pointer">■ Stop</button>' +
-      '</div>';
-    document.body.appendChild(root);
-    document.getElementById("__vg-ft-start").onclick = startSession;
-    document.getElementById("__vg-ft-stop").onclick = stopSession;
-    document.getElementById("__vg-ft-mark").onclick = openMarkModal;
-  }
+def redact(line: str, pat: re.Pattern[str]) -> str:
+    return pat.sub(SENTINEL, line)
 
-  function startSession() {
-    if (state.status !== "idle") return;
-    state.status = "recording";
-    state.start_ts = nowIso();
-    emit("start", { url: location.href });
-    render();
-  }
-  function stopSession() {
-    if (state.status === "idle") return;
-    state.status = "idle";
-    emit("stop", { marks: state.marks.length });
-    render();
-  }
 
-  function openMarkModal() {
-    if (state.status !== "recording") {
-      alert("Click Start first.");
-      return;
-    }
-    var existing = document.getElementById("__vg-ft-modal");
-    if (existing) existing.remove();
-    var modal = document.createElement("div");
-    modal.id = "__vg-ft-modal";
-    modal.style.cssText = [
-      "position:fixed", "inset:0", "background:rgba(0,0,0,.5)",
-      "z-index:2147483646", "display:flex", "align-items:center", "justify-content:center",
-      "font:14px/1.4 system-ui,sans-serif"
-    ].join(";");
-    modal.innerHTML =
-      '<div style="background:#0b1220;color:#e5e7eb;padding:18px 22px;border-radius:10px;min-width:420px;max-width:80vw">' +
-      '<div style="margin-bottom:10px;font-weight:600">Mark current view</div>' +
-      '<div style="margin-bottom:8px;font-size:12px;opacity:.7">URL: ' + location.href + '</div>' +
-      '<textarea id="__vg-ft-note" rows="5" style="width:100%;background:#1e293b;color:#e5e7eb;border:1px solid #334155;border-radius:6px;padding:8px;font:13px/1.4 system-ui,sans-serif" placeholder="Describe what you observed at this view (bug, missing feature, slow, etc.)"></textarea>' +
-      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">' +
-      '<button id="__vg-ft-cancel" style="background:#475569;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer">Cancel</button>' +
-      '<button id="__vg-ft-submit" style="background:#16a34a;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer">Submit</button>' +
-      '</div></div>';
-    document.body.appendChild(modal);
-    setTimeout(function () { var t = document.getElementById("__vg-ft-note"); if (t) t.focus(); }, 50);
-    document.getElementById("__vg-ft-cancel").onclick = function () { modal.remove(); };
-    document.getElementById("__vg-ft-submit").onclick = function () {
-      var note = (document.getElementById("__vg-ft-note").value || "").trim();
-      if (!note) { alert("Note required."); return; }
-      var n = state.marks.length;
-      var lastClick = state.buffer.clicks[state.buffer.clicks.length - 1] || null;
-      var entry = {
-        n: n,
-        ts: nowIso(),
-        url: location.href,
-        referrer: document.referrer || "",
-        nav_chain: state.buffer.nav.slice(-5),
-        user_note: note,
-        viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 },
-        click_target: lastClick
-      };
-      state.marks.push(entry);
-      emit("mark", entry);
-      modal.remove();
-      render();
-    };
-  }
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--pattern", default="default", help="Custom redaction keys regex (alternation)")
+    args = ap.parse_args()
+    pat, _ = build_pattern(args.pattern)
+    try:
+        for line in sys.stdin:
+            sys.stdout.write(redact(line, pat))
+            sys.stdout.flush()
+    except BrokenPipeError:
+        pass
+    return 0
 
-  window.__VG_FT_INIT = function () { render(); return true; };
-  window.__VG_FT_INIT();
-})();
+
+if __name__ == "__main__":
+    sys.exit(main())
 ```
 
-`.claude/scripts/field-test/overlay.js` is a byte-identical copy.
-
-**Step 4: Sync mirror + re-run tests**
-
-```bash
-mkdir -p .claude/scripts/field-test
-cp scripts/field-test/overlay.js .claude/scripts/field-test/overlay.js
-python -m pytest tests/test_field_test_overlay_js.py -v
-```
-Expected: PASS all (node smoke skipped if no node).
+**Step 4: Mirror + run** → PASS all 9 tests.
 
 **Step 5: Commit**
 
 ```bash
-git add scripts/field-test/overlay.js .claude/scripts/field-test/overlay.js tests/test_field_test_overlay_js.py
-git commit -m "feat(field-test): browser overlay JS (vanilla, IIFE, namespaced)
+git add scripts/field-test/redact-stream.py .claude/scripts/field-test/redact-stream.py tests/test_field_test_redact_stream.py
+git commit -m "feat(field-test): redact-stream.py multi-form redactor (capture+build)
 
-Floating overlay top-right with Start/Stop/Mark buttons + modal note.
-Monkeypatches console + fetch + XHR + history + click for capture
-buffers (capped). Emits markers via console.log('[VG_FT] <json>') so
-AI orchestrator can poll browser_console_messages. State exposed at
-window.__VG_FT_STATE; init exposed at window.__VG_FT_INIT.
+Single source of truth for redaction. Covers key=value, key: value,
+JSON body \"key\":\"value\", bare Bearer <jwt>, Authorization: ... header
+form. Idempotent (re-redacting redacted output is no-op). Bad user
+regex falls back to default + warns on stderr instead of crashing.
+
+Closes Codex review §4 — v1 plan regex was broken (dropped api_key,
+email, phone from design's promised default; second alternative branch
+only matched bare word; Bearer never matched).
+
+Used by tail-source.sh at capture time AND build-bundle.py at window
+correlation time — closes the disk-exposure window the v1 plan left
+open until Stop.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 3: API log tail wrapper
+## Task 3: tail-source.sh + Python timestamp wrapper
 
 **Files:**
 - Create: `scripts/field-test/tail-source.sh`
-- Create: `.claude/scripts/field-test/tail-source.sh`
+- Create: `scripts/field-test/prefix-iso.py` (replaces GNU `date %3N`)
+- Mirror both to `.claude/scripts/field-test/`
 - Test: `tests/test_field_test_tail_source.py`
 
-**Step 1: Write the failing test**
+**Key diff vs v1 plan:**
+- Replace `date -u +%Y-%m-%dT%H:%M:%S.%3N` (GNU-only) with `python3 prefix-iso.py` (portable Mac+Linux+Windows-via-GitBash).
+- Pipe stream through `redact-stream.py` BEFORE writing disk.
+
+**Step 1: Failing test**
 
 ```python
-"""tests/test_field_test_tail_source.py — tail-source.sh wrapper."""
+"""tests/test_field_test_tail_source.py"""
 from __future__ import annotations
 
-import os
-import shutil
-import signal
-import subprocess
-import sys
-import time
+import shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TAIL = REPO_ROOT / "scripts" / "field-test" / "tail-source.sh"
-MIRROR = REPO_ROOT / ".claude" / "scripts" / "field-test" / "tail-source.sh"
+PREFIX = REPO_ROOT / "scripts" / "field-test" / "prefix-iso.py"
+MIRROR_TAIL = REPO_ROOT / ".claude" / "scripts" / "field-test" / "tail-source.sh"
+MIRROR_PREFIX = REPO_ROOT / ".claude" / "scripts" / "field-test" / "prefix-iso.py"
 
 
-def test_tail_script_exists():
+def test_scripts_exist():
     assert TAIL.is_file()
+    assert PREFIX.is_file()
 
 
-def test_tail_script_starts_with_bash_strict():
+def test_tail_uses_python_timestamp_not_gnu_date():
     body = TAIL.read_text(encoding="utf-8")
-    assert body.startswith("#!/usr/bin/env bash")
-    assert "set -euo pipefail" in body
+    # Must NOT use `date %3N` (GNU-only)
+    assert "%3N" not in body, "v2 forbids date %3N (macOS BSD date breaks silently)"
+    # Must reference prefix-iso.py wrapper
+    assert "prefix-iso.py" in body
 
 
-def test_tail_handles_both_modes_in_source():
+def test_tail_pipes_through_redactor():
     body = TAIL.read_text(encoding="utf-8")
-    assert "--type" in body and "--target" in body and "--out" in body
-    assert "file)" in body or '"file"' in body
-    assert "command)" in body or '"command"' in body
+    assert "redact-stream.py" in body, (
+        "v2 mandates capture-time redaction before disk write"
+    )
+
+
+def test_tail_takes_redaction_pattern_arg():
+    body = TAIL.read_text(encoding="utf-8")
+    assert "--redact" in body, "tail must accept --redact pattern for per-session regex"
 
 
 def test_mirror_byte_identity():
-    assert TAIL.read_bytes() == MIRROR.read_bytes()
+    assert TAIL.read_bytes() == MIRROR_TAIL.read_bytes()
+    assert PREFIX.read_bytes() == MIRROR_PREFIX.read_bytes()
 
 
 _bash = pytest.mark.skipif(
     not shutil.which("bash") or sys.platform == "win32",
-    reason="bash + POSIX semantics required (Windows skipped)",
+    reason="POSIX bash required",
 )
 
 
 @_bash
-def test_tail_file_mode_writes_iso_prefixed_lines(tmp_path):
-    target = tmp_path / "input.log"
-    out = tmp_path / "output.log"
-    target.write_text("first line\n", encoding="utf-8")
+def test_tail_file_mode_redacts_inline(tmp_path):
+    target = tmp_path / "src.log"
+    out = tmp_path / "out.log"
+    target.write_text("", encoding="utf-8")
     proc = subprocess.Popen(
-        ["bash", str(TAIL), "--type", "file", "--target", str(target), "--out", str(out)],
+        ["bash", str(TAIL), "--type", "file", "--target", str(target),
+         "--out", str(out), "--redact", "password|token"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
-        time.sleep(0.5)
-        target.write_text("first line\nsecond line\n", encoding="utf-8")
-        time.sleep(1.5)
+        time.sleep(0.3)
+        with target.open("a", encoding="utf-8") as f:
+            f.write("login password=hunter2 success\n")
+        time.sleep(1.0)
     finally:
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=5)
     text = out.read_text(encoding="utf-8")
-    assert "second line" in text
-    # Lines should be ISO-prefixed (YYYY-MM-DDT...Z)
-    for line in text.strip().splitlines():
-        assert line[:4].isdigit() and "T" in line[:20], f"line missing ISO prefix: {line!r}"
+    assert "hunter2" not in text, "tail must redact at capture, not leave to build-time"
+    assert "[REDACTED]" in text
 
 
 @_bash
-def test_tail_command_mode_captures_command_output(tmp_path):
-    out = tmp_path / "output.log"
+def test_tail_iso_prefix_works_on_any_unix(tmp_path):
+    """Verifies prefix-iso.py emits parseable ISO timestamps (no `date %3N` portability bug)."""
+    target = tmp_path / "src.log"
+    out = tmp_path / "out.log"
+    target.write_text("", encoding="utf-8")
     proc = subprocess.Popen(
-        ["bash", str(TAIL), "--type", "command",
-         "--target", "for i in 1 2 3 4 5; do echo line-$i; sleep 0.05; done",
-         "--out", str(out)],
+        ["bash", str(TAIL), "--type", "file", "--target", str(target),
+         "--out", str(out), "--redact", "default"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    proc.wait(timeout=10)
+    try:
+        time.sleep(0.3)
+        with target.open("a", encoding="utf-8") as f:
+            f.write("hello world\n")
+        time.sleep(1.0)
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=5)
     text = out.read_text(encoding="utf-8")
-    for i in range(1, 6):
-        assert f"line-{i}" in text
+    # Each line must start with ISO date (e.g. 2026-05-11T...Z)
+    for line in text.strip().splitlines():
+        assert line[:4].isdigit() and "T" in line[:20] and "Z" in line[:35], (
+            f"line missing ISO timestamp: {line!r}"
+        )
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run** → FAIL.
 
+**Step 3: Write `scripts/field-test/prefix-iso.py`**:
+
+```python
+#!/usr/bin/env python3
+"""prefix-iso.py — portable line-oriented ISO-8601 timestamp prefixer.
+
+Replaces `date -u +%Y-%m-%dT%H:%M:%S.%3N` which is GNU-only (macOS BSD
+date silently emits literal `%3N`). Pure Python = portable Mac+Linux+
+Windows-via-Git-Bash.
+
+Reads stdin line-by-line, writes `<ISO-UTC-Z> <line>` to stdout.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import sys
+
+
+def main() -> int:
+    try:
+        for line in sys.stdin:
+            ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            sys.stdout.write(f"{ts} {line}")
+            sys.stdout.flush()
+    except BrokenPipeError:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 ```
-python -m pytest tests/test_field_test_tail_source.py -v
-```
-Expected: FAIL (script missing).
 
-**Step 3: Write `tail-source.sh`**
-
-`scripts/field-test/tail-source.sh`:
+**Step 4: Write `scripts/field-test/tail-source.sh`**:
 
 ```bash
 #!/usr/bin/env bash
-# VGFlow /vg:field-test tail wrapper.
-# Modes:
-#   --type file    --target <path>  --out <path>   → tail -F path
-#   --type command --target "cmd..." --out <path>  → eval cmd
-# Prepends ISO-8601 UTC timestamp to every emitted line.
-# Traps SIGTERM/SIGINT → flushes + exits 0.
+# /vg:field-test tail wrapper — pipes source output through redact-stream.py
+# then prefix-iso.py before writing to disk. Capture-time redaction closes
+# the disk-exposure window v1 left open until Stop.
 set -euo pipefail
 
 TYPE=""
 TARGET=""
 OUT=""
+REDACT_PATTERN="default"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --type)   TYPE="$2"; shift 2 ;;
-    --target) TARGET="$2"; shift 2 ;;
-    --out)    OUT="$2"; shift 2 ;;
+    --type)    TYPE="$2";          shift 2 ;;
+    --target)  TARGET="$2";        shift 2 ;;
+    --out)     OUT="$2";           shift 2 ;;
+    --redact)  REDACT_PATTERN="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 64 ;;
   esac
 done
 
 if [ -z "$TYPE" ] || [ -z "$TARGET" ] || [ -z "$OUT" ]; then
-  echo "usage: tail-source.sh --type {file|command} --target <arg> --out <path>" >&2
+  echo "usage: tail-source.sh --type {file|command} --target <arg> --out <path> [--redact <pattern>]" >&2
   exit 64
 fi
 
 mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 
-prefix_iso() {
-  while IFS= read -r line; do
-    printf '%sZ %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3N)" "$line"
-  done
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+REDACTOR="$SCRIPT_DIR/redact-stream.py"
+PREFIXER="$SCRIPT_DIR/prefix-iso.py"
 
 cleanup() {
   if [ -n "${CHILD_PID:-}" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
@@ -683,15 +597,21 @@ trap cleanup TERM INT
 case "$TYPE" in
   file)
     if [ ! -e "$TARGET" ]; then
-      echo "Z $(date -u +%Y-%m-%dT%H:%M:%S.%3N) tail-source: target file does not yet exist: $TARGET" >> "$OUT"
+      "$PYTHON_BIN" -c "import datetime as d; print(d.datetime.now(d.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'tail-source: waiting for $TARGET to exist')" >> "$OUT"
     fi
-    tail -F -n 0 "$TARGET" 2>/dev/null | prefix_iso >> "$OUT" &
+    tail -F -n 0 "$TARGET" 2>/dev/null \
+      | "$PYTHON_BIN" "$REDACTOR" --pattern "$REDACT_PATTERN" \
+      | "$PYTHON_BIN" "$PREFIXER" \
+      >> "$OUT" &
     CHILD_PID=$!
     wait "$CHILD_PID"
     ;;
   command)
     # shellcheck disable=SC2086
-    bash -c "$TARGET" 2>&1 | prefix_iso >> "$OUT" &
+    bash -c "$TARGET" 2>&1 \
+      | "$PYTHON_BIN" "$REDACTOR" --pattern "$REDACT_PATTERN" \
+      | "$PYTHON_BIN" "$PREFIXER" \
+      >> "$OUT" &
     CHILD_PID=$!
     wait "$CHILD_PID"
     ;;
@@ -702,1357 +622,565 @@ case "$TYPE" in
 esac
 ```
 
-**Step 4: Mirror + run tests**
+**Step 5: Mirror + run**:
 
 ```bash
-cp scripts/field-test/tail-source.sh .claude/scripts/field-test/tail-source.sh
+mkdir -p .claude/scripts/field-test
+cp scripts/field-test/tail-source.sh .claude/scripts/field-test/
+cp scripts/field-test/prefix-iso.py .claude/scripts/field-test/
 chmod +x scripts/field-test/tail-source.sh .claude/scripts/field-test/tail-source.sh
 python -m pytest tests/test_field_test_tail_source.py -v
 ```
-Expected: 4 content tests PASS on Windows; 2 functional PASS on Linux/Mac (skipped on Windows).
 
-**Step 5: Commit**
+PASS expected.
+
+**Step 6: Commit**
 
 ```bash
-git add scripts/field-test/tail-source.sh .claude/scripts/field-test/tail-source.sh tests/test_field_test_tail_source.py
-git commit -m "feat(field-test): tail-source.sh wrapper for API logs
+git add scripts/field-test/tail-source.sh scripts/field-test/prefix-iso.py \
+        .claude/scripts/field-test/tail-source.sh .claude/scripts/field-test/prefix-iso.py \
+        tests/test_field_test_tail_source.py
+git commit -m "feat(field-test): tail-source.sh + portable prefix-iso.py
 
-Supports --type file (tail -F path) and --type command (eval shell cmd).
-Prepends ISO-8601 UTC timestamps to every line so build-bundle.py can
-correlate Mark windows by wall-clock. Traps SIGTERM/SIGINT for clean
-shutdown when /vg:field-test step 6 kills tails.
+Closes Codex review §7: replaces GNU date %3N (macOS BSD date breaks
+silently) with prefix-iso.py portable Python wrapper.
+
+Closes Codex review §4: pipes through redact-stream.py BEFORE writing
+to disk. Capture-time redaction closes the multi-hour disk-exposure
+window v1 left open.
+
+--redact <pattern> per-session regex passed from skill body resolves
+session.redaction config.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 4: Bundle builder (Stop-time correlator)
+## Task 4: Overlay JS with idempotent reload + reload_epoch
 
 **Files:**
-- Create: `scripts/field-test/build-bundle.py`
-- Create: `.claude/scripts/field-test/build-bundle.py`
-- Test: `tests/test_field_test_build_bundle.py`
+- Create: `scripts/field-test/overlay.js`
+- Mirror: `.claude/scripts/field-test/overlay.js`
+- Test: `tests/test_field_test_overlay_js.py`
 
-**Step 1: Write the failing test**
+**Key diff vs v1 plan:**
+- `state.reload_epoch` field added so orchestrator distinguishes pre/post-reload marks.
+- Overlay no longer is the only source for marks — orchestrator polls `state.marks` directly. Console emit is notification-only.
+- Functional test (jsdom or headless playwright) actually clicks Start + Mark + asserts `state.marks.length === 1`. No more substring tautology.
+
+**Step 1: Failing test**
 
 ```python
-"""tests/test_field_test_build_bundle.py — bundle assembler + correlator."""
+"""tests/test_field_test_overlay_js.py"""
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
+import os, shutil, subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BUILDER = REPO_ROOT / "scripts" / "field-test" / "build-bundle.py"
-MIRROR = REPO_ROOT / ".claude" / "scripts" / "field-test" / "build-bundle.py"
+OVERLAY = REPO_ROOT / "scripts" / "field-test" / "overlay.js"
+MIRROR = REPO_ROOT / ".claude" / "scripts" / "field-test" / "overlay.js"
 
 
-def test_builder_exists():
-    assert BUILDER.is_file()
+def test_overlay_exists():
+    assert OVERLAY.is_file()
+
+
+def test_overlay_no_eval_no_cross_origin():
+    body = OVERLAY.read_text(encoding="utf-8")
+    assert "eval(" not in body
+    assert "new Function(" not in body
+    assert "fetch('http" not in body and 'fetch("http' not in body
+
+
+def test_overlay_state_shape():
+    body = OVERLAY.read_text(encoding="utf-8")
+    # Must declare state with reload_epoch + marks array + status
+    assert "window.__VG_FT_STATE" in body
+    assert "reload_epoch" in body, "v2 must track reload epoch for orchestrator dedupe"
+    assert "marks:" in body
+    assert "status:" in body
+
+
+def test_overlay_console_emit_is_notification_only():
+    body = OVERLAY.read_text(encoding="utf-8")
+    # Console markers must include event type but mark entries must also go to state.marks
+    # The marker text alone is NOT the source of truth.
+    assert "state.marks.push" in body or "marks.push" in body, (
+        "v2 overlay must push mark entries into state.marks (orchestrator polls state, not console)"
+    )
+
+
+def test_overlay_idempotent_init():
+    body = OVERLAY.read_text(encoding="utf-8")
+    assert "if (window.__VG_FT_STATE) return" in body or "if (window.__VG_FT_INIT)" in body, (
+        "overlay must be idempotent on re-injection (post-reload)"
+    )
 
 
 def test_mirror_byte_identity():
-    assert BUILDER.read_bytes() == MIRROR.read_bytes()
+    assert OVERLAY.read_bytes() == MIRROR.read_bytes()
 
 
-def _seed(session_dir: Path) -> None:
-    session_dir.mkdir(parents=True)
-    (session_dir / "session.json").write_text(json.dumps({
-        "version": "1", "sid": "ft-test", "phase": None, "preset": "standard",
-        "base_url": "http://localhost:3000",
-        "ts_started": "2026-05-11T10:00:00Z",
-        "ts_stopped": "2026-05-11T10:05:00Z",
-        "sources": [{"type": "file", "target": "/var/log/api.log", "label": "api", "pid": None}],
-        "redaction": "password|token|secret"
-    }), encoding="utf-8")
-    (session_dir / "marks.raw.jsonl").write_text(
-        json.dumps({
-            "n": 0, "ts": "2026-05-11T10:02:00Z",
-            "url": "http://localhost:3000/orders/42",
-            "referrer": "http://localhost:3000/orders",
-            "nav_chain": [],
-            "user_note": "save button no response. token=abc123",
-            "viewport": {"w": 1440, "h": 900, "dpr": 2},
-            "click_target": {"selector": "button.save-btn", "text": "Save"}
-        }) + "\n",
-        encoding="utf-8",
-    )
-    (session_dir / "console.raw.jsonl").write_text(
-        "\n".join([
-            json.dumps({"ts": "2026-05-11T10:01:59Z", "level": "error", "text": "TypeError: cannot read undefined"}),
-            json.dumps({"ts": "2026-05-11T10:02:01Z", "level": "warn", "text": "slow op (8s)"}),
-            json.dumps({"ts": "2026-05-11T10:04:00Z", "level": "info", "text": "outside window"}),
-        ]) + "\n",
-        encoding="utf-8",
-    )
-    (session_dir / "network.raw.jsonl").write_text(
-        json.dumps({
-            "ts": "2026-05-11T10:02:00.412Z", "method": "POST",
-            "url": "/api/orders/42", "status": 500, "duration_ms": 8420
-        }) + "\n",
-        encoding="utf-8",
-    )
-    (session_dir / "api-1.log").write_text(
-        "2026-05-11T10:01:58.500Z api: incoming POST /orders/42\n"
-        "2026-05-11T10:02:00.300Z api: ERROR upstream timeout (db) token=abc123\n"
-        "2026-05-11T10:10:00.000Z api: unrelated later line\n",
-        encoding="utf-8",
-    )
+_node = pytest.mark.skipif(not shutil.which("node"), reason="node required")
 
 
-def test_build_bundle_correlates_mark_window(tmp_path):
-    session_dir = tmp_path / "ft-test"
-    _seed(session_dir)
-    r = subprocess.run(
-        [sys.executable, str(BUILDER), "--session-dir", str(session_dir),
-         "--mark-window-sec", "30"],
-        capture_output=True, text=True, encoding="utf-8",
-    )
-    assert r.returncode == 0, f"builder exited {r.returncode}\n{r.stdout}\n{r.stderr}"
-    marks = (session_dir / "marks.jsonl").read_text(encoding="utf-8").strip().splitlines()
-    assert len(marks) == 1
-    bundle = json.loads(marks[0])
-    # Console window: only entries within ±30s of ts=10:02:00
-    levels = {e["level"] for e in bundle["console_window"]}
-    assert "error" in levels and "warn" in levels
-    assert all("outside window" not in e["text"] for e in bundle["console_window"])
-    # Network window: 500 captured
-    assert any(req["status"] == 500 for req in bundle["network_window"])
-    # API log window: ERROR + incoming POST in, unrelated later out
-    api = bundle["api_log_correlated"]["api"]
-    assert any("ERROR upstream" in line for line in api)
-    assert any("incoming POST" in line for line in api)
-    assert all("unrelated later" not in line for line in api)
+@_node
+def test_overlay_syntax_via_node_check():
+    r = subprocess.run(["node", "--check", str(OVERLAY)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
-def test_redaction_applied_to_logs_and_note(tmp_path):
-    session_dir = tmp_path / "ft-test"
-    _seed(session_dir)
-    subprocess.run(
-        [sys.executable, str(BUILDER), "--session-dir", str(session_dir),
-         "--mark-window-sec", "30"],
-        check=True,
-    )
-    text = (session_dir / "marks.jsonl").read_text(encoding="utf-8")
-    assert "abc123" not in text, "token value should have been redacted"
-    assert "[REDACTED]" in text, "redaction sentinel should appear"
-
-
-def test_manifest_written(tmp_path):
-    session_dir = tmp_path / "ft-test"
-    _seed(session_dir)
-    subprocess.run(
-        [sys.executable, str(BUILDER), "--session-dir", str(session_dir),
-         "--mark-window-sec", "30"],
-        check=True,
-    )
-    manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["sid"] == "ft-test"
-    assert manifest["mark_count"] == 1
-    assert "redaction_applied" in manifest
-    assert "ts_built" in manifest
+@_node
+@pytest.mark.skipif(os.environ.get("VG_RUN_BROWSER_TESTS") != "1", reason="set VG_RUN_BROWSER_TESTS=1 to enable jsdom smoke")
+def test_overlay_mark_flow_via_jsdom(tmp_path):
+    """Functional smoke: load overlay in jsdom, click Start, click Mark, fill note, submit.
+    Assert state.marks.length === 1 and entry has user_note."""
+    # Implementation requires `npm i jsdom` once; the test runner script wraps it.
+    runner = REPO_ROOT / "scripts" / "field-test" / "_test-jsdom-runner.js"
+    if not runner.is_file():
+        pytest.skip("jsdom runner not installed (run npm i jsdom in scripts/field-test/)")
+    r = subprocess.run(["node", str(runner), str(OVERLAY)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "marks.length=1" in r.stdout
+    assert "user_note=test note" in r.stdout
 ```
 
-**Step 2: Run test — expect FAIL** (script missing).
+**Step 2: Run** → FAIL.
 
-**Step 3: Write `scripts/field-test/build-bundle.py`**
+**Step 3: Write overlay.js**
 
-```python
-#!/usr/bin/env python3
-"""build-bundle.py — Stop-time bundle assembler for /vg:field-test.
+(Same skeleton as v1 plan with these specific v2 changes — full file in repo)
 
-Reads .vg/field-test/<sid>/{session.json, marks.raw.jsonl, console.raw.jsonl,
-network.raw.jsonl, clicks.raw.jsonl, nav.raw.jsonl, api-*.log}.
+```javascript
+/* eslint-disable */
+// VGFlow /vg:field-test overlay v2 — vanilla browser JS, no deps.
+// Injected via mcp__playwright1__browser_evaluate.
+// state.marks[] is canonical source; console emit is notification only.
+(function () {
+  "use strict";
+  if (window.__VG_FT_STATE) {
+    // Re-injection (e.g. post-reload). Bump reload_epoch, do NOT wipe marks-server-side
+    // (orchestrator holds the server-side marks.raw.jsonl record).
+    window.__VG_FT_STATE.reload_epoch = (window.__VG_FT_STATE.reload_epoch || 0) + 1;
+    if (window.__VG_FT_INIT) window.__VG_FT_INIT();
+    return;
+  }
 
-Per Mark: collect ±mark_window_sec windows from each stream, apply redaction
-regex, write bundle to marks.jsonl + manifest.json.
-"""
-from __future__ import annotations
+  var BUFFER_CAP = 10000;
+  function nowIso() { return new Date().toISOString(); }
+  function emit(event, payload) {
+    try {
+      console.log("[VG_FT] " + JSON.stringify({ event: event, ts: nowIso(), payload: payload || {} }));
+    } catch (e) {}
+  }
 
-import argparse
-import datetime as _dt
-import json
-import re
-import sys
-from pathlib import Path
+  var state = {
+    status: "idle",
+    reload_epoch: 0,
+    marks: [],
+    buffer: { console: [], network: [], nav: [], clicks: [] },
+    drops: {}
+  };
+  window.__VG_FT_STATE = state;
 
+  function pushBuffer(name, entry) {
+    var b = state.buffer[name];
+    b.push(entry);
+    while (b.length > BUFFER_CAP) { b.shift(); state.drops[name] = (state.drops[name] || 0) + 1; }
+  }
 
-def parse_ts(s: str) -> _dt.datetime | None:
-    try:
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        return _dt.datetime.fromisoformat(s)
-    except ValueError:
-        return None
+  // Console / fetch / XHR / history / click monkeypatching — same as v1 plan task 2 body.
+  // (See repo for full implementation; omitted here for plan brevity.)
 
+  function render() {
+    var existing = document.getElementById("__vg-ft-overlay");
+    if (existing) existing.remove();
+    var root = document.createElement("div");
+    root.id = "__vg-ft-overlay";
+    root.style.cssText = "position:fixed;top:12px;right:12px;z-index:2147483647;font:13px/1.3 system-ui;background:#0b1220;color:#e5e7eb;padding:10px;border-radius:8px";
+    var pillBg = state.status === "recording" ? "#16a34a" : (state.status === "idle" ? "#475569" : "#dc2626");
+    root.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+      '<span id="__vg-ft-pill" style="background:' + pillBg + ';padding:2px 8px;border-radius:999px;font-size:11px">' + state.status + '</span>' +
+      '<span style="font-size:11px;opacity:.7">marks: ' + state.marks.length + '</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button id="__vg-ft-start" style="background:#16a34a;color:#fff;border:0;padding:6px 10px;border-radius:6px">▶ Start</button>' +
+      '<button id="__vg-ft-mark" style="background:#f59e0b;color:#000;border:0;padding:6px 10px;border-radius:6px">⚑ Mark</button>' +
+      '<button id="__vg-ft-stop" style="background:#dc2626;color:#fff;border:0;padding:6px 10px;border-radius:6px">■ Stop</button>' +
+      '</div>';
+    document.body.appendChild(root);
+    document.getElementById("__vg-ft-start").onclick = function () {
+      if (state.status !== "idle") return;
+      state.status = "recording";
+      emit("start", { url: location.href });
+      render();
+    };
+    document.getElementById("__vg-ft-stop").onclick = function () {
+      if (state.status === "idle") return;
+      state.status = "idle";
+      emit("stop", { marks: state.marks.length });
+      render();
+    };
+    document.getElementById("__vg-ft-mark").onclick = openMark;
+  }
 
-def parse_api_log_line(line: str) -> tuple[_dt.datetime | None, str]:
-    # Lines emitted by tail-source.sh: "<ISO>Z <rest>"
-    parts = line.split(" ", 1)
-    if not parts:
-        return None, line
-    ts = parse_ts(parts[0])
-    rest = parts[1] if len(parts) > 1 else ""
-    return ts, rest
+  function openMark() {
+    if (state.status !== "recording") { alert("Click Start first."); return; }
+    var existing = document.getElementById("__vg-ft-modal");
+    if (existing) existing.remove();
+    var modal = document.createElement("div");
+    modal.id = "__vg-ft-modal";
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2147483646;display:flex;align-items:center;justify-content:center";
+    modal.innerHTML =
+      '<div style="background:#0b1220;color:#e5e7eb;padding:18px;border-radius:10px;min-width:420px">' +
+      '<div style="margin-bottom:10px;font-weight:600">Mark current view</div>' +
+      '<div style="margin-bottom:8px;font-size:12px;opacity:.7">URL: ' + location.href + '</div>' +
+      '<textarea id="__vg-ft-note" rows="5" style="width:100%;background:#1e293b;color:#e5e7eb;border:1px solid #334155;border-radius:6px;padding:8px"></textarea>' +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">' +
+      '<button id="__vg-ft-cancel" style="background:#475569;color:#fff;border:0;padding:6px 12px;border-radius:6px">Cancel</button>' +
+      '<button id="__vg-ft-submit" style="background:#16a34a;color:#fff;border:0;padding:6px 12px;border-radius:6px">Submit</button>' +
+      '</div></div>';
+    document.body.appendChild(modal);
+    document.getElementById("__vg-ft-cancel").onclick = function () { modal.remove(); };
+    document.getElementById("__vg-ft-submit").onclick = function () {
+      var note = (document.getElementById("__vg-ft-note").value || "").trim();
+      if (!note) { alert("Note required."); return; }
+      var entry = {
+        n: state.marks.length,
+        ts: nowIso(),
+        url: location.href,
+        referrer: document.referrer || "",
+        nav_chain: state.buffer.nav.slice(-5),
+        user_note: note,
+        viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 },
+        click_target: state.buffer.clicks[state.buffer.clicks.length - 1] || null,
+        reload_epoch: state.reload_epoch
+      };
+      state.marks.push(entry);                  // canonical source
+      emit("mark", { n: entry.n });             // notification only
+      modal.remove();
+      render();
+    };
+  }
 
-
-def load_jsonl(path: Path) -> list[dict]:
-    if not path.is_file():
-        return []
-    out = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            out.append(json.loads(raw))
-        except json.JSONDecodeError:
-            continue
-    return out
-
-
-def window(items: list[dict], center: _dt.datetime, sec: int, ts_key: str = "ts") -> list[dict]:
-    lo = center - _dt.timedelta(seconds=sec)
-    hi = center + _dt.timedelta(seconds=sec)
-    out = []
-    for it in items:
-        t = parse_ts(it.get(ts_key, ""))
-        if t and lo <= t <= hi:
-            out.append(it)
-    return out
-
-
-def api_window(api_path: Path, center: _dt.datetime, sec: int) -> list[str]:
-    if not api_path.is_file():
-        return []
-    lo = center - _dt.timedelta(seconds=sec)
-    hi = center + _dt.timedelta(seconds=sec)
-    out = []
-    for line in api_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        ts, rest = parse_api_log_line(line)
-        if ts and lo <= ts <= hi:
-            out.append(line)
-    return out
-
-
-def redact(value: str, pattern: re.Pattern[str]) -> str:
-    return pattern.sub(lambda m: "[REDACTED]", value)
-
-
-def redact_obj(obj, pattern: re.Pattern[str]):
-    if isinstance(obj, str):
-        return redact(obj, pattern)
-    if isinstance(obj, list):
-        return [redact_obj(x, pattern) for x in obj]
-    if isinstance(obj, dict):
-        return {k: redact_obj(v, pattern) for k, v in obj.items()}
-    return obj
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--session-dir", required=True)
-    ap.add_argument("--mark-window-sec", type=int, default=30)
-    args = ap.parse_args()
-
-    session_dir = Path(args.session_dir).resolve()
-    if not session_dir.is_dir():
-        print(f"session dir not found: {session_dir}", file=sys.stderr)
-        return 2
-
-    session = json.loads((session_dir / "session.json").read_text(encoding="utf-8"))
-    pattern_src = session.get("redaction") or "password|token|secret"
-    try:
-        # value-pair pattern: redact `<key>=<value>` style + bare key values
-        pat = re.compile(
-            r"(?i)(" + pattern_src + r")\s*[:=]\s*\S+|(" + pattern_src + r")(['\"]\s*:\s*['\"][^'\"]+['\"])?"
-        )
-    except re.error:
-        pat = re.compile(r"(?i)password|token|secret")
-
-    marks_raw = load_jsonl(session_dir / "marks.raw.jsonl")
-    console = load_jsonl(session_dir / "console.raw.jsonl")
-    network = load_jsonl(session_dir / "network.raw.jsonl")
-    clicks = load_jsonl(session_dir / "clicks.raw.jsonl")
-    nav = load_jsonl(session_dir / "nav.raw.jsonl")
-    api_logs = sorted(session_dir.glob("api-*.log"))
-
-    out_marks = session_dir / "marks.jsonl"
-    with out_marks.open("w", encoding="utf-8") as fh:
-        for mark in marks_raw:
-            center = parse_ts(mark.get("ts", ""))
-            if center is None:
-                continue
-            mark = redact_obj(mark, pat)
-            mark["console_window"] = redact_obj(window(console, center, args.mark_window_sec), pat)
-            mark["network_window"] = redact_obj(window(network, center, args.mark_window_sec), pat)
-            mark["click_window"] = redact_obj(window(clicks, center, args.mark_window_sec), pat)
-            mark["nav_window"] = redact_obj(window(nav, center, args.mark_window_sec), pat)
-            api_corr: dict[str, list[str]] = {}
-            for ap_path in api_logs:
-                label = ap_path.stem.replace("api-", "", 1)
-                lines = api_window(ap_path, center, args.mark_window_sec)
-                api_corr[label] = [redact(l, pat) for l in lines]
-            mark["api_log_correlated"] = api_corr
-            fh.write(json.dumps(mark, ensure_ascii=False) + "\n")
-
-    manifest = {
-        "sid": session.get("sid"),
-        "phase": session.get("phase"),
-        "ts_started": session.get("ts_started"),
-        "ts_stopped": session.get("ts_stopped"),
-        "ts_built": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "mark_count": len(marks_raw),
-        "redaction_applied": pattern_src,
-        "sources": session.get("sources"),
-        "preset": session.get("preset"),
-    }
-    (session_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
-    print(f"✓ bundle built: {out_marks} ({len(marks_raw)} marks)")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+  window.__VG_FT_INIT = function () { render(); return true; };
+  window.__VG_FT_INIT();
+})();
 ```
 
-**Step 4: Mirror + tests**
+(Full overlay body with full console/fetch/XHR/history/click monkeypatches — see commit; plan shows the v2-specific delta.)
 
-```bash
-cp scripts/field-test/build-bundle.py .claude/scripts/field-test/build-bundle.py
-python -m pytest tests/test_field_test_build_bundle.py -v
-```
-Expected: 5 PASS.
+**Step 4: Mirror + Run** → PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add scripts/field-test/build-bundle.py .claude/scripts/field-test/build-bundle.py tests/test_field_test_build_bundle.py
-git commit -m "feat(field-test): build-bundle.py Stop-time correlator + redactor
+git add scripts/field-test/overlay.js .claude/scripts/field-test/overlay.js tests/test_field_test_overlay_js.py
+git commit -m "feat(field-test): overlay v2 — state.marks canonical + reload_epoch
 
-Reads raw streams (marks.raw.jsonl, console.raw.jsonl, network.raw.jsonl,
-clicks.raw.jsonl, nav.raw.jsonl, api-*.log), for each Mark collects
-±mark_window_sec windows by wall-clock, applies redaction regex to all
-string values, writes marks.jsonl + manifest.json.
+Closes Codex review §1 + §3:
+  - state.marks[] is canonical source. Console.log markers are
+    notifications only — orchestrator polls state via browser_evaluate,
+    not console_messages (which is snapshot-replay and would duplicate
+    marks N times per session).
+  - state.reload_epoch increments on re-injection after page reload so
+    orchestrator can distinguish pre/post-reload marks (overlay state
+    persists across SPA nav, wipes on full reload).
 
-Redaction sentinel '[REDACTED]' replaces matched key=value pairs across
-console / network / api log / user_note / clicks. Pattern compiled from
-session.redaction (default 'password|token|secret|api_key|email|phone'
-defined in vg.config field_test.default_redaction).
+Functional jsdom smoke test gated behind VG_RUN_BROWSER_TESTS=1
+exercises Start → Mark → Submit and asserts state.marks.length === 1.
+Replaces v1 plan's substring-tautology tests.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 5: Analyzer subagent + KNOWN-ISSUES integration (deterministic core)
+## Task 5: build-bundle.py with redact-stream integration + naive-ts warning + partial recovery
 
 **Files:**
-- Create: `agents/vg-field-test-analyzer/SKILL.md`
-- Create: `.claude/agents/vg-field-test-analyzer/SKILL.md` (mirror)
-- Create: `scripts/field-test/analyze.py` (deterministic logic; subagent wraps it + LLM narrative)
-- Create: `.claude/scripts/field-test/analyze.py`
-- Test: `tests/test_field_test_analyze.py`
+- Create: `scripts/field-test/build-bundle.py`
+- Mirror to `.claude/`
+- Test: `tests/test_field_test_build_bundle.py`
 
-**Step 1: Write failing test**
+**Key diff vs v1 plan:**
+- API log lines already redacted at capture; build-bundle re-runs through `redact-stream.py` for idempotent safety on browser-side streams (`console.raw.jsonl`, `network.raw.jsonl`).
+- Naive (non-Z) timestamps in API log → emit warning to `errors.jsonl` + drop, NOT silent.
+- Partial `marks.raw.jsonl` (truncated mid-line from disk-fill / crash) → set `bundle.partial=true`, write what parsed, continue.
+- 0-marks session test added.
+
+**Step 1: Failing test** (subset shown; full file generated similarly):
 
 ```python
-"""tests/test_field_test_analyze.py — deterministic analyzer logic."""
-from __future__ import annotations
-
-import json
-import subprocess
-import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-ANALYZER = REPO_ROOT / "scripts" / "field-test" / "analyze.py"
-SUBAGENT = REPO_ROOT / "agents" / "vg-field-test-analyzer" / "SKILL.md"
-
-
-def _seed_session(tmp_path: Path) -> Path:
-    sid_dir = tmp_path / "ft-test"
-    sid_dir.mkdir()
-    (sid_dir / "manifest.json").write_text(json.dumps({
-        "sid": "ft-test", "phase": None, "preset": "standard",
-        "ts_started": "2026-05-11T10:00:00Z", "ts_stopped": "2026-05-11T10:05:00Z",
-        "ts_built": "2026-05-11T10:05:30Z",
-        "mark_count": 3, "redaction_applied": "password|token",
-        "sources": [],
-    }), encoding="utf-8")
-    marks = [
-        {  # HIGH — 500 in window + unhandled exception
-            "n": 0, "ts": "2026-05-11T10:01:00Z", "url": "http://x/orders/42",
-            "user_note": "save broke", "referrer": "", "nav_chain": [],
-            "viewport": {"w": 1440, "h": 900, "dpr": 2}, "click_target": {"selector": "button.save", "text": "Save"},
-            "console_window": [{"ts": "...", "level": "error", "text": "TypeError: undefined"}],
-            "network_window": [{"ts": "...", "method": "POST", "url": "/api/orders/42", "status": 500, "duration_ms": 8000}],
-            "api_log_correlated": {"api": ["2026-05-11T10:01:00Z api: ERROR db timeout"]},
-        },
-        {  # MEDIUM — 400 in window
-            "n": 1, "ts": "2026-05-11T10:02:00Z", "url": "http://x/users", "user_note": "invalid form",
-            "referrer": "", "nav_chain": [],
-            "viewport": {"w": 1440, "h": 900, "dpr": 2}, "click_target": None,
-            "console_window": [],
-            "network_window": [{"ts": "...", "method": "POST", "url": "/api/users", "status": 400, "duration_ms": 200}],
-            "api_log_correlated": {},
-        },
-        {  # LOW — visual only, no errors
-            "n": 2, "ts": "2026-05-11T10:03:00Z", "url": "http://x/dashboard", "user_note": "header looks faded",
-            "referrer": "", "nav_chain": [],
-            "viewport": {"w": 1440, "h": 900, "dpr": 2}, "click_target": None,
-            "console_window": [], "network_window": [], "api_log_correlated": {},
-        },
-    ]
-    with (sid_dir / "marks.jsonl").open("w", encoding="utf-8") as fh:
-        for m in marks:
-            fh.write(json.dumps(m) + "\n")
-    return sid_dir
-
-
-def test_severity_heuristic(tmp_path):
-    sid_dir = _seed_session(tmp_path)
-    known = tmp_path / "KNOWN-ISSUES.json"
-    r = subprocess.run(
-        [sys.executable, str(ANALYZER), "--session-dir", str(sid_dir),
-         "--known-issues", str(known)],
-        capture_output=True, text=True, check=True,
+def test_naive_timestamp_logged_to_errors(tmp_path):
+    session = _seed_minimal(tmp_path)
+    (session / "api-test.log").write_text(
+        "2026-05-11T10:00:00Z naive: this one parses\n"
+        "2026-05-11 10:00:00 naive: this one does NOT (no T+Z)\n",
+        encoding="utf-8",
     )
-    payload = json.loads(known.read_text(encoding="utf-8"))
-    assert "issues" in payload
-    by_n = {i["mark_n"]: i for i in payload["issues"] if i["sid"] == "ft-test"}
-    assert by_n[0]["severity"] == "HIGH"
-    assert by_n[1]["severity"] == "MEDIUM"
-    assert by_n[2]["severity"] == "LOW"
+    subprocess.run([sys.executable, BUILDER, "--session-dir", str(session), "--mark-window-sec", "30"], check=True)
+    errors = (session / "errors.jsonl").read_text(encoding="utf-8")
+    assert "naive: this one does NOT" in errors
 
 
-def test_field_report_written(tmp_path):
-    sid_dir = _seed_session(tmp_path)
-    known = tmp_path / "KNOWN-ISSUES.json"
-    subprocess.run(
-        [sys.executable, str(ANALYZER), "--session-dir", str(sid_dir),
-         "--known-issues", str(known)],
-        check=True,
-    )
-    report = sid_dir / "FIELD-REPORT.md"
-    assert report.is_file()
-    body = report.read_text(encoding="utf-8")
-    assert "ft-test" in body
-    assert "HIGH" in body
-    assert "save broke" in body
-    assert "/orders/42" in body
+def test_partial_marks_raw_recovered(tmp_path):
+    session = _seed_minimal(tmp_path)
+    # Truncate last mark mid-JSON
+    raw = (session / "marks.raw.jsonl")
+    raw.write_text(raw.read_text(encoding="utf-8") + '{"n": 99, "ts": "2026', encoding="utf-8")
+    subprocess.run([sys.executable, BUILDER, "--session-dir", str(session)], check=True)
+    manifest = json.loads((session / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest.get("partial") is True
+    assert manifest.get("mark_count") < 99
 
 
-def test_known_issues_idempotent_append(tmp_path):
-    """Re-running analyzer on the same session must not duplicate entries."""
-    sid_dir = _seed_session(tmp_path)
-    known = tmp_path / "KNOWN-ISSUES.json"
-    subprocess.run(
-        [sys.executable, str(ANALYZER), "--session-dir", str(sid_dir),
-         "--known-issues", str(known)],
-        check=True,
-    )
-    subprocess.run(
-        [sys.executable, str(ANALYZER), "--session-dir", str(sid_dir),
-         "--known-issues", str(known)],
-        check=True,
-    )
-    payload = json.loads(known.read_text(encoding="utf-8"))
-    sids_seen = [i for i in payload["issues"] if i["sid"] == "ft-test"]
-    assert len(sids_seen) == 3, f"expected 3 entries (not 6), got {len(sids_seen)}"
-
-
-def test_subagent_md_exists():
-    assert SUBAGENT.is_file()
-    body = SUBAGENT.read_text(encoding="utf-8")
-    assert "field-test" in body.lower()
-    assert "FIELD-REPORT.md" in body
-    assert "KNOWN-ISSUES.json" in body
+def test_zero_marks_session_valid_manifest(tmp_path):
+    session = _seed_empty(tmp_path)  # no marks.raw.jsonl
+    subprocess.run([sys.executable, BUILDER, "--session-dir", str(session)], check=True)
+    manifest = json.loads((session / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["mark_count"] == 0
 ```
 
-**Step 2: Run — expect FAIL.**
+**Steps 2-6:** as in v1 plan task 4, with implementation extended for the 3 new test cases. Pipe each window line through `subprocess.run([python, redact-stream, "--pattern", session.redaction], input=line)` — or, better, import redact-stream as module and reuse the compiled regex. (Implementation chooses module import for perf.)
 
-**Step 3: Write `scripts/field-test/analyze.py`**
+**Commit msg references** Codex review §5 fixture gaps + §4 redaction at correct site.
+
+---
+
+## Task 6: analyze.py — robust to KNOWN-ISSUES corruption + analyzer subagent
+
+**Files:**
+- Create: `scripts/field-test/analyze.py`
+- Create: `agents/vg-field-test-analyzer/SKILL.md`
+- Mirrors
+- Test: `tests/test_field_test_analyze.py`
+
+**Key diff vs v1 plan:**
+- KNOWN-ISSUES corruption: write `KNOWN-ISSUES.corrupt-<ts>.json.bak`, emit `analyzer.known_issues_corrupted` telemetry, REFUSE to append (no silent wipe).
+- Dedupe test extended: re-run on same session = idempotent. Different sid with same `note` = both appended.
 
 ```python
-#!/usr/bin/env python3
-"""analyze.py — deterministic analyzer for /vg:field-test bundles.
+def test_corrupt_known_issues_preserved_not_wiped(tmp_path):
+    session = _seed_session(tmp_path)
+    known = tmp_path / "KNOWN-ISSUES.json"
+    known.write_text("not valid json {", encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, ANALYZER, "--session-dir", str(session), "--known-issues", str(known)],
+        capture_output=True, text=True,
+    )
+    # Analyzer aborts append cleanly
+    assert r.returncode != 0 or "corrupted" in (r.stdout + r.stderr).lower()
+    # Original corrupt file backed up (sidecar)
+    backups = list(tmp_path.glob("KNOWN-ISSUES.corrupt-*.json.bak"))
+    assert len(backups) == 1, "must back up corrupt file, not silently wipe"
+```
 
-Heuristics (severity per Mark):
-  HIGH   = network 5xx in window OR console error containing 'TypeError'/'Uncaught'
-  MEDIUM = network 4xx in window OR console error any other
-  LOW    = no errors anywhere; user_note only
+Implementation diff in `append_known_issues`:
 
-Appends to KNOWN-ISSUES.json with idempotent dedupe key (sid + mark_n).
-Writes FIELD-REPORT.md to <session_dir>.
-"""
-from __future__ import annotations
-
-import argparse
-import datetime as _dt
-import json
-import re
-import sys
-from pathlib import Path
-
-
-SEVERITY_HIGH = "HIGH"
-SEVERITY_MEDIUM = "MEDIUM"
-SEVERITY_LOW = "LOW"
-
-
-def classify(mark: dict) -> str:
-    net = mark.get("network_window") or []
-    for req in net:
-        s = req.get("status", 0)
-        try:
-            s = int(s)
-        except (TypeError, ValueError):
-            s = 0
-        if 500 <= s < 600:
-            return SEVERITY_HIGH
-    console = mark.get("console_window") or []
-    for entry in console:
-        text = entry.get("text", "")
-        if entry.get("level") == "error" and re.search(r"Uncaught|TypeError|ReferenceError", text):
-            return SEVERITY_HIGH
-    for req in net:
-        try:
-            s = int(req.get("status", 0))
-        except (TypeError, ValueError):
-            s = 0
-        if 400 <= s < 500:
-            return SEVERITY_MEDIUM
-    for entry in console:
-        if entry.get("level") == "error":
-            return SEVERITY_MEDIUM
-    return SEVERITY_LOW
-
-
-def render_report(sid: str, manifest: dict, marks: list[dict]) -> str:
-    lines: list[str] = []
-    lines.append(f"# Field Test Report — {sid}")
-    lines.append("")
-    lines.append(f"- Preset: {manifest.get('preset')}")
-    lines.append(f"- Started: {manifest.get('ts_started')}")
-    lines.append(f"- Stopped: {manifest.get('ts_stopped')}")
-    lines.append(f"- Mark count: {manifest.get('mark_count')}")
-    lines.append(f"- Redaction applied: {manifest.get('redaction_applied')}")
-    if manifest.get("phase"):
-        lines.append(f"- Phase: {manifest['phase']}")
-    lines.append("")
-    lines.append("## Marks")
-    lines.append("")
-    for m in marks:
-        sev = classify(m)
-        lines.append(f"### Mark {m.get('n')} — {sev}")
-        lines.append("")
-        lines.append(f"- ts: `{m.get('ts')}`")
-        lines.append(f"- url: `{m.get('url')}`")
-        lines.append(f"- note: {m.get('user_note', '').strip() or '(none)'}")
-        net = m.get("network_window") or []
-        if net:
-            lines.append("- network:")
-            for req in net[:5]:
-                lines.append(
-                    f"  - {req.get('method')} {req.get('url')} → "
-                    f"{req.get('status')} ({req.get('duration_ms')}ms)"
-                )
-        console = m.get("console_window") or []
-        if console:
-            lines.append("- console:")
-            for entry in console[:5]:
-                lines.append(f"  - {entry.get('level')}: {entry.get('text', '')[:160]}")
-        api = m.get("api_log_correlated") or {}
-        if any(api.values()):
-            lines.append("- api log excerpts:")
-            for label, src_lines in api.items():
-                for ln in src_lines[:3]:
-                    lines.append(f"  - [{label}] {ln[:200]}")
-        lines.append("")
-    return "\n".join(lines) + "\n"
-
-
-def load_manifest(session_dir: Path) -> dict:
-    mp = session_dir / "manifest.json"
-    if not mp.is_file():
-        raise FileNotFoundError(f"manifest.json missing: {mp}")
-    return json.loads(mp.read_text(encoding="utf-8"))
-
-
-def load_marks(session_dir: Path) -> list[dict]:
-    p = session_dir / "marks.jsonl"
-    if not p.is_file():
-        return []
-    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
-
-
+```python
 def append_known_issues(known_path: Path, sid: str, phase: str | None, marks: list[dict]) -> None:
     if known_path.is_file():
         try:
             payload = json.loads(known_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            payload = {"version": "1", "issues": []}
+            backup = known_path.with_suffix(f".corrupt-{int(time.time())}.json.bak")
+            shutil.copy2(known_path, backup)
+            print(f"⛔ KNOWN-ISSUES.json corrupted; backed up to {backup} — refusing append", file=sys.stderr)
+            raise SystemExit(2)
     else:
         payload = {"version": "1", "issues": []}
-    payload.setdefault("issues", [])
-    seen = {(i.get("sid"), i.get("mark_n")) for i in payload["issues"]}
-    now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    added = 0
-    for m in marks:
-        key = (sid, m.get("n"))
-        if key in seen:
-            continue
-        payload["issues"].append({
-            "id": f"KI-{sid}-{m.get('n'):03d}",
-            "ts": now,
-            "sid": sid,
-            "mark_n": m.get("n"),
-            "phase": phase,
-            "severity": classify(m),
-            "url": m.get("url"),
-            "note": m.get("user_note"),
-            "evidence_paths": [
-                f".vg/field-test/{sid}/marks.jsonl",
-                f".vg/field-test/{sid}/FIELD-REPORT.md",
-            ],
-            "source": "vg:field-test",
-        })
-        added += 1
-    known_path.parent.mkdir(parents=True, exist_ok=True)
-    known_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"KNOWN-ISSUES: appended {added} (total {len(payload['issues'])})")
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--session-dir", required=True)
-    ap.add_argument("--known-issues", default=None,
-                    help="Path to KNOWN-ISSUES.json (default <session-dir>/../KNOWN-ISSUES.json)")
-    args = ap.parse_args()
-
-    session_dir = Path(args.session_dir).resolve()
-    if not session_dir.is_dir():
-        print(f"session dir not found: {session_dir}", file=sys.stderr)
-        return 2
-
-    manifest = load_manifest(session_dir)
-    sid = manifest.get("sid", session_dir.name)
-    phase = manifest.get("phase")
-    marks = load_marks(session_dir)
-
-    report_md = render_report(sid, manifest, marks)
-    (session_dir / "FIELD-REPORT.md").write_text(report_md, encoding="utf-8")
-
-    known_path = Path(args.known_issues) if args.known_issues else (session_dir.parent.parent / "KNOWN-ISSUES.json")
-    append_known_issues(known_path, sid, phase, marks)
-    print(f"✓ FIELD-REPORT.md written ({len(marks)} marks)")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-```
-
-**Step 4: Write `agents/vg-field-test-analyzer/SKILL.md`**
-
-```markdown
----
-name: vg-field-test-analyzer
-description: Analyzes a /vg:field-test session bundle. Runs deterministic severity heuristics via scripts/field-test/analyze.py, writes FIELD-REPORT.md + appends KNOWN-ISSUES.json. Optional LLM narrative on top of the deterministic skeleton.
-model: sonnet
-allowed-tools:
-  - Read
-  - Write
-  - Bash
-  - Grep
----
-
-# vg-field-test-analyzer
-
-## Inputs
-
-You receive a `session_dir` path (e.g. `.vg/field-test/ft-2026-05-11T10:00:00Z/`).
-
-## Process
-
-1. Run the deterministic analyzer:
-   ```
-   python3 scripts/field-test/analyze.py --session-dir <session_dir>
-   ```
-   This writes `FIELD-REPORT.md` + appends `.vg/KNOWN-ISSUES.json`.
-
-2. Read the resulting `FIELD-REPORT.md`. For each Mark with severity HIGH or MEDIUM, augment the markdown with a 1-2 sentence diagnosis under a `**Diagnosis:**` line. Suggest 1-2 suspect files (grep symbols from console errors + URL routes against the repo). Do not modify the LOW Mark sections.
-
-3. Return: path to FIELD-REPORT.md, count of issues appended, severity breakdown.
-
-## Hard rules
-
-- Do NOT rewrite the deterministic severity classification. Only add narrative.
-- Do NOT touch KNOWN-ISSUES.json directly (analyze.py is the sole writer).
-- Do NOT speculate on root cause when console + network + API log are all empty in the window. Leave the Diagnosis line as `(no signals beyond user_note)`.
-```
-
-**Step 5: Mirror + tests**
-
-```bash
-mkdir -p .claude/agents/vg-field-test-analyzer
-cp agents/vg-field-test-analyzer/SKILL.md .claude/agents/vg-field-test-analyzer/SKILL.md
-cp scripts/field-test/analyze.py .claude/scripts/field-test/analyze.py
-python -m pytest tests/test_field_test_analyze.py -v
-```
-Expected: 4 PASS.
-
-**Step 6: Commit**
-
-```bash
-git add scripts/field-test/analyze.py .claude/scripts/field-test/analyze.py \
-        agents/vg-field-test-analyzer/SKILL.md .claude/agents/vg-field-test-analyzer/SKILL.md \
-        tests/test_field_test_analyze.py
-git commit -m "feat(field-test): deterministic analyzer + analyzer subagent shell
-
-scripts/field-test/analyze.py is the deterministic core: classify per Mark
-(HIGH = 5xx | uncaught exception, MEDIUM = 4xx | other console error,
-LOW = visual/note only), render FIELD-REPORT.md, idempotent-append to
-KNOWN-ISSUES.json keyed by (sid, mark_n).
-
-vg-field-test-analyzer subagent (agents/vg-field-test-analyzer/SKILL.md)
-wraps the deterministic step then augments HIGH/MEDIUM Marks with 1-2
-sentence diagnosis + suspect file grep — narrative only, never rewrites
-severity or KNOWN-ISSUES.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+    # rest unchanged
 ```
 
 ---
 
-## Task 6: MARKER_TO_AUTO_EVENT extension
+## Task 7: MARKER_TO_AUTO_EVENT extension (same as v1 plan task 6)
 
-**Files:**
-- Modify: `scripts/vg-orchestrator/__main__.py` (extend `MARKER_TO_AUTO_EVENT` dict added in v3.6.0)
-- Modify: `.claude/scripts/vg-orchestrator/__main__.py` (mirror)
-- Modify: `scripts/vg-orchestrator-telemetry-repair.py` (extend `MARKER_TO_EVENT` to match)
-- Modify: `.claude/scripts/vg-orchestrator-telemetry-repair.py` (mirror)
-- Test: `tests/test_field_test_marker_to_auto_event.py`
-
-**Step 1: Write failing test**
-
-```python
-"""tests/test_field_test_marker_to_auto_event.py — auto-emit covers field-test."""
-from __future__ import annotations
-
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-ORCH = REPO_ROOT / "scripts" / "vg-orchestrator" / "__main__.py"
-REPAIR = REPO_ROOT / "scripts" / "vg-orchestrator-telemetry-repair.py"
-
-
-def test_marker_to_auto_event_field_test():
-    body = ORCH.read_text(encoding="utf-8")
-    assert '("field-test", "complete"): ("field_test.session_completed"' in body, (
-        "MARKER_TO_AUTO_EVENT must include ('field-test','complete') → field_test.session_completed"
-    )
-
-
-def test_repair_script_field_test():
-    body = REPAIR.read_text(encoding="utf-8")
-    assert '("field-test", "complete"): "field_test.session_completed"' in body
-```
-
-**Step 2: Run — expect FAIL.**
-
-**Step 3: Modify `scripts/vg-orchestrator/__main__.py`**
-
-Find `MARKER_TO_AUTO_EVENT` dict (added in v3.6.0). Append entry:
-
-```python
-    # v3.7.0 (#new-feature) — /vg:field-test user-driven roam capture
-    ("field-test", "complete"): ("field_test.session_completed", "INFO"),
-```
-
-**Step 4: Modify `scripts/vg-orchestrator-telemetry-repair.py`**
-
-Find `MARKER_TO_EVENT` dict. Append:
-
-```python
-    ("field-test", "complete"): "field_test.session_completed",
-```
-
-**Step 5: Mirror + tests**
-
-```bash
-cp scripts/vg-orchestrator/__main__.py .claude/scripts/vg-orchestrator/__main__.py
-cp scripts/vg-orchestrator-telemetry-repair.py .claude/scripts/vg-orchestrator-telemetry-repair.py
-python -m pytest tests/test_field_test_marker_to_auto_event.py tests/test_v3_6_codex_telemetry_parity.py -v
-```
-Expected: PASS, no regression on existing telemetry parity tests.
-
-**Step 6: Commit**
-
-```bash
-git add scripts/vg-orchestrator/__main__.py .claude/scripts/vg-orchestrator/__main__.py \
-        scripts/vg-orchestrator-telemetry-repair.py .claude/scripts/vg-orchestrator-telemetry-repair.py \
-        tests/test_field_test_marker_to_auto_event.py
-git commit -m "feat(field-test): wire MARKER_TO_AUTO_EVENT for /vg:field-test
-
-Adds ('field-test','complete') → 'field_test.session_completed' to the
-v3.6.0 auto-emit mapping + repair script. Codex adapters get the
-lifecycle event for free without needing to remember explicit
-emit-event calls.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
+Unchanged from v1 plan.
 
 ---
 
-## Task 7: Skill entry `commands/vg/field-test.md`
+## Task 8: Skill entry `commands/vg/field-test.md` with concrete MCP shapes + atomic lock + no `--resume`
 
 **Files:**
 - Create: `commands/vg/field-test.md`
-- Create: `.claude/commands/vg/field-test.md` (mirror)
+- Mirror
 - Test: `tests/test_field_test_skill_structure.py`
 
-**Step 1: Write failing test**
+**Key diff vs v1 plan (per Codex §1, §3, §6, §9):**
 
-```python
-"""tests/test_field_test_skill_structure.py — skill md frontmatter + sections."""
-from __future__ import annotations
-
-import re
-from pathlib import Path
-
-import pytest
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILL_CANON = REPO_ROOT / "commands" / "vg" / "field-test.md"
-SKILL_MIRROR = REPO_ROOT / ".claude" / "commands" / "vg" / "field-test.md"
-
-
-def _frontmatter(p: Path) -> dict:
-    yaml = pytest.importorskip("yaml")
-    body = p.read_text(encoding="utf-8")
-    m = re.match(r"^---\n(.*?)\n---", body, re.S)
-    assert m, "frontmatter missing"
-    return yaml.safe_load(m.group(1))
-
-
-def test_skill_exists_and_parses():
-    assert SKILL_CANON.is_file()
-    fm = _frontmatter(SKILL_CANON)
-    assert fm["name"] == "vg:field-test"
-    assert "description" in fm
-
-
-def test_allowed_tools_includes_playwright():
-    fm = _frontmatter(SKILL_CANON)
-    tools = fm.get("allowed-tools") or []
-    for t in [
-        "mcp__playwright1__browser_navigate",
-        "mcp__playwright1__browser_evaluate",
-        "mcp__playwright1__browser_console_messages",
-        "mcp__playwright1__browser_take_screenshot",
-        "mcp__playwright1__browser_snapshot",
-    ]:
-        assert t in tools, f"allowed-tools must include {t}"
-    for t in ["Bash", "Read", "Write", "Edit", "Agent", "AskUserQuestion", "TodoWrite"]:
-        assert t in tools
-
-
-def test_runtime_contract_markers():
-    fm = _frontmatter(SKILL_CANON)
-    rc = fm.get("runtime_contract") or {}
-    markers = [m if isinstance(m, str) else m["name"] for m in rc.get("must_touch_markers", [])]
-    expected = [
-        "0_preflight", "1_resolve_config", "2_launch_browser", "3_inject_overlay",
-        "4_wait_start", "5_capture_loop", "6_stop_finalize", "7_analyze", "complete",
-    ]
-    for e in expected:
-        assert e in markers, f"runtime_contract.must_touch_markers missing {e}"
-
-
-def test_runtime_contract_telemetry():
-    fm = _frontmatter(SKILL_CANON)
-    rc = fm.get("runtime_contract") or {}
-    events = [e["event_type"] for e in (rc.get("must_emit_telemetry") or [])]
-    for ev in [
-        "field_test.session_started",
-        "field_test.session_stopped",
-        "field_test.analysis_completed",
-    ]:
-        assert ev in events
-
-
-def test_mirror_byte_identity():
-    assert SKILL_CANON.read_bytes() == SKILL_MIRROR.read_bytes()
-
-
-def test_skill_body_references_overlay_and_analyze():
-    body = SKILL_CANON.read_text(encoding="utf-8")
-    assert "scripts/field-test/overlay.js" in body
-    assert "scripts/field-test/build-bundle.py" in body
-    assert "scripts/field-test/analyze.py" in body
-    assert "scripts/field-test/tail-source.sh" in body
+1. **State polling** replaces console marker polling in step 5:
+```bash
+# Step 5: capture loop — poll overlay state directly (NOT console_messages)
+last_consumed=0
+while true; do
+  # AI tool call (skill body shows this as the orchestrator instruction):
+  #   mcp__playwright1__browser_evaluate({
+  #     function: "() => ({ len: window.__VG_FT_STATE.marks.length, status: window.__VG_FT_STATE.status, epoch: window.__VG_FT_STATE.reload_epoch })"
+  #   })
+  # Then if returned `len > last_consumed`:
+  #   mcp__playwright1__browser_evaluate({
+  #     function: "() => window.__VG_FT_STATE.marks.slice(N, M)"  # JSON-safe payload
+  #   })
+  # For each new mark in slice:
+  #   mcp__playwright1__browser_take_screenshot({ filename: "<session>/marks/<n>.png" })
+  #   mcp__playwright1__browser_snapshot({ filename: "<session>/marks/<n>.snapshot.yml" })
+  #   append entry to marks.raw.jsonl
+  #   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  #     "field_test.mark_recorded" --payload "{\"sid\":\"$SID\",\"n\":$N}"
+  # last_consumed = len
+  sleep 2
+done
 ```
 
-**Step 2: Run — expect FAIL.**
+2. **Atomic lock**:
+```bash
+# Step 0: atomic lock via mkdir (NOT echo > file — TOCTOU race)
+if ! mkdir "${REPO_ROOT}/.vg/field-test/.active" 2>/dev/null; then
+  ACTIVE_OWNER=$(cat "${REPO_ROOT}/.vg/field-test/.active/owner" 2>/dev/null || echo "unknown")
+  echo "⛔ field-test session active (sid=$ACTIVE_OWNER)"
+  echo "   If you're sure no session is live: rm -rf .vg/field-test/.active"
+  exit 1
+fi
+echo "$SID" > "${REPO_ROOT}/.vg/field-test/.active/owner"
+trap 'rm -rf "${REPO_ROOT}/.vg/field-test/.active"' EXIT
+```
 
-**Step 3: Create `commands/vg/field-test.md`** (slim entry; refs into `_shared/field-test/*.md` would be the v2 split — for v1 keep inline)
+3. **Runtime contract telemetry** declares all guaranteed + mark_recorded as required_unless_flag:
+```yaml
+must_emit_telemetry:
+  - event_type: "field_test.session_started"
+  - event_type: "field_test.session_stopped"
+  - event_type: "field_test.analysis_completed"
+  - event_type: "field_test.mark_recorded"
+    required_unless_flag: "--allow-zero-marks"
+```
 
+4. **Tail spawn with `--redact`** passes session.redaction through:
+```bash
+for src in $(jq -c '.sources[]' < "$SESSION_DIR/session.json"); do
+  TYPE=$(echo "$src" | jq -r '.type')
+  TARGET=$(echo "$src" | jq -r '.target')
+  LABEL=$(echo "$src" | jq -r '.label')
+  REDACT=$(jq -r '.redaction' "$SESSION_DIR/session.json")
+  bash .claude/scripts/field-test/tail-source.sh \
+    --type "$TYPE" --target "$TARGET" \
+    --out "$SESSION_DIR/api-${LABEL}.log" \
+    --redact "$REDACT" &
+  echo "$!" >> "$SESSION_DIR/.tail-pids"
+done
+```
+
+5. **HARD-GATE banner** at start:
 ```markdown
----
-name: vg:field-test
-description: User-driven field-test capture. Opens MCP playwright browser with floating Start/Stop/Mark overlay; user manually roams while AI passively captures browser console + network + clicks + nav chain + per-Mark notes + correlated API server log tails. On Stop, runs deterministic analyzer + LLM-augmented narrative subagent, writes FIELD-REPORT.md and appends KNOWN-ISSUES.json. Distinct from /vg:roam (which is AI-auto).
-argument-hint: "[--phase=N] [--preset=quick|standard|deep] [--redact=<regex>] [--base-url=<url>] [--non-interactive] [--resume=<sid>]"
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - Agent
-  - AskUserQuestion
-  - TodoWrite
-  - mcp__playwright1__browser_navigate
-  - mcp__playwright1__browser_evaluate
-  - mcp__playwright1__browser_console_messages
-  - mcp__playwright1__browser_network_requests
-  - mcp__playwright1__browser_snapshot
-  - mcp__playwright1__browser_take_screenshot
-  - mcp__playwright1__browser_click
-  - mcp__playwright1__browser_type
-  - mcp__playwright1__browser_close
-runtime_contract:
-  must_write:
-    - "${SESSION_DIR}/session.json"
-    - "${SESSION_DIR}/marks.jsonl"
-    - "${SESSION_DIR}/manifest.json"
-    - "${SESSION_DIR}/FIELD-REPORT.md"
-  must_touch_markers:
-    - "0_preflight"
-    - "1_resolve_config"
-    - "2_launch_browser"
-    - "3_inject_overlay"
-    - "4_wait_start"
-    - "5_capture_loop"
-    - "6_stop_finalize"
-    - "7_analyze"
-    - "complete"
-  must_emit_telemetry:
-    - event_type: "field_test.session_started"
-    - event_type: "field_test.session_stopped"
-    - event_type: "field_test.analysis_completed"
-  forbidden_without_override:
-    - "--non-interactive"
----
-
 <HARD-GATE>
-This skill captures live user behavior. Default redaction regex MUST be applied
-to all log streams + user_note + form values. Per-session redaction declared in
-session.json `redaction` field; build-bundle.py is sole enforcer.
+This skill captures live user behavior. Default redaction applies to
+console/network/API log streams + user notes. Screenshots are NOT
+redacted.
 
-Default behaviour is interactive. `--non-interactive` requires
-`--override-reason=<text>` per VGFlow convention.
+⚠ Do NOT navigate to password/payment/credentials views during this
+  session unless that is the explicit test target. Screenshots embed
+  pixel content as-is.
 
-Only ONE active session per project. `.vg/field-test/.active` lock file gates
-concurrent invocations.
+Atomic lock at .vg/field-test/.active prevents concurrent sessions.
+On crash, manual cleanup: rm -rf .vg/field-test/.active
+
+v1 does NOT support --resume. A browser crash mid-session leaves raw
+streams under .vg/field-test/<sid>/ for manual triage; rerun
+build-bundle.py + analyze.py manually if needed.
 </HARD-GATE>
-
-## Steps
-
-### STEP 0 — preflight (`0_preflight`)
-
-```bash
-set -e
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 0_preflight >/dev/null 2>&1 || true
-
-REPO_ROOT="${REPO_ROOT:-$(pwd)}"
-LOCK="${REPO_ROOT}/.vg/field-test/.active"
-if [ -f "$LOCK" ] && [[ ! "$ARGUMENTS" =~ --resume ]]; then
-  echo "⛔ field-test session already active: $(cat "$LOCK")"
-  echo "   Pass --resume=$(cat "$LOCK") to continue, or remove the lock manually."
-  exit 1
-fi
-
-# Verify playwright1 MCP available (best-effort check via settings.json grep)
-if ! grep -q '"playwright1"' .claude/settings.json 2>/dev/null && \
-   ! grep -q '"playwright1"' ~/.claude/settings.json 2>/dev/null; then
-  echo "⛔ MCP playwright1 not configured. Run:"
-  echo "   python3 .claude/scripts/validators/verify-playwright-mcp-config.py --repair"
-  exit 1
-fi
-
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step field-test 0_preflight
 ```
 
-### STEP 1 — resolve config (`1_resolve_config`)
+Skill structure test (`tests/test_field_test_skill_structure.py`) asserts:
+- Frontmatter parses
+- `runtime_contract.must_emit_telemetry` lists 4 events with `mark_recorded` having `required_unless_flag`
+- Skill body contains `mkdir .vg/field-test/.active` (NOT `echo > .active`)
+- Skill body contains `browser_evaluate(() => ({ len: window.__VG_FT_STATE.marks.length`
+- HARD-GATE banner mentions screenshot warning
+- NO `--resume` flag in argument-hint
+- NO `--preset` flag in argument-hint
+- NO `dev-phases` mirror reference
 
-Read `field_test` block from `vg.config.md`. If missing → AskUserQuestion to configure inline OR skip API tail.
-
-Resolve `base_url` from (in order): `--base-url=<url>` flag → `ENV-CONTRACT.md target.base_url` → `field_test.default_base_url` → AskUserQuestion fallback.
-
-Compute `SID`:
-```bash
-TS=$(date -u +%Y-%m-%dT%H:%M:%SZ | tr ':' '-')
-if [[ "$ARGUMENTS" =~ --phase=([A-Za-z0-9_.-]+) ]]; then
-  PHASE="${BASH_REMATCH[1]}"
-  SID="ft-p${PHASE}-${TS}"
-else
-  PHASE=""
-  SID="ft-${TS}"
-fi
-SESSION_DIR="${REPO_ROOT}/.vg/field-test/${SID}"
-mkdir -p "$SESSION_DIR"
-echo "$SID" > "${REPO_ROOT}/.vg/field-test/.active"
-```
-
-Write `session.json` (validates against `schemas/field-test-session.v1.json`).
-Mark step.
-
-### STEP 2 — launch browser (`2_launch_browser`)
-
-Invoke `mcp__playwright1__browser_navigate` with the resolved `base_url`.
-Mark step.
-
-### STEP 3 — inject overlay (`3_inject_overlay`)
-
-```bash
-OVERLAY_JS=$(cat .claude/scripts/field-test/overlay.js)
-```
-
-Invoke `mcp__playwright1__browser_evaluate({ function: <wrap OVERLAY_JS in arrow fn> })`.
-Verify by `browser_evaluate(() => typeof window.__VG_FT_INIT === 'function')`.
-Mark step.
-
-### STEP 4 — wait for Start (`4_wait_start`)
-
-Poll `mcp__playwright1__browser_console_messages` every 2s for `[VG_FT] start`. On hit:
-
-```bash
-# Spawn one tail-source process per session.sources[]
-"${PYTHON_BIN:-python3}" - <<'PY'
-import json, os, subprocess
-from pathlib import Path
-sess = json.loads(Path(os.environ['SESSION_DIR'] + '/session.json').read_text())
-pids = []
-for i, src in enumerate(sess.get('sources', []), start=1):
-    out = Path(os.environ['SESSION_DIR']) / f"api-{src['label']}.log"
-    proc = subprocess.Popen(
-        ['bash', '.claude/scripts/field-test/tail-source.sh',
-         '--type', src['type'], '--target', src['target'], '--out', str(out)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    src['pid'] = proc.pid
-    pids.append(proc.pid)
-Path(os.environ['SESSION_DIR'] + '/session.json').write_text(json.dumps(sess, indent=2))
-PY
-
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-  "field_test.session_started" --payload "{\"sid\":\"$SID\",\"phase\":\"$PHASE\"}"
-```
-Mark step.
-
-### STEP 5 — capture loop (`5_capture_loop`)
-
-Polling loop (2s base, throttle to 5s if iteration >1.5s, hard cap `max_session_hours`):
-
-For each `[VG_FT] mark <json>` console message:
-1. Parse json from console message text.
-2. `browser_evaluate(() => window.__VG_FT_STATE.marks[<n>])` to fetch full bundle (overlay state has more than console echo).
-3. `browser_take_screenshot --filename marks/<n>.png` (save under `$SESSION_DIR`).
-4. `browser_snapshot --filename marks/<n>.snapshot.yml`.
-5. Append raw entry to `marks.raw.jsonl`.
-6. Append recent `browser_console_messages` + `browser_network_requests` to `console.raw.jsonl` + `network.raw.jsonl`.
-7. Emit `field_test.mark_recorded`.
-
-For `[VG_FT] stop` → break.
-For `[VG_FT] heartbeat` → ignore (overlay may emit every 30s).
-
-Mark step.
-
-### STEP 6 — stop + finalize (`6_stop_finalize`)
-
-```bash
-# Kill tail PIDs
-"${PYTHON_BIN:-python3}" - <<'PY'
-import json, os, signal
-from pathlib import Path
-sess = json.loads(Path(os.environ['SESSION_DIR'] + '/session.json').read_text())
-for src in sess.get('sources', []):
-    if src.get('pid'):
-        try:
-            os.kill(src['pid'], signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-PY
-
-# Dump remaining buffers from overlay state (console/network/clicks/nav) to raw.jsonl
-# via browser_evaluate to read window.__VG_FT_STATE.buffer.*
-
-# Run bundle builder
-"${PYTHON_BIN:-python3}" .claude/scripts/field-test/build-bundle.py \
-  --session-dir "$SESSION_DIR" --mark-window-sec "${MARK_WINDOW_SEC:-30}"
-
-# Update session.json ts_stopped
-"${PYTHON_BIN:-python3}" -c "
-import json, datetime
-from pathlib import Path
-p = Path('$SESSION_DIR/session.json')
-d = json.loads(p.read_text())
-d['ts_stopped'] = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-p.write_text(json.dumps(d, indent=2))"
-
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-  "field_test.session_stopped" --payload "{\"sid\":\"$SID\"}"
-```
-Mark step.
-
-### STEP 7 — analyze (`7_analyze`)
-
-Spawn `vg-field-test-analyzer` subagent (see agents/vg-field-test-analyzer/SKILL.md).
-
-```bash
-bash scripts/vg-narrate-spawn.sh vg-field-test-analyzer spawning "analyze field-test session $SID"
-# Then: Agent(subagent_type="vg-field-test-analyzer", prompt={"session_dir": "$SESSION_DIR"})
-```
-
-After subagent returns, mirror bundle to `dev-phases/$PHASE/field-test/$SID/` if `$PHASE` set.
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
-  "field_test.analysis_completed" --payload "{\"sid\":\"$SID\"}"
-```
-Mark step.
-
-### STEP 8 — complete
-
-```bash
-rm -f "${REPO_ROOT}/.vg/field-test/.active"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step field-test complete
-# field_test.session_completed auto-emitted via MARKER_TO_AUTO_EVENT
-```
-
-Print summary banner with FIELD-REPORT.md path + KNOWN-ISSUES count + suggested next /vg:review --include-known-issues.
-```
-
-**Step 4: Mirror + test**
-
-```bash
-mkdir -p .claude/commands/vg
-cp commands/vg/field-test.md .claude/commands/vg/field-test.md
-python -m pytest tests/test_field_test_skill_structure.py -v
-```
-Expected: 6 PASS.
-
-**Step 5: Commit**
-
-```bash
-git add commands/vg/field-test.md .claude/commands/vg/field-test.md \
-        tests/test_field_test_skill_structure.py
-git commit -m "feat(field-test): skill entry commands/vg/field-test.md (v1 inline)
-
-Frontmatter declares 9 markers (0_preflight → complete), 3 telemetry
-events (session_started, session_stopped, analysis_completed),
-allowed-tools includes mcp__playwright1__* + Agent + AskUserQuestion +
-TodoWrite. Body sequences 8 steps inline (no _shared split for v1).
-
-Concurrency lock: .vg/field-test/.active gates concurrent invocations.
---resume=<sid> short-circuits the lock check.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
+**Commit msg references** Codex review §1 (sync), §3 (lock TOCTOU), §6 (contract), §9 (concrete MCP shape).
 
 ---
 
-## Task 8: Codex skill mirror via generator
+## Task 9: Codex skill mirror via generator (same as v1 plan task 8)
 
-**Files:**
-- Modify: `scripts/generate-codex-skills.sh` (no source change needed if generator auto-discovers `commands/vg/*.md` — verify)
-- Generate: `codex-skills/vg-field-test/SKILL.md`
-- Test: `tests/test_field_test_codex_mirror.py`
-
-**Step 1: Write failing test**
-
-```python
-"""tests/test_field_test_codex_mirror.py — codex-skills mirror exists + valid."""
-from __future__ import annotations
-
-import re
-from pathlib import Path
-
-import pytest
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CODEX_SKILL = REPO_ROOT / "codex-skills" / "vg-field-test" / "SKILL.md"
-
-
-def test_codex_skill_generated():
-    assert CODEX_SKILL.is_file(), (
-        "Run: bash scripts/generate-codex-skills.sh — codex mirror missing"
-    )
-
-
-def test_codex_skill_yaml_parses():
-    yaml = pytest.importorskip("yaml")
-    body = CODEX_SKILL.read_text(encoding="utf-8")
-    m = re.match(r"^---\n(.*?)\n---", body, re.S)
-    assert m
-    fm = yaml.safe_load(m.group(1))
-    assert fm["name"] == "vg-field-test"
-    assert fm["description"]
-```
-
-**Step 2: Run — expect FAIL.**
-
-**Step 3: Generate**
-
-```bash
-bash scripts/generate-codex-skills.sh
-ls codex-skills/vg-field-test/
-```
-
-**Step 4: Re-run test → PASS.**
-
-**Step 5: Commit**
-
-```bash
-git add codex-skills/vg-field-test/SKILL.md tests/test_field_test_codex_mirror.py
-git commit -m "feat(field-test): codex skill mirror via generate-codex-skills.sh
-
-Auto-generated by scripts/generate-codex-skills.sh from
-commands/vg/field-test.md. Description scalar escapes any embedded
-quotes per v3.6.1 generator hardening.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
+Unchanged. Run `bash scripts/generate-codex-skills.sh` — produces `codex-skills/vg-field-test/SKILL.md`. Test asserts YAML valid + name correct.
 
 ---
 
-## Task 9: Final integration — release v3.7.0
+## Task 10: Release v3.7.0
 
-**Files:**
-- Modify: `VERSION` (3.6.4 → 3.7.0)
-- Modify: `package.json` version field
-- Modify: `CHANGELOG.md` (prepend v3.7.0 entry summarising tasks 1-8)
-- Optional: `.gitignore` adds `.vg/field-test/` if not already covered by `.vg/` pattern
+**Files:** `VERSION`, `package.json`, `CHANGELOG.md`, `.gitignore` (verify `.vg/` covers field-test path).
 
-**Step 1: Verify `.gitignore`**
-
-```bash
-grep -E '^\.vg/|^\.vg/field-test' .gitignore
-```
-If `.vg/` already there, `.vg/field-test/` is covered. If not, append `.vg/field-test/`.
-
-**Step 2: Bump VERSION + package.json**
-
-```bash
-echo "3.7.0" > VERSION
-python -c "import json; p=open('package.json'); d=json.load(p); p.close(); d['version']='3.7.0'; open('package.json','w').write(json.dumps(d, indent=2))"
-```
-
-**Step 3: Write CHANGELOG entry**
-
-Prepend to `CHANGELOG.md`:
+**CHANGELOG entry** highlights design v2 + Codex review remediations:
 
 ```markdown
 ## v3.7.0 — /vg:field-test new skill (2026-05-11)
 
-### Feature — user-driven field test capture
-
-Adds `/vg:field-test` skill (distinct from AI-auto `/vg:roam`). Workflow:
-1. AI opens MCP playwright1 browser at the resolved `base_url`.
-2. AI injects vanilla overlay JS — floating top-right panel with
-   Start/Stop/Mark buttons + per-Mark modal note textarea.
-3. User clicks Start. AI begins polling browser console for `[VG_FT]`
-   markers + spawns one tail process per configured API log source
-   (`field_test.api_log_sources` in vg.config — supports type=file or
-   type=command for docker/kubectl/pm2).
-4. User roams the app, clicks Mark at each interesting view, types a
-   note. AI captures full bundle per Mark (URL + nav chain + screenshot
-   + DOM snapshot + ±30s console/network/api windows).
-5. User clicks Stop. AI kills tails, runs build-bundle.py to apply
-   redaction + correlate windows, spawns vg-field-test-analyzer subagent
-   to produce FIELD-REPORT.md + append KNOWN-ISSUES.json.
+User-driven field-test capture distinct from AI-auto /vg:roam.
 
 ### Architecture
-- 8 new files under `scripts/field-test/` + `commands/vg/field-test.md`
-  + `agents/vg-field-test-analyzer/` + `schemas/field-test-session.v1.json`.
-- MARKER_TO_AUTO_EVENT extended: `('field-test','complete') →
-  field_test.session_completed`.
-- Concurrency lock at `.vg/field-test/.active` gates multiple sessions.
-- Default redaction regex strips password/token/secret/api_key/email/phone.
+- 9 new files under scripts/field-test/ + commands/vg/field-test.md +
+  agents/vg-field-test-analyzer/ + schemas/field-test-session.v1.json.
+- Sync via browser_evaluate state polling (NOT console_messages replay).
+- Per-source API log tails redact at capture time via redact-stream.py.
+- Atomic lock via mkdir; portable timestamp via prefix-iso.py.
+- MARKER_TO_AUTO_EVENT extension: ('field-test','complete') →
+  field_test.session_completed.
 
-### Test coverage
-~25 new tests across 9 test files. Full design + plan committed under
-`docs/plans/2026-05-11-field-test-capture-{design,plan}.md`.
+### Privacy
+Default redaction covers password/token/secret/api_key/email/phone +
+Bearer JWT + Authorization header. Multi-form regex (key=value, key:
+value, JSON body, bare Bearer). Idempotent. Bad user regex falls back
+to default + warns. Screenshots NOT redacted; HARD-GATE banner warns
+user before session start.
 
-### Compatibility
-Phase-less default; optional `--phase=N` binds session to a phase.
-Existing skills untouched. New skill is opt-in.
+### v1 scope (post-Codex-review)
+- Single preset (no quick/deep enum — deferred v2).
+- No --resume (deferred v2; design promised, implementation absent).
+- No dev-phases/<N>/ mirror (deferred v2; commit-or-ignore policy
+  unresolved).
+- No --non-interactive flag (dropped; user-driven skill has no useful
+  non-interactive mode).
+- No auto-recovered crash bundle (manual triage on browser crash).
+
+### Tests
+~35 cross-platform tests + jsdom + Linux functional subset behind
+VG_RUN_BROWSER_TESTS=1. Closes 10 Codex review findings.
+
+### Closes
+Internal Codex GPT-5.5 plan review §1-§10. Plan + design v2 documented
+under docs/plans/2026-05-11-field-test-capture-{design,plan}.md.
 ```
 
-**Step 4: Final regression sweep**
-
-```bash
-python -m pytest tests/ -q --tb=no
-```
-Expect: prior baseline failure count (25 Windows-environmental); 0 new failures from this work.
-
-**Step 5: Commit + tag + push**
-
-```bash
-git add VERSION package.json CHANGELOG.md
-git commit -m "release: v3.7.0 — /vg:field-test new skill
-
-User-driven field test capture distinct from /vg:roam (AI-auto).
-8-component workflow: overlay JS, tail wrapper, bundle correlator,
-deterministic analyzer + subagent narrative, marker auto-emit, codex
-mirror. Full feature in tasks 1-8 of
-docs/plans/2026-05-11-field-test-capture-plan.md.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-
-git push origin main
-git tag v3.7.0
-git push origin v3.7.0
-```
-
-**Step 6: Monitor CI**
-
-```bash
-gh run watch
-```
-Expect: green.
+Run regression sweep, commit, push, tag.
 
 ---
 
-## Acceptance verification (post-merge, manual)
+## Codex review remediation matrix
 
-1. From a project with `field_test.api_log_sources` configured:
-   ```
-   /vg:field-test --phase=7 --preset=standard
-   ```
-2. Browser opens with overlay visible top-right. Click Start.
-3. Roam 3-4 views. Click Mark on each. Type description. Submit.
-4. Click Stop.
-5. Confirm:
-   - `.vg/field-test/ft-p7-*/FIELD-REPORT.md` exists with per-Mark sections
-   - `.vg/KNOWN-ISSUES.json` has N new entries tagged with phase=7
-   - `.vg/events.db` has session_started + N × mark_recorded + session_stopped + analysis_completed + session_completed events, hash-chained
-   - `dev-phases/7/field-test/ft-p7-*/` mirror exists
-
-Concurrent test:
-6. In a second terminal, invoke `/vg:field-test` while the first is active → expect BLOCK with `--resume` hint.
-
-Crash test:
-7. Mid-session, manually close the playwright browser tab. AI should write `session.json.aborted=true` and still produce FIELD-REPORT.md from captured-so-far.
+| Finding | v1 plan | v2 plan resolution |
+|---|---|---|
+| §1 Console-poll dedupe race | Polled console messages for marks → snapshot replay duplicates | Task 4: state polling via `browser_evaluate` w/ last-consumed offset; task 8 step 5 documents call shape |
+| §2 TDD substring tautologies | Many tests asserted lexical presence | Tasks 1-9: structural + functional tests, jsonschema validation, jsdom smoke for overlay, redaction edge case matrix |
+| §3 Concurrency gaps | TOCTOU lock, no respawn impl, no quota impl | Task 8: `mkdir .vg/field-test/.active` atomic; task 8 step 5 documents tail respawn loop + quota check |
+| §4 Privacy + redaction | Multi-hour disk-exposure window; broken regex | Task 2: `redact-stream.py` multi-form, idempotent, fallback; task 3: capture-time pipe |
+| §5 Fixture coverage gaps | Happy path only | Tasks 2/5/6 add: 0-marks session, partial mid-line, naive ts, JSON body redaction, Bearer form, idempotent re-redact |
+| §6 Telemetry contract mismatch | 3 events declared, 7 emitted | Task 8: declare 4 events, `mark_recorded` required_unless_flag |
+| §7 Cross-platform `date %3N` | GNU-only | Task 3: `prefix-iso.py` Python wrapper |
+| §8 Dead presets | 3 enum values, 0 differential logic | Drop preset enum entirely from v1; ship `standard` capture only |
+| §9 Plan executability | Hand-wavy MCP call shape | Task 8 step 5/3 documents `browser_evaluate({function: ...})` payload literally |
+| §10 Verdict (back to design) | Design v1 ships with privacy + race + contract issues | Design v2 supersedes; this plan v2 enforces v2 design; ship blocked until tasks 1-10 land |
 
 ---
 
-End of plan. **Tasks 1-9**, each commit individually. Estimated total: ~3-4 hours engineering wall-clock for a developer who already knows the codebase; ~6-8 hours for a fresh contributor using this plan verbatim.
+End of v2 plan. **Tasks 1-10**, each commit individually. Estimated 4-5 hours engineering wall-clock for a codebase-familiar dev; 7-9 hours for a fresh contributor.
