@@ -97,6 +97,84 @@ run_project_uninstall_helper() {
   "$py" "${VG_HOME}/scripts/vg_uninstall.py" --root "$project_root" --apply
 }
 
+refresh_global_cli_link() {
+  local src="${HOME}/.vgflow/bin/vg.js"
+  local dst="${HOME}/.local/bin/vg"
+  local existing=""
+
+  if [ ! -f "$src" ]; then
+    src="${VG_HOME}/bin/vg.js"
+  fi
+  if [ ! -f "$src" ]; then
+    echo "vgflow: warning: CLI source missing (${src}); skipping CLI link" >&2
+    return 0
+  fi
+
+  chmod +x "$src" "${VG_HOME}/bin/vg-cli-dispatcher.sh" 2>/dev/null || true
+
+  existing="$(command -v vg 2>/dev/null || true)"
+  if [ -n "$existing" ]; then
+    echo "vgflow: CLI available at ${existing}"
+    return 0
+  fi
+
+  mkdir -p "${HOME}/.local/bin"
+  if [ -L "$dst" ]; then
+    rm -f "$dst"
+  elif [ -e "$dst" ]; then
+    echo "vgflow: warning: ${dst} exists and is not a symlink; skipping CLI link" >&2
+    return 0
+  fi
+
+  if ln -s "$src" "$dst" 2>/dev/null; then
+    echo "vgflow: linked CLI ${dst} -> ${src}"
+  else
+    cp "$src" "$dst"
+    chmod +x "$dst" 2>/dev/null || true
+    echo "vgflow: copied CLI into ${dst}"
+  fi
+}
+
+refresh_global_claude_commands() {
+  local src="${HOME}/.vgflow/commands/vg"
+  local dst="${HOME}/.claude/commands/vg"
+  local src_real=""
+  local dst_real=""
+
+  if [ ! -d "$src" ]; then
+    src="${VG_HOME}/commands/vg"
+  fi
+  if [ ! -d "$src" ]; then
+    echo "vgflow: warning: Claude command source missing (${src}); skipping command refresh" >&2
+    return 0
+  fi
+
+  src_real="$(cd "$src" 2>/dev/null && pwd -P || true)"
+  mkdir -p "${HOME}/.claude/commands"
+
+  if [ -L "$dst" ]; then
+    dst_real="$(cd "$dst" 2>/dev/null && pwd -P || true)"
+    if [ -n "$src_real" ] && [ "$dst_real" = "$src_real" ]; then
+      echo "vgflow: Claude commands already linked at ~/.claude/commands/vg"
+      return 0
+    fi
+    rm -f "$dst"
+  elif [ -e "$dst" ]; then
+    local backup="${dst}.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$dst" "$backup"
+    echo "vgflow: backed up stale ~/.claude/commands/vg to ${backup}"
+  fi
+
+  if ln -s "$src" "$dst" 2>/dev/null; then
+    echo "vgflow: linked Claude commands ~/.claude/commands/vg -> ${src}"
+    return 0
+  fi
+
+  mkdir -p "$dst"
+  cp -R "$src"/. "$dst"/
+  echo "vgflow: copied Claude commands into ~/.claude/commands/vg"
+}
+
 codex_config_path() {
   local path="$1"
   if command -v cygpath >/dev/null 2>&1; then
@@ -201,6 +279,8 @@ case "$cmd" in
     project_root="$(pwd)"
     ensure_home_vgflow
     run_project_uninstall_helper "$project_root"
+    refresh_global_cli_link
+    refresh_global_claude_commands
     refresh_global_codex
     repair_playwright_mcp
     bash "${VG_HOME}/scripts/hooks/install-hooks.sh" \
@@ -235,6 +315,8 @@ case "$cmd" in
       exit 1
     fi
     ensure_home_vgflow
+    refresh_global_cli_link
+    refresh_global_claude_commands
     refresh_global_codex
     repair_playwright_mcp
     run_project_uninstall_helper "$(pwd)"
@@ -257,9 +339,16 @@ case "$cmd" in
     echo "  Bash:       $(bash --version 2>/dev/null | head -1 || echo missing)"
     echo "  Python:     $(python3 --version 2>/dev/null || python --version 2>/dev/null || echo missing)"
     echo "  Git:        $(git --version 2>/dev/null || echo missing)"
+    echo "  VG CLI:     $(command -v vg 2>/dev/null || echo missing)"
     if [ -f "${HOME}/.claude/settings.json" ]; then
       vg_hooks=$(grep -c "vgflow\|vg-orchestrator\|vg-pre-tool-use\|vg-post-tool-use\|vg-user-prompt-submit\|vg-stop\|vg-session-start" "${HOME}/.claude/settings.json" 2>/dev/null || echo 0)
       echo "  Claude hooks: ${vg_hooks} VG entries in ~/.claude/settings.json"
+    fi
+    if [ -d "${HOME}/.claude/commands/vg" ]; then
+      vg_commands=$(find "${HOME}/.claude/commands/vg/" -maxdepth 1 -type f -name "*.md" 2>/dev/null | wc -l | tr -d '[:space:]')
+      echo "  Claude commands: ${vg_commands} file(s) in ~/.claude/commands/vg"
+    else
+      echo "  Claude commands: missing ~/.claude/commands/vg"
     fi
     if [ -d ".vg" ]; then
       echo "  Project .vg/: present at $(pwd)/.vg/"
