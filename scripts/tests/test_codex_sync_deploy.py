@@ -123,6 +123,14 @@ def _write_project_local_vg_files(target: Path) -> None:
     )
 
 
+def _write_fake_global_surface(fake_home: Path) -> None:
+    (fake_home / ".vgflow").mkdir(parents=True)
+    (fake_home / ".codex" / "skills").mkdir(parents=True)
+    (fake_home / ".codex" / "hooks.json").write_text("{}", encoding="utf-8")
+    (fake_home / ".claude").mkdir(parents=True, exist_ok=True)
+    (fake_home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+
+
 def _assert_global_install(fake_home: Path, target: Path) -> None:
     assert len(_skill_names(fake_home)) == _canonical_codex_skill_count()
     assert EXPECTED_SKILLS <= _skill_names(fake_home)
@@ -221,6 +229,7 @@ def test_sync_check_does_not_deploy_project_local_surfaces(tmp_path: Path) -> No
     fake_home = tmp_path / "home"
     target.mkdir()
     fake_home.mkdir()
+    _write_fake_global_surface(fake_home)
 
     result = subprocess.run(
         [
@@ -242,3 +251,71 @@ def test_sync_check_does_not_deploy_project_local_surfaces(tmp_path: Path) -> No
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (target / ".codex").exists()
     assert not (target / ".claude").exists()
+
+
+def test_sync_check_reports_missing_global_surface_without_writes(tmp_path: Path) -> None:
+    bash = _working_bash()
+    if bash is None:
+        pytest.skip("working bash not found")
+
+    target = tmp_path / "target-project"
+    fake_home = tmp_path / "home"
+    target.mkdir()
+    fake_home.mkdir()
+
+    result = subprocess.run(
+        [
+            bash,
+            "-lc",
+            (
+                f"cd {shlex.quote(_bash_path(bash, REPO_ROOT))} && "
+                f"HOME={shlex.quote(_bash_path(bash, fake_home))} "
+                f"DEV_ROOT={shlex.quote(_bash_path(bash, target))} "
+                "bash sync.sh --check"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 1
+    assert "MISSING global source" in result.stdout
+    assert not (target / ".codex").exists()
+    assert not (target / ".claude").exists()
+
+
+def test_sync_check_reports_stale_project_local_surfaces(tmp_path: Path) -> None:
+    bash = _working_bash()
+    if bash is None:
+        pytest.skip("working bash not found")
+
+    target = tmp_path / "target-project"
+    fake_home = tmp_path / "home"
+    target.mkdir()
+    fake_home.mkdir()
+    _write_fake_global_surface(fake_home)
+    _write_project_local_vg_files(target)
+
+    result = subprocess.run(
+        [
+            bash,
+            "-lc",
+            (
+                f"cd {shlex.quote(_bash_path(bash, REPO_ROOT))} && "
+                f"HOME={shlex.quote(_bash_path(bash, fake_home))} "
+                f"DEV_ROOT={shlex.quote(_bash_path(bash, target))} "
+                "bash sync.sh --check"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 1
+    assert "STALE project-local VG surfaces" in result.stdout
+    assert ".claude/commands/vg" in result.stdout
+    assert ".codex/skills/vg-accept" in result.stdout

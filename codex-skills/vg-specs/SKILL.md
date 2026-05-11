@@ -157,6 +157,32 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-specs`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+<HARD-GATE-CODEX>
+Codex has no Claude PreToolUse/PostToolUse hook substrate. Claude hooks may
+auto-emit step markers, but Codex MUST emit the same hard markers explicitly
+after each matching STEP primary action.
+
+Use global VGFlow paths so global-only installs work without project-local
+`.claude/scripts` or `.claude/commands`:
+
+```bash
+VG_HOME="${VG_HOME:-$HOME/.vgflow}"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME}/scripts}"
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs parse_args
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs create_task_tracker
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs check_existing
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs choose_mode
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs generate_draft
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs write_specs
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs write_interface_standards
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step specs commit_and_next
+```
+
+Hook/spawn mechanics may differ by provider, but marker names, order, gates,
+must-write artifacts, and telemetry contract stay identical to the Claude
+command source.
+</HARD-GATE-CODEX>
+
 
 
 <objective>

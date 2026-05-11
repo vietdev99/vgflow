@@ -10,7 +10,7 @@
 #
 # This repo is now the canonical VGFlow source. DEV_ROOT/RTB source probing is
 # intentionally gone; use sync.sh to deploy this repo's generated artifacts to
-# project-local .codex/ and global ~/.codex/.
+# global ~/.codex/ and prune project-local VG-owned .codex/.claude copies.
 
 set -euo pipefail
 

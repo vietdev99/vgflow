@@ -157,6 +157,33 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-field-test`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+<HARD-GATE-CODEX>
+Codex has no Claude PreToolUse/PostToolUse hook substrate. Claude hooks may
+auto-emit step markers, but Codex MUST emit the same hard markers explicitly
+after each matching STEP primary action.
+
+Use global VGFlow paths so global-only installs work without project-local
+`.claude/scripts` or `.claude/commands`:
+
+```bash
+VG_HOME="${VG_HOME:-$HOME/.vgflow}"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME}/scripts}"
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 0_preflight
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 1_resolve_config
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 2_launch_browser
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 3_inject_overlay
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 4_wait_start
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 5_capture_loop
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 6_stop_finalize
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test 7_analyze
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step field-test complete
+```
+
+Hook/spawn mechanics may differ by provider, but marker names, order, gates,
+must-write artifacts, and telemetry contract stay identical to the Claude
+command source.
+</HARD-GATE-CODEX>
+
 
 
 <HARD-GATE>
