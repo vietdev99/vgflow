@@ -49,8 +49,11 @@ export ROAM_ENV ROAM_MODEL ROAM_MODE
 # Anchor on `credentials:` block first — vg.config.md has multiple `local:` sections
 # (environments.local, services.local, credentials.local) that must not be confused.
 ROAM_TARGET_DOMAIN=$(${PYTHON_BIN:-python3} - <<PY
-import re, sys
-text = open('.claude/vg.config.md', encoding='utf-8').read()
+import pathlib, re, sys
+config_path = pathlib.Path('${VG_CONFIG_PATH:-.claude/vg.config.md}')
+if not config_path.exists():
+    config_path = pathlib.Path('vg.config.md')
+text = config_path.read_text(encoding='utf-8') if config_path.exists() else ''
 m = re.search(r'^\s*${ROAM_ENV}:\s*$', text, re.M)
 if not m: print(''); sys.exit(0)
 section = text[m.end():m.end()+2000]
@@ -103,7 +106,7 @@ p.write_text(json.dumps({
 }, indent=2))
 "
 
-${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+${PYTHON_BIN:-python3} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
   "roam.config_confirmed" \
   --actor "orchestrator" --outcome "INFO" \
   --payload "{\"env\":\"${ROAM_ENV}\",\"model\":\"${ROAM_MODEL}\",\"mode\":\"${ROAM_MODE}\"}" 2>/dev/null || true
@@ -115,7 +118,7 @@ mkdir -p "${ROAM_DIR}/.tmp"
 echo "$(date +%s)|${ROAM_ENV}|${ROAM_MODEL}|${ROAM_MODE}" > "${ROAM_DIR}/.tmp/0a-confirmed.marker"
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0a_persist_config" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0a_persist_config.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0a_persist_config 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 0a_persist_config 2>/dev/null || true
 ```
 
 After this sub-step, the config gate is complete. Next: `discovery.md`.

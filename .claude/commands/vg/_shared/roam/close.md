@@ -19,7 +19,7 @@ mode that lives outside the main pipeline.
 ```bash
 vg-orchestrator step-active complete
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
   "roam.session.completed" \
   --actor "orchestrator" --outcome "INFO" \
   --payload "{\"surfaces\":${SURFACE_COUNT:-0},\"events\":${EVENT_COUNT:-0},\"bugs\":${BUGS_COUNT:-0}}" 2>/dev/null || true
@@ -34,7 +34,7 @@ echo "  Output:      ${ROAM_DIR}/ROAM-BUGS.md"
 echo "  New specs:   ${ROAM_DIR}/proposed-specs/ (use /vg:roam --merge-specs to merge into test suite)"
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/complete.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam complete 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam complete 2>/dev/null || true
 ```
 
 ---
@@ -53,10 +53,12 @@ merge invocation:
 
 ```bash
 if [[ "$ARGUMENTS" =~ --merge-specs ]]; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/roam-merge-specs.py \
+  CONFIG_PATH="${VG_CONFIG_PATH:-.claude/vg.config.md}"
+  [ -f "$CONFIG_PATH" ] || CONFIG_PATH="vg.config.md"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/roam-merge-specs.py" \
     --phase-dir "${PHASE_DIR}" \
     --proposed-dir "${PHASE_DIR}/roam/proposed-specs" \
-    --target-dir "$(grep -oP 'tests:\s*\K\S+' .claude/vg.config.md)"
+    --target-dir "$(grep -oP 'tests:\s*\K\S+' "$CONFIG_PATH")"
   exit 0
 fi
 ```

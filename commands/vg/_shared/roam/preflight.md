@@ -84,14 +84,14 @@ if [ ${#ROAM_USED_FORBIDDEN[@]} -gt 0 ]; then
     exit 1
   fi
   for FF in "${ROAM_USED_FORBIDDEN[@]}"; do
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" override \
       --flag "$FF" --reason "$ROAM_OVR_REASON" || {
         echo "⛔ vg-orchestrator override rejected $FF (reason too short / placeholder)."
         exit 1
       }
   done
 elif [ "$ROAM_HAS_OVERRIDE_REASON" = "true" ]; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" override \
     --flag "--override-reason" --reason "$ROAM_OVR_REASON" || {
       echo "⛔ vg-orchestrator override rejected --override-reason (reason too short / placeholder)."
       exit 1
@@ -99,9 +99,9 @@ elif [ "$ROAM_HAS_OVERRIDE_REASON" = "true" ]; then
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0_parse_and_validate 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 0_parse_and_validate 2>/dev/null || true
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
   "roam.session.started" \
   --actor "orchestrator" --outcome "INFO" --payload "{\"args\":\"${ARGUMENTS}\"}" 2>/dev/null || true
 ```
@@ -224,13 +224,13 @@ export ROAM_RESUME_MODE
 mkdir -p "${ROAM_DIR}/.tmp"
 echo "$(date +%s)|${ROAM_RESUME_MODE}" > "${ROAM_DIR}/.tmp/0aa-confirmed.marker"
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
   "roam.resume_mode_chosen" \
   --actor "user" --outcome "INFO" \
   --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mode\":\"${ROAM_RESUME_MODE}\",\"had_prior_state\":${HAS_RUN_BEFORE}}" 2>/dev/null || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0aa_resume_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0aa_resume_check.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0aa_resume_check 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 0aa_resume_check 2>/dev/null || true
 ```
 
 **Step 0a behavior under resume (v2.42.10):** Step 0a ALWAYS fires its 3-question batch, regardless of `$ROAM_RESUME_MODE`. Under resume, prior values are loaded as `ROAM_PRIOR_ENV/MODEL/MODE` and used as pre-fill, but user must confirm.

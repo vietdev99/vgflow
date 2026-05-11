@@ -157,6 +157,38 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-roam`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+<HARD-GATE-CODEX>
+Codex has no Claude PreToolUse/PostToolUse hook substrate. Claude hooks may
+auto-emit step markers, but Codex MUST emit the same hard markers explicitly
+after each matching STEP primary action.
+
+Use global VGFlow paths so global-only installs work without project-local
+`.claude/scripts` or `.claude/commands`:
+
+```bash
+VG_HOME="${VG_HOME:-$HOME/.vgflow}"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME}/scripts}"
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 0_parse_and_validate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 0a_backfill_env_pref
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 0a_detect_platform_tools
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 0a_enrich_env_options
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 0a_confirm_env_model_mode
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 0a_persist_config
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 0aa_resume_check
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 1_discover_surfaces
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 2_compose_briefs
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 3_spawn_executors
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 4_aggregate_logs
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 5_analyze_findings
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam 6_emit_artifacts
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step roam complete
+```
+
+Hook/spawn mechanics may differ by provider, but marker names, order, gates,
+must-write artifacts, and telemetry contract stay identical to the Claude
+command source.
+</HARD-GATE-CODEX>
+
 
 
 <HARD-GATE>
@@ -194,10 +226,12 @@ via `vg-codegen-interactive` validator, merges into project test suite path
 
 ```bash
 if [[ "$ARGUMENTS" =~ --merge-specs ]]; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/roam-merge-specs.py \
+  CONFIG_PATH="${VG_CONFIG_PATH:-.claude/vg.config.md}"
+  [ -f "$CONFIG_PATH" ] || CONFIG_PATH="vg.config.md"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/roam-merge-specs.py" \
     --phase-dir "${PHASE_DIR}" \
     --proposed-dir "${PHASE_DIR}/roam/proposed-specs" \
-    --target-dir "$(grep -oP 'tests:\s*\K\S+' .claude/vg.config.md)"
+    --target-dir "$(grep -oP 'tests:\s*\K\S+' "$CONFIG_PATH")"
   exit 0
 fi
 ```
@@ -214,7 +248,7 @@ imperative. AI MUST issue `TodoWrite` with the projected items as soon as
 which the runtime contract requires.
 
 ```bash
-${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
+${PYTHON_BIN:-python3} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/emit-tasklist.py" \
   --command vg:roam \
   --phase "${PHASE_NUMBER}"
 # AI: now invoke TodoWrite with the items printed above.
@@ -222,7 +256,7 @@ ${PYTHON_BIN:-python3} .claude/scripts/emit-tasklist.py \
 # Bug D 2026-05-04: explicit emission — was previously instruction-text-only,
 # AI could complete /vg:roam without ever firing roam.native_tasklist_projected.
 # Now bash-enforced; PreToolUse Bash hook validates evidence on next step-active.
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected \
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" tasklist-projected \
   --adapter "${VG_TASKLIST_ADAPTER:-claude}" || {
     echo "⛔ vg-orchestrator tasklist-projected failed — roam.native_tasklist_projected event will not fire." >&2
     echo "   Check .vg/runs/<run_id>/tasklist-contract.json + adapter ∈ {claude,codex,fallback}." >&2
@@ -330,11 +364,13 @@ After `phase.roam_completed` emits, spawn vg-reflector subagent IF
 `meta_memory_mode != "disabled"`:
 
 ```bash
-META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+CONFIG_PATH="${VG_CONFIG_PATH:-vg.config.md}"
+[ -f "$CONFIG_PATH" ] || CONFIG_PATH=".claude/vg.config.md"
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" "$CONFIG_PATH" 2>/dev/null | awk '{print $2}' || echo "disabled")
 
 if [ "$META_MEMORY_MODE" != "disabled" ] && [ "$EVENT_TYPE" = "phase.roam_completed" ]; then
-  bash scripts/vg-narrate-spawn.sh vg-reflector spawning "post-roam candidate draft"
-  ${PYTHON_BIN:-python3} .claude/scripts/vg-orchestrator emit-event \
+  bash "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-narrate-spawn.sh" vg-reflector spawning "post-roam candidate draft"
+  ${PYTHON_BIN:-python3} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
     "reflection.trigger_requested" --actor "roam" --outcome "INFO" \
     --metadata "{\"step\":\"roam\",\"phase\":\"${PHASE_NUMBER}\",\"trigger\":\"post-roam\"}"
 fi

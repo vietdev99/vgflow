@@ -77,7 +77,7 @@ if [[ ! "$ARGUMENTS" =~ --non-interactive ]]; then
       echo "   AI must invoke AskUserQuestion per skill spec — silent skip not permitted."
       echo "   Override (NOT recommended, debt-logged): re-run with --non-interactive + explicit"
       echo "   flags (--target-env=X --model=Y --mode=Z) to skip prompts intentionally."
-      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
         "roam.gate_breach" --actor "orchestrator" --outcome "FAIL" \
         --payload "{\"phase\":\"${PHASE_NUMBER}\",\"missing_marker\":\"${marker}\"}" 2>/dev/null || true
       exit 1
@@ -109,7 +109,7 @@ else
   # vg-load --index: returns per-task PLAN.md index (NOT flat 8K-line read).
   # roam-discover-surfaces.py reads CONTEXT.md flat (small) + RUNTIME-MAP.md
   # flat (JSON), and uses --index for PLAN.md scan.
-  "${PYTHON_BIN:-python3}" .claude/scripts/roam-discover-surfaces.py \
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/roam-discover-surfaces.py" \
     --phase-dir "${PHASE_DIR}" \
     --use-vg-load-index \
     --output "${ROAM_DIR}/SURFACES.md"
@@ -126,7 +126,7 @@ if [ "$SURFACE_COUNT" -gt "$MAX_SURFACES" ]; then
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "1_discover_surfaces" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/1_discover_surfaces.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 1_discover_surfaces 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 1_discover_surfaces 2>/dev/null || true
 ```
 
 **DO NOT** `cat ${PHASE_DIR}/PLAN.md` or `Read ${PHASE_DIR}/PLAN.md` flat —
@@ -174,7 +174,10 @@ if [[ "$ARGUMENTS" =~ --lens=([a-z,-]+) ]]; then LENS_LIST="${BASH_REMATCH[1]}";
 # credentials.local) that must not be confused.
 ${PYTHON_BIN:-python3} -c "
 import json, re, sys, pathlib
-text = open('.claude/vg.config.md', encoding='utf-8').read()
+config_path = pathlib.Path('${VG_CONFIG_PATH:-.claude/vg.config.md}')
+if not config_path.exists():
+    config_path = pathlib.Path('vg.config.md')
+text = config_path.read_text(encoding='utf-8') if config_path.exists() else ''
 env = '${ROAM_ENV}'
 roles = []
 cm = re.search(r'^credentials:\s*\$', text, re.M)
@@ -193,7 +196,7 @@ print(f'[roam] extracted {len(roles)} role(s) for env={env}', file=sys.stderr)
 # Compose briefs into EACH per-model dir (council = 2 dirs, single = 1)
 for MODEL_DIR in "${ROAM_MODEL_DIRS[@]}"; do
   MODEL_NAME=$(basename "$MODEL_DIR")
-  ${PYTHON_BIN:-python3} .claude/scripts/roam-compose-brief.py \
+  ${PYTHON_BIN:-python3} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/roam-compose-brief.py" \
     --phase-dir "${PHASE_DIR}" \
     --surfaces "${ROAM_DIR}/SURFACES.md" \
     --lenses "${LENS_LIST}" \
@@ -215,7 +218,7 @@ fi  # end SKIP_COMPOSE guard
 # aggregate-only). Prior shape had separate emits per branch and missed the
 # resume-reuse path entirely.
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "2_compose_briefs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2_compose_briefs.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 2_compose_briefs 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 2_compose_briefs 2>/dev/null || true
 ```
 
 **Conformance contract (per `<rules>` in roam.md):** every brief MUST inject

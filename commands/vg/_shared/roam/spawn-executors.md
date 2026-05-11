@@ -20,8 +20,8 @@ Run executors per `$ROAM_MODE`:
 so all artifacts land beside the brief.
 
 **Narration:** for spawn / self branches that invoke sub-agents or sub-processes,
-emit `bash scripts/vg-narrate-spawn.sh <name> spawning [...]` before AND
-`bash scripts/vg-narrate-spawn.sh <name> returned [...]` after. UX courtesy
+emit `bash "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-narrate-spawn.sh" <name> spawning [...]` before AND
+`bash "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-narrate-spawn.sh" <name> returned [...]` after. UX courtesy
 per harness convention — no hook enforces this but operator visibility wins
 over 1 saved bash call.
 
@@ -108,7 +108,7 @@ if [ "$ROAM_MODE" = "spawn" ]; then
     CLI_TEMPLATE="${CLI_CMD_FOR_MODEL[$MODEL_NAME]}"
 
     # NARRATION: spawning sub-process executor (UX courtesy).
-    bash scripts/vg-narrate-spawn.sh "${MODEL_NAME}-executor" spawning "spawning $(ls "$MODEL_DIR"/INSTRUCTION-*.md 2>/dev/null | wc -l | tr -d ' ') brief(s)" 2>/dev/null || true
+    bash "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-narrate-spawn.sh" "${MODEL_NAME}-executor" spawning "spawning $(ls "$MODEL_DIR"/INSTRUCTION-*.md 2>/dev/null | wc -l | tr -d ' ') brief(s)" 2>/dev/null || true
 
     for brief in "$MODEL_DIR"/INSTRUCTION-*.md; do
       [ -f "$brief" ] || continue
@@ -145,7 +145,7 @@ if [ "$ROAM_MODE" = "spawn" ]; then
       fi
     done
 
-    bash scripts/vg-narrate-spawn.sh "${MODEL_NAME}-executor" returned "all briefs dispatched" 2>/dev/null || true
+    bash "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-narrate-spawn.sh" "${MODEL_NAME}-executor" returned "all briefs dispatched" 2>/dev/null || true
   done
   [ ${#PIDS[@]} -gt 0 ] && wait "${PIDS[@]}"
   echo "✓ All spawn executors completed"
@@ -249,7 +249,7 @@ fi  # end aggregate-only guard
 # aggregate-only-skip). Round-2 B4 fix: prior shape emitted inside the
 # aggregate-only branch AND again at the bottom unconditionally → double-mark.
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "3_spawn_executors" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_spawn_executors.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 3_spawn_executors 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 3_spawn_executors 2>/dev/null || true
 ```
 
 **Recursion (commander loop):** scan emitted `observe-*.jsonl` for

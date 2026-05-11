@@ -104,7 +104,7 @@ p.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "0a_backfill_env_pref" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0a_backfill_env_pref.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 0a_backfill_env_pref 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 0a_backfill_env_pref 2>/dev/null || true
 ```
 
 Next: read `detect-platform.md`.

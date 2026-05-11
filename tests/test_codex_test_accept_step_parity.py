@@ -48,7 +48,7 @@ def _step_sequence(text: str) -> list[str]:
 
 
 def test_codex_test_accept_and_test_spec_bodies_match_claude_source() -> None:
-    for name in ("test", "accept", "test-spec"):
+    for name in ("test", "accept", "test-spec", "roam"):
         source = _workflow_body(REPO_ROOT / "commands" / "vg" / f"{name}.md")
         codex = _codex_workflow_body(
             REPO_ROOT / "codex-skills" / f"vg-{name}" / "SKILL.md"
@@ -60,7 +60,7 @@ def test_codex_test_accept_and_test_spec_bodies_match_claude_source() -> None:
 
 
 def test_codex_test_accept_and_test_spec_step_order_matches_claude() -> None:
-    for name in ("test", "accept", "test-spec"):
+    for name in ("test", "accept", "test-spec", "roam"):
         source = _workflow_body(REPO_ROOT / "commands" / "vg" / f"{name}.md")
         codex = _codex_workflow_body(
             REPO_ROOT / "codex-skills" / f"vg-{name}" / "SKILL.md"
