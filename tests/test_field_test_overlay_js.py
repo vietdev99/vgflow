@@ -59,6 +59,40 @@ def test_overlay_syntax_via_node_check():
     assert r.returncode == 0, r.stderr
 
 
+def test_overlay_no_innerhtml_for_location_href():
+    """v2.1 fix I-1: modal URL must use textContent not innerHTML."""
+    body = OVERLAY.read_text(encoding="utf-8")
+    # Forbidden pattern: 'URL: ' concatenated directly into innerHTML
+    forbidden = "'URL: ' + location.href"
+    assert forbidden not in body, (
+        "I-1 regression: location.href must be set via textContent, not innerHTML"
+    )
+    # Required pattern: textContent with URL
+    assert ".textContent" in body, "URL div must use .textContent"
+    assert "URL: " in body and "location.href" in body, "URL string still composed"
+
+
+def test_overlay_zindex_modal_above_overlay():
+    """v2.1 fix I-2: modal must sit ABOVE overlay buttons."""
+    body = OVERLAY.read_text(encoding="utf-8")
+    # Both z-index values must be present
+    assert "z-index:2147483647" in body, "modal must use max z-index"
+    assert "z-index:2147483646" in body, "overlay must use modal-minus-1"
+    # The MAX z-index must be on the modal block (heuristic: appears after 'modal-id' assignment)
+    modal_start = body.index("__vg-ft-modal")
+    overlay_start = body.index("__vg-ft-overlay")
+    # Find first z-index mention after each id assignment
+    modal_zindex = body.index("z-index", modal_start)
+    overlay_zindex = body.index("z-index", overlay_start)
+    # Modal's z-index line must be the MAX (2147483647)
+    assert "2147483647" in body[modal_zindex:modal_zindex + 30], (
+        "I-2 regression: modal must declare z-index:2147483647"
+    )
+    assert "2147483646" in body[overlay_zindex:overlay_zindex + 30], (
+        "I-2 regression: overlay must declare z-index:2147483646 (below modal)"
+    )
+
+
 @_node
 def test_overlay_mark_flow_via_jsdom(tmp_path):
     """v2.1 round-2 SHOULD-6: functional smoke is DEFAULT.

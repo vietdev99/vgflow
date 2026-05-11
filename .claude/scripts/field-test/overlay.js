@@ -138,8 +138,10 @@
     if (existing) existing.remove();
     var root = document.createElement("div");
     root.id = "__vg-ft-overlay";
+    // v2.1 fix I-2: overlay below modal so Mark/Stop buttons aren't
+    // clickable through the open modal backdrop.
     root.style.cssText =
-      "position:fixed;top:12px;right:12px;z-index:2147483647;" +
+      "position:fixed;top:12px;right:12px;z-index:2147483646;" +
       "font:13px/1.3 system-ui,-apple-system,sans-serif;" +
       "background:#0b1220;color:#e5e7eb;padding:10px;border-radius:8px;" +
       "box-shadow:0 4px 12px rgba(0,0,0,.3)";
@@ -179,16 +181,38 @@
     if (existing) existing.remove();
     var modal = document.createElement("div");
     modal.id = "__vg-ft-modal";
-    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2147483646;display:flex;align-items:center;justify-content:center";
-    modal.innerHTML =
-      '<div style="background:#0b1220;color:#e5e7eb;padding:18px;border-radius:10px;min-width:420px">' +
-      '<div style="margin-bottom:10px;font-weight:600">Mark current view</div>' +
-      '<div style="margin-bottom:8px;font-size:12px;opacity:.7">URL: ' + location.href + '</div>' +
-      '<textarea id="__vg-ft-note" rows="5" style="width:100%;background:#1e293b;color:#e5e7eb;border:1px solid #334155;border-radius:6px;padding:8px"></textarea>' +
-      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">' +
+    // v2.1 fix I-2: modal z-index now MAX (2147483647); overlay drops to 2147483646.
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2147483647;display:flex;align-items:center;justify-content:center";
+
+    var card = document.createElement("div");
+    card.style.cssText = "background:#0b1220;color:#e5e7eb;padding:18px;border-radius:10px;min-width:420px";
+
+    var title = document.createElement("div");
+    title.style.cssText = "margin-bottom:10px;font-weight:600";
+    title.textContent = "Mark current view";
+
+    // v2.1 fix I-1: URL injected via textContent — innerHTML would XSS on
+    // crafted URLs like http://x/?p=<img src=x onerror=alert(1)>.
+    var urlDiv = document.createElement("div");
+    urlDiv.style.cssText = "margin-bottom:8px;font-size:12px;opacity:.7;word-break:break-all";
+    urlDiv.textContent = "URL: " + location.href;
+
+    var ta = document.createElement("textarea");
+    ta.id = "__vg-ft-note";
+    ta.rows = 5;
+    ta.style.cssText = "width:100%;background:#1e293b;color:#e5e7eb;border:1px solid #334155;border-radius:6px;padding:8px";
+
+    var btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:10px";
+    btnRow.innerHTML =
       '<button id="__vg-ft-cancel" style="background:#475569;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer">Cancel</button>' +
-      '<button id="__vg-ft-submit" style="background:#16a34a;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer">Submit</button>' +
-      '</div></div>';
+      '<button id="__vg-ft-submit" style="background:#16a34a;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer">Submit</button>';
+
+    card.appendChild(title);
+    card.appendChild(urlDiv);
+    card.appendChild(ta);
+    card.appendChild(btnRow);
+    modal.appendChild(card);
     document.body.appendChild(modal);
     document.getElementById("__vg-ft-cancel").onclick = function () { modal.remove(); };
     document.getElementById("__vg-ft-submit").onclick = function () {
