@@ -309,6 +309,46 @@ if [ -f "$ROUTE_SCHEMA_VAL" ] && [ -d "apps/api/src" ]; then
   fi
 fi
 
+# v3.7.1 (Codex wiring fix) — verify-contract-runtime.py static existence gate.
+# Closes the gap where validator existed (B7.2 / OHOK gap A2) but was never
+# wired into the build pipeline. Phantom endpoints (declared in API-CONTRACTS.md
+# but never implemented in source) previously surfaced only at review step 5b
+# curl — 1+ hours after the wave committed. This static gate runs BEFORE
+# PR-E runtime truthcheck so cheap presence checks fire first.
+CONTRACT_RUNTIME_VAL=".claude/scripts/validators/verify-contract-runtime.py"
+if [ -f "$CONTRACT_RUNTIME_VAL" ]; then
+  if [[ "${ARGUMENTS}" =~ --skip-contract-runtime ]]; then
+    if [[ ! "${ARGUMENTS}" =~ --override-reason=([^[:space:]]+) ]]; then
+      echo "⛔ --skip-contract-runtime requires --override-reason=<issue-id-or-url>"
+      exit 1
+    fi
+    CONTRACT_SKIP_REASON="${BASH_REMATCH[1]}"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+      --flag=--skip-contract-runtime \
+      --reason="build.contract-runtime.skipped phase=${PHASE_NUMBER:-${PHASE_ARG}} ts=$(date -u +%FT%TZ); operator-supplied: ${CONTRACT_SKIP_REASON}" \
+      2>&1 || echo "⚠ vg-orchestrator override emit failed for --skip-contract-runtime; debt register still appended" >&2
+    if type -t log_override_debt >/dev/null 2>&1; then
+      log_override_debt "--skip-contract-runtime" "${PHASE_NUMBER:-${PHASE_ARG}}" \
+        "build.contract-runtime.skipped" "$CONTRACT_SKIP_REASON" \
+        "build-contract-runtime-skipped" >/dev/null 2>&1 || true
+    fi
+    echo "  contract-runtime: SKIPPED via --skip-contract-runtime (override-debt logged: ${CONTRACT_SKIP_REASON})"
+  else
+    ${PYTHON_BIN:-python3} "$CONTRACT_RUNTIME_VAL" --phase "${PHASE_NUMBER:-${PHASE_ARG}}"
+    CONTRACT_RC=$?
+    if [ "$CONTRACT_RC" -ne 0 ]; then
+      echo "⛔ Contract-runtime gate failed at build close — phantom endpoints detected."
+      echo "   API-CONTRACTS.md declares endpoints not found in source code."
+      echo "   Fix path:"
+      echo "     1. Implement the missing route handler in apps/api/src/..."
+      echo "     2. Or remove the obsolete declaration from API-CONTRACTS.md"
+      echo "     3. Or override (logs debt): --skip-contract-runtime --override-reason='<reason>'"
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.contract_runtime_blocked" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\"}" >/dev/null 2>&1 || true
+      exit 1
+    fi
+  fi
+fi
+
 # RFC v9 PR-E — API truthcheck loop (1-command 3-phase build).
 # After BE+FE code committed and openapi.json exported, run every backend
 # mutation goal that has FIXTURES through recipe_executor with hard

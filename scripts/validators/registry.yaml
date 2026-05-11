@@ -527,7 +527,7 @@ validators:
 
   - id: contract-runtime
     path: .claude/scripts/validators/verify-contract-runtime.py
-    severity: warn
+    severity: block
     phases_active: [all]
     domain: contract
     runtime_target_ms: 5000

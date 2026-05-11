@@ -1,7 +1,7 @@
 ---
 name: vg:build
 description: Execute phase plans with contract-aware wave-based parallel execution
-argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck] [--skip-pre-test] [--skip-spec-review] [--skip-final-review]"
+argument-hint: "<phase> [--wave N] [--only 15,16,17] [--gaps-only] [--interactive] [--auto] [--reset-queue] [--status] [--skip-truthcheck] [--skip-contract-runtime] [--skip-pre-test] [--skip-spec-review] [--skip-final-review]"
 allowed-tools:
   - Read
   - Write
@@ -187,6 +187,10 @@ runtime_contract:
     - "--allow-r5-violation"
     - "--force"
     - "--skip-truthcheck"
+    # v3.7.1 (Codex wiring fix) — static contract-runtime gate skip.
+    # Requires --override-reason=<text>; emits build.contract_runtime_blocked
+    # event + override-debt entry. Joins --skip-truthcheck convention.
+    - "--skip-contract-runtime"
     # v2.41 R2 build pilot — hard-gate-skip flags surfaced by waves-overview
     # gates 8/8d.4/8d.5/8d.9. Each requires --override-reason=<text> + emits
     # override-debt entry. --allow-coverage-regression is informational and
