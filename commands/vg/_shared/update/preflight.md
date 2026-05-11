@@ -21,16 +21,22 @@ command -v git      >/dev/null 2>&1 || { echo "git CLI required"; exit 1; }
 command -v curl     >/dev/null 2>&1 || { echo "curl required"; exit 1; }
 command -v python3  >/dev/null 2>&1 || { echo "python3 required"; exit 1; }
 
-# v2.88.0: detect v3 install-target marker
-INSTALL_TARGET=""
+# v3.6.6: global-only update. Marker is read for narration only; project and
+# absent markers are coerced to global so update prunes project-local VG files.
+INSTALL_TARGET="global"
+MARKER_TARGET=""
 if [ -f "${REPO_ROOT}/.vg/.install-target" ]; then
-  INSTALL_TARGET="$(tr -d '[:space:]' < "${REPO_ROOT}/.vg/.install-target")"
+  MARKER_TARGET="$(tr -d '[:space:]' < "${REPO_ROOT}/.vg/.install-target")"
 fi
-echo "install-target marker: ${INSTALL_TARGET:-(absent — legacy project mode)}"
+if [ -n "$MARKER_TARGET" ] && [ "$MARKER_TARGET" != "global" ]; then
+  echo "install-target marker: ${MARKER_TARGET} (deprecated — coercing to global-only)"
+else
+  echo "install-target marker: ${MARKER_TARGET:-(absent)} (global-only update)"
+fi
 
 HELPER="${REPO_ROOT}/.claude/scripts/vg_update.py"
-# Project-mode helper required only when we'll do the project-local merge.
-# Global-mode update doesn't touch .claude/ helpers.
+# Project-mode helper is no longer required. Global-mode update doesn't touch
+# project .claude/ helpers except to prune stale VG-owned files.
 if [ "$INSTALL_TARGET" != "global" ] && [ ! -f "$HELPER" ]; then
   echo "vg_update.py missing at ${HELPER}"
   echo "Legacy install detected. Re-install vgflow first:"
@@ -51,13 +57,29 @@ re-install hooks at `~/.claude/settings.json` with `--mode global`, AND clean
 up any stale legacy files left in `.claude/` that should have been removed
 during the original v3 migration but remained from a partial run.
 
-When marker is `project` or absent, fall through to the v2.x project-local
-3-way-merge flow (steps 5-9 below).
+Project and absent markers are coerced to this same global path. The legacy
+project-local 3-way merge path is retained only as dead compatibility text for
+older skill mirrors; global-only update exits before it can run.
 
 ```bash
 if [ "$INSTALL_TARGET" = "global" ]; then
   echo ""
   echo "Global update path (marker=global) — refreshing ~/.vgflow/..."
+
+  DISPATCHER=""
+  for candidate in \
+    "${VG_HOME:-}/bin/vg-cli-dispatcher.sh" \
+    "${HOME}/.vgflow/bin/vg-cli-dispatcher.sh"; do
+    if [ -f "$candidate" ]; then
+      DISPATCHER="$candidate"
+      break
+    fi
+  done
+  if [ -n "$DISPATCHER" ]; then
+    echo "  Delegating to global dispatcher: ${DISPATCHER}"
+    VG_HOME="$(dirname "$(dirname "$DISPATCHER")")" bash "$DISPATCHER" update
+    exit $?
+  fi
 
   HOME_VGFLOW="${HOME}/.vgflow"
   GLOBAL_OK=0
@@ -77,8 +99,15 @@ if [ "$INSTALL_TARGET" = "global" ]; then
   if [ "$GLOBAL_OK" = "0" ] && command -v npm >/dev/null 2>&1; then
     echo "  Updating via npm install -g vgflow@latest..."
     if npm install -g vgflow@latest >/dev/null 2>&1; then
-      GLOBAL_OK=1
-      echo "  ✓ npm install -g vgflow@latest done"
+      NPM_ROOT="$(npm root -g 2>/dev/null || true)"
+      NPM_VGFLOW="${NPM_ROOT%/}/vgflow"
+      if [ -f "${NPM_VGFLOW}/bin/vg-cli-dispatcher.sh" ]; then
+        echo "  ✓ npm install -g vgflow@latest done"
+        echo "  Delegating to npm-installed dispatcher so ~/.vgflow is canonicalized..."
+        VG_HOME="$NPM_VGFLOW" bash "${NPM_VGFLOW}/bin/vg-cli-dispatcher.sh" update
+        exit $?
+      fi
+      echo "  ⚠ npm install succeeded but dispatcher not found at ${NPM_VGFLOW}"
     else
       echo "  ⚠ npm install failed"
     fi
@@ -111,41 +140,76 @@ if [ "$INSTALL_TARGET" = "global" ]; then
     fi
   fi
 
-  # Clean up stale project-local files that should not exist in global mode.
-  # Backup first to .vg/.backup-<ts>/ in case user wants to revert.
-  STALE_TS="$(date -u +%Y%m%dT%H%M%SZ)"
-  STALE_BACKUP="${REPO_ROOT}/.vg/.backup-${STALE_TS}-stale-cleanup"
-  STALE_FOUND=0
-  for d in ".claude/commands/vg" ".claude/scripts" ".claude/schemas" ".claude/templates/vg"; do
-    if [ -d "${REPO_ROOT}/${d}" ]; then
-      STALE_FOUND=$((STALE_FOUND + 1))
+  # Refresh global Codex skills/agents from the updated global harness.
+  # The global update branch exits before sync-and-report, so it must keep
+  # ~/.codex current here instead of relying on the later Codex deploy step.
+  CODEX_DEPLOYED=0
+  if [ -d "${HOME_VGFLOW}/codex-skills" ]; then
+    mkdir -p "${HOME}/.codex/skills" "${HOME}/.codex/agents"
+    while IFS= read -r skill_dir; do
+      [ -f "$skill_dir/SKILL.md" ] || continue
+      skill="$(basename "$skill_dir")"
+      rm -rf "${HOME}/.codex/skills/${skill}"
+      mkdir -p "${HOME}/.codex/skills/${skill}"
+      cp -R "$skill_dir"/. "${HOME}/.codex/skills/${skill}/"
+      CODEX_DEPLOYED=$((CODEX_DEPLOYED + 1))
+    done < <(find "${HOME_VGFLOW}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
+    if [ -d "${HOME_VGFLOW}/templates/codex-agents" ]; then
+      cp "${HOME_VGFLOW}/templates/codex-agents/"*.toml "${HOME}/.codex/agents/" 2>/dev/null || true
+    fi
+    CODEX_CONFIG="${HOME}/.codex/config.toml"
+    touch "$CODEX_CONFIG"
+    codex_config_path() {
+      local path="$1"
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$path"
+      else
+        printf '%s\n' "$path"
+      fi
+    }
+    register_codex_agent() {
+      local name="$1"
+      local desc="$2"
+      local config_file
+      config_file="$(codex_config_path "${HOME}/.codex/agents/${name}.toml")"
+      if ! grep -q "^\[agents\.${name}\]" "$CODEX_CONFIG" 2>/dev/null; then
+        cat >> "$CODEX_CONFIG" <<EOF
+
+[agents.${name}]
+description = "${desc}"
+config_file = "${config_file}"
+EOF
+      fi
+    }
+    register_codex_agent "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+    register_codex_agent "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
+    register_codex_agent "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+    echo "  ✓ global Codex refreshed (${CODEX_DEPLOYED} skill dirs)"
+  fi
+
+  # Clean project-local Claude/Codex VG surfaces. This must remove all
+  # VG-owned support skills too (api-contract, flow-*, test-*, etc.), not
+  # only .claude/skills/vg-*.
+  UNINSTALL_HELPER=""
+  for candidate in \
+    "${HOME_VGFLOW}/scripts/vg_uninstall.py" \
+    "${REPO_ROOT}/.claude/scripts/vg_uninstall.py"; do
+    if [ -f "$candidate" ]; then
+      UNINSTALL_HELPER="$candidate"
+      break
     fi
   done
-  for d in "${REPO_ROOT}"/.claude/skills/vg-*; do
-    [ -d "$d" ] && STALE_FOUND=$((STALE_FOUND + 1))
-  done
-
-  if [ "$STALE_FOUND" -gt 0 ]; then
-    echo "  Cleaning ${STALE_FOUND} stale project-local dir(s) (backup → ${STALE_BACKUP})..."
-    mkdir -p "$STALE_BACKUP"
-    for d in ".claude/commands/vg" ".claude/scripts" ".claude/schemas" ".claude/templates/vg"; do
-      if [ -d "${REPO_ROOT}/${d}" ]; then
-        mkdir -p "$(dirname "${STALE_BACKUP}/${d}")"
-        mv "${REPO_ROOT}/${d}" "${STALE_BACKUP}/${d}" 2>/dev/null || true
-        echo "    moved ${d} → backup"
-      fi
-    done
-    for d in "${REPO_ROOT}"/.claude/skills/vg-*; do
-      [ -d "$d" ] || continue
-      base="$(basename "$d")"
-      mkdir -p "${STALE_BACKUP}/.claude/skills"
-      mv "$d" "${STALE_BACKUP}/.claude/skills/${base}" 2>/dev/null || true
-      echo "    moved .claude/skills/${base} → backup"
-    done
-    echo "  ✓ stale cleanup done. Recover via: cp -r ${STALE_BACKUP}/* ${REPO_ROOT}/"
+  if [ -n "$UNINSTALL_HELPER" ]; then
+    echo "  Cleaning stale project-local VG files via vg_uninstall.py..."
+    python3 "$UNINSTALL_HELPER" --root "$REPO_ROOT" --apply
+    echo "  ✓ stale project-local VG cleanup done"
+  else
+    echo "  ⚠ vg_uninstall.py not found — stale project-local VG files may remain"
   fi
 
   # Bump VGFLOW-VERSION marker for global mode tracking
+  mkdir -p "${REPO_ROOT}/.vg"
+  printf '%s\n' "global" > "${REPO_ROOT}/.vg/.install-target"
   if [ -f "${HOME_VGFLOW}/VERSION" ]; then
     cp "${HOME_VGFLOW}/VERSION" "${REPO_ROOT}/.vg/.global-vgflow-version" 2>/dev/null || true
   fi
@@ -155,7 +219,7 @@ if [ "$INSTALL_TARGET" = "global" ]; then
   exit 0
 fi
 
-# Marker absent or =project: continue to legacy v2.x project-local merge below.
+# Unreachable in global-only mode; retained for legacy mirrors only.
 ```
 </step>
 

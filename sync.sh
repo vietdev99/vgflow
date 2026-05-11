@@ -59,6 +59,25 @@ if [ "$VERIFY_ONLY" = "true" ]; then
   exit $?
 fi
 
+if [ "$MODE_CHECK" = "true" ]; then
+  echo "VGFlow sync check: global-only mode; project-local .claude/.codex deploy disabled."
+  echo "Source: $SCRIPT_DIR"
+  echo "Target cleanup root: $TARGET_ROOT"
+  exit 0
+fi
+
+echo "VGFlow sync: global-only mode"
+echo "  source: $SCRIPT_DIR"
+echo "  target project for cleanup/marker: $TARGET_ROOT"
+echo ""
+"$BASH_BIN" "$SCRIPT_DIR/scripts/generate-codex-skills.sh" --force >/tmp/vgflow-codex-generate.log
+tail -5 /tmp/vgflow-codex-generate.log || true
+(
+  cd "$TARGET_ROOT"
+  VG_HOME="$SCRIPT_DIR" bash "$SCRIPT_DIR/bin/vg-cli-dispatcher.sh" install --global
+)
+exit $?
+
 SUMMARY=()
 CHANGED=0
 MISSING=0

@@ -91,6 +91,10 @@ def test_uninstall_dry_run_does_not_remove_files(tmp_path: Path) -> None:
 def test_uninstall_apply_moves_vg_surfaces_to_backup(tmp_path: Path) -> None:
     (tmp_path / ".claude" / "commands" / "vg").mkdir(parents=True)
     (tmp_path / ".claude" / "commands" / "vg" / "build.md").write_text("x", encoding="utf-8")
+    (tmp_path / ".claude" / "skills" / "api-contract").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "api-contract" / "SKILL.md").write_text("x", encoding="utf-8")
+    (tmp_path / ".claude" / "skills" / "custom-skill").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "custom-skill" / "SKILL.md").write_text("keep", encoding="utf-8")
     (tmp_path / ".codex" / "skills" / "vg-build").mkdir(parents=True)
     (tmp_path / ".codex" / "skills" / "vg-build" / "SKILL.md").write_text("x", encoding="utf-8")
     _write_settings(tmp_path / ".claude" / "settings.local.json")
@@ -105,6 +109,8 @@ def test_uninstall_apply_moves_vg_surfaces_to_backup(tmp_path: Path) -> None:
 
     assert rc == 0
     assert not (tmp_path / ".claude" / "commands" / "vg").exists()
+    assert not (tmp_path / ".claude" / "skills" / "api-contract").exists()
+    assert (tmp_path / ".claude" / "skills" / "custom-skill" / "SKILL.md").read_text(encoding="utf-8") == "keep"
     assert not (tmp_path / ".codex" / "skills" / "vg-build").exists()
     backups = list((tmp_path / ".vgflow-uninstall-backup").glob("*"))
     assert backups, "expected backup directory"
@@ -137,7 +143,7 @@ def test_command_and_mirror_exist() -> None:
     assert (root / "commands" / "vg" / "uninstall.md").is_file()
     assert (root / ".claude" / "commands" / "vg" / "uninstall.md").is_file()
     assert (root / "codex-skills" / "vg-uninstall" / "SKILL.md").is_file()
-    assert (root / ".codex" / "skills" / "vg-uninstall" / "SKILL.md").is_file()
+    assert not (root / ".codex" / "skills" / "vg-uninstall" / "SKILL.md").exists()
     assert (root / ".claude" / "scripts" / "vg_uninstall.py").read_bytes() == (
         root / "scripts" / "vg_uninstall.py"
     ).read_bytes()

@@ -40,10 +40,9 @@ def test_mirror_byte_identical():
     assert canonical == mirror
 
 
-def test_codex_skill_mirror_byte_identical():
-    canonical = Path("codex-skills/vg-learn/SKILL.md").read_bytes()
-    mirror = Path(".codex/skills/vg-learn/SKILL.md").read_bytes()
-    assert canonical == mirror
+def test_project_codex_skill_mirror_absent_global_only():
+    assert Path("codex-skills/vg-learn/SKILL.md").is_file()
+    assert not Path(".codex/skills/vg-learn/SKILL.md").exists()
 
 
 def test_codex_skill_documents_consolidate_mode():

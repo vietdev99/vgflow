@@ -31,10 +31,43 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
-FILTER_STEPS = REPO_ROOT / ".claude" / "scripts" / "filter-steps.py"
-ORCHESTRATOR = REPO_ROOT / ".claude" / "scripts" / "vg-orchestrator"
-SESSION_CONTEXTS_DIR = REPO_ROOT / ".vg" / "session-contexts"
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "vg-orchestrator"))
+    from _repo_root import find_repo_root
+    from _vg_home import find_vg_home
+except Exception:  # pragma: no cover - legacy fallback for partial installs
+    find_repo_root = None
+    find_vg_home = None
+
+def _resolve_project_root() -> Path:
+    env = os.environ.get("VG_REPO_ROOT") or os.environ.get("VG_PROJECT")
+    if env:
+        return Path(env).resolve()
+
+    # Restore-mode tests and some harness calls operate in a temp/project
+    # directory that has `.vg/` but no `.git/`. Treat that as project state.
+    cwd = Path.cwd().resolve()
+    for candidate in [cwd, *cwd.parents]:
+        if (candidate / ".vg").exists():
+            return candidate
+
+    if find_repo_root:
+        return find_repo_root(__file__)
+    return cwd
+
+
+PROJECT_ROOT = _resolve_project_root()
+VG_HOME = (
+    find_vg_home(__file__)
+    if find_vg_home
+    else Path(os.environ.get("VG_HOME") or PROJECT_ROOT / ".claude").resolve()
+)
+
+# Backward-compatible alias: state still lives in the project root.
+REPO_ROOT = PROJECT_ROOT
+FILTER_STEPS = VG_HOME / "scripts" / "filter-steps.py"
+ORCHESTRATOR = VG_HOME / "scripts" / "vg-orchestrator"
+SESSION_CONTEXTS_DIR = PROJECT_ROOT / ".vg" / "session-contexts"
 
 
 def _safe_session_filename(sid: str) -> str:
@@ -130,11 +163,11 @@ def _find_matching_active_run(
 
 
 def _resolve_command_file(command: str) -> Path:
-    # "vg:build" → .claude/commands/vg/build.md
+    # "vg:build" → ${VG_HOME}/commands/vg/build.md
     if ":" in command:
         ns, name = command.split(":", 1)
-        return REPO_ROOT / ".claude" / "commands" / ns / f"{name}.md"
-    return REPO_ROOT / ".claude" / "commands" / f"{command}.md"
+        return VG_HOME / "commands" / ns / f"{name}.md"
+    return VG_HOME / "commands" / f"{command}.md"
 
 
 def _get_step_list(command: str, profile: str, mode: str | None = None) -> list[str]:

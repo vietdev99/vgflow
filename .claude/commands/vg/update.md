@@ -1,6 +1,6 @@
 ---
 name: vg:update
-description: Pull latest VG release from GitHub, 3-way merge with local, park conflicts for /vg:reapply-patches
+description: Update global VGFlow at ~/.vgflow, refresh global Claude/Codex hooks, and prune project-local VG files
 argument-hint: "[--check] [--accept-breaking] [--repo=vietdev99/vgflow]"
 allowed-tools:
   - Bash
@@ -15,16 +15,16 @@ runtime_contract:
 ---
 
 <rules>
-1. **Atomic** — VERSION file + ancestor dir rotated only after all merges complete.
-2. **Non-destructive on conflict** — conflicted files are parked under `.claude/vgflow-patches/`, never clobber user edits.
-3. **All logic in Python** — this markdown wraps `.claude/scripts/vg_update.py`; no version math / SHA / merge logic in bash.
+1. **Global-only** — update refreshes `~/.vgflow`/global npm package, not project `.claude`.
+2. **Project cleanup** — stale project-local `.claude`/`.codex` VG files are pruned via `vg_uninstall.py` backup path.
+3. **Single source** — Claude hooks point at `~/.claude/settings.json`; Codex skills point at `~/.codex/skills`.
 4. **Honor repo override** — `--repo=owner/name` flag flows through to `vg_update.py`.
 5. **Honor args literally** — use `${ARGUMENTS}`, never `$*`/`$@` to avoid arg splitting.
 </rules>
 
 <objective>
-Sync local VG install (`.claude/commands/vg/`, `.claude/skills/`, `.claude/scripts/`, `.claude/templates/`)
-to latest GitHub release of `vietdev99/vgflow`. Logic lives in `.claude/scripts/vg_update.py`.
+Sync global VG install to latest `vietdev99/vgflow`, then clean the current
+project so Claude and Codex load VGFlow from one global surface only.
 High-level flow:
 
 1. Preflight: verify `git`, `curl`, `python3`, helper script present.
@@ -34,13 +34,11 @@ High-level flow:
 5. Ask user to confirm.
 6. Breaking-change gate: major bump requires `--accept-breaking` + shows migration doc.
 7. Download tarball + verify SHA256 + extract to `.vgflow-cache/v{ver}/`.
-8. Walk extracted tree, 3-way merge each file against `.claude/vgflow-ancestor/v{installed}/`.
-9. Clean merges → apply; conflicts → `.claude/vgflow-patches/{rel}.conflict` + manifest entry.
-10. Rotate ancestor dir + bump `.claude/VGFLOW-VERSION`.
-11. Sync Codex mirrors directly from the updated release assets.
-12. Verify/repair Claude + Codex Playwright MCP workers (`playwright1`..`playwright5`).
-13. Verify/install Graphify tooling when `graphify.enabled=true`.
-14. Report counts + restart reminder.
+8. Refresh global Codex skills/agents from `~/.vgflow/codex-skills`.
+9. Verify/repair Claude + Codex Playwright MCP workers (`playwright1`..`playwright5`).
+10. Prune project-local VG-owned `.claude/` and `.codex/` files.
+11. Write `.vg/.install-target=global`.
+12. Report restart reminder.
 </objective>
 
 <process>
@@ -92,9 +90,11 @@ Step coverage: 8_sync_codex, 8b_repair_playwright_mcp, 8c_ensure_graphify, 9_rep
 - Non-check run: shows changelog preview, asks confirmation, either applies or exits on cancel.
 - Clean merges applied silently; conflicts parked to `.claude/vgflow-patches/{rel}.conflict` with manifest entry.
 - Major-version bump blocked unless `--accept-breaking` is passed AND migration doc displayed.
-- `.claude/VGFLOW-VERSION` bumped to `${LATEST}`; old `vgflow-ancestor/v{INSTALLED}` removed; new `vgflow-ancestor/v{LATEST}` populated.
-- Claude Code hooks are installed/repaired after update (`UserPromptSubmit`, `Stop`, `PostToolUse` edit warning, `PostToolUse` Bash step tracker).
-- Project-local Codex mirrors in `.codex/skills` and `.codex/agents` are refreshed directly from the updated release assets. Global `~/.codex` deploy is OFF by default (matches `install.sh` + `sync.sh` convention); opt in via `VG_UPDATE_GLOBAL_CODEX=1 /vg:update` when global Codex install is desired.
+- `~/.vgflow` exists and points at the active VGFlow install.
+- Claude Code hooks are installed/repaired at `~/.claude/settings.json`.
+- Codex skills/agents are refreshed at `~/.codex/skills` and `~/.codex/agents`.
+- Project-local VG-owned `.claude/` and `.codex/` files are pruned with backup.
+- `.vg/.install-target` is written as `global`.
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Playwright MCP workers are verified/repaired after update for both Claude and Codex (`playwright1`..`playwright5`) and stale hardcoded lock scripts are replaced.
 - Graphify tooling is verified/repaired after update when `graphify.enabled=true`; missing package installs `graphifyy[mcp]`, `.mcp.json` is repaired, and `.graphifyignore` / `.gitignore` are maintained.

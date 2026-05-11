@@ -15,9 +15,9 @@ runtime_contract:
 ---
 
 <objective>
-Detect current position in the 7-step phase pipeline and immediately invoke the next command.
+Detect current position in the 8-step phase pipeline and immediately invoke the next command.
 
-Pipeline order: specs → scope → blueprint → build → review → test → accept
+Pipeline order: specs → scope → blueprint → build → test-spec → review → test → accept
 </objective>
 
 <process>
@@ -70,7 +70,7 @@ if [ -f "$PIPELINE_STATE" ]; then
 import json
 s = json.load(open('${PIPELINE_STATE}', encoding='utf-8'))
 steps = s.get('steps', {})
-order = ['specs','scope','blueprint','build','review','test','accept']
+order = ['specs','scope','blueprint','build','test-spec','review','test','accept']
 for st in order:
     if steps.get(st, {}).get('status') == 'in_progress':
         print(st); break
@@ -81,7 +81,7 @@ for st in order:
 import json
 s = json.load(open('${PIPELINE_STATE}', encoding='utf-8'))
 steps = s.get('steps', {})
-order = ['specs','scope','blueprint','build','review','test','accept']
+order = ['specs','scope','blueprint','build','test-spec','review','test','accept']
 last_done = -1
 for i, st in enumerate(order):
     if steps.get(st, {}).get('status') == 'done':
@@ -148,6 +148,7 @@ Display only — không block. User decision: re-migrate (recommended) hay skip.
 - `NEXT_STEP == "scope"` → Next: `/vg:scope {phase}`
 - `NEXT_STEP == "blueprint"` → Next: `/vg:blueprint {phase}`
 - `NEXT_STEP == "build"` → Next: `/vg:build {phase}`
+- `NEXT_STEP == "test-spec"` → Next: `/vg:test-spec {phase}` (post-build deep lifecycle specs)
 - `NEXT_STEP == "review"` → Next: `/vg:review {phase}` (see Cross-CLI option below)
 - `NEXT_STEP == "test"` → Next: `/vg:test {phase}` (UNLESS prior review verdict ∈ FAIL/BLOCK — see verdict gate; TEST_PENDING may advance)
 - `NEXT_STEP == "accept"` → Next: `/vg:accept {phase}` (UNLESS prior test verdict ∈ GAPS_FOUND/FAILED — see verdict gate)
@@ -367,6 +368,7 @@ Display current status with artifact checklist, then IMMEDIATELY invoke.
   scope:     {status} {v6_artifacts}
   blueprint: {status} {v6_artifacts}
   build:     {status} {v6_artifacts}
+  test-spec: {status} {v6_artifacts}
   review:    {status} {v6_artifacts}
   test:      {status} {v6_artifacts}
   accept:    {status} {v6_artifacts}

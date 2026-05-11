@@ -34,14 +34,32 @@ from collections import defaultdict
 from pathlib import Path
 
 
+ID_BODY_PAT = r"[A-Za-z0-9][A-Za-z0-9_.-]*"
 GOAL_ID_PAT = re.compile(
-    r"(?m)^(?:#{1,4}\s*(?:Goal\s+)?|\|\s*|\s*-\s*\*\*)(G-\d+)",
+    rf"(?m)^(?:#{{1,4}}\s*(?:Goal\s+)?|\|\s*|\s*-\s*\*\*)(G-{ID_BODY_PAT})",
 )
 VERIFICATION_PAT = re.compile(
     r"verification\W+(\w+)",
     re.IGNORECASE,
 )
-TS_IN_TEST_PAT = re.compile(r"\bTS-(\d+)\b")
+TS_IN_TEST_PAT = re.compile(
+    r"\b(TS-(?:\d+[a-z]?|[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*))\b",
+)
+PLACEHOLDER_TS_IDS = {"TS-XX", "TS-NN"}
+
+def normalize_suffix(value: str) -> str:
+    """Normalize numeric suffixes without destroying domain IDs."""
+    if re.fullmatch(r"\d+", value):
+        return value.zfill(2)
+    return value
+
+def goal_to_ts(goal_id: str) -> str:
+    suffix = goal_id.removeprefix("G-")
+    return f"TS-{normalize_suffix(suffix)}"
+
+def ts_to_goal(ts_id: str) -> str:
+    suffix = ts_id.removeprefix("TS-")
+    return f"G-{normalize_suffix(suffix)}"
 
 
 def parse_goals(test_goals_md: Path) -> dict[str, str]:
@@ -80,7 +98,7 @@ def scan_test_markers(repo_root: Path) -> dict[str, list[str]]:
     ]
     try:
         out = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files"] + patterns,
+            ["git", "-C", str(repo_root), "ls-files", "--cached", "--others", "--exclude-standard", "--"] + patterns,
             capture_output=True, text=True, check=True,
         ).stdout
     except subprocess.CalledProcessError:
@@ -99,7 +117,9 @@ def scan_test_markers(repo_root: Path) -> dict[str, list[str]]:
         except OSError:
             continue
         for m in TS_IN_TEST_PAT.finditer(content):
-            ts_id = f"TS-{m.group(1).zfill(2)}"
+            ts_id = f"TS-{normalize_suffix(m.group(1).removeprefix('TS-'))}"
+            if ts_id in PLACEHOLDER_TS_IDS:
+                continue
             if rel not in ts_map[ts_id]:
                 ts_map[ts_id].append(rel)
     return dict(ts_map)
@@ -114,8 +134,8 @@ def verify(phase_dir: Path, repo_root: Path, strict: bool = True) -> tuple[int, 
     unbound_deferred: list[str] = []
 
     for gid, verification in sorted(goals.items()):
-        # Canonical binding: G-NN → TS-NN (same number)
-        ts_candidate = f"TS-{gid.removeprefix('G-').zfill(2)}"
+        # Canonical binding: G-NN -> TS-NN, G-AUTH-00 -> TS-AUTH-00.
+        ts_candidate = goal_to_ts(gid)
         files = ts_map.get(ts_candidate, [])
         if files:
             bound[gid] = files
@@ -127,7 +147,7 @@ def verify(phase_dir: Path, repo_root: Path, strict: bool = True) -> tuple[int, 
     # Orphan TS markers (tests for goals not declared)
     orphans = sorted(
         ts for ts in ts_map
-        if f"G-{ts.removeprefix('TS-').zfill(2)}" not in goals
+        if ts_to_goal(ts) not in goals
     )
 
     summary = {
@@ -173,7 +193,7 @@ def print_report(summary: dict, as_json: bool = False) -> None:
     if summary["details"]["unbound_automated"]:
         print("## ⛔ Unbound automated (BLOCK)\n")
         for g in summary["details"]["unbound_automated"]:
-            ts = f"TS-{g.removeprefix('G-').zfill(2)}"
+            ts = goal_to_ts(g)
             print(f"- {g} → no test file contains `{ts}` marker")
         print()
 

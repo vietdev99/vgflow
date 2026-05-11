@@ -272,6 +272,45 @@ if [ -n "$MISSING" ]; then
 fi
 ```
 
+**Post-build deep test-spec gate (v3.6.6) — `/vg:test-spec` sits between build and review.**
+
+Review compares runtime behavior against a post-build deep spec contract.
+Blueprint cannot provide this because implemented DOM/routes/API/forms may not
+exist yet; `/vg:test` is too late because review would already have missed
+the lifecycle contract.
+
+```bash
+DEEP_SPEC_REQUIRED=0
+case "${PHASE_PROFILE}" in
+  feature|hotfix|bugfix) DEEP_SPEC_REQUIRED=1 ;;
+esac
+
+# Retry/evaluate modes reuse prior review artifacts and should not demand a
+# fresh pre-review spec lane. Full first review must have it.
+if [ "$DEEP_SPEC_REQUIRED" = "1" ] && \
+   [ -z "${RETRY_FAILED:-}" ] && [ -z "${RE_SCAN_GOALS:-}" ] && \
+   [ -z "${EVALUATE_ONLY:-}" ] && [ -z "${FIX_ONLY:-}" ]; then
+  DEEP_SPEC_VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-deep-test-specs.py"
+  [ -f "$DEEP_SPEC_VALIDATOR" ] || DEEP_SPEC_VALIDATOR="${REPO_ROOT}/scripts/validators/verify-deep-test-specs.py"
+
+  if [ ! -f "$DEEP_SPEC_VALIDATOR" ]; then
+    echo "⛔ verify-deep-test-specs.py missing — re-sync VGFlow before review." >&2
+    exit 1
+  fi
+
+  mkdir -p "${PHASE_DIR}/.tmp"
+  "${PYTHON_BIN:-python3}" "$DEEP_SPEC_VALIDATOR" --phase "${PHASE_NUMBER}" \
+    > "${PHASE_DIR}/.tmp/deep-test-specs-review.json" 2>&1
+  DEEP_SPEC_RC=$?
+  if [ "$DEEP_SPEC_RC" != "0" ]; then
+    echo "⛔ Deep test specs missing or shallow — run /vg:test-spec ${PHASE_NUMBER} before /vg:review." >&2
+    echo "   Details: ${PHASE_DIR}/.tmp/deep-test-specs-review.json" >&2
+    echo "   This is review-owned precondition, not /vg:test coverage debt." >&2
+    exit 1
+  fi
+fi
+```
+
 **Update PIPELINE-STATE.json:**
 ```bash
 # VG-native state update (no GSD dependency)
@@ -848,4 +887,3 @@ Per TASKLIST_POLICY, the tasklist shown by `emit-tasklist.py` is a binding contr
 - `## ━━━ 3: Fixing Bug #2: S2SSecretSection crash (iter 1/5) ━━━`
 - `## ━━━ 4a: 38 goals loaded, 16 INFRA_PENDING (ClickHouse, pixel_server) ━━━`
 </step>
-

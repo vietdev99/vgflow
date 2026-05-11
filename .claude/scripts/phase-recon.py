@@ -7,7 +7,7 @@ Before any /vg:* command routes or runs a step, call this script to:
   2. Classify into 10 buckets (v6_current / v5_numbered_plan / legacy_gsd /
      legacy_superseded / versioned_rot / scan_intermediate / work_intermediate /
      user_convention / v6_marker / orphan)
-  3. Detect pipeline position per step (specs/scope/blueprint/build/review/test/accept)
+  3. Detect pipeline position per step (specs/scope/blueprint/build/test-spec/review/test/accept)
   4. Propose migration candidates (legacy → V6 artifact)
   5. Flag rot (versioned files, stale intermediates)
   6. Write .recon-state.json (machine) + .recon-report.md (human)
@@ -42,7 +42,7 @@ VALID_PROFILES = {
     "library",
 }
 
-PIPELINE_STEPS = ["specs", "scope", "blueprint", "build", "review", "test", "accept"]
+PIPELINE_STEPS = ["specs", "scope", "blueprint", "build", "test-spec", "review", "test", "accept"]
 
 # ---- Classification tables -------------------------------------------------
 
@@ -57,6 +57,12 @@ V6_CANONICAL = {
     "RUNTIME-MAP.md",
     "RIPPLE-ANALYSIS.md",
     "SUMMARY.md",
+    "DEEP-TEST-SPECS.md",
+    "LIFECYCLE-SPECS.json",
+    "TEST-FIXTURE-DAG.json",
+    "TEST-EXECUTION-PLAN.json",
+    "PLAYWRIGHT-SPEC-PLAN.md",
+    "TEST-SPEC-GAPS.md",
     "SANDBOX-TEST.md",
     "UAT.md",
     "REVIEW-DIRECTION.md",
@@ -432,6 +438,8 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
     )
     build_pipeline_advanced = pipeline_step in {
         "build-complete",
+        "test-spec",
+        "test-spec-complete",
         "review",
         "review-complete",
         "test",
@@ -474,6 +482,22 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
         b_status = "legacy_only"
     else:
         b_status = "missing"
+
+    # Test-spec: post-build deep test contracts consumed by review.
+    deep_specs = _find_first_canonical(entries, "DEEP-TEST-SPECS.md")
+    lifecycle_specs = _find_first_canonical(entries, "LIFECYCLE-SPECS.json")
+    fixture_dag = _find_first_canonical(entries, "TEST-FIXTURE-DAG.json")
+    execution_plan = _find_first_canonical(entries, "TEST-EXECUTION-PLAN.json")
+    playwright_plan = _find_first_canonical(entries, "PLAYWRIGHT-SPEC-PLAN.md")
+    spec_gaps = _find_first_canonical(entries, "TEST-SPEC-GAPS.md")
+    test_spec_artifacts = [e for e in (deep_specs, lifecycle_specs, fixture_dag, execution_plan, playwright_plan, spec_gaps) if e]
+    test_spec_marker_present = marker_namespace_has("test-spec")
+    if len(test_spec_artifacts) == 6:
+        tspec_status = "done"
+    elif test_spec_artifacts or test_spec_marker_present:
+        tspec_status = "partial"
+    else:
+        tspec_status = "missing"
 
     # Review: RUNTIME-MAP.json (required for web profiles) + GOAL-COVERAGE-MATRIX
     runtime = _find_first_canonical(entries, "RUNTIME-MAP.json")
@@ -562,6 +586,10 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
                           "pipeline_status": pipeline_status,
                           "complete_marker": build_complete_marker,
                       }},
+        "test-spec": {"status": tspec_status,
+                      "v6_artifacts": [e["name"] for e in test_spec_artifacts],
+                      "legacy_sources": [],
+                      "marker_present": test_spec_marker_present},
         "review":    {"status": r_status,
                       "v6_artifacts": [e["name"] for e in (runtime, coverage) if e],
                       "legacy_sources": r_legacy,

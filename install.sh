@@ -66,6 +66,17 @@ if [ "$TARGET" = "." ] && [ "$REFRESH" != "true" ]; then
   fi
 fi
 
+echo "VGFlow installer: global-only mode"
+echo "  source: $SCRIPT_DIR"
+echo "  target project for cleanup/marker: $TARGET"
+echo ""
+mkdir -p "$TARGET"
+(
+  cd "$TARGET"
+  VG_HOME="$SCRIPT_DIR" bash "$SCRIPT_DIR/bin/vg-cli-dispatcher.sh" install --global
+)
+exit $?
+
 echo "Installing VGFlow to: $TARGET"
 echo ""
 

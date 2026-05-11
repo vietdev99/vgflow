@@ -2871,6 +2871,7 @@ _BACKFILL_REQUIRED_ARTIFACTS = {
     "vg:scope": ["CONTEXT.md"],
     "vg:blueprint": ["PLAN*.md", "API-CONTRACTS.md", "TEST-GOALS.md"],
     "vg:build": ["SUMMARY*.md"],
+    "vg:test-spec": ["DEEP-TEST-SPECS.md", "LIFECYCLE-SPECS.json", "TEST-FIXTURE-DAG.json", "TEST-EXECUTION-PLAN.json"],
     "vg:review": ["RUNTIME-MAP.json", "GOAL-COVERAGE-MATRIX.md"],
     "vg:test": ["SANDBOX-TEST*.md"],
 }
@@ -3780,7 +3781,9 @@ COMMAND_VALIDATORS = {
     # zero security signal. Now review is a true security checkpoint.
     # B9.1 (2026-04-23): accessibility-scan runs alongside security — UX
     # violations blocking before browser discovery spawn.
+    "vg:test-spec": ["phase-exists", "deep-test-specs", "lifecycle-spec-depth"],
     "vg:review": ["phase-exists", "runtime-evidence", "review-skip-guard",
+                  "deep-test-specs",
                   "secrets-scan", "verify-input-validation",
                   "verify-authz-declared",
                   "verify-interface-standards",
@@ -4841,7 +4844,7 @@ def _verify_contract(contract: dict | None, run_id: str, command: str,
     # tasklist contract.
     MAINLINE_CMDS_FOR_TASKLIST = {
         "vg:specs", "vg:scope", "vg:blueprint", "vg:build",
-        "vg:review", "vg:test", "vg:accept", "vg:deploy", "vg:roam",
+        "vg:test-spec", "vg:review", "vg:test", "vg:accept", "vg:deploy", "vg:roam",
     }
     if command in MAINLINE_CMDS_FOR_TASKLIST:
         projection_event = _tasklist_projection_event_name(command)

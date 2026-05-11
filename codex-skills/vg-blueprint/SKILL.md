@@ -299,6 +299,11 @@ Read `_shared/blueprint/contracts-overview.md` AND `_shared/blueprint/contracts-
 Then call `Agent(subagent_type="vg-blueprint-contracts", prompt=<from delegation>)`.
 DO NOT generate contracts inline.
 
+Contracts MUST NOT create `${PHASE_DIR}/LIFECYCLE-SPECS.json`. Blueprint only
+authors API/CRUD/TEST-GOALS. Post-build `/vg:test-spec` owns
+`LIFECYCLE-SPECS.json`, `DEEP-TEST-SPECS.md`, `TEST-FIXTURE-DAG.json`, and
+`PLAYWRIGHT-SPEC-PLAN.md` after implemented DOM/routes/API/forms exist.
+
 After the contracts subagent returns (API-CONTRACTS.md, TEST-GOALS, expand
 from CRUD surfaces complete):
 

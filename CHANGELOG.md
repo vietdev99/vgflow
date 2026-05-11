@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — global-only install + lifecycle spec depth
+
+### Fix — global install/update leaves no project-local VG duplicates
+
+- `vg install --global` now treats `~/.vgflow` + `~/.codex` + `~/.claude/settings.json` as the single global VG surface.
+- Project-local VG-owned Claude/Codex files are removed via `vg_uninstall.py` and backed up under `.vgflow-uninstall-backup/`.
+- Custom non-VG project skills are preserved.
+- `vg update` / `vg sync` refresh global Codex skills and, when the project marker is `global`, prune stale project-local VG files.
+- Global `/vg:update` refreshes `~/.codex` before its early exit and cleans stale project-local VG surfaces with the same uninstall helper.
+
+### Fix — mutation lifecycle specs must be closed-loop before /vg:test
+
+- Added `verify-lifecycle-spec-depth.py`.
+- Blueprint now generates and validates `LIFECYCLE-SPECS.json`.
+- `/vg:test` preflight blocks side-effecting or multi-actor goals missing actors, fixture DAG, preconditions, full RCRURDR stages, artifact capture when applicable, or cleanup.
+- Test codegen now consumes `LIFECYCLE-SPECS.json` instead of inventing fixtures/actors inline.
+
 ## v3.6.4 — bugfix: /vg:update prunes duplicate Codex skills (2026-05-11)
 
 ### Bug — /vg:update left duplicate Codex skills even after v3.6.1 dedupe

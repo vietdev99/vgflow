@@ -1,11 +1,7 @@
-"""v2.88.0 — /vg:update marker-aware refactor.
+"""v3.6.6 — /vg:update global-only refactor.
 
-Closes 5 gaps from Codex audit (PR #N):
-1. /vg:update reads .vg/.install-target marker
-2. When marker=global: refresh ~/.vgflow/ via git pull or npm install -g
-3. After global refresh: re-install hooks at ~/.claude/settings.json --mode global
-4. After global refresh: clean up stale .claude/{commands/vg, skills/vg-*, scripts, schemas, templates/vg}
-5. Project-mode rotate-and-repair passes --mode matching marker (default project)
+Update refreshes one global VGFlow surface and prunes project-local Claude/Codex
+workflow copies. Project marker values are coerced to global.
 """
 from __future__ import annotations
 
@@ -18,10 +14,11 @@ ROTATE = REPO_ROOT / "commands" / "vg" / "_shared" / "update" / "rotate-and-repa
 
 def test_preflight_reads_install_target_marker():
     body = PREFLIGHT.read_text(encoding="utf-8")
-    assert "INSTALL_TARGET=" in body, "preflight must capture marker into INSTALL_TARGET"
+    assert 'INSTALL_TARGET="global"' in body, "preflight must coerce update to global-only"
     assert '${REPO_ROOT}/.vg/.install-target' in body, (
         "preflight must read .vg/.install-target file path"
     )
+    assert "coercing to global-only" in body
 
 
 def test_preflight_skips_helper_check_when_global():
@@ -64,20 +61,34 @@ def test_marker_branch_reinstalls_hooks_with_mode_global():
 
 def test_marker_branch_cleans_stale_project_local_dirs():
     body = PREFLIGHT.read_text(encoding="utf-8")
+    helper = (REPO_ROOT / "scripts" / "vg_uninstall.py").read_text(encoding="utf-8")
     for d in (
         ".claude/commands/vg",
         ".claude/scripts",
         ".claude/schemas",
         ".claude/templates/vg",
     ):
-        assert d in body, f"stale cleanup must enumerate: {d}"
-    assert ".claude/skills/vg-*" in body, "stale cleanup must include skills/vg-* glob"
+        assert d in helper, f"stale cleanup helper must enumerate: {d}"
+    assert "vg_uninstall.py" in body, "global cleanup must use canonical uninstall helper"
+    assert "api-contract, flow-*, test-*" in body, (
+        "global cleanup must include non-vg support skill removal"
+    )
+
+
+def test_marker_branch_refreshes_global_codex_before_exit():
+    body = PREFLIGHT.read_text(encoding="utf-8")
+    assert "${HOME_VGFLOW}/codex-skills" in body
+    assert "${HOME}/.codex/skills" in body
+    assert "global Codex refreshed" in body
 
 
 def test_marker_branch_backs_up_before_cleanup():
     body = PREFLIGHT.read_text(encoding="utf-8")
-    assert "STALE_BACKUP=" in body
-    assert ".vg/.backup-" in body, "stale cleanup must backup to .vg/.backup-<ts>-stale-cleanup"
+    helper = (REPO_ROOT / "scripts" / "vg_uninstall.py").read_text(encoding="utf-8")
+    assert "vg_uninstall.py" in body
+    assert ".vgflow-uninstall-backup" in helper, (
+        "stale cleanup helper must backup removed files"
+    )
 
 
 def test_marker_branch_exits_after_global_path():
@@ -91,15 +102,9 @@ def test_marker_branch_exits_after_global_path():
     assert "exit 0" in section, "global branch must exit before legacy merge runs"
 
 
-def test_rotate_and_repair_passes_mode_to_install_hooks():
-    body = ROTATE.read_text(encoding="utf-8")
-    assert "HOOK_MODE=" in body
-    assert '.vg/.install-target' in body, (
-        "rotate-and-repair must read marker to set HOOK_MODE"
-    )
-    assert '--mode "$HOOK_MODE"' in body, (
-        "install-hooks invocation must pass --mode $HOOK_MODE"
-    )
+def test_marker_branch_writes_global_marker():
+    body = PREFLIGHT.read_text(encoding="utf-8")
+    assert 'printf \'%s\\n\' "global" > "${REPO_ROOT}/.vg/.install-target"' in body
 
 
 def test_preflight_mirror_byte_identity():

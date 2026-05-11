@@ -20,70 +20,70 @@ from vg_update import (
 _HAS_GIT = shutil.which("git") is not None
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UPDATE_MD = REPO_ROOT / "commands" / "vg" / "update.md"
+PREFLIGHT_MD = REPO_ROOT / "commands" / "vg" / "_shared" / "update" / "preflight.md"
 
 
-def test_update_command_syncs_codex_without_vgflow_sync_sh():
+def test_update_command_declares_global_only_contract():
     text = UPDATE_MD.read_text(encoding="utf-8")
-    assert "Syncing Codex mirror from updated release assets" in text
-    assert 'CODEX_SOURCE="${NEW_ANCESTOR}"' in text
-    assert '${REPO_ROOT}/.codex/skills' in text
-    assert '$HOME/.codex/skills' in text
-    assert "verify-codex-mirror-equivalence.py" in text
-    assert 'rm -rf "${REPO_ROOT}/.codex/skills/${skill}"' in text
-    assert 'rm -rf "$HOME/.codex/skills/${skill}"' in text
-    assert "vgflow/sync.sh not present" not in text
+    assert "Global-only" in text
+    assert "`~/.vgflow`/global npm package" in text
+    assert "`~/.claude/settings.json`" in text
+    assert "`~/.codex/skills`" in text
+    assert "Project-local VG-owned `.claude/` and `.codex/` files are pruned" in text
 
 
-def test_update_command_bootstraps_merge_helper_from_tarball():
-    text = UPDATE_MD.read_text(encoding="utf-8")
-    assert 'MERGE_HELPER="${EXTRACTED}/scripts/vg_update.py"' in text
-    assert 'python3 "$MERGE_HELPER" merge' in text
-    assert 'python3 "${MERGE_HELPER}" verify-gates' in text
-    assert "Refusing to bump VGFLOW-VERSION while core update tooling is stale." in text
+def test_update_preflight_coerces_marker_to_global():
+    text = PREFLIGHT_MD.read_text(encoding="utf-8")
+    assert 'INSTALL_TARGET="global"' in text
+    assert "MARKER_TARGET" in text
+    assert "coercing to global-only" in text
+    assert "project-local 3-way merge path is retained only as dead compatibility text" in text
 
 
-def test_update_command_keeps_codex_assets_out_of_claude_tree():
-    text = UPDATE_MD.read_text(encoding="utf-8")
-    assert "codex-skills/*|gemini-skills/*|templates/codex/*|templates/codex-agents/*)" in text
-    assert "commands/*|skills/*|scripts/*|schemas/*|templates/vg/*)" in text
-    assert "commands/*|skills/*|scripts/*|templates/*|codex-skills/*" not in text
+def test_update_preflight_delegates_to_dispatcher_first():
+    text = PREFLIGHT_MD.read_text(encoding="utf-8")
+    assert 'DISPATCHER=""' in text
+    assert '"${VG_HOME:-}/bin/vg-cli-dispatcher.sh"' in text
+    assert '"${HOME}/.vgflow/bin/vg-cli-dispatcher.sh"' in text
+    assert "Delegating to global dispatcher" in text
+    assert 'VG_HOME="$(dirname "$(dirname "$DISPATCHER")")" bash "$DISPATCHER" update' in text
 
 
-def test_update_command_merges_all_known_file_types():
-    text = UPDATE_MD.read_text(encoding="utf-8")
-    assert 'done < <(find "$EXTRACTED" -type f)' in text
-    assert '-name "*.md" -o -name "*.py"' not in text
+def test_update_preflight_bootstraps_npm_into_home_vgflow():
+    text = PREFLIGHT_MD.read_text(encoding="utf-8")
+    assert "npm install -g vgflow@latest" in text
+    assert 'NPM_ROOT="$(npm root -g' in text
+    assert 'NPM_VGFLOW="${NPM_ROOT%/}/vgflow"' in text
+    assert "Delegating to npm-installed dispatcher so ~/.vgflow is canonicalized" in text
+    assert 'VG_HOME="$NPM_VGFLOW" bash "${NPM_VGFLOW}/bin/vg-cli-dispatcher.sh" update' in text
 
 
-def test_update_command_repairs_enforcement_hooks():
-    text = UPDATE_MD.read_text(encoding="utf-8")
-    assert '<step name="7b_repair_hooks">' in text
-    assert "scripts/hooks/install-hooks.sh" in text
-    assert "settings.local.json" in text
+def test_update_preflight_refreshes_global_codex():
+    text = PREFLIGHT_MD.read_text(encoding="utf-8")
+    assert "${HOME_VGFLOW}/codex-skills" in text
+    assert "${HOME}/.codex/skills" in text
+    assert "${HOME}/.codex/agents" in text
+    assert "global Codex refreshed" in text
+    assert "vgflow-orchestrator" in text
+
+
+def test_update_preflight_prunes_project_local_vg_files():
+    text = PREFLIGHT_MD.read_text(encoding="utf-8")
+    helper = (REPO_ROOT / "scripts" / "vg_uninstall.py").read_text(encoding="utf-8")
     assert "vg_uninstall.py" in text
-    assert "prune-hooks" in text
-    assert "double hooks can create duplicate UserPromptSubmit" in text
-    assert "UserPromptSubmit" in text
-    assert "PostToolUse" in text
-    assert ".vg/events.db" in text
+    assert "Cleaning stale project-local VG files" in text
+    assert ".claude/commands/vg" in helper
+    assert ".claude/scripts" in helper
+    assert ".codex/config.template.toml" in helper
+    assert "CODEX_SKILL_PREFIXES" in helper
+    assert ".vgflow-uninstall-backup" in helper
 
 
-def test_update_command_repairs_playwright_mcp_workers():
-    text = UPDATE_MD.read_text(encoding="utf-8")
-    assert '<step name="8b_repair_playwright_mcp">' in text
-    assert "verify-playwright-mcp-config.py" in text
-    assert "--repair --lock-source" in text
-    assert "playwright1" in text
-    assert "playwright5" in text
-    assert "Claude + Codex" in text
-
-
-def test_update_command_repairs_graphify_tooling():
-    text = UPDATE_MD.read_text(encoding="utf-8")
-    assert '<step name="8c_ensure_graphify">' in text
-    assert "ensure-graphify.py" in text
-    assert '--target "$REPO_ROOT" --repair' in text
-    assert "graphifyy[mcp]" in text
+def test_update_preflight_writes_global_marker():
+    text = PREFLIGHT_MD.read_text(encoding="utf-8")
+    assert 'mkdir -p "${REPO_ROOT}/.vg"' in text
+    assert 'printf \'%s\\n\' "global" > "${REPO_ROOT}/.vg/.install-target"' in text
+    assert ".global-vgflow-version" in text
 
 
 # ---- Task C1: compare_versions -----------------------------------------------

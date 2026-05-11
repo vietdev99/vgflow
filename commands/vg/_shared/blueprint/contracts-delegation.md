@@ -236,6 +236,22 @@ Each goal:
     Mutation goals WITHOUT this structured block fail Rule 3b extended →
     blueprint BLOCKED. The unstructured **Persistence check:** prose still
     required for human readability, but the YAML block is the machine contract.
+3d. **Lifecycle spec handoff (post-build).**
+    Do NOT write `${PHASE_DIR}/LIFECYCLE-SPECS.json` in blueprint. Blueprint
+    lacks implemented DOM/routes/API/form reality, so lifecycle-depth authoring
+    is owned by `/vg:test-spec` after `/vg:build`.
+
+    Blueprint MUST still make side-effecting goals discoverable by
+    `/vg:test-spec`:
+    - set `goal_type` or `goal_class` to mutation/workflow/multi-actor where
+      applicable;
+    - write concrete **Mutation evidence** and **Persistence check** fields;
+    - name actors and dependencies in the goal text;
+    - mention emitted artifacts (email/token/webhook/queue/OAuth/notification)
+      when the flow consumes them.
+
+    `/vg:test-spec` will generate the post-build `fixture_dag`, actor/session
+    matrix, RCRURDR stages, artifact_capture, and cleanup contracts.
 4. Dependencies reference goal IDs (G-XX).
 5. Priority assignment (deterministic, evaluate in order):
    a. Endpoints matching config `routing.critical_goal_domains`

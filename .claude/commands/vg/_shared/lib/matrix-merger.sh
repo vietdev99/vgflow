@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Matrix Merger — bash function library (v2.64.1 hotfix)
+# Matrix Merger — bash function library (v2.65.1 lifecycle-contract hotfix)
 #
 # v2.64.1 (Issue #148 HIGH — review FALSE-PASS):
 #   Added 3-layer split format support. Pre-fix: parser only understood
@@ -31,7 +31,7 @@
 #
 # Exposed functions:
 #   - merge_and_write_matrix PHASE_DIR TEST_GOALS RUNTIME_MAP PROBE_RESULTS OUTPUT_MD
-#       → stdout: "PASS|BLOCK|INTERMEDIATE" + counts in $MERGE_*
+#       → stdout: "PASS|BLOCK|INTERMEDIATE|TEST_PENDING" + counts in $MERGE_*
 #       → writes OUTPUT_MD
 #
 # Usage in review.md Phase 4b + 4d:
@@ -45,6 +45,7 @@
 #     PASS) echo "✓ Gate PASS" ;;
 #     BLOCK) echo "⛔ Gate BLOCK" ;;
 #     INTERMEDIATE) echo "⚠ Gate: intermediate goals present" ;;
+#     TEST_PENDING) echo "🧪 Gate: runtime clear, test coverage pending" ;;
 #   esac
 
 merge_and_write_matrix() {
@@ -75,6 +76,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 phase_dir, test_goals_path, runtime_map_path, probe_path, out_path, phase_num = sys.argv[1:7]
+
+phase_path = Path(phase_dir)
+
+def _read_json_object(path):
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding='utf-8'))
+    except Exception as exc:
+        print(f'⚠ {p.name} read error: {exc}', file=sys.stderr)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+lifecycle = _read_json_object(phase_path / 'LIFECYCLE-SPECS.json')
+lifecycle_goals = lifecycle.get('goals') if isinstance(lifecycle.get('goals'), dict) else {}
+fixture_dag_artifact = _read_json_object(phase_path / 'TEST-FIXTURE-DAG.json')
+execution_artifact = _read_json_object(phase_path / 'TEST-EXECUTION-PLAN.json')
+execution_goals = execution_artifact.get('goals') if isinstance(execution_artifact.get('goals'), dict) else {}
+deep_specs_present = (phase_path / 'DEEP-TEST-SPECS.md').exists()
 
 # ─── Load TEST-GOALS (v2.64.1 — 3-layer split format support) ─────
 # Issue #148 HIGH: pre-fix only flat-heading parser ran. New phases use
@@ -202,6 +223,75 @@ print(f"⓵ matrix-merger: parsed {len(goals)} goals via '{method}' "
       f"(flat={len(flat_goals)}, table={len(table_goals)}, split={len(split_goals)})",
       file=sys.stderr)
 
+def _goal_plan(gid, spec):
+    plan = {}
+    artifact_plan = execution_goals.get(gid)
+    if isinstance(artifact_plan, dict):
+        plan.update(artifact_plan)
+    spec_plan = spec.get('execution_plan') if isinstance(spec, dict) else {}
+    if isinstance(spec_plan, dict):
+        plan.update(spec_plan)
+    return plan
+
+def _surface_from_lifecycle(spec, fallback='ui', plan=None):
+    surface = str((spec or {}).get('surface') or fallback or '').lower()
+    plan = plan if isinstance(plan, dict) else _goal_plan('', spec if isinstance(spec, dict) else {})
+    family = str(plan.get('family') or '').lower()
+    if family == 'web':
+        return 'ui-mobile' if 'mobile' in surface else 'ui'
+    if family == 'mobile':
+        return 'ui-mobile'
+    if family == 'backend':
+        return 'api'
+    if family == 'cli':
+        return 'cli'
+    if family == 'library':
+        return 'library'
+    if surface in ('', 'unknown'):
+        return fallback or 'ui'
+    return surface
+
+# Lifecycle-only goals are still review goals: test-spec can discover a
+# side-effecting contract that legacy TEST-GOALS parsing missed. Include them
+# so review verdict provenance covers the full post-build lifecycle contract.
+seen_goal_ids = {g.get('id') for g in goals}
+for gid, spec in lifecycle_goals.items():
+    if not isinstance(spec, dict) or gid in seen_goal_ids:
+        continue
+    plan = _goal_plan(gid, spec)
+    goals.append({
+        'id': gid,
+        'title': str(spec.get('title') or gid)[:80],
+        'priority': str(spec.get('priority') or 'important').lower(),
+        'surface': _surface_from_lifecycle(spec, 'ui', plan),
+        'infra_deps': [],
+        'mutation_evidence': (spec.get('source_assertions') or {}).get('mutation_evidence', ''),
+        'persistence_check': (spec.get('source_assertions') or {}).get('persistence_check', ''),
+        'status': 'NOT_SCANNED',
+        'evidence': '',
+    })
+    seen_goal_ids.add(gid)
+
+for g in goals:
+    gid = g['id']
+    spec = lifecycle_goals.get(gid)
+    if isinstance(spec, dict):
+        plan = _goal_plan(gid, spec)
+        if plan:
+            spec = dict(spec)
+            spec['execution_plan'] = plan
+        g['lifecycle_contract'] = spec
+        g['lifecycle_plan'] = plan
+        # For non-web phase profiles, do not leave old TEST-GOALS surface
+        # guesses (e.g. "login") in control. The post-build test-spec plan is
+        # the profile-aware source of runner family.
+        family = str(plan.get('family') or '').lower()
+        if family in {'mobile', 'backend', 'cli', 'library'}:
+            g['surface'] = _surface_from_lifecycle(spec, g.get('surface') or 'ui', plan)
+    else:
+        g['lifecycle_contract'] = None
+        g['lifecycle_plan'] = {}
+
 # ─── Load RUNTIME-MAP (browser scan results) ──────────────────────
 rm_seqs = {}
 if Path(runtime_map_path).exists():
@@ -270,6 +360,166 @@ def _has_persistence_proof(seq):
             return True
     return False
 
+REQUIRED_LIFECYCLE_STAGES = (
+    'read_before',
+    'create',
+    'read_after_create',
+    'update',
+    'read_after_update',
+    'delete',
+    'read_after_delete',
+)
+
+SIDE_EFFECT_GOAL_TYPES = {
+    'mutation',
+    'multi-actor',
+    'multi_actor',
+    'workflow',
+    'crud',
+    'rcrurd',
+    'rcrurdr',
+}
+
+RUNNER_NATIVE_FAMILIES = {'backend', 'cli', 'library', 'mobile'}
+
+def _goal_needs_lifecycle_contract(goal):
+    spec = goal.get('lifecycle_contract')
+    if not isinstance(spec, dict):
+        return False
+    goal_type = str(spec.get('goal_type') or '').strip().lower().replace(' ', '_')
+    if goal_type in SIDE_EFFECT_GOAL_TYPES:
+        return True
+    # LIFECYCLE-SPECS.json is emitted only for side-effecting/multi-actor
+    # goals by default. If it declares full RCRURDR steps, treat it as a
+    # lifecycle contract even when old TEST-GOALS omitted goal_type.
+    stages = [
+        str(step.get('stage') or '')
+        for step in spec.get('steps') or []
+        if isinstance(step, dict)
+    ]
+    return bool(stages or spec.get('fixture_dag') or spec.get('actors'))
+
+def _execution_family(goal):
+    plan = goal.get('lifecycle_plan')
+    if isinstance(plan, dict):
+        return str(plan.get('family') or '').strip().lower()
+    return ''
+
+def _execution_runner(goal):
+    plan = goal.get('lifecycle_plan')
+    if isinstance(plan, dict):
+        return str(plan.get('runner') or '').strip()
+    return ''
+
+def _declared_lifecycle_stages(goal):
+    spec = goal.get('lifecycle_contract')
+    if not isinstance(spec, dict):
+        return []
+    stages = []
+    for step in spec.get('steps') or []:
+        if not isinstance(step, dict):
+            continue
+        stage = str(step.get('stage') or '').strip()
+        if stage:
+            stages.append(stage)
+    return stages
+
+def _observed_lifecycle_stages(seq):
+    stages = set()
+    for node in _walk(seq or {}):
+        if not isinstance(node, dict):
+            continue
+        for key in ('stage', 'lifecycle_stage', 'rcrurd_stage', 'rcrurdr_stage'):
+            value = node.get(key)
+            if isinstance(value, str) and value.strip():
+                stages.add(value.strip())
+        for key in ('stages', 'lifecycle_stages', 'covered_stages'):
+            values = node.get(key)
+            if isinstance(values, list):
+                stages.update(str(item).strip() for item in values if str(item).strip())
+    return stages
+
+def _lifecycle_missing_runtime_stages(goal, seq):
+    declared = _declared_lifecycle_stages(goal)
+    if not declared:
+        return []
+    observed = _observed_lifecycle_stages(seq)
+    if not observed:
+        return declared
+    return [stage for stage in declared if stage not in observed]
+
+def _lifecycle_fixture_count(goal):
+    spec = goal.get('lifecycle_contract')
+    if not isinstance(spec, dict):
+        return 0
+    fixtures = spec.get('fixture_dag')
+    return len(fixtures) if isinstance(fixtures, list) else 0
+
+def _lifecycle_pending_evidence(goal, prefix='lifecycle contract pending'):
+    stages = _declared_lifecycle_stages(goal)
+    runner = _execution_runner(goal) or 'profile runner'
+    family = _execution_family(goal) or 'profile'
+    fixture_count = _lifecycle_fixture_count(goal)
+    stage_hint = ', '.join(stages[:3])
+    if len(stages) > 3:
+        stage_hint += ', ...'
+    if not stage_hint:
+        stage_hint = 'RCRURDR stages'
+    return (
+        f"{prefix}: runner={runner} family={family}; "
+        f"{len(stages)} stages ({stage_hint}), {fixture_count} fixtures need /vg:test proof"
+    )
+
+TEST_PENDING_PATTERNS = (
+    'not exercised',
+    'not observed',
+    'not proven',
+    'not prove',
+    'did not prove',
+    'proof missing',
+    'lifecycle',
+    'multi-step',
+    'mutation evidence',
+    'realtime evidence',
+    'without a successful post/put/patch/delete',
+    'no persistence_probe',
+    'persistence proof',
+    'needs dedicated browser session',
+    'acceptance-grade proof',
+)
+
+RUNTIME_BLOCKER_PATTERNS = (
+    'api error',
+    ' 400',
+    ' 401',
+    ' 403',
+    ' 404',
+    ' 409',
+    ' 422',
+    ' 500',
+    ' 502',
+    ' 503',
+    'exception',
+    'crash',
+    'cannot render',
+    'failed to render',
+    'route missing',
+    'not found',
+    'redirected to login',
+    'auth failed',
+    'nan',
+    'raw i18n',
+    'placeholder',
+)
+
+def _is_test_pending_evidence(text):
+    compact = re.sub(r'\s+', ' ', str(text or '').strip()).lower()
+    if not compact:
+        return False
+    if any(pattern in compact for pattern in RUNTIME_BLOCKER_PATTERNS):
+        return False
+    return any(pattern in compact for pattern in TEST_PENDING_PATTERNS)
+
 # ─── Load surface probe results ───────────────────────────────────
 probe_results = {}
 if Path(probe_path).exists():
@@ -292,15 +542,27 @@ for g in goals:
                 g['status'] = 'READY'
                 g['evidence'] = f"browser: {len(seq.get('steps',[]))} steps"
             elif result == 'failed':
-                g['status'] = 'BLOCKED'
-                g['evidence'] = f"browser failed: {seq.get('failure_reason','?')[:80]}"
+                reason = str(seq.get('failure_reason', '?'))
+                g['status'] = 'TEST_PENDING' if _is_test_pending_evidence(reason) else 'BLOCKED'
+                g['evidence'] = f"browser failed: {reason[:80]}"
+            elif result == 'partial':
+                reason = str(seq.get('failure_reason', '?'))
+                g['status'] = 'TEST_PENDING' if _is_test_pending_evidence(reason) else 'BLOCKED'
+                g['evidence'] = f"browser partial: {reason[:80]}"
             else:
                 g['status'] = 'FAILED'
                 g['evidence'] = f"browser result unknown"
         else:
             # No browser seq — remains NOT_SCANNED (browser phase pending or skipped)
-            g['status'] = 'NOT_SCANNED'
-            g['evidence'] = 'browser phase did not record goal_sequence'
+            if _goal_needs_lifecycle_contract(g) and _execution_family(g) in RUNNER_NATIVE_FAMILIES:
+                g['status'] = 'TEST_PENDING'
+                g['evidence'] = _lifecycle_pending_evidence(
+                    g,
+                    'runner-native lifecycle proof pending',
+                )
+            else:
+                g['status'] = 'NOT_SCANNED'
+                g['evidence'] = 'browser phase did not record goal_sequence'
 
         # Layer 4 gate: mutation goals require real runtime mutation evidence.
         # If goal has **Mutation evidence:** non-empty AND status was READY
@@ -309,18 +571,26 @@ for g in goals:
         # assertion or "row visible" snapshot is not CRUD evidence.
         if g['status'] == 'READY' and _meaningful(g.get('mutation_evidence')):
             if not _has_mutation_step(seq):
-                g['status'] = 'BLOCKED'
+                g['status'] = 'TEST_PENDING'
                 g['evidence'] = (
                     "shallow CRUD evidence: goal_sequence passed without a successful "
                     "POST/PUT/PATCH/DELETE observation; list-only review cannot satisfy "
                     "Mutation evidence"
                 )
             elif not _has_persistence_proof(seq):
-                g['status'] = 'BLOCKED'
+                g['status'] = 'TEST_PENDING'
                 g['evidence'] = (
                     "ghost-save risk: mutation observed but no persistence_probe.persisted=true; "
                     "Layer 4 verify (refresh + re-read + diff) missing"
                 )
+        if g['status'] == 'READY' and _goal_needs_lifecycle_contract(g):
+            missing_stages = _lifecycle_missing_runtime_stages(g, seq)
+            if missing_stages:
+                g['status'] = 'TEST_PENDING'
+                g['evidence'] = (
+                    _lifecycle_pending_evidence(g)
+                    + f"; runtime missing stages: {', '.join(missing_stages[:4])}"
+                )[:300]
         continue
 
     # Backend goals: consult probe results
@@ -332,13 +602,28 @@ for g in goals:
         if g['status'] == 'SKIPPED':
             g['status'] = 'NOT_SCANNED'
             g['evidence'] = f"probe skipped: {probe.get('evidence','?')}"
+        if g['status'] == 'READY' and _goal_needs_lifecycle_contract(g):
+            g['status'] = 'TEST_PENDING'
+            g['evidence'] = _lifecycle_pending_evidence(
+                g,
+                'surface probe ready; lifecycle proof pending',
+            )
     else:
-        # No probe run for this goal — NOT_SCANNED
-        g['status'] = 'NOT_SCANNED'
-        g['evidence'] = 'no probe result; surface probe phase may not have run'
+        # No probe run for this goal. For runner-native lifecycle contracts,
+        # review records runtime-clean/test-pending instead of forcing browser
+        # semantics onto CLI/mobile/backend/library phases.
+        if _goal_needs_lifecycle_contract(g) and _execution_family(g) in RUNNER_NATIVE_FAMILIES:
+            g['status'] = 'TEST_PENDING'
+            g['evidence'] = _lifecycle_pending_evidence(
+                g,
+                'runner-native lifecycle proof pending',
+            )
+        else:
+            g['status'] = 'NOT_SCANNED'
+            g['evidence'] = 'no probe result; surface probe phase may not have run'
 
 # ─── Aggregate counts ────────────────────────────────────────────
-total_by_status = {'READY': 0, 'BLOCKED': 0, 'NOT_SCANNED': 0, 'UNREACHABLE': 0, 'INFRA_PENDING': 0, 'FAILED': 0}
+total_by_status = {'READY': 0, 'BLOCKED': 0, 'TEST_PENDING': 0, 'NOT_SCANNED': 0, 'UNREACHABLE': 0, 'INFRA_PENDING': 0, 'FAILED': 0}
 by_priority = {
     'critical':     {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 100},
     'important':    {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 80},
@@ -358,6 +643,7 @@ for g in goals:
 
 # ─── Gate verdict ────────────────────────────────────────────────
 # 4 conclusion statuses: READY, BLOCKED, UNREACHABLE, INFRA_PENDING
+# 1 coverage-pending status: TEST_PENDING → may advance to /vg:test
 # 2 intermediate: NOT_SCANNED, FAILED → force INTERMEDIATE verdict
 intermediate = total_by_status['NOT_SCANNED'] + total_by_status['FAILED']
 
@@ -372,13 +658,15 @@ elif total_by_status['BLOCKED'] > 0 or total_by_status['UNREACHABLE'] > 0:
     # priority threshold — pre-fix: weighted gate masked BLOCKED < threshold pct
     # and emitted PASS. Now blocks first.
     verdict = 'BLOCK'
+elif total_by_status['TEST_PENDING'] > 0:
+    verdict = 'TEST_PENDING'
 else:
     # Compute weighted gate (only if 0 BLOCKED + 0 UNREACHABLE)
     for prio, info in by_priority.items():
         if info['total'] == 0: continue
         pct = 100 * info['ready'] / info['total']
         if pct < info['threshold']:
-            verdict = 'BLOCK'
+            verdict = 'TEST_PENDING' if info['other'] > 0 and total_by_status['TEST_PENDING'] > 0 else 'BLOCK'
             info['failed_gate'] = True
 
 # ─── Write GOAL-COVERAGE-MATRIX.md ───────────────────────────────
@@ -386,14 +674,16 @@ lines = [
     f'# Goal Coverage Matrix — Phase {phase_num}',
     '',
     f'**Generated:** {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}  ',
-    f'**Source:** RUNTIME-MAP.json (UI goals) + .surface-probe-results.json (backend goals)  ',
-    f'**Merger:** _shared/lib/matrix-merger.sh v2.64.1',
+    f'**Source:** RUNTIME-MAP.json (UI goals) + .surface-probe-results.json (backend goals) + LIFECYCLE-SPECS.json/TEST-FIXTURE-DAG.json/TEST-EXECUTION-PLAN.json (post-build lifecycle contract)  ',
+    f'**Merger:** _shared/lib/matrix-merger.sh v2.65.1',
+    f'**Lifecycle contracts consumed:** {len(lifecycle_goals)} goal(s); fixture nodes={len(fixture_dag_artifact.get("nodes") or []) if isinstance(fixture_dag_artifact.get("nodes"), list) else 0}; deep_specs_present={str(deep_specs_present).lower()}  ',
     '',
     '## Summary',
     '',
     f'- **Total goals:** {len(goals)}',
     f'- **READY:** {total_by_status["READY"]}',
     f'- **BLOCKED:** {total_by_status["BLOCKED"]}',
+    f'- **TEST_PENDING:** {total_by_status["TEST_PENDING"]} (test coverage pending)',
     f'- **NOT_SCANNED:** {total_by_status["NOT_SCANNED"]} (intermediate)',
     f'- **UNREACHABLE:** {total_by_status["UNREACHABLE"]}',
     f'- **INFRA_PENDING:** {total_by_status["INFRA_PENDING"]}',
@@ -410,7 +700,12 @@ for prio in ('critical', 'important', 'nice-to-have'):
         lines.append(f'| {prio} | 0 | 0 | 0 | 0 | {info["threshold"]}% | n/a | — |')
         continue
     pct = 100 * info['ready'] / info['total']
-    status_icon = '✅ PASS' if pct >= info['threshold'] else '⛔ BLOCK'
+    if pct >= info['threshold']:
+        status_icon = '✅ PASS'
+    elif info['blocked'] == 0 and total_by_status['TEST_PENDING'] > 0:
+        status_icon = '🧪 TEST_PENDING'
+    else:
+        status_icon = '⛔ BLOCK'
     lines.append(f'| {prio} | {info["ready"]} | {info["blocked"]} | {info["other"]} | {info["total"]} | {info["threshold"]}% | {pct:.1f}% | {status_icon} |')
 
 lines += ['', '## Goal Details', '', '| Goal | Priority | Surface | Status | Evidence |', '|------|----------|---------|--------|----------|']
@@ -419,7 +714,7 @@ for g in goals:
     lines.append(f'| {g["id"]} | {g["priority"]} | {g["surface"]} | {g["status"]} | {ev} |')
 
 # Gate verdict section
-gate_icon = {'PASS': '✅', 'BLOCK': '⛔', 'INTERMEDIATE': '⚠️'}[verdict]
+gate_icon = {'PASS': '✅', 'BLOCK': '⛔', 'INTERMEDIATE': '⚠️', 'TEST_PENDING': '🧪'}[verdict]
 lines += ['', f'## Gate: {gate_icon} **{verdict}**', '']
 if verdict == 'INTERMEDIATE':
     lines += [
@@ -443,7 +738,14 @@ elif verdict == 'BLOCK':
             'Fix blockers or escalate to /vg:accept with debt entry.',
         ]
 else:
-    lines += [f'All priority thresholds met. {total_by_status["READY"]}/{len(goals)} READY — proceed to /vg:test.']
+    if verdict == 'TEST_PENDING':
+        lines += [
+            f'Review runtime blockers clear. {total_by_status["TEST_PENDING"]} goals still need lifecycle/test evidence.',
+            'Proceed to /vg:test; generated tests must consume LIFECYCLE-SPECS.json, TEST-FIXTURE-DAG.json, and TEST-EXECUTION-PLAN.json.',
+            'Do not loop back to /vg:review unless test finds a concrete runtime/code blocker.',
+        ]
+    else:
+        lines += [f'All priority thresholds met. {total_by_status["READY"]}/{len(goals)} READY — proceed to /vg:test.']
 
 lines.append('')
 Path(out_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
@@ -454,10 +756,12 @@ print(f"VERDICT={verdict}")
 print(f"TOTAL={len(goals)}")
 print(f"READY={total_by_status['READY']}")
 print(f"BLOCKED={total_by_status['BLOCKED']}")
+print(f"TEST_PENDING={total_by_status['TEST_PENDING']}")
 print(f"NOT_SCANNED={total_by_status['NOT_SCANNED']}")
 print(f"UNREACHABLE={total_by_status['UNREACHABLE']}")
 print(f"INFRA_PENDING={total_by_status['INFRA_PENDING']}")
 print(f"FAILED={total_by_status['FAILED']}")
 print(f"INTERMEDIATE={intermediate}")
+print(f"LIFECYCLE_CONTRACTS={len(lifecycle_goals)}")
 PY
 }

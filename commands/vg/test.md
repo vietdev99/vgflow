@@ -187,7 +187,7 @@ không cần đọc Bash output. Hook không reject append vì tolerant match (B
 <objective>
 Step 5 of V5.1 pipeline. Clean goal verification — review already discovered + fixed. Test only verifies goals and generates regression tests.
 
-Pipeline: specs → scope → blueprint → build → review → **test** → accept
+Pipeline: specs → scope → blueprint → build → test-spec → review → **test** → accept
 
 Sub-steps:
 - 5a: DEPLOY — push + build + restart on target

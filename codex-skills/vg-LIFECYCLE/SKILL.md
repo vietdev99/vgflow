@@ -156,7 +156,7 @@ Invoke this skill as `$vg-LIFECYCLE`. Treat all user text after the skill name a
 
 
 
-# VG Lifecycle — 7 Phases
+# VG Lifecycle — 8 Phases
 
 VG enforces a deterministic pipeline. Each phase has REQUIRED artifacts, a slash command, and a gate contract that the next phase reads. **Skipping a phase = breaking the contract = next phase BLOCKs.**
 
@@ -173,7 +173,8 @@ flowchart LR
     P1 --> P2[2. Scope]
     P2 --> P3[3. Plan]
     P3 --> P4[4. Build]
-    P4 --> P5[5. Verify]
+    P4 --> P4B[4b. Test Spec]
+    P4B --> P5[5. Verify]
     P5 --> P6[6. Test]
     P6 --> P7[7. Accept]
     P7 --> P8{Deploy?}
@@ -188,6 +189,7 @@ flowchart LR
     style P2 fill:#e3f2fd
     style P3 fill:#fff9c4
     style P4 fill:#c8e6c9
+    style P4B fill:#ffe0b2
     style P5 fill:#f8bbd0
     style P6 fill:#f8bbd0
     style P7 fill:#dcedc8
@@ -205,7 +207,8 @@ flowchart LR
 | **1. Define** | `/vg:specs <N>` | `${PHASE_DIR}/SPECS.md` (frontmatter: phase, status=draft, required H2 sections) + `${PHASE_DIR}/INTERFACE-STANDARDS.md` (when API/UI surface) | `/vg:scope` validates SPECS schema before round 1 |
 | **2. Scope** | `/vg:scope <N>` (5 rounds + deep probe) | `${PHASE_DIR}/CONTEXT.md` (decisions D-XX, monotonic), `DISCUSSION-LOG.md` | `/vg:blueprint` reads CONTEXT decisions; missing D-IDs → BLOCK |
 | **3. Plan** | `/vg:blueprint <N>` | `${PHASE_DIR}/PLAN.md`, `API-CONTRACTS.md`, `TEST-GOALS.md`, `CRUD-SURFACES.md`, `INTERFACE-STANDARDS.md` | `/vg:build` validates blueprint schema + plan-vs-context coherence |
-| **4. Build** | `/vg:build <N>` (wave-based parallel) | `${PHASE_DIR}/SUMMARY.md` (per-wave commits + per-task evidence) | `/vg:review` reads SUMMARY for ripple analysis |
+| **4. Build** | `/vg:build <N>` (wave-based parallel) | `${PHASE_DIR}/SUMMARY.md` (per-wave commits + per-task evidence) | `/vg:test-spec` reads build output and implemented surfaces |
+| **4b. Test Spec** | `/vg:test-spec <N>` (post-build deep spec authoring) | `${PHASE_DIR}/DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/PROMPT.md`, `PLAYWRIGHT-SPEC-PLAN.md`, `TEST-SPEC-GAPS.md` | `/vg:review` verifies runtime against deep lifecycle contract |
 | **5. Verify** | `/vg:review <N>` (code scan + browser discovery + fix loop) | `${PHASE_DIR}/RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md` | `/vg:test` reads goals coverage matrix; pre-test-gate blocks if review BLOCKed |
 | **6. Test** | `/vg:test <N>` (codegen + smoke + regression + security) | `${PHASE_DIR}/TEST-RESULTS.json` + Playwright spec files | `/vg:accept` validates test outcomes |
 | **7. Accept** | `/vg:accept <N>` (UAT checklist + audit + reflector) | `${PHASE_DIR}/UAT.md` (verdict + bootstrap candidates) | Phase considered complete; milestone closer reads accept verdict |

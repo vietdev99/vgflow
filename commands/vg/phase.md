@@ -1,6 +1,6 @@
 ---
 name: vg:phase
-description: Run full 7-step phase pipeline — specs → scope → blueprint → build → review → test → accept
+description: Run full 8-step phase pipeline — specs → scope → blueprint → build → test-spec → review → test → accept
 argument-hint: "<phase> [--from=<step>] [--auto]"
 allowed-tools:
   - Read
@@ -27,10 +27,10 @@ Full pipeline (3 stages):
 ```
 Project init:     /vg:project → /vg:roadmap → /vg:map (optional)
 Phase planning:   /vg:prioritize → /vg:specs → /vg:scope → /vg:scope-review
-Phase execution:  /vg:blueprint → /vg:build → /vg:review → /vg:test → /vg:accept
+Phase execution:  /vg:blueprint → /vg:build → /vg:test-spec → /vg:review → /vg:test → /vg:accept
 ```
 
-This command runs the **phase execution** stage (7 steps): specs → scope → blueprint → build → review → test → accept.
+This command runs the **phase execution** stage (8 steps): specs → scope → blueprint → build → test-spec → review → test → accept.
 For project init (`/vg:init` → `/vg:project` → `/vg:roadmap` → `/vg:map`) or phase planning (`/vg:prioritize`), use the individual commands listed above.
 
 Flags:
@@ -115,7 +115,7 @@ Display:
 ## VG Phase {N} — V6 Pipeline
 
 Phase type:   {PHASE_TYPE} (from recon)
-Starting from: {START_STEP} (step {N}/6)
+Starting from: {START_STEP} (step {N}/7)
 Mode: {auto|interactive}
 ```
 </step>
@@ -123,7 +123,7 @@ Mode: {auto|interactive}
 <step name="2b_create_task_tracker">
 **Create visual task list for pipeline progress tracking.**
 
-Create 6 tasks — one per pipeline step. Mark already-completed steps immediately.
+Create 7 tasks — one per pipeline step. Mark already-completed steps immediately.
 Steps before `START_STEP` that have artifacts → mark as `completed`.
 The `START_STEP` itself → leave as `pending` (will be marked `in_progress` when it runs).
 
@@ -138,15 +138,16 @@ any stale tasklist from a previous workflow. On normal completion, use
 native list if supported; otherwise replace it with one completed sentinel item:
 `vg:phase phase ${PHASE_NUMBER} complete`.
 
-TaskCreate/TodoWrite item: "Step 1/6: scope — extract decisions"        (activeForm: "Running scope...")
-TaskCreate/TodoWrite item: "Step 2/6: blueprint — plan + API contracts"  (activeForm: "Running blueprint...")
-TaskCreate/TodoWrite item: "Step 3/6: build — execute code"              (activeForm: "Running build...")
-TaskCreate/TodoWrite item: "Step 4/6: review — discovery + fix loop"      (activeForm: "Running review...")
-TaskCreate/TodoWrite item: "Step 5/6: test — goal verification"           (activeForm: "Running test...")
-TaskCreate/TodoWrite item: "Step 6/6: accept — human UAT"                (activeForm: "Running accept...")
+TaskCreate/TodoWrite item: "Step 1/7: scope — extract decisions"          (activeForm: "Running scope...")
+TaskCreate/TodoWrite item: "Step 2/7: blueprint — plan + API contracts"    (activeForm: "Running blueprint...")
+TaskCreate/TodoWrite item: "Step 3/7: build — execute code"                (activeForm: "Running build...")
+TaskCreate/TodoWrite item: "Step 4/7: test-spec — deep lifecycle specs"     (activeForm: "Running test-spec...")
+TaskCreate/TodoWrite item: "Step 5/7: review — discovery + fix loop"        (activeForm: "Running review...")
+TaskCreate/TodoWrite item: "Step 6/7: test — goal verification"             (activeForm: "Running test...")
+TaskCreate/TodoWrite item: "Step 7/7: accept — human UAT"                  (activeForm: "Running accept...")
 ```
 
-Store task IDs as: `TASK_SCOPE`, `TASK_BLUEPRINT`, `TASK_BUILD`, `TASK_REVIEW`, `TASK_TEST`, `TASK_ACCEPT`.
+Store task IDs as: `TASK_SCOPE`, `TASK_BLUEPRINT`, `TASK_BUILD`, `TASK_TEST_SPEC`, `TASK_REVIEW`, `TASK_TEST`, `TASK_ACCEPT`.
 
 For each step with existing artifact (before START_STEP):
 ```
@@ -179,7 +180,8 @@ Run steps sequentially. **For each step:**
      |----------|-----------------|-------------------|
      | scope | blueprint needs CONTEXT.md | CONTEXT.md |
      | blueprint | build needs PLAN*.md + API-CONTRACTS.md | any PLAN*.md |
-     | build | review needs commits (git log) | phase commits count > 0 |
+     | build | test-spec needs SUMMARY*.md / BUILD-LOG | SUMMARY*.md |
+     | test-spec | review needs DEEP-TEST-SPECS.md + LIFECYCLE-SPECS.json | either file |
      | review | test needs RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md | either file |
      | test | accept needs *-SANDBOX-TEST.md (verdict != FAILED) | SANDBOX-TEST.md |
 
@@ -203,16 +205,17 @@ Run steps sequentially. **For each step:**
 | 1 | scope | `/vg:scope {phase}` | TASK_SCOPE | CONTEXT.md |
 | 2 | blueprint | `/vg:blueprint {phase}` | TASK_BLUEPRINT | PLAN*.md + API-CONTRACTS.md |
 | 3 | build | `/vg:build {phase}` | TASK_BUILD | SUMMARY*.md |
-| 4 | review | `/vg:review {phase}` | TASK_REVIEW | RUNTIME-MAP.json + RUNTIME-MAP.md |
-| 5 | test | `/vg:test {phase}` | TASK_TEST | *-SANDBOX-TEST.md with verdict != FAILED |
-| 6 | accept | `/vg:accept {phase}` | TASK_ACCEPT | *-UAT.md with status "complete" |
+| 4 | test-spec | `/vg:test-spec {phase}` | TASK_TEST_SPEC | DEEP-TEST-SPECS.md + LIFECYCLE-SPECS.json |
+| 5 | review | `/vg:review {phase}` | TASK_REVIEW | RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md |
+| 6 | test | `/vg:test {phase}` | TASK_TEST | *-SANDBOX-TEST.md with verdict != FAILED |
+| 7 | accept | `/vg:accept {phase}` | TASK_ACCEPT | *-UAT.md with status "complete" |
 
 **Fast-path (AI-recommended):**
 Before starting, assess scope complexity:
 - Small change (1-2 files, no new pages) → **⛔ forced user pause** (review skip = fewer gates, higher risk of missed drift):
   Invoke `AskUserQuestion`:
     - header: "Skip review step?"
-    - question: "Phase scope nhỏ (1-2 files). Recommend bỏ qua /vg:review → chạy: specs → scope → blueprint → build → test → accept. Review giúp phát hiện runtime drift, bỏ qua nhanh hơn nhưng rủi ro hơn. Approve skip?"
+    - question: "Phase scope nhỏ (1-2 files). Recommend bỏ qua /vg:review → chạy: specs → scope → blueprint → build → test-spec → test → accept. Review giúp phát hiện runtime drift, bỏ qua nhanh hơn nhưng rủi ro hơn. Approve skip?"
     - options:
       - "Yes — skip review (phase nhỏ, ít drift risk)"
       - "No — chạy full pipeline có review (safer)"

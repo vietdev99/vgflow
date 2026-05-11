@@ -85,6 +85,10 @@ The subagent writes:
 - `${PHASE_DIR}/API-CONTRACTS.md` (4-block per endpoint format)
 - `${PHASE_DIR}/TEST-GOALS.md` (per-decision goals + persistence + URL state)
 - `${PHASE_DIR}/CRUD-SURFACES.md` (resource × operation × platform contract)
+- Lifecycle specs are NOT generated here. `/vg:test-spec` owns post-build
+  `LIFECYCLE-SPECS.json`, `DEEP-TEST-SPECS.md`, `TEST-FIXTURE-DAG.json`,
+  `TEST-EXECUTION-PLAN.json`, and `TEST-SPEC-LOCALIZER/PROMPT.md`
+  after implemented surfaces exist.
 
 Returns JSON with paths + sha256 + bindings_satisfied + warnings.
 
@@ -245,6 +249,10 @@ sys.exit(0 if inv is not None else 1)
     fi
   done
 fi
+
+# Post-build lifecycle specs are intentionally deferred to /vg:test-spec.
+# Blueprint only authors TEST-GOALS/CRUD/API contracts; implemented surfaces
+# are not available yet.
 ```
 
 ### Bidirectional Goal ↔ Task linkage (auto-injection)

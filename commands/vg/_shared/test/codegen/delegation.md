@@ -58,6 +58,12 @@ ONLY the spawn payload + return contract.
   thay vì bịa skeleton — đảm bảo coverage check (Gate F.2.5) PASS.
 - The subagent MUST NOT `cat PLAN.md`, `cat API-CONTRACTS.md`, `cat TEST-GOALS.md`,
   or `cat EDGE-CASES.md` directly. All artifacts loaded via vg-load.
+- Mutation/multi-actor codegen MUST consume `${PHASE_DIR}/LIFECYCLE-SPECS.json`
+  when present. Do not invent fixture prerequisites in the spec file; use the
+  lifecycle fixture DAG, actor matrix, artifact_capture, and cleanup contract.
+  If it is missing, the orchestrator preflight runs
+  `.claude/scripts/generate-lifecycle-specs.py --phase ${PHASE_NUMBER}` from
+  existing phase docs, then validates depth before this subagent starts.
 
 ---
 
@@ -74,6 +80,7 @@ Do NOT browse files outside input. Do NOT ask user — input is the contract.
 @${PHASE_DIR}/UI-RUNTIME-CONTRACT.json   (v3.2.0+ — route_inventory + first_viewport_surfaces + env_contract + min_spec_count; spec count gate target)
 @${PHASE_DIR}/FIXTURES-CACHE.json        (if exists — fixture inject)
 @${PHASE_DIR}/CRUD-SURFACES.md           (if exists — CRUD structural fallback)
+@${PHASE_DIR}/LIFECYCLE-SPECS.json       (fixture DAG + actors + RCRURDR stages for mutation/multi-actor goals)
 @${PHASE_DIR}/TEST-GOALS-DISCOVERED.md   (if exists — G-AUTO-* skeleton specs)
 @${PHASE_DIR}/TEST-GOALS-EXPANDED.md     (if exists — G-CRUD-* skeleton specs)
 </inputs>
@@ -227,7 +234,22 @@ Validate with `verify-filter-test-coverage.py --phase ${PHASE_NUMBER}`.
 4. **Steps from goal_sequences** — each `do` step → Playwright action; each
    `assert` step → `expect()`. Nearly 1:1 mapping.
 
-5. **Mutation 4-layer verify** (every POST/PUT/PATCH/DELETE):
+5. **Lifecycle specs for mutation/multi-actor goals**:
+   - Read `LIFECYCLE-SPECS.json.goals[G-ID]` before writing the spec.
+   - Treat `formula.stages` as the canonical lifecycle order generated from
+     phase docs; do not drop a stage because the happy path looked shorter.
+   - Create fixtures in `fixture_dag` order.
+   - Use `actors[]` for role/session switching; never collapse multi-actor
+     flows into one user.
+   - Execute RCRURDR stages in order: `read_before`, `create`,
+     `read_after_create`, `update`, `read_after_update`, `delete`,
+     `read_after_delete`.
+   - Capture and consume `artifact_capture[]` entries for invite/email/token/
+     websocket/realtime flows.
+   - Register `cleanup[]` in `afterEach` / teardown so test-owned state does
+     not leak into later specs.
+
+6. **Mutation 4-layer verify** (every POST/PUT/PATCH/DELETE):
    ```
    Layer 1: Toast text  → expect(page.getByRole('status')).toContainText(expected_toast)
    Layer 2: API 2xx     → res = await page.waitForResponse(...); expect(res.status()).toBeLessThan(400)
@@ -236,7 +258,7 @@ Validate with `verify-filter-test-coverage.py --phase ${PHASE_NUMBER}`.
                           expect(errs.length).toBe(0)
    ```
 
-6. **Env var credentials** — never hardcode emails/passwords. Use
+7. **Env var credentials** — never hardcode emails/passwords. Use
    `{ROLE_UPPER}_EMAIL`, `{ROLE_UPPER}_PASSWORD`, `{ROLE_UPPER}_DOMAIN`.
 
 Output: `${GENERATED_TESTS_DIR}/${PHASE_NUMBER}-goal-{group}.spec.ts`

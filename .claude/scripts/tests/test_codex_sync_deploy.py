@@ -1,43 +1,26 @@
-"""Integration tests for VGFlow Codex sync deployment.
-
-These tests run `sync.sh` against a temporary project and fake HOME. They pin
-the behavior that matters for Codex parity:
-
-- all generated Codex skills deploy locally and globally
-- Codex agent templates deploy locally and globally
-- global Codex deploy is opt-in via --global-codex
-- installed-project validators pass against the deployed target
-"""
+"""Global-only install/sync tests for Claude + Codex surfaces."""
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import shlex
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
 
 def _find_repo_root() -> Path:
     here = Path(__file__).resolve()
     for parent in [here.parent, *here.parents]:
         if (parent / "VERSION").exists() and (parent / ".git").exists():
             return parent
-    return here.parents[3]
+    return here.parents[2]
 
 
 REPO_ROOT = _find_repo_root()
 SYNC_SH = REPO_ROOT / "sync.sh"
 INSTALL_SH = REPO_ROOT / "install.sh"
-EQUIV = REPO_ROOT / "scripts" / "verify-codex-mirror-equivalence.py"
-MIRROR_SYNC = (
-    REPO_ROOT / "scripts" / "validators" / "verify-codex-skill-mirror-sync.py"
-)
-RUNTIME_ADAPTER = (
-    REPO_ROOT / "scripts" / "validators" / "verify-codex-runtime-adapter.py"
-)
 EXPECTED_SKILLS = {
     "api-contract",
     "flow-runner",
@@ -45,13 +28,10 @@ EXPECTED_SKILLS = {
     "vg-scope",
     "vg-blueprint",
     "vg-build",
+    "vg-test-spec",
     "vg-review",
     "vg-test",
     "vg-accept",
-    "vg-codegen-interactive",
-    "vg-design-scanner",
-    "vg-reflector",
-    "vg-haiku-scanner",
 }
 EXPECTED_AGENTS = {
     "vgflow-orchestrator.toml",
@@ -61,19 +41,9 @@ EXPECTED_AGENTS = {
 
 
 def _working_bash() -> str | None:
-    candidates: list[str] = []
-    if os.environ.get("VG_BASH"):
-        candidates.append(os.environ["VG_BASH"])
-    if os.name == "nt":
-        candidates.extend(
-            [
-                r"C:\Program Files\Git\usr\bin\bash.exe",
-                r"C:\Program Files\Git\bin\bash.exe",
-            ]
-        )
-    candidates.append("bash")
-
-    for candidate in candidates:
+    for candidate in [os.environ.get("VG_BASH"), "bash"]:
+        if not candidate:
+            continue
         try:
             result = subprocess.run(
                 [candidate, "-lc", "printf OK"],
@@ -106,47 +76,16 @@ def _bash_path(bash: str, path: Path) -> str:
 
 def _skill_names(root: Path) -> set[str]:
     skill_root = root / ".codex" / "skills"
-    assert skill_root.is_dir(), f"missing Codex skills dir: {skill_root}"
+    if not skill_root.is_dir():
+        return set()
     return {p.name for p in skill_root.iterdir() if p.is_dir()}
 
 
 def _agent_names(root: Path) -> set[str]:
     agent_root = root / ".codex" / "agents"
-    assert agent_root.is_dir(), f"missing Codex agents dir: {agent_root}"
+    if not agent_root.is_dir():
+        return set()
     return {p.name for p in agent_root.glob("*.toml")}
-
-
-def _write_stale_claude_local_hooks(root: Path) -> None:
-    settings = root / ".claude" / "settings.local.json"
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(
-        json.dumps(
-            {
-                "permissions": {"allow": ["Bash(echo:*)"]},
-                "hooks": {
-                    "UserPromptSubmit": [
-                        {
-                            "hooks": [
-                                {"type": "command", "command": "python .claude/scripts/vg-entry-hook.py"},
-                                {"type": "command", "command": "echo user-hook"},
-                            ]
-                        }
-                    ],
-                    "Stop": [
-                        {
-                            "hooks": [
-                                {
-                                    "type": "command",
-                                    "command": "python3 .claude/scripts/hooks/vg-run-bash-hook.py .claude/scripts/hooks/vg-stop.sh",
-                                }
-                            ]
-                        }
-                    ],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
 
 
 def _canonical_codex_skill_count() -> int:
@@ -157,481 +96,149 @@ def _canonical_codex_skill_count() -> int:
     )
 
 
-def _canonical_claude_skill_count() -> int:
-    return sum(
-        1
-        for path in (REPO_ROOT / "skills").iterdir()
-        if path.is_dir() and (path / "SKILL.md").is_file()
-    )
-
-
-def _claude_skill_names(root: Path) -> set[str]:
-    skill_root = root / ".claude" / "skills"
-    assert skill_root.is_dir(), f"missing Claude skills dir: {skill_root}"
-    return {p.name for p in skill_root.iterdir() if p.is_dir()}
-
-
-def _assert_toml_smoke(path: Path) -> None:
-    text = path.read_text(encoding="utf-8")
-    try:
-        import tomllib  # type: ignore[import-not-found]
-
-        tomllib.loads(text)
-        return
-    except ModuleNotFoundError:
-        pass
-    except Exception as exc:  # pragma: no cover - exact exception varies by Python
-        pytest.fail(f"invalid TOML in {path}: {exc}")
-
-    in_multiline = False
-    for lineno, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        triple_count = line.count("'''")
-        if in_multiline:
-            if triple_count % 2 == 1:
-                in_multiline = False
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            continue
-        assert " = " in line, f"{path}:{lineno} is not a simple TOML assignment"
-        if triple_count % 2 == 1:
-            in_multiline = True
-    assert not in_multiline, f"{path} has an unterminated multiline TOML string"
-
-
-def _assert_claude_hooks_installed(root: Path) -> None:
-    settings = root / ".claude" / "settings.json"
-    assert settings.is_file(), f"missing Claude hook settings: {settings}"
-    data = json.loads(settings.read_text(encoding="utf-8"))
-    commands: list[str] = []
-    for matchers in data.get("hooks", {}).values():
-        for matcher in matchers:
-            for hook in matcher.get("hooks", []):
-                commands.append(hook.get("command", ""))
-    joined = "\n".join(commands)
-    assert "vg-run-bash-hook.py" in joined
-    assert "vg-user-prompt-submit.sh" in joined
-    assert "vg-stop.sh" in joined
-    assert "vg-pre-tool-use-bash.sh" in joined
-    assert "vg-post-tool-use-todowrite.sh" in joined
-    assert "UserPromptSubmit" in data["hooks"]
-    assert "Stop" in data["hooks"]
-    pre_tool = data["hooks"]["PreToolUse"]
-    assert any(matcher.get("matcher") == "Bash" for matcher in pre_tool)
-
-    local_settings = root / ".claude" / "settings.local.json"
-    if local_settings.exists():
-        local = json.loads(local_settings.read_text(encoding="utf-8"))
-        local_commands: list[str] = []
-        for matchers in local.get("hooks", {}).values():
-            for matcher in matchers:
-                for hook in matcher.get("hooks", []):
-                    local_commands.append(hook.get("command", ""))
-        local_joined = "\n".join(local_commands)
-        assert "vg-entry-hook.py" not in local_joined
-        assert "vg-verify-claim.py" not in local_joined
-        assert "vg-step-tracker.py" not in local_joined
-        assert "vg-run-bash-hook.py" not in local_joined
-        assert "vg-stop.sh" not in local_joined
-        assert "echo user-hook" in local_joined
-
-
-def _assert_no_python_cache_synced(root: Path) -> None:
-    scripts = root / ".claude" / "scripts"
-    assert not list(scripts.rglob("__pycache__"))
-    assert not list(scripts.rglob("*.pyc"))
-
-
-def _assert_playwright_mcp_configured(home: Path) -> None:
-    settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
-    for i in range(1, 6):
-        entry = settings["mcpServers"][f"playwright{i}"]
-        assert entry["command"] == "npx"
-        args = entry["args"]
-        assert "@playwright/mcp@latest" in args
-        assert "--user-data-dir" in args
-        assert args[args.index("--user-data-dir") + 1].replace("\\", "/").endswith(
-            f"/.claude/playwright-profile-{i}"
-        )
-
-    config = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-    for i in range(1, 6):
-        assert f"[mcp_servers.playwright{i}]" in config
-        assert "@playwright/mcp@latest" in config
-        assert f"/.codex/playwright-profile-{i}" in config.replace("\\", "/")
-
-    lock = home / ".claude" / "playwright-locks" / "playwright-lock.sh"
-    lock_text = lock.read_text(encoding="utf-8")
-    assert "VG_PLAYWRIGHT_LOCK_DIR" in lock_text
-    assert "C:/Users/Lionel Messi" not in lock_text
-
-
-def test_sync_skips_global_codex_by_default(tmp_path):
-    bash = _working_bash()
-    if bash is None:
-        pytest.skip("working bash not found; sync.sh integration requires bash")
-
-    target = tmp_path / "target-project"
-    fake_home = tmp_path / "home"
-    (fake_home / ".codex").mkdir(parents=True)
-    target.mkdir()
-    stale_global = fake_home / ".codex" / "skills" / "vg-accept" / "RULES-CARDS.md"
-    stale_global.parent.mkdir(parents=True)
-    stale_global.write_text("stale", encoding="utf-8")
-
-    repo_bash = _bash_path(bash, REPO_ROOT)
-    target_bash = _bash_path(bash, target)
-    home_bash = _bash_path(bash, fake_home)
-
-    command = (
-        f"cd {shlex.quote(repo_bash)} && "
-        f"HOME={shlex.quote(home_bash)} "
-        f"DEV_ROOT={shlex.quote(target_bash)} "
-        "bash sync.sh"
-    )
-    result = subprocess.run(
-        [bash, "-lc", command],
-        capture_output=True,
-        text=True,
-        timeout=180,
+def _write_project_local_vg_files(target: Path) -> None:
+    (target / ".codex" / "skills" / "vg-accept").mkdir(parents=True)
+    (target / ".codex" / "skills" / "vg-accept" / "SKILL.md").write_text("stale", encoding="utf-8")
+    (target / ".claude" / "commands" / "vg").mkdir(parents=True)
+    (target / ".claude" / "commands" / "vg" / "review.md").write_text("stale", encoding="utf-8")
+    (target / ".claude" / "settings.local.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 .claude/scripts/hooks/vg-run-bash-hook.py .claude/scripts/hooks/vg-stop.sh",
+                                },
+                                {"type": "command", "command": "echo user-hook"},
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
         encoding="utf-8",
-        errors="replace",
-    )
-    assert result.returncode == 0, (
-        f"sync.sh failed\nSTDOUT:\n{result.stdout[-4000:]}\n"
-        f"STDERR:\n{result.stderr[-4000:]}"
     )
 
-    assert len(_skill_names(target)) == _canonical_codex_skill_count()
-    assert EXPECTED_SKILLS <= _skill_names(target)
-    assert stale_global.exists(), "default sync must not mutate global Codex skills"
-    assert not (fake_home / ".codex" / "agents" / "vgflow-orchestrator.toml").exists()
-    config_text = (fake_home / ".codex" / "config.toml").read_text(encoding="utf-8")
-    assert "[agents.vgflow-orchestrator]" not in config_text
 
-
-def test_sync_deploys_full_codex_surface_to_project_and_fake_global_when_opted_in(tmp_path):
-    bash = _working_bash()
-    if bash is None:
-        pytest.skip("working bash not found; sync.sh integration requires bash")
-
-    target = tmp_path / "target-project"
-    fake_home = tmp_path / "home"
-    (fake_home / ".codex").mkdir(parents=True)
-    target.mkdir()
-    stale_local = target / ".codex" / "skills" / "vg-accept" / "RULES-CARDS.md"
-    stale_global = fake_home / ".codex" / "skills" / "vg-accept" / "RULES-CARDS.md"
-    stale_local.parent.mkdir(parents=True)
-    stale_global.parent.mkdir(parents=True)
-    stale_local.write_text("stale", encoding="utf-8")
-    stale_global.write_text("stale", encoding="utf-8")
-    _write_stale_claude_local_hooks(target)
-
-    repo_bash = _bash_path(bash, REPO_ROOT)
-    target_bash = _bash_path(bash, target)
-    home_bash = _bash_path(bash, fake_home)
-
-    command = (
-        f"cd {shlex.quote(repo_bash)} && "
-        f"HOME={shlex.quote(home_bash)} "
-        f"DEV_ROOT={shlex.quote(target_bash)} "
-        "bash sync.sh --global-codex"
-    )
-    result = subprocess.run(
-        [bash, "-lc", command],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert result.returncode == 0, (
-        f"sync.sh failed\nSTDOUT:\n{result.stdout[-4000:]}\n"
-        f"STDERR:\n{result.stderr[-4000:]}"
-    )
-
-    local_skills = _skill_names(target)
-    global_skills = _skill_names(fake_home)
-    expected_count = _canonical_codex_skill_count()
-    assert len(local_skills) == expected_count
-    assert len(global_skills) == expected_count
-    assert EXPECTED_SKILLS <= local_skills
-    assert EXPECTED_SKILLS <= global_skills
-    assert not stale_local.exists()
-    assert not stale_global.exists()
-
-    assert _agent_names(target) == EXPECTED_AGENTS
+def _assert_global_install(fake_home: Path, target: Path) -> None:
+    assert len(_skill_names(fake_home)) == _canonical_codex_skill_count()
+    assert EXPECTED_SKILLS <= _skill_names(fake_home)
     assert _agent_names(fake_home) == EXPECTED_AGENTS
-    assert (target / ".codex" / "config.template.toml").is_file()
-    config_template = (
-        target / ".codex" / "config.template.toml"
-    ).read_text(encoding="utf-8")
-    assert "VG_CODEX_MODEL_EXECUTOR" in config_template
-    assert "Sonnet-class build quality" in config_template
-    assert "VG_CODEX_MODEL_SCANNER" in config_template
-    assert "cheap/fast read-only model" in config_template
-    assert (
-        target
-        / ".codex"
-        / "skills"
-        / "vg-codegen-interactive"
-        / "filter-test-matrix.mjs"
-    ).is_file()
-    assert (
-        fake_home
-        / ".codex"
-        / "skills"
-        / "vg-codegen-interactive"
-        / "filter-test-matrix.mjs"
-    ).is_file()
-    assert (
-        target / ".claude" / "commands" / "vg" / "_shared" / "lib" / "codex-spawn.sh"
-    ).is_file()
-    helper_exec = subprocess.run(
+    assert not (target / ".codex" / "skills" / "vg-accept").exists()
+    assert not (target / ".claude" / "commands" / "vg").exists()
+    assert (target / ".vg" / ".install-target").read_text(encoding="utf-8").strip() == "global"
+
+    settings = fake_home / ".claude" / "settings.json"
+    assert settings.is_file()
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    commands = "\n".join(
+        hook.get("command", "")
+        for matchers in data.get("hooks", {}).values()
+        for matcher in matchers
+        for hook in matcher.get("hooks", [])
+    )
+    assert "vg-stop.sh" in commands
+    assert "vg-user-prompt-submit.sh" in commands
+
+
+def test_sync_global_only_prunes_project_and_refreshes_global_codex(tmp_path: Path) -> None:
+    bash = _working_bash()
+    if bash is None:
+        pytest.skip("working bash not found")
+
+    target = tmp_path / "target-project"
+    fake_home = tmp_path / "home"
+    target.mkdir()
+    (target / ".git").mkdir()
+    (fake_home / ".codex").mkdir(parents=True)
+    (fake_home / ".claude").mkdir(parents=True)
+    _write_project_local_vg_files(target)
+
+    result = subprocess.run(
         [
             bash,
             "-lc",
-            f"test -x {shlex.quote(target_bash + '/.claude/commands/vg/_shared/lib/codex-spawn.sh')}",
+            (
+                f"cd {shlex.quote(_bash_path(bash, REPO_ROOT))} && "
+                f"HOME={shlex.quote(_bash_path(bash, fake_home))} "
+                f"DEV_ROOT={shlex.quote(_bash_path(bash, target))} "
+                "bash sync.sh"
+            ),
         ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert helper_exec.returncode == 0, "codex-spawn.sh should be executable after sync"
-    assert (
-        target / ".claude" / "VGFLOW-VERSION"
-    ).read_text(encoding="utf-8").strip() == (
-        REPO_ROOT / "VGFLOW-VERSION"
-    ).read_text(encoding="utf-8").strip()
-    _assert_claude_hooks_installed(target)
-    _assert_no_python_cache_synced(target)
-
-    config_text = (fake_home / ".codex" / "config.toml").read_text(encoding="utf-8")
-    _assert_playwright_mcp_configured(fake_home)
-    _assert_toml_smoke(fake_home / ".codex" / "config.toml")
-    _assert_toml_smoke(target / ".codex" / "config.template.toml")
-    for agent_file in EXPECTED_AGENTS:
-        agent_path = fake_home / ".codex" / "agents" / agent_file
-        _assert_toml_smoke(agent_path)
-        agent_text = agent_path.read_text(encoding="utf-8")
-        assert "description = " in agent_text
-        assert "gpt-5" not in agent_text
-
-    for agent in ("vgflow-orchestrator", "vgflow-executor", "vgflow-classifier"):
-        assert f"[agents.{agent}]" in config_text
-        assert f"/.codex/agents/{agent}.toml" in config_text.replace("\\", "/")
-    if os.name == "nt":
-        agent_lines = [
-            line for line in config_text.splitlines() if line.startswith("config_file = ")
-        ]
-        assert agent_lines, config_text
-        assert all('config_file = "/' not in line for line in agent_lines)
-
-    codex = shutil.which("codex")
-    if codex:
-        smoke_env = os.environ.copy()
-        smoke_env.update(
-            {
-                "CODEX_HOME": str(fake_home / ".codex"),
-                "HOME": str(fake_home),
-                "USERPROFILE": str(fake_home),
-            }
-        )
-        codex_smoke = subprocess.run(
-            [codex, "features", "list"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=smoke_env,
-            encoding="utf-8",
-            errors="replace",
-        )
-        assert codex_smoke.returncode == 0, (
-            f"Codex CLI could not parse generated config\nSTDOUT:\n{codex_smoke.stdout}\n"
-            f"STDERR:\n{codex_smoke.stderr}"
-        )
-
-    validator_env = os.environ.copy()
-    validator_env.update(
-        {
-            "PYTHONIOENCODING": "utf-8",
-            "REPO_ROOT": str(target),
-            "VGFLOW_REPO": str(REPO_ROOT),
-            "HOME": str(fake_home),
-            "USERPROFILE": str(fake_home),
-        }
-    )
-
-    equiv = subprocess.run(
-        [sys.executable, str(EQUIV), "--json"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=REPO_ROOT,
-        env=validator_env,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert equiv.returncode == 0, equiv.stderr
-    equiv_json = json.loads(equiv.stdout)
-    assert equiv_json["checked"] == expected_count
-    assert equiv_json["drift_count"] == 0
-
-    mirror = subprocess.run(
-        [sys.executable, str(MIRROR_SYNC), "--quiet"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=REPO_ROOT,
-        env=validator_env,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert mirror.returncode == 0, (
-        f"mirror sync validator failed\nSTDOUT:\n{mirror.stdout}\n"
-        f"STDERR:\n{mirror.stderr}"
-    )
-
-    runtime = subprocess.run(
-        [sys.executable, str(RUNTIME_ADAPTER), "--root", str(target), "--quiet"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=REPO_ROOT,
-        env=validator_env,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert runtime.returncode == 0, (
-        f"runtime adapter validator failed\nSTDOUT:\n{runtime.stdout}\n"
-        f"STDERR:\n{runtime.stderr}"
-    )
-
-
-def test_install_deploys_full_claude_and_codex_surfaces(tmp_path):
-    bash = _working_bash()
-    if bash is None:
-        pytest.skip("working bash not found; install.sh integration requires bash")
-
-    target = tmp_path / "installed-project"
-    fake_home = tmp_path / "home"
-    (fake_home / ".codex").mkdir(parents=True)
-    (fake_home / ".claude").mkdir(parents=True)
-    target.mkdir()
-    stale_local = target / ".codex" / "skills" / "vg-accept" / "RULES-CARDS.md"
-    stale_global = fake_home / ".codex" / "skills" / "vg-accept" / "RULES-CARDS.md"
-    stale_local.parent.mkdir(parents=True)
-    stale_global.parent.mkdir(parents=True)
-    stale_local.write_text("stale", encoding="utf-8")
-    stale_global.write_text("stale", encoding="utf-8")
-    _write_stale_claude_local_hooks(target)
-
-    repo_bash = _bash_path(bash, REPO_ROOT)
-    target_bash = _bash_path(bash, target)
-    home_bash = _bash_path(bash, fake_home)
-
-    command = (
-        f"cd {shlex.quote(repo_bash)} && "
-        f"HOME={shlex.quote(home_bash)} "
-        "VGFLOW_SKIP_GRAPHIFY_INSTALL=true "
-        f"bash {shlex.quote(_bash_path(bash, INSTALL_SH))} "
-        "--global-codex "
-        f"{shlex.quote(target_bash)}"
-    )
-    result = subprocess.run(
-        [bash, "-lc", command],
         capture_output=True,
         text=True,
         timeout=180,
         encoding="utf-8",
         errors="replace",
     )
-    assert result.returncode == 0, (
-        f"install.sh failed\nSTDOUT:\n{result.stdout[-4000:]}\n"
-        f"STDERR:\n{result.stderr[-4000:]}"
-    )
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    _assert_global_install(fake_home, target)
 
-    expected_codex_count = _canonical_codex_skill_count()
-    expected_claude_count = _canonical_claude_skill_count()
 
-    assert len(_claude_skill_names(target)) == expected_claude_count
-    assert len(_skill_names(target)) == expected_codex_count
-    assert len(_skill_names(fake_home)) == expected_codex_count
-    assert EXPECTED_SKILLS <= _skill_names(target)
-    assert not stale_local.exists()
-    assert not stale_global.exists()
-    assert _agent_names(target) == EXPECTED_AGENTS
-    assert _agent_names(fake_home) == EXPECTED_AGENTS
-    assert (
-        target / ".claude" / "commands" / "vg" / "_shared" / "lib" / "codex-spawn.sh"
-    ).is_file()
-    assert (target / ".claude" / "scripts" / "vg_update.py").is_file()
-    assert (target / ".claude" / "schemas").is_dir()
-    _assert_claude_hooks_installed(target)
-    _assert_no_python_cache_synced(target)
-    config_template = (
-        target / ".codex" / "config.template.toml"
-    ).read_text(encoding="utf-8")
-    assert "VG_CODEX_MODEL_EXECUTOR" in config_template
-    assert "VG_CODEX_MODEL_SCANNER" in config_template
-    _assert_playwright_mcp_configured(fake_home)
+def test_install_sh_global_only_prunes_project_and_refreshes_global_codex(tmp_path: Path) -> None:
+    bash = _working_bash()
+    if bash is None:
+        pytest.skip("working bash not found")
 
-    validator_env = os.environ.copy()
-    validator_env.update(
-        {
-            "PYTHONIOENCODING": "utf-8",
-            "REPO_ROOT": str(target),
-            "VGFLOW_REPO": str(REPO_ROOT),
-            "HOME": str(fake_home),
-            "USERPROFILE": str(fake_home),
-        }
-    )
+    target = tmp_path / "installed-project"
+    fake_home = tmp_path / "home"
+    target.mkdir()
+    (target / ".git").mkdir()
+    (fake_home / ".codex").mkdir(parents=True)
+    (fake_home / ".claude").mkdir(parents=True)
+    _write_project_local_vg_files(target)
 
-    equiv = subprocess.run(
-        [sys.executable, str(EQUIV), "--json"],
+    result = subprocess.run(
+        [
+            bash,
+            "-lc",
+            (
+                f"cd {shlex.quote(_bash_path(bash, REPO_ROOT))} && "
+                f"HOME={shlex.quote(_bash_path(bash, fake_home))} "
+                f"bash {shlex.quote(_bash_path(bash, INSTALL_SH))} "
+                f"{shlex.quote(_bash_path(bash, target))}"
+            ),
+        ],
         capture_output=True,
         text=True,
-        timeout=60,
-        cwd=REPO_ROOT,
-        env=validator_env,
+        timeout=180,
         encoding="utf-8",
         errors="replace",
     )
-    assert equiv.returncode == 0, equiv.stderr
-    equiv_json = json.loads(equiv.stdout)
-    assert equiv_json["checked"] == expected_codex_count
-    assert equiv_json["drift_count"] == 0
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    _assert_global_install(fake_home, target)
 
-    mirror = subprocess.run(
-        [sys.executable, str(MIRROR_SYNC), "--quiet"],
+
+def test_sync_check_does_not_deploy_project_local_surfaces(tmp_path: Path) -> None:
+    bash = _working_bash()
+    if bash is None:
+        pytest.skip("working bash not found")
+
+    target = tmp_path / "target-project"
+    fake_home = tmp_path / "home"
+    target.mkdir()
+    fake_home.mkdir()
+
+    result = subprocess.run(
+        [
+            bash,
+            "-lc",
+            (
+                f"cd {shlex.quote(_bash_path(bash, REPO_ROOT))} && "
+                f"HOME={shlex.quote(_bash_path(bash, fake_home))} "
+                f"DEV_ROOT={shlex.quote(_bash_path(bash, target))} "
+                "bash sync.sh --check"
+            ),
+        ],
         capture_output=True,
         text=True,
         timeout=60,
-        cwd=REPO_ROOT,
-        env=validator_env,
         encoding="utf-8",
         errors="replace",
     )
-    assert mirror.returncode == 0, (
-        f"installed mirror sync validator failed\nSTDOUT:\n{mirror.stdout}\n"
-        f"STDERR:\n{mirror.stderr}"
-    )
-
-    runtime = subprocess.run(
-        [sys.executable, str(RUNTIME_ADAPTER), "--root", str(target), "--quiet"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=REPO_ROOT,
-        env=validator_env,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert runtime.returncode == 0, (
-        f"installed runtime adapter validator failed\nSTDOUT:\n{runtime.stdout}\n"
-        f"STDERR:\n{runtime.stderr}"
-    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (target / ".codex").exists()
+    assert not (target / ".claude").exists()

@@ -4,7 +4,7 @@
 This validator is layout-aware:
 
 * Source repository mode:
-  commands/vg + skills/* -> codex-skills -> .codex/skills -> ~/.codex/skills
+  commands/vg + skills/* -> codex-skills -> ~/.codex/skills
 
 * Installed project mode:
   .claude/commands/vg -> $VGFLOW_REPO/codex-skills -> .codex/skills
@@ -266,7 +266,7 @@ def _check_chain_b(
         )
     ]
     local_root = repo_root / ".codex" / "skills"
-    if local_root.is_dir() or not source_repo:
+    if not source_repo and local_root.is_dir():
         mirrors.append(
             ("local_codex", local_path, _sha256(local_path), local_dir, _file_manifest(local_dir))
         )

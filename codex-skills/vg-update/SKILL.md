@@ -1,8 +1,8 @@
 ---
 name: "vg-update"
-description: "Pull latest VG release from GitHub, 3-way merge with local, park conflicts for /vg:reapply-patches"
+description: "Update global VGFlow at ~/.vgflow, refresh global Claude/Codex hooks, and prune project-local VG files"
 metadata:
-  short-description: "Pull latest VG release from GitHub, 3-way merge with local, park conflicts for /vg:reapply-patches"
+  short-description: "Update global VGFlow at ~/.vgflow, refresh global Claude/Codex hooks, and prune project-local VG files"
 ---
 
 <codex_skill_adapter>
@@ -154,17 +154,19 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-update`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+
+
 <rules>
-1. **Atomic** — VERSION file + ancestor dir rotated only after all merges complete.
-2. **Non-destructive on conflict** — conflicted files are parked under `.claude/vgflow-patches/`, never clobber user edits.
-3. **All logic in Python** — this markdown wraps `.claude/scripts/vg_update.py`; no version math / SHA / merge logic in bash.
+1. **Global-only** — update refreshes `~/.vgflow`/global npm package, not project `.claude`.
+2. **Project cleanup** — stale project-local `.claude`/`.codex` VG files are pruned via `vg_uninstall.py` backup path.
+3. **Single source** — Claude hooks point at `~/.claude/settings.json`; Codex skills point at `~/.codex/skills`.
 4. **Honor repo override** — `--repo=owner/name` flag flows through to `vg_update.py`.
 5. **Honor args literally** — use `${ARGUMENTS}`, never `$*`/`$@` to avoid arg splitting.
 </rules>
 
 <objective>
-Sync local VG install (`.claude/commands/vg/`, `.claude/skills/`, `.claude/scripts/`, `.claude/templates/`)
-to latest GitHub release of `vietdev99/vgflow`. Logic lives in `.claude/scripts/vg_update.py`.
+Sync global VG install to latest `vietdev99/vgflow`, then clean the current
+project so Claude and Codex load VGFlow from one global surface only.
 High-level flow:
 
 1. Preflight: verify `git`, `curl`, `python3`, helper script present.
@@ -174,13 +176,11 @@ High-level flow:
 5. Ask user to confirm.
 6. Breaking-change gate: major bump requires `--accept-breaking` + shows migration doc.
 7. Download tarball + verify SHA256 + extract to `.vgflow-cache/v{ver}/`.
-8. Walk extracted tree, 3-way merge each file against `.claude/vgflow-ancestor/v{installed}/`.
-9. Clean merges → apply; conflicts → `.claude/vgflow-patches/{rel}.conflict` + manifest entry.
-10. Rotate ancestor dir + bump `.claude/VGFLOW-VERSION`.
-11. Sync Codex mirrors directly from the updated release assets.
-12. Verify/repair Claude + Codex Playwright MCP workers (`playwright1`..`playwright5`).
-13. Verify/install Graphify tooling when `graphify.enabled=true`.
-14. Report counts + restart reminder.
+8. Refresh global Codex skills/agents from `~/.vgflow/codex-skills`.
+9. Verify/repair Claude + Codex Playwright MCP workers (`playwright1`..`playwright5`).
+10. Prune project-local VG-owned `.claude/` and `.codex/` files.
+11. Write `.vg/.install-target=global`.
+12. Report restart reminder.
 </objective>
 
 <process>
@@ -188,41 +188,42 @@ High-level flow:
 ### Preflight section (extracted v2.73.0 T6)
 
 Read `_shared/update/preflight.md` and follow it exactly.
-Includes 2 steps: 0_preflight (verify git/curl/python3 + helper script present, parse --repo= flag) and 1_check_only_mode (handle --check flag — print version state + exit).
+Includes 2 steps: 0_preflight, 1_check_only_mode.
 
 Step coverage: 0_preflight, 1_check_only_mode.
+
 
 ### Version + changelog (extracted v2.73.0 T7)
 
 Read `_shared/update/version-and-changelog.md` and follow it exactly.
-Includes 3 steps: 2_version_compare (query latest release via helper, parse installed/latest/state), 3_changelog_preview (fetch + filter CHANGELOG entries between installed and latest, ask user to confirm via AskUserQuestion), and 4_breaking_gate (major-bump opt-in via --accept-breaking + migration doc display + deep compat scan).
+Includes 3 steps: 2_version_compare, 3_changelog_preview, 4_breaking_gate.
 
 Step coverage: 2_version_compare, 3_changelog_preview, 4_breaking_gate.
 
-CODEX NOTE: Step 3's confirmation prompt uses AskUserQuestion on Claude. On Codex, ask the same Yes/No question inline in the main Codex thread per the adapter contract above (Tool mapping table).
 
 ### Fetch + merge (extracted v2.73.0 T8)
 
 Read `_shared/update/fetch-and-merge.md` and follow it exactly.
-Includes 3 steps: 5_fetch_tarball (download + verify SHA256 + extract via helper, self-bootstrap to upstream vg_update.py), 6_three_way_merge_per_file (walk extracted tree, 3-way merge each file vs ancestor, park conflicts to .claude/vgflow-patches/, force-upstream when ancestor missing, refuse VERSION bump on core update-tooling drift), and 6b_verify_gate_integrity (T8 hard-gate manifest re-hash + diff, soft-skip on pre-v1.8.0 404).
+Includes 3 steps: 5_fetch_tarball, 6_three_way_merge_per_file, 6b_verify_gate_integrity.
 
 Step coverage: 5_fetch_tarball, 6_three_way_merge_per_file, 6b_verify_gate_integrity.
+
 
 ### Rotate + repair (extracted v2.73.0 T9)
 
 Read `_shared/update/rotate-and-repair.md` and follow it exactly.
-Includes 2 steps: 7_rotate_ancestor_and_version (remove old ancestor stash, move extracted upstream into new vgflow-ancestor/v{LATEST}, atomic VGFLOW-VERSION bump) and 7b_repair_hooks (re-install Claude hooks via install-hooks.sh + prune legacy VG entries from settings.local.json to prevent v2.50.x double-hook drift).
+Includes 2 steps: 7_rotate_ancestor_and_version, 7b_repair_hooks.
 
 Step coverage: 7_rotate_ancestor_and_version, 7b_repair_hooks.
+
 
 ### Sync + report (extracted v2.73.0 T10 — final)
 
 Read `_shared/update/sync-and-report.md` and follow it exactly.
-Includes 4 closing steps: 8_sync_codex (deploy Codex skills + agents + templates from rotated release ancestor into .codex/ via tri-state VG_UPDATE_PROJECT_CODEX [auto-detect prior project install by default; 1=force, 0=opt-out], optional global ~/.codex via tri-state VG_UPDATE_GLOBAL_CODEX [auto-detect prior global install by default; 1=force, 0=opt-out], verify mirror equivalence), 8b_repair_playwright_mcp (verify/repair playwright1-5 MCP workers via verify-playwright-mcp-config.py), 8c_ensure_graphify (verify/install Graphify tooling when graphify.enabled=true, soft-fail), and 9_report (final counts + NEXT_ACTION directive when conflicts parked, restart reminder).
+Includes 4 steps: 8_sync_codex, 8b_repair_playwright_mcp, 8c_ensure_graphify, 9_report.
 
 Step coverage: 8_sync_codex, 8b_repair_playwright_mcp, 8c_ensure_graphify, 9_report.
 
-CODEX NOTE: The final report's AI directive (`▶ NEXT_ACTION=/vg:reapply-patches[ --verify-gates]`) is runtime-agnostic — Codex MUST chain into /vg:reapply-patches in the next turn when CONFLICTS > 0 OR gate-conflicts.md exists, without waiting for a fresh user prompt (matches Claude behavior).
 
 </process>
 
@@ -231,9 +232,11 @@ CODEX NOTE: The final report's AI directive (`▶ NEXT_ACTION=/vg:reapply-patche
 - Non-check run: shows changelog preview, asks confirmation, either applies or exits on cancel.
 - Clean merges applied silently; conflicts parked to `.claude/vgflow-patches/{rel}.conflict` with manifest entry.
 - Major-version bump blocked unless `--accept-breaking` is passed AND migration doc displayed.
-- `.claude/VGFLOW-VERSION` bumped to `${LATEST}`; old `vgflow-ancestor/v{INSTALLED}` removed; new `vgflow-ancestor/v{LATEST}` populated.
-- Claude Code hooks are installed/repaired after update (`UserPromptSubmit`, `Stop`, `PostToolUse` edit warning, `PostToolUse` Bash step tracker).
-- Project-local Codex mirrors in `.codex/skills` and `.codex/agents` are refreshed from the updated release assets only when project install is detected (presence of `.codex/skills/vg-update`) OR `VG_UPDATE_PROJECT_CODEX=1` is set. Set `VG_UPDATE_PROJECT_CODEX=0` to permanently opt the project out (useful when keeping vgflow in `~/.codex` global only). Global `~/.codex` deploy follows the same auto-detect rule via `VG_UPDATE_GLOBAL_CODEX` (auto-detects prior global install; `1`/`0` to force/skip). Both env vars default to `auto` for symmetric, non-destructive behavior.
+- `~/.vgflow` exists and points at the active VGFlow install.
+- Claude Code hooks are installed/repaired at `~/.claude/settings.json`.
+- Codex skills/agents are refreshed at `~/.codex/skills` and `~/.codex/agents`.
+- Project-local VG-owned `.claude/` and `.codex/` files are pruned with backup.
+- `.vg/.install-target` is written as `global`.
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.
 - Playwright MCP workers are verified/repaired after update for both Claude and Codex (`playwright1`..`playwright5`) and stale hardcoded lock scripts are replaced.
 - Graphify tooling is verified/repaired after update when `graphify.enabled=true`; missing package installs `graphifyy[mcp]`, `.mcp.json` is repaired, and `.graphifyignore` / `.gitignore` are maintained.

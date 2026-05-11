@@ -15,85 +15,16 @@ CODEX_SOURCE="${NEW_ANCESTOR}"
 CODEX_SKILLS_UPDATED=0
 CODEX_AGENTS_UPDATED=0
 
-# Project .codex deploy tri-state (v2.76.0+, symmetric with VG_UPDATE_GLOBAL_CODEX):
-# Tri-state VG_UPDATE_PROJECT_CODEX:
-#   1     -> always deploy to project .codex (legacy default — backwards compat)
-#   0     -> never deploy to project .codex (opt-out — useful when user keeps
-#            vgflow in ~/.codex global only; prevents duplicate-flow bug at
-#            project-side instead of global-side)
-#   unset -> auto: deploy ONLY if .codex/skills/vg-update already exists
-#            (i.e., project previously had vgflow installed locally)
-#
-# Default 'auto' makes /vg:update non-destructive: if user opted out of project
-# install (e.g. after running cleanup to keep global only), /vg:update will not
-# silently re-create the duplicate. install.sh remains the canonical first-time
-# project installer — it always populates .codex/skills/vg-update, which then
-# auto-detects on subsequent updates.
-PROJECT_CODEX_HAS_VGFLOW=0
-if [ -d "${REPO_ROOT}/.codex/skills/vg-update" ]; then
-  PROJECT_CODEX_HAS_VGFLOW=1
+# v3.6.6 global-only contract: never deploy Codex skills into the project.
+# Project-local .codex is a stale duplicate surface; prune it with backup via
+# the same uninstall helper used by `vg install`/dispatcher update.
+UNINSTALL_HELPER="${REPO_ROOT}/.claude/scripts/vg_uninstall.py"
+if [ -f "$UNINSTALL_HELPER" ]; then
+  python3 "$UNINSTALL_HELPER" --root "$REPO_ROOT" --apply
+  echo "Codex project deploy: disabled (global-only); project-local VG files pruned"
+else
+  echo "Codex project deploy: disabled (global-only); vg_uninstall.py missing, manual project cleanup may be needed"
 fi
-
-VG_PROJECT_CODEX_DECISION="skip"
-case "${VG_UPDATE_PROJECT_CODEX:-auto}" in
-  1)
-    VG_PROJECT_CODEX_DECISION="deploy-explicit"
-    ;;
-  0)
-    VG_PROJECT_CODEX_DECISION="skip-explicit"
-    ;;
-  auto)
-    if [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ]; then
-      VG_PROJECT_CODEX_DECISION="deploy-auto"
-    else
-      VG_PROJECT_CODEX_DECISION="skip-auto"
-    fi
-    ;;
-esac
-
-case "$VG_PROJECT_CODEX_DECISION" in
-  deploy-explicit|deploy-auto)
-    if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
-      mkdir -p "${REPO_ROOT}/.codex/skills"
-      while IFS= read -r skill_dir; do
-        [ -f "$skill_dir/SKILL.md" ] || continue
-        skill="$(basename "$skill_dir")"
-        rm -rf "${REPO_ROOT}/.codex/skills/${skill}"
-        mkdir -p "${REPO_ROOT}/.codex/skills/${skill}"
-        cp -R "$skill_dir"/. "${REPO_ROOT}/.codex/skills/${skill}/"
-        CODEX_SKILLS_UPDATED=$((CODEX_SKILLS_UPDATED + 1))
-      done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
-    fi
-
-    if [ -d "${CODEX_SOURCE}/templates/codex-agents" ]; then
-      mkdir -p "${REPO_ROOT}/.codex/agents"
-      cp "${CODEX_SOURCE}/templates/codex-agents/"*.toml "${REPO_ROOT}/.codex/agents/" 2>/dev/null || true
-      CODEX_AGENTS_UPDATED=$(ls "${REPO_ROOT}/.codex/agents/"*.toml 2>/dev/null | wc -l | tr -d ' ')
-    fi
-
-    if [ -d "${CODEX_SOURCE}/templates/codex" ]; then
-      mkdir -p "${REPO_ROOT}/.codex"
-      cp "${CODEX_SOURCE}/templates/codex/"* "${REPO_ROOT}/.codex/" 2>/dev/null || true
-    fi
-
-    if [ "$VG_PROJECT_CODEX_DECISION" = "deploy-auto" ]; then
-      echo "Codex project deploy: refreshed .codex skills/agents (auto-detected prior project install)"
-    else
-      echo "Codex project deploy: VG_UPDATE_PROJECT_CODEX=1 — refreshed .codex skills/agents"
-    fi
-    ;;
-  skip-explicit)
-    echo "Codex project deploy: skipped (VG_UPDATE_PROJECT_CODEX=0 — explicit opt-out)"
-    if [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ]; then
-      echo "  ⚠ Stale vgflow detected at .codex/skills — Codex CLI may register each flow TWICE."
-      echo "    Resolve: rerun without VG_UPDATE_PROJECT_CODEX=0 (auto-refresh) OR manually:"
-      echo "      rm -rf .codex/skills/vg-* && rm -rf .codex/skills/{api-contract,flow-codegen,flow-runner,flow-scan,flow-spec,sandbox-test,test-depth,test-gen,test-review,test-scan,write-test-spec} && rm -f .codex/agents/vgflow-*.toml"
-    fi
-    ;;
-  skip-auto)
-    echo "Codex project deploy: skipped (no prior project vgflow detected; set VG_UPDATE_PROJECT_CODEX=1 to deploy)"
-    ;;
-esac
 
 codex_config_path() {
   local path="$1"
@@ -120,142 +51,30 @@ EOF
   fi
 }
 
-# Global ~/.codex deploy auto-detect (v2.75.1):
-# Codex CLI loads skills from BOTH ~/.codex/skills (global) AND .codex/skills
-# (project). If a prior `install.sh --global-codex` populated ~/.codex/skills/,
-# /vg:update must refresh it OR Codex CLI registers each flow TWICE — once
-# from stale global, once from fresh project = duplicate-flow bug (#duplicate-flow).
-#
-# Tri-state VG_UPDATE_GLOBAL_CODEX:
-#   1     -> always refresh global (legacy opt-in)
-#   0     -> never refresh global (explicit opt-out, even if global vgflow exists)
-#   unset -> auto: refresh ONLY if ~/.codex/skills/vg-update already exists
-#            (i.e., user previously installed vgflow globally)
-GLOBAL_CODEX_HAS_VGFLOW=0
-if [ -d "$HOME/.codex/skills/vg-update" ]; then
-  GLOBAL_CODEX_HAS_VGFLOW=1
+# Global ~/.codex deploy is mandatory in global-only mode.
+mkdir -p "$HOME/.codex/skills" "$HOME/.codex/agents"
+if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
+  while IFS= read -r skill_dir; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    skill="$(basename "$skill_dir")"
+    rm -rf "$HOME/.codex/skills/${skill}"
+    mkdir -p "$HOME/.codex/skills/${skill}"
+    cp -R "$skill_dir"/. "$HOME/.codex/skills/${skill}/"
+    CODEX_SKILLS_UPDATED=$((CODEX_SKILLS_UPDATED + 1))
+  done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
 fi
-
-VG_GLOBAL_CODEX_DECISION="skip"
-case "${VG_UPDATE_GLOBAL_CODEX:-auto}" in
-  1)
-    VG_GLOBAL_CODEX_DECISION="refresh-explicit"
-    ;;
-  0)
-    VG_GLOBAL_CODEX_DECISION="skip-explicit"
-    ;;
-  auto)
-    if [ "$GLOBAL_CODEX_HAS_VGFLOW" = "1" ]; then
-      VG_GLOBAL_CODEX_DECISION="refresh-auto"
-    else
-      VG_GLOBAL_CODEX_DECISION="skip-auto"
-    fi
-    ;;
-esac
-
-case "$VG_GLOBAL_CODEX_DECISION" in
-  refresh-explicit|refresh-auto)
-    if [ ! -d "$HOME/.codex" ]; then
-      echo "Codex global deploy: ~/.codex missing — skipped"
-    else
-      mkdir -p "$HOME/.codex/skills" "$HOME/.codex/agents"
-      if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
-        while IFS= read -r skill_dir; do
-          [ -f "$skill_dir/SKILL.md" ] || continue
-          skill="$(basename "$skill_dir")"
-          rm -rf "$HOME/.codex/skills/${skill}"
-          mkdir -p "$HOME/.codex/skills/${skill}"
-          cp -R "$skill_dir"/. "$HOME/.codex/skills/${skill}/"
-        done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d | sort)
-      fi
-      if [ -d "${CODEX_SOURCE}/templates/codex-agents" ]; then
-        cp "${CODEX_SOURCE}/templates/codex-agents/"*.toml "$HOME/.codex/agents/" 2>/dev/null || true
-      fi
-      CODEX_CONFIG="$HOME/.codex/config.toml"
-      touch "$CODEX_CONFIG"
-      register_codex_agent "$CODEX_CONFIG" "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
-      register_codex_agent "$CODEX_CONFIG" "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
-      register_codex_agent "$CODEX_CONFIG" "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
-      if [ "$VG_GLOBAL_CODEX_DECISION" = "refresh-auto" ]; then
-        echo "Codex global deploy: refreshed ~/.codex skills/agents (auto-detected prior global vgflow install — prevents duplicate-flow bug)"
-      else
-        echo "Codex global deploy: VG_UPDATE_GLOBAL_CODEX=1 — refreshed ~/.codex skills/agents"
-      fi
-    fi
-    ;;
-  skip-explicit)
-    echo "Codex global deploy: skipped (VG_UPDATE_GLOBAL_CODEX=0 — explicit opt-out)"
-    if [ "$GLOBAL_CODEX_HAS_VGFLOW" = "1" ]; then
-      echo "  ⚠ Stale vgflow detected at ~/.codex/skills — Codex CLI may register each flow TWICE."
-      echo "    Resolve: rerun without VG_UPDATE_GLOBAL_CODEX=0 (auto-refresh) OR manually:"
-      echo "      rm -rf ~/.codex/skills/vg-* && rm -rf ~/.codex/skills/{api-contract,flow-codegen,flow-runner,flow-scan,flow-spec,sandbox-test,test-depth,test-gen,test-review,test-scan,write-test-spec}"
-    fi
-    ;;
-  skip-auto)
-    echo "Codex global deploy: skipped (no prior global vgflow detected; set VG_UPDATE_GLOBAL_CODEX=1 to deploy)"
-    ;;
-esac
+if [ -d "${CODEX_SOURCE}/templates/codex-agents" ]; then
+  cp "${CODEX_SOURCE}/templates/codex-agents/"*.toml "$HOME/.codex/agents/" 2>/dev/null || true
+  CODEX_AGENTS_UPDATED=$(ls "$HOME/.codex/agents/"*.toml 2>/dev/null | wc -l | tr -d ' ')
+fi
+CODEX_CONFIG="$HOME/.codex/config.toml"
+touch "$CODEX_CONFIG"
+register_codex_agent "$CODEX_CONFIG" "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
+register_codex_agent "$CODEX_CONFIG" "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
+register_codex_agent "$CODEX_CONFIG" "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+echo "Codex global deploy: refreshed ~/.codex skills/agents (global-only)"
 
 echo "Codex mirror: skills=${CODEX_SKILLS_UPDATED} agents=${CODEX_AGENTS_UPDATED}"
-
-# v3.6.4 — marker-driven dedupe of Codex skills.
-#
-# Bug: even with tri-state VG_UPDATE_{PROJECT,GLOBAL}_CODEX, an operator
-# who started with project-local install + later opted into global
-# (`install.sh --global-codex`) ended up with vgflow skills in BOTH
-# ~/.codex/skills/ AND <project>/.codex/skills/. Codex CLI's skill picker
-# reads both → every $vg- flow shows up twice. /vg:update did not clean
-# this even though sync.sh already had prune_duplicate_codex_skills()
-# (v3.6.1) — sync.sh path is not exercised by /vg:update.
-#
-# Fix: respect .vg/.install-target marker. After both project + global
-# deploy steps above, prune the duplicate side so Codex picker sees one
-# canonical flow per name. Marker resolution:
-#   global    → prune <project>/.codex/skills/vg-*
-#   project   → prune ~/.codex/skills/vg-*
-#   absent    → default to pruning project (v3.0.0 architecture preference)
-INSTALL_TARGET=""
-if [ -f "${REPO_ROOT}/.vg/.install-target" ]; then
-  INSTALL_TARGET="$(tr -d '[:space:]' < "${REPO_ROOT}/.vg/.install-target" 2>/dev/null || true)"
-fi
-
-prune_codex_dir() {
-  local dir="$1"
-  local label="$2"
-  [ -d "$dir" ] || return 0
-  local pruned=0
-  if [ -d "${CODEX_SOURCE}/codex-skills" ]; then
-    while IFS= read -r src_skill_dir; do
-      [ -d "$src_skill_dir" ] || continue
-      local name
-      name="$(basename "$src_skill_dir")"
-      if [ -d "${dir}/${name}" ]; then
-        rm -rf "${dir}/${name}" 2>/dev/null && pruned=$((pruned + 1))
-      fi
-    done < <(find "${CODEX_SOURCE}/codex-skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
-  fi
-  if [ "$pruned" -gt 0 ]; then
-    echo "Codex dedupe (${label}): pruned ${pruned} duplicate skill dir(s) from ${dir}"
-  fi
-}
-
-# Only run dedupe when both sides actually had vgflow content; otherwise
-# there's nothing to dedupe and we skip silently.
-if [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ] && [ "$GLOBAL_CODEX_HAS_VGFLOW" = "1" ]; then
-  case "$INSTALL_TARGET" in
-    project)
-      prune_codex_dir "$HOME/.codex/skills" "global-side (install-target=project)"
-      ;;
-    global|"")
-      prune_codex_dir "${REPO_ROOT}/.codex/skills" "project-side (install-target=${INSTALL_TARGET:-unset})"
-      ;;
-    *)
-      echo "Codex dedupe: unknown install-target=${INSTALL_TARGET} — leaving both sides intact"
-      ;;
-  esac
-elif [ "$PROJECT_CODEX_HAS_VGFLOW" = "1" ] || [ "$GLOBAL_CODEX_HAS_VGFLOW" = "1" ]; then
-  echo "Codex dedupe: only one side has vgflow content — nothing to prune"
-fi
 
 if [ -f "${REPO_ROOT}/.claude/scripts/verify-codex-mirror-equivalence.py" ]; then
   VERIFY_OUT="${PATCHES_DIR}/codex-mirror-verify.json"
