@@ -1103,3 +1103,20 @@ bug_reporting:
   max_per_session: 5
   queue_path: ".claude/.bug-reports-queue.jsonl"
   sent_cache_path: ".claude/.bug-reports-sent.jsonl"
+
+## field_test (v3.7+ — /vg:field-test skill, v1 scope)
+
+```yaml
+field_test:
+  api_log_sources:
+    # - { type: file,    target: /var/log/api.log,                  label: api }
+    # - { type: command, target: "docker logs -f my-api",           label: docker-api }
+    # - { type: command, target: "kubectl logs -f pod/api -n prod", label: k8s-api }
+
+  default_redaction: 'password|token|secret|api[_-]?key|email|phone|bearer\s+[A-Za-z0-9._-]+|authorization:\s*\S+'
+  default_base_url: ""
+  mark_window_sec: 30
+  screenshot_quality: 80
+  session_max_size_mb: 200
+  max_session_hours: 4
+```

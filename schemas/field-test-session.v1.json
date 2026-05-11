@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vgflow.dev/schemas/field-test-session.v1.json",
+  "title": "VG field-test session (v1) — user-driven roam capture",
+  "type": "object",
+  "required": ["version", "sid", "phase", "base_url", "ts_started", "sources", "redaction"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {"const": "1"},
+    "sid": {"type": "string", "pattern": "^ft-(p[A-Za-z0-9._-]+-)?[0-9TZ:.-]+$"},
+    "phase": {"type": ["string", "null"]},
+    "base_url": {"type": "string"},
+    "ts_started": {"type": "string", "format": "date-time"},
+    "ts_stopped": {"type": ["string", "null"]},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "target", "label"],
+        "properties": {
+          "type": {"enum": ["file", "command"]},
+          "target": {"type": "string"},
+          "label": {"type": "string"},
+          "pid": {"type": ["integer", "null"]}
+        }
+      }
+    },
+    "redaction": {"type": "string"},
+    "mark_count": {"type": "integer", "minimum": 0},
+    "bundle_path": {"type": ["string", "null"]},
+    "phase_goal": {
+      "type": ["string", "null"],
+      "description": "v2.1: optional cross-ref to a phase goal ID — accepts domain IDs (G-AUTH-00, G-FE-ADMIN-DLQ-01) post-PR-#177 generic ID rewrite",
+      "pattern": "^G-[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    }
+  }
+}
