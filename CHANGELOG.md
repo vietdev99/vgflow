@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.6.5 — review auto-records RUNTIME-MAP.json to evidence-manifest (2026-05-11)
+
+### Bug — Codex vg:review run-complete blocked on must_write artifacts (closes #175)
+
+`commands/vg/_shared/review/fix-loop-and-goals.md` emitted an evidence-manifest entry for `GOAL-COVERAGE-MATRIX.md` only. `RUNTIME-MAP.json`, written by step 2b-3, never received its own manifest entry. Operators reported run-complete blocking because must_write artifacts existed on disk but had no `.vg/runs/<run>/evidence-manifest.json` entries — requiring manual `emit-evidence-manifest.py` invocation before review could close.
+
+Signature: `45c32b6c` (auto-reported by vg bug-reporter v3.6.3 on darwin).
+
+### Fix — emit manifest entry for RUNTIME-MAP.json at Phase 4 close
+
+Fix-loop now emits two manifest entries side-by-side:
+
+- `RUNTIME-MAP.json` → producer `vg:review phase2b3_runtime_map`, source_inputs `nav-discovery.json,TEST-GOALS.md`.
+- `GOAL-COVERAGE-MATRIX.md` → producer `vg:review phase4_goal_comparison` (existing).
+
+Both wrapped in `[ -f ... ]` guards so backend-only phases that legitimately skip RUNTIME-MAP.json don't false-block. Both mirrored to `.claude/commands/...`.
+
+### Tests
+
+- `tests/test_issue_175_review_runtime_map_manifest.py` — 6 regression tests covering canonical+mirror parity, producer tagging, source-input provenance, file-existence guards.
+
 ## Unreleased — global-only install + lifecycle spec depth
 
 ### Fix — global install/update leaves no project-local VG duplicates

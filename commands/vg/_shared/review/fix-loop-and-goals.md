@@ -953,17 +953,28 @@ else
   # Legacy path: orchestrator writes matrix directly using template below
 fi
 
-# Bind GOAL-COVERAGE-MATRIX.md provenance to both runtime evidence and
-# post-build lifecycle artifacts. This makes run-complete catch stale matrix
-# reuse and lifecycle-spec drift after review.
+# Bind GOAL-COVERAGE-MATRIX.md + RUNTIME-MAP.json provenance to both runtime
+# evidence and post-build lifecycle artifacts. This makes run-complete catch
+# stale matrix reuse, lifecycle-spec drift, AND stale runtime-map reuse after
+# review. Closes #175: must_write artifacts existed on disk but had no
+# evidence-manifest entries → manual emit-evidence-manifest calls required.
 EMIT_MANIFEST="${REPO_ROOT}/.claude/scripts/emit-evidence-manifest.py"
 [ -f "$EMIT_MANIFEST" ] || EMIT_MANIFEST="${REPO_ROOT}/scripts/emit-evidence-manifest.py"
-if [ -f "$EMIT_MANIFEST" ] && [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
-  "${PYTHON_BIN:-python3}" "$EMIT_MANIFEST" \
-    --path "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" \
-    --producer "vg:review phase4_goal_comparison" \
-    --source-inputs "${PHASE_DIR}/TEST-GOALS.md,${PHASE_DIR}/RUNTIME-MAP.json,${PHASE_DIR}/.surface-probe-results.json,${PHASE_DIR}/DEEP-TEST-SPECS.md,${PHASE_DIR}/LIFECYCLE-SPECS.json,${PHASE_DIR}/TEST-FIXTURE-DAG.json,${PHASE_DIR}/TEST-EXECUTION-PLAN.json" \
-    --quiet || true
+if [ -f "$EMIT_MANIFEST" ]; then
+  if [ -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
+    "${PYTHON_BIN:-python3}" "$EMIT_MANIFEST" \
+      --path "${PHASE_DIR}/RUNTIME-MAP.json" \
+      --producer "vg:review phase2b3_runtime_map" \
+      --source-inputs "${PHASE_DIR}/nav-discovery.json,${PHASE_DIR}/TEST-GOALS.md" \
+      --quiet || true
+  fi
+  if [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
+    "${PYTHON_BIN:-python3}" "$EMIT_MANIFEST" \
+      --path "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" \
+      --producer "vg:review phase4_goal_comparison" \
+      --source-inputs "${PHASE_DIR}/TEST-GOALS.md,${PHASE_DIR}/RUNTIME-MAP.json,${PHASE_DIR}/.surface-probe-results.json,${PHASE_DIR}/DEEP-TEST-SPECS.md,${PHASE_DIR}/LIFECYCLE-SPECS.json,${PHASE_DIR}/TEST-FIXTURE-DAG.json,${PHASE_DIR}/TEST-EXECUTION-PLAN.json" \
+      --quiet || true
+  fi
 fi
 
 # Defense-in-depth: matrix-merger now downgrades shallow mutation sequences, but
