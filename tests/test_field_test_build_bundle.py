@@ -110,6 +110,11 @@ def test_zero_marks_session_valid_manifest(tmp_path):
     manifest = json.loads((session / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["mark_count"] == 0
     assert manifest["partial"] is False
+    marks_out = session / "marks.jsonl"
+    assert marks_out.exists(), "marks.jsonl must be written even for 0-mark sessions"
+    assert marks_out.read_text(encoding="utf-8") == "", (
+        "marks.jsonl should be empty (zero lines) for 0-mark session"
+    )
 
 
 def test_redaction_applied_both_capture_and_build(tmp_path):
@@ -152,3 +157,41 @@ def test_api_log_window_correlation(tmp_path):
     assert any("within_window" in ln for ln in api_correlated)
     assert not any("too_early" in ln for ln in api_correlated)
     assert not any("too_late" in ln for ln in api_correlated)
+
+
+def test_api_log_window_boundary_inclusive_at_millisecond_precision(tmp_path):
+    """v2.1 fix: API log line at EXACT window boundary (to the millisecond) must
+    be included. Previously, prefix-iso.py's .mmmZ form was compared against
+    _shift_iso's .ffffffZ form, silently excluding boundary lines."""
+    session = _seed_minimal(tmp_path)
+    # Single mark at 10:00:30.000Z
+    (session / "marks.raw.jsonl").write_text(
+        json.dumps({"n": 0, "ts": "2026-05-11T10:00:30.000Z", "url": "http://x",
+                    "user_note": "boundary test"}) + "\n",
+        encoding="utf-8",
+    )
+    # API log: 4 lines — both exact-boundary lines (-30s and +30s) must be INSIDE
+    # with --mark-window-sec=30.
+    (session / "api-test.log").write_text(
+        "2026-05-11T10:00:00.000Z exact_lo_boundary\n"
+        "2026-05-11T10:00:30.000Z dead_center\n"
+        "2026-05-11T10:01:00.000Z exact_hi_boundary\n"
+        "2026-05-11T10:01:00.001Z one_ms_past_hi\n",
+        encoding="utf-8",
+    )
+    r = subprocess.run(
+        [sys.executable, str(BUILDER), "--session-dir", str(session), "--mark-window-sec", "30"],
+        capture_output=True, text=True, check=True,
+    )
+    bundle = json.loads((session / "marks.jsonl").read_text(encoding="utf-8").strip())
+    api_correlated = bundle["api_log_correlated"]["test"]
+    assert any("exact_lo_boundary" in ln for ln in api_correlated), (
+        "exact -window boundary line must be INCLUDED"
+    )
+    assert any("dead_center" in ln for ln in api_correlated)
+    assert any("exact_hi_boundary" in ln for ln in api_correlated), (
+        "exact +window boundary line must be INCLUDED (was excluded by width mismatch bug)"
+    )
+    assert not any("one_ms_past_hi" in ln for ln in api_correlated), (
+        "line 1ms past window must be EXCLUDED"
+    )

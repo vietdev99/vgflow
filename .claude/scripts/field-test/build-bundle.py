@@ -60,12 +60,17 @@ def parse_iso_log(path: Path, errors_log: Path) -> list[LogLine]:
             if not m:
                 err.write(json.dumps({"src": str(path), "naive_ts": ln}) + "\n")
                 continue
-            out.append(LogLine(ts_iso=m.group(1), raw=ln))
+            # Normalize captured ts to .ffffffZ width so it compares correctly against
+            # lo/hi values produced by _shift_iso (which always emits 6 decimal places).
+            out.append(LogLine(ts_iso=_shift_iso(m.group(1), 0), raw=ln))
     return out
 
 
 def correlate_window(lines: list[LogLine], mark_ts: str, window_sec: int) -> list[str]:
-    """ISO-8601 lexicographic comparison is correct for fixed-width Z form."""
+    """ISO-8601 lexicographic comparison — REQUIRES all timestamps normalized
+    to fixed `.ffffffZ` width by parse_iso_log / _slice_browser_window so the
+    string compare aligns across API logs (.mmmZ from prefix-iso.py) and
+    browser streams (.mmmZ from JS Date.toISOString)."""
     lo = _shift_iso(mark_ts, -window_sec)
     hi = _shift_iso(mark_ts, +window_sec)
     return [ln.raw for ln in lines if lo <= ln.ts_iso <= hi]
@@ -80,7 +85,12 @@ def _slice_browser_window(stream_lines: list[str], mark_ts: str, window_sec: int
         m = ts_field.search(ln)
         if not m:
             continue
-        if lo <= m.group(1) <= hi:
+        # Normalize the captured ts to width-match lo/hi (see _shift_iso).
+        try:
+            extracted = _shift_iso(m.group(1), 0)
+        except (ValueError, AttributeError):
+            continue  # malformed ts — skip
+        if lo <= extracted <= hi:
             yield ln
 
 
@@ -88,7 +98,9 @@ def assemble(session_dir: Path, mark_window_sec: int) -> dict:
     session = json.loads((session_dir / "session.json").read_text(encoding="utf-8"))
     pat, _used_default = redact_stream.build_pattern(session.get("redaction") or "default")
     errors_log = session_dir / "errors.jsonl"
-    # Truncate errors.jsonl at the start of a build so it reflects THIS build's findings.
+    # Truncate errors.jsonl so it reflects only THIS build's findings (not
+    # accumulated across retries). On re-runs after a failed build, prior
+    # diagnostics are intentionally discarded — see plan v2.1 Task 5 docs.
     errors_log.write_text("", encoding="utf-8")
 
     # Per-source API logs.
