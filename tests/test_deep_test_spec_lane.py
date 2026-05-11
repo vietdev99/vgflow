@@ -13,18 +13,18 @@ VAL = REPO_ROOT / "scripts" / "validators" / "verify-deep-test-specs.py"
 
 
 def _make_phase(root: Path) -> Path:
-    phase = root / ".vg" / "phases" / "06-merchant-team"
+    phase = root / ".vg" / "phases" / "06-workspace-access"
     phase.mkdir(parents=True)
     (phase / "SUMMARY.md").write_text("# Summary\n\nBuild done.\n", encoding="utf-8")
     (phase / "TEST-GOALS.md").write_text(
         """# Test Goals
 
-## Goal G-TEAM-INVITE: owner invites a member and manages role
+## Goal G-ACCESS-GRANT: owner grants collaborator access and manages role
 goal_type: multi-actor
-Surface: merchant team settings
-Mutation evidence: POST /api/team/invitations returns invitation id and token/email artifact
-Persistence check: GET /api/team/members shows active invitee after accept; role patch persists; revoke removes session
-Dependencies: owner user, invitee user, invitation token/email, accept invite
+Surface: workspace access settings
+Mutation evidence: POST /api/access/grants returns grant id and one-time artifact
+Persistence check: GET /api/access/members shows active collaborator after acceptance; role patch persists; revoke removes session
+Dependencies: owner account, collaborator account, one-time acceptance artifact
 """,
         encoding="utf-8",
     )
@@ -35,11 +35,11 @@ def test_generate_deep_test_specs_post_build(tmp_path: Path) -> None:
     phase = _make_phase(tmp_path)
     app = tmp_path / "src" / "routes"
     app.mkdir(parents=True)
-    (app / "team.tsx").write_text(
+    (app / "access.tsx").write_text(
         """
-        export const path = "/merchant/team";
-        fetch("/api/team/invitations", { method: "POST" });
-        <form data-testid="invite-member-form"></form>
+        export const path = "/workspace/access";
+        fetch("/api/access/grants", { method: "POST" });
+        <form data-testid="grant-access-form"></form>
         """,
         encoding="utf-8",
     )
@@ -68,14 +68,18 @@ def test_generate_deep_test_specs_post_build(tmp_path: Path) -> None:
     summary = json.loads(result.stdout)
     assert summary["lifecycle_goals"] == 1
     assert summary["forms"] >= 1
+    assert summary["phase_profile"] == "web-fullstack"
+    assert summary["execution_plan_goals"] == 1
     assert (phase / "DEEP-TEST-SPECS.md").is_file()
     assert (phase / "LIFECYCLE-SPECS.json").is_file()
     assert (phase / "TEST-FIXTURE-DAG.json").is_file()
+    assert (phase / "TEST-EXECUTION-PLAN.json").is_file()
+    assert (phase / "TEST-SPEC-LOCALIZER" / "PROMPT.md").is_file()
     assert (phase / "PLAYWRIGHT-SPEC-PLAN.md").is_file()
     assert (phase / "TEST-SPEC-GAPS.md").is_file()
 
     lifecycle = json.loads((phase / "LIFECYCLE-SPECS.json").read_text(encoding="utf-8"))
-    spec = lifecycle["goals"]["G-TEAM-INVITE"]
+    spec = lifecycle["goals"]["G-ACCESS-GRANT"]
     stages = [step["stage"] for step in spec["steps"]]
     assert stages == [
         "read_before",
@@ -88,6 +92,11 @@ def test_generate_deep_test_specs_post_build(tmp_path: Path) -> None:
     ]
     assert len(spec["actors"]) >= 2
     assert spec["artifact_capture"]
+    assert spec["execution_plan"]["runner"] == "playwright"
+
+    execution = json.loads((phase / "TEST-EXECUTION-PLAN.json").read_text(encoding="utf-8"))
+    assert execution["phase_profile"] == "web-fullstack"
+    assert execution["goals"]["G-ACCESS-GRANT"]["entrypoints"]
 
 
 def test_verify_deep_test_specs_blocks_missing(tmp_path: Path) -> None:
@@ -129,3 +138,4 @@ def test_test_spec_command_supports_global_only_install() -> None:
     assert 'PHASE_RESOLVER="${VG_HOME}/commands/vg/_shared/lib/phase-resolver.sh"' in command
     assert 'SCRIPT="${VG_HOME}/scripts/generate-deep-test-specs.py"' in command
     assert 'VALIDATOR="${VG_HOME}/scripts/validators/verify-deep-test-specs.py"' in command
+    assert "--ai-response=" in command

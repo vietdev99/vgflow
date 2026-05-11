@@ -86,7 +86,8 @@ The subagent writes:
 - `${PHASE_DIR}/TEST-GOALS.md` (per-decision goals + persistence + URL state)
 - `${PHASE_DIR}/CRUD-SURFACES.md` (resource × operation × platform contract)
 - Lifecycle specs are NOT generated here. `/vg:test-spec` owns post-build
-  `LIFECYCLE-SPECS.json`, `DEEP-TEST-SPECS.md`, and `TEST-FIXTURE-DAG.json`
+  `LIFECYCLE-SPECS.json`, `DEEP-TEST-SPECS.md`, `TEST-FIXTURE-DAG.json`,
+  `TEST-EXECUTION-PLAN.json`, and `TEST-SPEC-LOCALIZER/PROMPT.md`
   after implemented surfaces exist.
 
 Returns JSON with paths + sha256 + bindings_satisfied + warnings.

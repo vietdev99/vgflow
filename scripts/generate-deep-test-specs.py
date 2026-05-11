@@ -141,6 +141,20 @@ def load_lifecycle_generator() -> Any:
     spec.loader.exec_module(module)
     return module
 
+def load_test_spec_expander() -> Any:
+    here = Path(__file__).resolve().parent
+    path = here / "test_spec_ai_expander.py"
+    if not path.exists():
+        path = Path.cwd() / ".claude" / "scripts" / "test_spec_ai_expander.py"
+    if not path.exists():
+        raise SystemExit("test_spec_ai_expander.py not found")
+    spec = importlib.util.spec_from_file_location("vg_test_spec_ai_expander", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot import test-spec expander: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 def has_build_evidence(phase_dir: Path) -> bool:
     return bool(
@@ -170,7 +184,8 @@ def scan_surfaces(root: Path, max_files: int = 1200) -> dict[str, Any]:
     forms: list[dict[str, str]] = []
     selector_files = 0
 
-    for path in iter_source_files(root, max_files):
+    source_files = iter_source_files(root, max_files)
+    for path in source_files:
         text = read(path)
         rel = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
         if TESTID_RE.search(text):
@@ -192,7 +207,7 @@ def scan_surfaces(root: Path, max_files: int = 1200) -> dict[str, Any]:
         "forms": forms[:300],
         "mutations": mutations[:300],
         "selector_files": selector_files,
-        "files_scanned": len(iter_source_files(root, max_files)),
+        "files_scanned": len(source_files),
     }
 
 
@@ -242,6 +257,7 @@ def render_deep_specs(phase_dir: Path, lifecycle: dict[str, Any], surfaces: dict
         f"- Form surfaces detected: `{len(surfaces['forms'])}`",
         f"- Mutation candidates detected: `{len(surfaces['mutations'])}`",
         f"- Files exposing selectors/roles/labels: `{surfaces['selector_files']}`",
+        f"- Phase profile: `{lifecycle.get('phase_profile', 'mixed')}`",
         "",
         "## Lifecycle Goals",
         "",
@@ -261,6 +277,7 @@ def render_deep_specs(phase_dir: Path, lifecycle: dict[str, Any], surfaces: dict
                 f"- RCRURDR stages: `{', '.join(stages)}`",
                 f"- Artifact capture: `{len(spec.get('artifact_capture') or [])}` item(s)",
                 f"- Cleanup: `{len(spec.get('cleanup') or [])}` item(s)",
+                f"- Runner: `{(spec.get('execution_plan') or {}).get('runner', 'unplanned')}`",
                 "",
             ]
         )
@@ -275,6 +292,7 @@ def render_deep_specs(phase_dir: Path, lifecycle: dict[str, Any], surfaces: dict
             "- `/vg:review` must compare browser discovery against these lifecycle goals.",
             "- Runtime blockers stay in review/debug; missing executable specs route to `/vg:test` only after runtime is clean.",
             "- Mutation goals require read-before, create, read-after-create, update, read-after-update, delete, read-after-delete evidence.",
+            "- `TEST-EXECUTION-PLAN.json` selects runner family per phase profile; do not force Playwright for mobile, CLI, backend, or library phases.",
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
@@ -282,27 +300,47 @@ def render_deep_specs(phase_dir: Path, lifecycle: dict[str, Any], surfaces: dict
 
 def render_playwright_plan(lifecycle: dict[str, Any], surfaces: dict[str, Any]) -> str:
     lines = [
-        "# Playwright Spec Plan",
+        "# Compatibility Test Execution Plan",
         "",
         "## Global Requirements",
         "",
-        "- Capture console errors and failed network responses for every scenario.",
-        "- Use stable selectors: data-testid, role, label, name, or route-bound locators.",
+        "- Use the runner selected in `TEST-EXECUTION-PLAN.json` for this phase profile.",
+        "- Capture profile-native logs, traces, state snapshots, and failure artifacts for every scenario.",
+        "- Use stable entrypoints: selectors, accessibility ids, commands, endpoints, public APIs, jobs, events, or fixtures.",
         "- Seed through fixture DAG order, cleanup in reverse order.",
-        "- Assert UI, API response, and fresh re-read state after every mutation.",
+        "- Assert response/output/state and fresh re-read after every mutation.",
         "",
-        "## Spec Skeletons",
+        "## Runner Skeletons",
         "",
     ]
     for goal_id, spec in (lifecycle.get("goals") or {}).items():
         title = spec.get("title", "")
+        plan = spec.get("execution_plan") or {}
+        profile = plan.get("profile") or lifecycle.get("phase_profile") or "mixed"
+        family = plan.get("family") or "mixed"
+        runner = plan.get("runner") or "custom"
+        if family == "web":
+            file_hint = f"tests/e2e/{goal_id.lower().replace('.', '-')}.lifecycle.spec.ts"
+        elif family == "mobile":
+            file_hint = f"tests/mobile/{goal_id.lower().replace('.', '-')}.lifecycle.yaml"
+        elif family == "cli":
+            file_hint = f"tests/cli/{goal_id.lower().replace('.', '-')}.lifecycle.test"
+        elif family == "backend":
+            file_hint = f"tests/api/{goal_id.lower().replace('.', '-')}.lifecycle.test"
+        elif family == "library":
+            file_hint = f"tests/unit/{goal_id.lower().replace('.', '-')}.lifecycle.test"
+        else:
+            file_hint = f"tests/lifecycle/{goal_id.lower().replace('.', '-')}.test"
         lines.extend(
             [
                 f"### `{goal_id}` — {title}",
                 "",
-                f"- File: `tests/e2e/{goal_id.lower().replace('.', '-')}.lifecycle.spec.ts`",
+                f"- Profile: `{profile}`",
+                f"- Runner: `{runner}`",
+                f"- File hint: `{file_hint}`",
                 f"- Actors: `{', '.join(str(a.get('id')) for a in spec.get('actors') or [])}`",
                 f"- Fixtures: `{', '.join(str(f.get('id')) for f in spec.get('fixture_dag') or [])}`",
+                f"- Entrypoints: `{', '.join(str(item) for item in plan.get('entrypoints') or [])}`",
                 "- Steps:",
             ]
         )
@@ -319,6 +357,8 @@ def render_playwright_plan(lifecycle: dict[str, Any], surfaces: dict[str, Any]) 
 
 def render_gaps(lifecycle: dict[str, Any], surfaces: dict[str, Any], phase_dir: Path) -> str:
     gaps: list[str] = []
+    strategy = lifecycle.get("execution_strategy") if isinstance(lifecycle.get("execution_strategy"), dict) else {}
+    family = strategy.get("family") or "mixed"
     if not has_build_evidence(phase_dir):
         gaps.append("Build evidence missing; run `/vg:build` first.")
     if not (phase_dir / "TEST-GOALS.md").exists() and not (phase_dir / "TEST-GOALS").is_dir():
@@ -327,10 +367,12 @@ def render_gaps(lifecycle: dict[str, Any], surfaces: dict[str, Any], phase_dir: 
         gaps.append("No lifecycle goals emitted; verify mutation/multi-actor goals are tagged in TEST-GOALS.")
     if surfaces["mutations"] and not lifecycle.get("goals"):
         gaps.append("Mutation code exists but TEST-GOALS did not produce lifecycle contracts.")
-    if surfaces["forms"] and surfaces["selector_files"] == 0:
+    if family == "web" and surfaces["forms"] and surfaces["selector_files"] == 0:
         gaps.append("Forms detected but no stable selector/role/label hints found in scanned files.")
-    if not surfaces["routes"]:
-        gaps.append("No routes detected by static scan; review must rely on runtime navigation or framework-specific scanner.")
+    if family == "web" and not surfaces["routes"]:
+        gaps.append("No browser routes detected by static scan; review must rely on runtime navigation or framework-specific scanner.")
+    if family in {"mobile", "cli", "backend", "library"}:
+        gaps.append(f"Profile `{lifecycle.get('phase_profile', 'mixed')}` needs runner-native executable specs from `/vg:test`; browser-only coverage is insufficient.")
     if not gaps:
         gaps.append("No deterministic deep-spec gaps detected.")
     return "# Test Spec Gaps\n\n" + "\n".join(f"- {gap}" for gap in gaps) + "\n"
@@ -346,6 +388,7 @@ def main() -> int:
     parser.add_argument("--phase-dir")
     parser.add_argument("--root")
     parser.add_argument("--max-files", type=int, default=1200)
+    parser.add_argument("--ai-response", help="Optional AI expansion JSON/markdown response to merge into lifecycle specs")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -356,12 +399,25 @@ def main() -> int:
         raise SystemExit(f"build evidence missing for {phase_dir}; run /vg:build first")
 
     lifecycle_module = load_lifecycle_generator()
+    expander = load_test_spec_expander()
     lifecycle = lifecycle_module.generate(phase_dir)
     surfaces = scan_surfaces(root, max_files=args.max_files)
+    profile = expander.normalize_profile(
+        str(lifecycle.get("phase_profile") or "") or expander.detect_phase_profile(phase_dir, root)
+    )
+    lifecycle = expander.ensure_execution_plans(lifecycle, profile, surfaces)
+    ai_expansion: dict[str, Any] | None = None
+    if args.ai_response:
+        payload = expander.load_expansion_file(Path(args.ai_response))
+        lifecycle, ai_expansion = expander.apply_expansion(lifecycle, payload)
+        lifecycle = expander.ensure_execution_plans(lifecycle, profile, surfaces)
     fixture_dag = flatten_fixture_dag(lifecycle)
+    execution_plan = expander.build_execution_plan_artifact(lifecycle, surfaces)
 
     write_json(phase_dir / "LIFECYCLE-SPECS.json", lifecycle)
     write_json(phase_dir / "TEST-FIXTURE-DAG.json", fixture_dag)
+    write_json(phase_dir / "TEST-EXECUTION-PLAN.json", execution_plan)
+    localizer = expander.prepare(phase_dir, root, phase_dir / "TEST-SPEC-LOCALIZER")
     (phase_dir / "DEEP-TEST-SPECS.md").write_text(
         render_deep_specs(phase_dir, lifecycle, surfaces),
         encoding="utf-8",
@@ -378,16 +434,25 @@ def main() -> int:
     summary = {
         "phase_dir": str(phase_dir),
         "root": str(root),
+        "phase_profile": lifecycle.get("phase_profile"),
         "lifecycle_goals": len(lifecycle.get("goals") or {}),
         "fixture_nodes": len(fixture_dag["nodes"]),
         "fixture_edges": len(fixture_dag["edges"]),
+        "execution_plan_goals": len(execution_plan["goals"]),
         "routes": len(surfaces["routes"]),
         "forms": len(surfaces["forms"]),
         "mutations": len(surfaces["mutations"]),
+        "localizer": localizer,
+        "ai_expansion": ai_expansion,
         "artifacts": [
             "DEEP-TEST-SPECS.md",
             "LIFECYCLE-SPECS.json",
             "TEST-FIXTURE-DAG.json",
+            "TEST-EXECUTION-PLAN.json",
+            "TEST-SPEC-LOCALIZER/REQUEST.json",
+            "TEST-SPEC-LOCALIZER/PROMPT.md",
+            "TEST-SPEC-LOCALIZER/OUTPUT.schema.json",
+            "TEST-SPEC-LOCALIZER/OUTPUT.template.json",
             "PLAYWRIGHT-SPEC-PLAN.md",
             "TEST-SPEC-GAPS.md",
         ],

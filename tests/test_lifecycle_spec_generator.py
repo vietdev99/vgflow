@@ -36,13 +36,13 @@ def test_generator_creates_multi_actor_artifact_lifecycle_specs(tmp_path: Path) 
     (goals / "G-01.md").write_text(
         textwrap.dedent(
             """
-            # G-01: Merchant invites vendor by email token
+            # G-01: Owner grants collaborator access by one-time token
             **goal_type:** multi-actor
             **Surface:** api
             **Priority:** critical
-            **Mutation evidence:** POST /api/team/invitations returns 201 and emits email token
-            **Persistence check:** invitee accepts token, owner updates role, owner revokes access
-            **Dependencies:** merchant account and vendor account
+            **Mutation evidence:** POST /api/access/grants returns 201 and emits one-time token
+            **Persistence check:** collaborator accepts token, owner updates role, owner revokes access
+            **Dependencies:** owner account and collaborator account
             """
         ).strip()
         + "\n",
@@ -65,7 +65,7 @@ def test_generator_creates_multi_actor_artifact_lifecycle_specs(tmp_path: Path) 
     ]
     assert len(spec["actors"]) >= 2
     assert {step["stage"] for step in spec["steps"]} == set(payload["formula"]["stages"])
-    assert spec["primary_endpoints"] == [{"method": "POST", "path": "/api/team/invitations"}]
+    assert spec["primary_endpoints"] == [{"method": "POST", "path": "/api/access/grants"}]
     assert spec["artifact_capture"], "email/token goal must capture emitted artifact"
     assert any(item["id"] == "artifact_sink" for item in spec["fixture_dag"])
     assert spec["cleanup"]
@@ -99,11 +99,11 @@ def test_generator_output_passes_lifecycle_depth_validator(tmp_path: Path) -> No
     (phase / "TEST-GOALS.md").write_text(
         textwrap.dedent(
             """
-            ## Goal G-01: Admin freezes merchant store and replays queue on unfreeze
+            ## Goal G-01: Admin freezes resource and replays queue on unfreeze
             **goal_type:** mutation
             **Surface:** api
-            **Mutation evidence:** POST /api/admin/stores/123/freeze returns 200 and queues events
-            **Persistence check:** GET /api/admin/stores/123 shows Frozen, then unfreeze restores Active
+            **Mutation evidence:** POST /api/admin/resources/123/freeze returns 200 and queues events
+            **Persistence check:** GET /api/admin/resources/123 shows Frozen, then unfreeze restores Active
             """
         ).strip()
         + "\n",

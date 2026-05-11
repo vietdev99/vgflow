@@ -1,7 +1,7 @@
 ---
 name: vg:test-spec
-description: Post-build deep test-spec authoring — derive lifecycle specs and fixture DAG before review
-argument-hint: "<phase> [--regen] [--max-files=N]"
+description: Post-build deep test-spec authoring — derive lifecycle specs, fixture DAG, localizer prompt, and execution plan before review
+argument-hint: "<phase> [--regen] [--max-files=N] [--ai-response=path]"
 allowed-tools:
   - Read
   - Write
@@ -17,6 +17,12 @@ runtime_contract:
       content_min_bytes: 80
     - path: "${PHASE_DIR}/TEST-FIXTURE-DAG.json"
       content_min_bytes: 80
+    - path: "${PHASE_DIR}/TEST-EXECUTION-PLAN.json"
+      content_min_bytes: 80
+    - path: "${PHASE_DIR}/TEST-SPEC-LOCALIZER/REQUEST.json"
+      content_min_bytes: 80
+    - path: "${PHASE_DIR}/TEST-SPEC-LOCALIZER/PROMPT.md"
+      content_min_bytes: 200
     - path: "${PHASE_DIR}/PLAYWRIGHT-SPEC-PLAN.md"
       content_min_bytes: 180
     - path: "${PHASE_DIR}/TEST-SPEC-GAPS.md"
@@ -59,14 +65,17 @@ Pipeline:
 <rules>
 1. This command is post-build only. Missing `SUMMARY*.md`, `BUILD-LOG.md`, or
    `.build-progress.json` BLOCKs with guidance to run `/vg:build`.
-2. It authors test-depth contracts, not executable Playwright specs. Executable
+2. It authors test-depth contracts, not executable test specs. Executable
    specs still belong to `/vg:test`.
 3. Mutation and multi-actor goals must get closed-loop RCRURDR coverage:
    read_before → create → read_after_create → update → read_after_update →
    delete → read_after_delete.
 4. Fixture dependencies must be explicit: actors, sessions, resource ownership,
    artifact sinks, cleanup order.
-5. Review consumes these artifacts. If review finds runtime blockers, stay in
+5. VG is profile-aware. Web may use Playwright, mobile may use Maestro/Appium/native,
+   CLI may use command assertions, backend may use HTTP/RPC/job checks, library may
+   use unit/property tests.
+6. Review consumes these artifacts. If review finds runtime blockers, stay in
    review/debug. If runtime is clean but executable specs are missing, route to
    `/vg:test`.
 </rules>
@@ -93,9 +102,11 @@ if [ ! -e "$ORCH" ]; then
 fi
 
 MAX_FILES="1200"
+AI_RESPONSE=""
 for tok in ${ARGUMENTS:-}; do
   case "$tok" in
     --max-files=*) MAX_FILES="${tok#--max-files=}" ;;
+    --ai-response=*) AI_RESPONSE="${tok#--ai-response=}" ;;
     --regen) ;;
     *) ;;
   esac
@@ -159,11 +170,17 @@ if [ ! -f "$SCRIPT" ]; then
   exit 1
 fi
 
+AI_ARGS=()
+if [ -n "${AI_RESPONSE:-}" ]; then
+  AI_ARGS=(--ai-response "${AI_RESPONSE}")
+fi
+
 "${PYTHON_BIN:-python3}" "$SCRIPT" \
   --phase "${PHASE_NUMBER}" \
   --phase-dir "${PHASE_DIR}" \
   --root "${REPO_ROOT}" \
   --max-files "${MAX_FILES}" \
+  "${AI_ARGS[@]}" \
   --json > "${PHASE_DIR}/.deep-test-spec-summary.json"
 
 "${PYTHON_BIN:-python3}" "$ORCH" emit-event \
@@ -223,6 +240,8 @@ echo "✓ /vg:test-spec complete"
 echo "  Wrote: ${PHASE_DIR}/DEEP-TEST-SPECS.md"
 echo "  Wrote: ${PHASE_DIR}/LIFECYCLE-SPECS.json"
 echo "  Wrote: ${PHASE_DIR}/TEST-FIXTURE-DAG.json"
+echo "  Wrote: ${PHASE_DIR}/TEST-EXECUTION-PLAN.json"
+echo "  Wrote: ${PHASE_DIR}/TEST-SPEC-LOCALIZER/PROMPT.md"
 echo "  Wrote: ${PHASE_DIR}/PLAYWRIGHT-SPEC-PLAN.md"
 echo "  Next:  /vg:review ${PHASE_NUMBER}"
 ```
@@ -233,6 +252,8 @@ echo "  Next:  /vg:review ${PHASE_NUMBER}"
 <success_criteria>
 - Build evidence existed before generation.
 - Deep test-spec artifacts exist and pass `verify-deep-test-specs.py`.
+- `TEST-EXECUTION-PLAN.json` selects runner family from phase profile.
+- `TEST-SPEC-LOCALIZER/PROMPT.md` exists for optional project-local AI expansion.
 - `PIPELINE-STATE.json` marks `steps.test-spec.status=done`.
 - Next command is `/vg:review <phase>`.
 </success_criteria>

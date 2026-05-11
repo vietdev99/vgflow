@@ -50,7 +50,7 @@ ARTIFACT_WORD_RE = re.compile(
     r"\b("
     r"email|mail|token|magic\s+link|websocket|ws|realtime|real-time|"
     r"notification|callback|webhook|invite|invitation|otp|2fa|webauthn|"
-    r"oauth|hmac|queue|dlq|cron|polling"
+    r"oauth|hmac|queue|dlq|cron|polling|artifact"
     r")\b",
     re.IGNORECASE,
 )
@@ -58,8 +58,8 @@ ARTIFACT_WORD_RE = re.compile(
 MULTI_ACTOR_WORD_RE = re.compile(
     r"\b("
     r"multi[-\s]?actor|owner|invitee|inviter|admin|approver|reviewer|"
-    r"second\s+user|another\s+user|role\s+switch|impersonat|oauth|"
-    r"merchant|vendor|platform|buyer|customer"
+    r"collaborator|operator|manager|member|second\s+user|another\s+user|"
+    r"role\s+switch|impersonat|oauth|external\s+system"
     r")\b",
     re.IGNORECASE,
 )
@@ -214,14 +214,12 @@ def _infer_actors(goal: dict[str, Any]) -> list[dict[str, Any]]:
 
     if "admin" in text:
         add("admin", "admin", "admin_session")
-    if "merchant" in text or "owner" in text:
-        add("merchant", "merchant_owner", "merchant_session")
-    if "vendor" in text:
-        add("vendor", "vendor", "vendor_session")
-    if "invitee" in text or "buyer" in text or "customer" in text:
+    if "owner" in text:
+        add("owner_actor", "resource_owner", "owner_session")
+    if any(word in text for word in ("invitee", "reviewer", "approver", "collaborator", "member")):
         add("secondary_actor", "secondary_user", "secondary_session")
-    if "platform" in text or "oauth" in text or "webhook" in text:
-        add("platform_actor", "external_platform_or_webhook", "signed_callback_context")
+    if "external system" in text or "oauth" in text or "webhook" in text:
+        add("external_actor", "external_system_or_webhook", "signed_callback_context")
 
     if not actors:
         add("system_actor", "system", "authenticated or service context required by TEST-GOALS")
@@ -310,6 +308,7 @@ def _artifact_capture(goal: dict[str, Any]) -> list[dict[str, str]]:
 def _goal_spec(goal: dict[str, Any]) -> dict[str, Any]:
     actors = _infer_actors(goal)
     actor_id = actors[0]["id"]
+    fixture_dag = _fixture_dag(goal, actors)
     return {
         "title": goal["title"],
         "priority": goal.get("priority") or "important",
@@ -325,7 +324,7 @@ def _goal_spec(goal: dict[str, Any]) -> dict[str, Any]:
             "infra_deps": goal.get("infra_deps") or "",
         },
         "actors": actors,
-        "fixture_dag": _fixture_dag(goal, actors),
+        "fixture_dag": fixture_dag,
         "preconditions": [
             "Use unique test-owned identifiers; never mutate shared production-like fixtures.",
             "Start from a clean actor/session context.",
@@ -335,9 +334,8 @@ def _goal_spec(goal: dict[str, Any]) -> dict[str, Any]:
         "steps": [_step(stage, goal, actor_id) for stage in REQUIRED_STAGES],
         "artifact_capture": _artifact_capture(goal),
         "cleanup": [
-            {"target": "owned_resource", "action": "delete/deactivate/cancel/rollback after assertions"},
-            {"target": "actor_session", "action": "revoke generated sessions/tokens where applicable"},
-            {"target": "external_artifacts", "action": "clear mailbox/webhook/queue/storage artifacts owned by test"},
+            {"target": fixture["id"], "action": fixture["cleanup"]}
+            for fixture in reversed(fixture_dag)
         ],
         "generator_note": "Generated from phase docs; executable tests must bind TS-XX to this goal and implement these steps.",
     }

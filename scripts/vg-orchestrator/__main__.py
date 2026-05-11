@@ -2871,7 +2871,7 @@ _BACKFILL_REQUIRED_ARTIFACTS = {
     "vg:scope": ["CONTEXT.md"],
     "vg:blueprint": ["PLAN*.md", "API-CONTRACTS.md", "TEST-GOALS.md"],
     "vg:build": ["SUMMARY*.md"],
-    "vg:test-spec": ["DEEP-TEST-SPECS.md", "LIFECYCLE-SPECS.json", "TEST-FIXTURE-DAG.json"],
+    "vg:test-spec": ["DEEP-TEST-SPECS.md", "LIFECYCLE-SPECS.json", "TEST-FIXTURE-DAG.json", "TEST-EXECUTION-PLAN.json"],
     "vg:review": ["RUNTIME-MAP.json", "GOAL-COVERAGE-MATRIX.md"],
     "vg:test": ["SANDBOX-TEST*.md"],
 }

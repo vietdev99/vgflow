@@ -60,6 +60,7 @@ V6_CANONICAL = {
     "DEEP-TEST-SPECS.md",
     "LIFECYCLE-SPECS.json",
     "TEST-FIXTURE-DAG.json",
+    "TEST-EXECUTION-PLAN.json",
     "PLAYWRIGHT-SPEC-PLAN.md",
     "TEST-SPEC-GAPS.md",
     "SANDBOX-TEST.md",
@@ -486,11 +487,12 @@ def determine_pipeline_position(entries: list[dict], profile: str) -> dict[str, 
     deep_specs = _find_first_canonical(entries, "DEEP-TEST-SPECS.md")
     lifecycle_specs = _find_first_canonical(entries, "LIFECYCLE-SPECS.json")
     fixture_dag = _find_first_canonical(entries, "TEST-FIXTURE-DAG.json")
+    execution_plan = _find_first_canonical(entries, "TEST-EXECUTION-PLAN.json")
     playwright_plan = _find_first_canonical(entries, "PLAYWRIGHT-SPEC-PLAN.md")
     spec_gaps = _find_first_canonical(entries, "TEST-SPEC-GAPS.md")
-    test_spec_artifacts = [e for e in (deep_specs, lifecycle_specs, fixture_dag, playwright_plan, spec_gaps) if e]
+    test_spec_artifacts = [e for e in (deep_specs, lifecycle_specs, fixture_dag, execution_plan, playwright_plan, spec_gaps) if e]
     test_spec_marker_present = marker_namespace_has("test-spec")
-    if len(test_spec_artifacts) == 5:
+    if len(test_spec_artifacts) == 6:
         tspec_status = "done"
     elif test_spec_artifacts or test_spec_marker_present:
         tspec_status = "partial"

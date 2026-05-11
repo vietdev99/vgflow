@@ -43,6 +43,8 @@ def test_post_build_test_spec_generates_and_verifies_lifecycle_specs() -> None:
     assert "${PHASE_DIR}/LIFECYCLE-SPECS.json" in command
     assert "${PHASE_DIR}/DEEP-TEST-SPECS.md" in command
     assert "${PHASE_DIR}/TEST-FIXTURE-DAG.json" in command
+    assert "${PHASE_DIR}/TEST-EXECUTION-PLAN.json" in command
+    assert "${PHASE_DIR}/TEST-SPEC-LOCALIZER/PROMPT.md" in command
     assert "generate-deep-test-specs.py" in command
     assert "verify-deep-test-specs.py" in command
     assert "read_after_delete" in command
@@ -69,3 +71,4 @@ def test_curated_codex_skills_reference_lifecycle_generator() -> None:
     assert "generate-deep-test-specs.py" in vg_test_spec
     assert "verify-deep-test-specs.py" in vg_test_spec
     assert "TEST-FIXTURE-DAG.json" in vg_test_spec
+    assert "TEST-EXECUTION-PLAN.json" in vg_test_spec
