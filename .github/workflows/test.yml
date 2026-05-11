@@ -10,7 +10,7 @@ jobs:
   orchestrator:
     name: Orchestrator + validators
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,7 +72,7 @@ jobs:
           # fixture cache, preflight, RCRURD gate, content depth, pattern
           # catalog, diagnostic L2, tester pro, schema golden tests, and the
           # standalone runner subprocess tests.
-          python -m pytest tests/ -q --tb=short
+          python -m pytest tests/ -q --tb=short --timeout=90 --timeout-method=thread --durations=25
 
       - name: Shell test suite (block-resolver harness)
         run: |

@@ -1,4 +1,4 @@
-"""Tests for project-local Codex hook installation."""
+"""Tests for global Codex hook installation."""
 from __future__ import annotations
 
 import importlib.util
@@ -20,23 +20,23 @@ def _installer_module():
 
 
 def test_codex_hooks_installer_writes_hooks_and_feature_flag(tmp_path):
-    root = tmp_path / "project"
-    (root / ".claude" / "scripts" / "codex-hooks").mkdir(parents=True)
-    (root / ".codex").mkdir(parents=True)
+    root = tmp_path / "vgflow"
+    codex_home = tmp_path / "home" / ".codex"
+    (root / "scripts" / "codex-hooks").mkdir(parents=True)
     for rel in (
-        ".claude/scripts/vg-entry-hook.py",
-        ".claude/scripts/codex-hooks/vg-user-prompt-submit.py",
-        ".claude/scripts/codex-hooks/vg-pre-tool-use-bash.py",
-        ".claude/scripts/codex-hooks/vg-pre-tool-use-apply-patch.py",
-        ".claude/scripts/codex-hooks/vg-post-tool-use-bash.py",
-        ".claude/scripts/codex-hooks/vg-stop.py",
+        "scripts/vg-entry-hook.py",
+        "scripts/codex-hooks/vg-user-prompt-submit.py",
+        "scripts/codex-hooks/vg-pre-tool-use-bash.py",
+        "scripts/codex-hooks/vg-pre-tool-use-apply-patch.py",
+        "scripts/codex-hooks/vg-post-tool-use-bash.py",
+        "scripts/codex-hooks/vg-stop.py",
     ):
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# stub\n", encoding="utf-8")
 
     result = subprocess.run(
-        [sys.executable, str(INSTALLER), "--root", str(root)],
+        [sys.executable, str(INSTALLER), "--codex-home", str(codex_home), "--vg-home", str(root)],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -44,7 +44,7 @@ def test_codex_hooks_installer_writes_hooks_and_feature_flag(tmp_path):
     )
     assert result.returncode == 0, result.stderr
 
-    hooks = json.loads((root / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    hooks = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
     commands = "\n".join(
         hook.get("command", "")
         for groups in hooks["hooks"].values()
@@ -60,12 +60,14 @@ def test_codex_hooks_installer_writes_hooks_and_feature_flag(tmp_path):
     assert "^Bash$" in json.dumps(hooks)
     assert "^(apply_patch|Edit|Write)$" in json.dumps(hooks)
 
-    config = (root / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert ".claude/scripts" not in commands
+
+    config = (codex_home / "config.toml").read_text(encoding="utf-8")
     assert "[features]" in config
     assert "codex_hooks = true" in config
 
     check = subprocess.run(
-        [sys.executable, str(INSTALLER), "--root", str(root), "--check"],
+        [sys.executable, str(INSTALLER), "--codex-home", str(codex_home), "--vg-home", str(root), "--check"],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -76,7 +78,7 @@ def test_codex_hooks_installer_writes_hooks_and_feature_flag(tmp_path):
 
 def test_codex_hooks_merge_preserves_custom_hooks_and_replaces_vg_owned_hooks():
     module = _installer_module()
-    root = Path("/repo")
+    root = Path("/home/user/.vgflow")
     existing = {
         "hooks": {
             "PreToolUse": [
@@ -105,7 +107,7 @@ def test_codex_hooks_merge_preserves_custom_hooks_and_replaces_vg_owned_hooks():
 
 def test_codex_hooks_installer_replaces_legacy_user_prompt_submit_hook():
     module = _installer_module()
-    root = Path("/repo")
+    root = Path("/home/user/.vgflow")
     existing = {
         "hooks": {
             "UserPromptSubmit": [

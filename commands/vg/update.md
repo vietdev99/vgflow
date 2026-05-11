@@ -93,6 +93,7 @@ Step coverage: 8_sync_codex, 8b_repair_playwright_mcp, 8c_ensure_graphify, 9_rep
 - `~/.vgflow` exists and points at the active VGFlow install.
 - Claude Code hooks are installed/repaired at `~/.claude/settings.json`.
 - Codex skills/agents are refreshed at `~/.codex/skills` and `~/.codex/agents`.
+- Codex hooks are installed/repaired at `~/.codex/hooks.json` with `codex_hooks = true` in `~/.codex/config.toml`.
 - Project-local VG-owned `.claude/` and `.codex/` files are pruned with backup.
 - `.vg/.install-target` is written as `global`.
 - Functional Codex mirror equivalence is verified after update; drift without merge conflicts fails the update.

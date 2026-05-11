@@ -186,6 +186,13 @@ EOF
     register_codex_agent "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
     echo "  ✓ global Codex refreshed (${CODEX_DEPLOYED} skill dirs)"
   fi
+  CODEX_HOOK_INSTALLER="${HOME_VGFLOW}/scripts/codex-hooks-install.py"
+  if [ -f "$CODEX_HOOK_INSTALLER" ]; then
+    python3 "$CODEX_HOOK_INSTALLER" --codex-home "${HOME}/.codex" --vg-home "$HOME_VGFLOW"
+    echo "  ✓ Codex hooks refreshed at ~/.codex/hooks.json"
+  else
+    echo "  ⚠ codex-hooks-install.py not found — Codex review may rely on manual markers"
+  fi
 
   # Clean project-local Claude/Codex VG surfaces. This must remove all
   # VG-owned support skills too (api-contract, flow-*, test-*, etc.), not

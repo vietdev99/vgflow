@@ -1,10 +1,9 @@
-"""v3.5.0 — #173 Stage 5: auto-routing TEST_SPEC_MISSING to /vg:test codegen.
+"""v3.7.1 — route TEST_SPEC_MISSING to /vg:test-spec regeneration.
 
 Coverage:
-1. review close.md prints exact /vg:test command when TEST_SPEC_MISSING goals exist
+1. review close.md prints exact /vg:test-spec command when TEST_SPEC_MISSING goals exist
 2. close.md emits review.test_spec_missing_routed telemetry
-3. vg-test-codegen delegation references UI-RUNTIME-CONTRACT.json
-4. delegation declares test_spec_missing_filter section
+3. vg-test-codegen delegation keeps legacy filter semantics documented
 5. canonical/mirror byte-identity for close.md + delegation.md
 """
 from __future__ import annotations
@@ -23,13 +22,13 @@ DELEGATION_MIRROR = REPO_ROOT / ".claude" / "commands" / "vg" / "_shared" / "tes
 def test_close_md_surfaces_test_spec_missing():
     body = CLOSE_CANON.read_text(encoding="utf-8")
     assert "TEST_SPEC_MISSING" in body, (
-        "close.md must reference TEST_SPEC_MISSING for v3.5.0 auto-routing"
+        "close.md must reference TEST_SPEC_MISSING for routing"
     )
-    assert "--codegen-from-goals" in body, (
-        "close.md must print /vg:test --codegen-from-goals flag"
+    assert "/vg:test-spec ${PHASE_NUMBER} --regen" in body, (
+        "close.md must print /vg:test-spec --regen command"
     )
-    assert "--filter=test-spec-missing" in body, (
-        "close.md must print --filter=test-spec-missing arg"
+    assert "/vg:review ${PHASE_NUMBER} --mode=full --force" in body, (
+        "close.md must tell operator to rerun review after test-spec"
     )
 
 
@@ -42,9 +41,14 @@ def test_close_md_emits_routed_telemetry():
 
 def test_close_md_lists_codegen_inputs():
     body = CLOSE_CANON.read_text(encoding="utf-8")
-    # The hint block should mention the canonical inputs the codegen consumes
-    for ref in ["TEST-GOALS.md", "CRUD-SURFACES.md", "UI-RUNTIME-CONTRACT.json", "RUNTIME-MAP.json"]:
-        assert ref in body, f"close.md must list {ref} as codegen input in hint"
+    for ref in [
+        "TEST-GOALS.md",
+        "DEEP-TEST-SPECS.md",
+        "LIFECYCLE-SPECS.json",
+        "TEST-FIXTURE-DAG.json",
+        "TEST-EXECUTION-PLAN.json",
+    ]:
+        assert ref in body, f"close.md must list {ref} as review lifecycle input"
 
 
 def test_close_md_mirror_byte_identity():

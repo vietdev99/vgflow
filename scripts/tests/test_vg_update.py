@@ -63,6 +63,8 @@ def test_update_preflight_refreshes_global_codex():
     assert "${HOME_VGFLOW}/codex-skills" in text
     assert "${HOME}/.codex/skills" in text
     assert "${HOME}/.codex/agents" in text
+    assert "codex-hooks-install.py" in text
+    assert "${HOME}/.codex" in text
     assert "global Codex refreshed" in text
     assert "vgflow-orchestrator" in text
 

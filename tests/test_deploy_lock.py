@@ -66,6 +66,14 @@ def test_lock_normalizes_unsafe_env_chars(tmp_path, lock_mod):
         assert "/" not in path.name
 
 
+def _deploy_lock_holder(proj, barrier, release):
+    from deploy.lock import deploy_lock  # type: ignore[import-not-found]
+
+    with deploy_lock(proj, env="prod"):
+        barrier.set()
+        release.wait(5.0)
+
+
 @pytest.mark.skipif(
     sys.platform == "win32", reason="POSIX flock semantics tested separately"
 )
@@ -77,14 +85,7 @@ def test_concurrent_acquire_raises_lock_held(tmp_path, lock_mod):
     release = mp.Event()
     proj = str(tmp_path)
 
-    def _holder(proj, barrier, release):
-        from deploy.lock import deploy_lock  # type: ignore[import-not-found]
-
-        with deploy_lock(proj, env="prod"):
-            barrier.set()
-            release.wait(5.0)
-
-    p = mp.Process(target=_holder, args=(proj, barrier, release))
+    p = mp.Process(target=_deploy_lock_holder, args=(proj, barrier, release))
     p.start()
     try:
         assert barrier.wait(5.0)
