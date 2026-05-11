@@ -22,7 +22,15 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".claude").is_dir() and (parent / "scripts").is_dir():
+            return parent
+    return here.parents[2]
+
+
+REPO_ROOT = _repo_root()
 sys.path.insert(0, str(REPO_ROOT / ".claude" / "scripts"))
 
 # Import orchestrator's contracts module (treats dir as package)

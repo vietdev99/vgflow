@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 ADAPTER_CLOSE = re.compile(r"</codex_skill_adapter>\s*\n", re.S)
+CODEX_HARD_GATE = re.compile(r"<HARD-GATE-CODEX>.*?</HARD-GATE-CODEX>\s*\n", re.S)
 
 
 def _has_source_repo_layout(root: Path) -> bool:
@@ -68,8 +69,10 @@ def strip_frontmatter(text: str) -> str:
 def strip_mirror_adapter(text: str) -> str:
     match = ADAPTER_CLOSE.search(text)
     if not match:
-        return strip_frontmatter(text)
-    return text[match.end() :].lstrip("\n")
+        body = strip_frontmatter(text)
+    else:
+        body = text[match.end() :].lstrip("\n")
+    return CODEX_HARD_GATE.sub("", body, count=1).lstrip("\n")
 
 
 def normalize(text: str) -> str:

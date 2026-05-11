@@ -12,8 +12,8 @@ tokens on a doomed scan.
 # BOTH scripts/runtime AND ENV-CONTRACT, so a phase with FIXTURES+lifecycle
 # but no ENV-CONTRACT skipped RCRURD entirely.
 PRE_OK=1
-VG_SCRIPT_ROOT="${REPO_ROOT}/.claude/scripts"
-[ -d "${VG_SCRIPT_ROOT}/runtime" ] || VG_SCRIPT_ROOT="${REPO_ROOT}/scripts"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}"
+[ -d "${VG_SCRIPT_ROOT}/runtime" ] || VG_SCRIPT_ROOT="${REPO_ROOT:-.}/scripts"
 if [ -d "${VG_SCRIPT_ROOT}/runtime" ]; then
   RFC_V9_GATE_RAN=0
   # Only echo the banner once when at least one gate has work to do
@@ -93,11 +93,11 @@ except: print("   (could not parse error)")
         echo "   Fix path: ENV-CONTRACT.md must declare api_index for every"
         echo "   resource referenced in data_invariants. Verify vg.config.md"
         echo "   credentials_map covers all count_role values."
-        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.preflight_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
         exit 1
       fi
       if [ "$PRE_RC" -eq 1 ] && [ "${VG_PREFLIGHT_SEVERITY:-block}" = "block" ]; then
-        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_invariants_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.preflight_invariants_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
         source scripts/lib/blocking-gate-prompt.sh
         EVIDENCE_PATH="${PHASE_DIR}/.vg/preflight-invariants-evidence.json"
@@ -125,7 +125,7 @@ JSON
         echo "   data_invariants but no sandbox base_url found."
         echo "   Fix path: set step_env.sandbox_test in vg.config.md OR"
         echo "             export VG_BASE_URL=https://your-sandbox/."
-        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.preflight_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
         exit 1
       fi
       echo "  preflight invariants: SKIPPED (no base_url + no data_invariants — no-op)"
@@ -175,11 +175,11 @@ except: print("   (could not parse error)")
 '
         echo "   Fix path: vg.config.md credentials_map must cover every role"
         echo "   referenced in FIXTURES/{G-XX}.yaml lifecycle.pre_state."
-        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
         exit 1
       fi
       if [ "$RCRURD_RC" -eq 1 ] && [ "${VG_RCRURD_SEVERITY:-block}" = "block" ]; then
-        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_preflight_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_preflight_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
         source scripts/lib/blocking-gate-prompt.sh
         EVIDENCE_PATH="${PHASE_DIR}/.vg/rcrurd-preflight-evidence.json"
@@ -209,7 +209,7 @@ JSON
           echo "   assertions (increased_by_at_least / decreased_by_at_least)."
           echo "   Without snapshot, post-mode would compare post-action to"
           echo "   post-action → delta=0 false-fail."
-          "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+          "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
           exit 1
         fi
       fi
@@ -221,7 +221,7 @@ JSON
         echo "   lifecycle blocks but no sandbox base_url found."
         echo "   Fix path: set step_env.sandbox_test in vg.config.md OR"
         echo "             export VG_BASE_URL=https://your-sandbox/."
-        "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+        "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_no_base_url" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
         exit 1
       fi
       echo "  RCRURD pre_state: SKIPPED (no base_url + no lifecycle — no-op)"
@@ -245,7 +245,7 @@ if [ ! -f "$ROUTES_STATIC" ]; then
   echo "⛔ Preflight P1 BLOCK: routes-static.json missing at ${ROUTES_STATIC}" >&2
   echo "   Fix path: regenerate routes-static.json via /vg:build or the route" >&2
   echo "   extractor for this phase. Review cannot run without it." >&2
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p1_routes_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.preflight_p1_routes_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
   exit 1
 fi
 ROUTES_LEN=$("${PYTHON_BIN:-python3}" -c "
@@ -261,7 +261,7 @@ if [ "${ROUTES_LEN:-0}" -eq 0 ]; then
   echo "⛔ Preflight P1 BLOCK: routes-static.json contains 0 routes" >&2
   echo "   Fix path: rebuild route inventory. Empty routes-static prevents" >&2
   echo "   coverage gating in Phase 1." >&2
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p1_routes_empty" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.preflight_p1_routes_empty" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
   exit 1
 fi
 
@@ -275,7 +275,7 @@ if [ -f "${PHASE_DIR}/ENV-CONTRACT.md" ]; then
     echo "⛔ Preflight P2 BLOCK: ENV-CONTRACT.md missing 'preflight_checks:' section" >&2
     echo "   Fix path: add preflight_checks: block to ENV-CONTRACT.md listing" >&2
     echo "   the invariants /vg:review must verify (see ENV-CONTRACT-template.md)." >&2
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p2_env_contract_section_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.preflight_p2_env_contract_section_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
 fi
@@ -291,7 +291,7 @@ if [ -f "$OPENAPI_LOG" ]; then
     echo "   Fix path: repair the OpenAPI schema (most often a route registers" >&2
     echo "   without a valid response schema). Docs-derived probes are unreliable" >&2
     echo "   until the generator returns valid output." >&2
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.preflight_p3_openapi_invalid" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.preflight_p3_openapi_invalid" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
 fi
@@ -331,7 +331,7 @@ echo ""
 ### 1a: Contract Verify (grep)
 
 Read `.claude/skills/api-contract/SKILL.md` — Mode: Verify-Grep.
-Read `.claude/commands/vg/_shared/env-commands.md` — contract_verify_grep(phase_dir, "both").
+Read `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/env-commands.md` — contract_verify_grep(phase_dir, "both").
 
 Run contract_verify_grep against `$SCAN_PATTERNS` paths from config:
 - BE routes vs API-CONTRACTS.md endpoints
@@ -433,7 +433,7 @@ The skip-when-current-phase-also-uses-flag guard mirrors the v2.6.1 accept.md
 pattern: never resolve a gate_id whose flag is being used right now.
 
 ```bash
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/override-debt.sh" 2>/dev/null || true
 if type -t override_auto_resolve_clean_run >/dev/null 2>&1; then
   RESOLUTION_EVENT_ID="review-clean-${PHASE_NUMBER}-$(date -u +%s)"
   if [[ ! "${ARGUMENTS}" =~ --allow-orthogonal-hotfix ]]; then
@@ -477,7 +477,7 @@ if [ "$GRAPHIFY_ACTIVE" != "true" ]; then
   echo "RIPPLE_SKIPPED=true" > "${PHASE_DIR}/uat-ripples.txt"
   echo "RIPPLE_SKIP_REASON=graphify-inactive" >> "${PHASE_DIR}/uat-ripples.txt"
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase1_5_ripple_and_god_node" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase1_5_ripple_and_god_node.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase1_5_ripple_and_god_node 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase1_5_ripple_and_god_node 2>/dev/null || true
   # skip to Phase 2
 fi
 ```
@@ -497,7 +497,7 @@ if [ "$GRAPHIFY_ACTIVE" = "true" ]; then
 
   # Always rebuild before ripple — review is the SAFETY NET, must be accurate
   if [ "${COMMITS_SINCE:-0}" -gt 0 ]; then
-    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/graphify-safe.sh"
+    source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/graphify-safe.sh"
     vg_graphify_rebuild_safe "$GRAPHIFY_GRAPH_PATH" "review-phase1_5-${PHASE_NUMBER}" || {
       echo "⛔ Review cannot trust ripple analysis with stale graph"
       echo "   Fix manually: ${PYTHON_BIN} -m graphify update ."
@@ -532,7 +532,7 @@ echo "$CHANGED_SRC" > "${PHASE_DIR}/.ripple-input.txt"
 **Why script not MCP**: graphify TS extractor doesn't resolve path aliases (e.g., `@/hooks/X` → `src/hooks/X`). Pure MCP queries miss alias-imported callers. The hybrid script uses graphify + git grep, catches both.
 
 ```bash
-${PYTHON_BIN} .claude/scripts/build-caller-graph.py \
+${PYTHON_BIN} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/build-caller-graph.py \
   --changed-files-input "${PHASE_DIR}/.ripple-input.txt" \
   --config .claude/vg.config.md \
   --graphify-graph "$GRAPHIFY_GRAPH_PATH" \

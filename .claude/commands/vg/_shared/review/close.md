@@ -11,7 +11,7 @@ else
   session_mark_step "4f-unreachable-triage-legacy"
   echo ""
   echo "🔍 Legacy path: UNREACHABLE triage fallback (4d bị bỏ qua)..."
-  source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/unreachable-triage.sh" 2>/dev/null || true
+  source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/unreachable-triage.sh" 2>/dev/null || true
   if type -t triage_unreachable_goals >/dev/null 2>&1; then
     triage_unreachable_goals "$PHASE_DIR" "$PHASE_NUMBER"
   else
@@ -56,7 +56,7 @@ re-run on the next invocation.
 The shared writer enforces this rule in one place:
 
 ```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/crossai-marker-write.py \
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/crossai-marker-write.py \
   --marker-dir "${PHASE_DIR}/.step-markers/review" \
   --step crossai_review \
   --report-json "${PHASE_DIR}/crossai/review-check.report.json"
@@ -259,7 +259,7 @@ review proves: if review passed without orthogonal-hotfix override, the
 "goal-coverage" condition is satisfied for prior phases too.
 
 ```bash
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/override-debt.sh" 2>/dev/null || true
 if type -t override_auto_resolve_clean_run >/dev/null 2>&1; then
   # Only resolve if THIS phase didn't fall back to the override itself
   if [[ ! "${ARGUMENTS}" =~ --allow-orthogonal-hotfix ]]; then
@@ -390,37 +390,39 @@ Per CONTEXT.md D-XX OR Per API-CONTRACTS.md"  # body must cite
 # v2.2 — complete step marker + terminal emit + run-complete
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/complete.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review complete 2>/dev/null || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review 0_parse_and_validate 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review complete 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review 0_parse_and_validate 2>/dev/null || true
 READY_COUNT=$(grep -c "READY" "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" 2>/dev/null || echo 0)
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.completed" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goals_ready\":${READY_COUNT}}" >/dev/null
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.completed" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goals_ready\":${READY_COUNT}}" >/dev/null
 
-# v3.5.0 (#173 Stage 5) — auto-route TEST_SPEC_MISSING goals to /vg:test codegen.
-# When review classifies goals as TEST_SPEC_MISSING (taxonomy from v3.1.0
-# Stage 1), surface the exact /vg:test command operators should run next.
-# Goal IDs come from the matrix Status column; codegen subagent
-# (vg-test-codegen) reads them via vg-load + matrix scan.
+# v3.7.1 — route TEST_SPEC_MISSING back to /vg:test-spec, not /vg:test.
+# TEST_SPEC_MISSING means review lacks the post-build lifecycle contract for
+# one or more goals. That is a review precondition gap, not executable test
+# coverage debt. /vg:test may write runnable specs only after review has a
+# complete DEEP-TEST-SPECS/LIFECYCLE-SPECS/TEST-FIXTURE-DAG contract.
 TEST_SPEC_MISSING_GOALS=$(grep -oE '^\| (G-[A-Z0-9-]+)[^|]*\|[^|]*\|[^|]*\|[[:space:]]*TEST_SPEC_MISSING[[:space:]]*\|' "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" 2>/dev/null | grep -oE 'G-[A-Z0-9-]+' | sort -u | tr '\n' ',' | sed 's/,$//')
 TEST_SPEC_MISSING_COUNT=$(echo "$TEST_SPEC_MISSING_GOALS" | tr ',' '\n' | grep -cE '^G-' 2>/dev/null || echo 0)
 if [ "${TEST_SPEC_MISSING_COUNT:-0}" -gt 0 ]; then
   echo ""
-  echo "━━━ TEST_SPEC_MISSING goals (v3.5.0 #173 Stage 5 — auto-route) ━━━"
-  echo "  ${TEST_SPEC_MISSING_COUNT} goal(s) classified as TEST_SPEC_MISSING (no Playwright/lifecycle spec exists):"
+  echo "━━━ TEST_SPEC_MISSING goals — route to /vg:test-spec ━━━"
+  echo "  ${TEST_SPEC_MISSING_COUNT} goal(s) classified as TEST_SPEC_MISSING (lifecycle test-spec contract missing or stale):"
   echo "    ${TEST_SPEC_MISSING_GOALS}"
   echo ""
-  echo "  Run the codegen command below to generate skeleton specs from TEST-GOALS + CRUD-SURFACES + route_inventory:"
+  echo "  Run the command below to regenerate the post-build lifecycle contract, then rerun review:"
   echo ""
-  echo "    /vg:test ${PHASE_NUMBER} --codegen-from-goals --filter=test-spec-missing"
+  echo "    /vg:test-spec ${PHASE_NUMBER} --regen"
+  echo "    /vg:review ${PHASE_NUMBER} --mode=full --force"
   echo ""
-  echo "  /vg:test consumes:"
+  echo "  /vg:review consumes:"
   echo "    - ${PHASE_DIR}/TEST-GOALS.md (per-goal slice via vg-load)"
-  echo "    - ${PHASE_DIR}/CRUD-SURFACES.md (resources × roles)"
-  echo "    - ${PHASE_DIR}/UI-RUNTIME-CONTRACT.json (route inventory + first-viewport surfaces — v3.2.0+)"
-  echo "    - ${PHASE_DIR}/RUNTIME-MAP.json (goal_sequences for replay context)"
+  echo "    - ${PHASE_DIR}/DEEP-TEST-SPECS.md"
+  echo "    - ${PHASE_DIR}/LIFECYCLE-SPECS.json"
+  echo "    - ${PHASE_DIR}/TEST-FIXTURE-DAG.json"
+  echo "    - ${PHASE_DIR}/TEST-EXECUTION-PLAN.json"
   echo ""
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
     "review.test_spec_missing_routed" \
-    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goal_count\":${TEST_SPEC_MISSING_COUNT},\"goal_ids\":\"${TEST_SPEC_MISSING_GOALS}\"}" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goal_count\":${TEST_SPEC_MISSING_COUNT},\"goal_ids\":\"${TEST_SPEC_MISSING_GOALS}\",\"next_command\":\"/vg:test-spec ${PHASE_NUMBER} --regen\"}" \
     2>/dev/null || true
 fi
 
@@ -434,7 +436,7 @@ COMP_SEV=$(vg_config_get "flow_compliance.severity" "warn" 2>/dev/null || echo "
 COMP_ARGS=( "--phase-dir" "$PHASE_DIR" "--command" "review" "--severity" "$COMP_SEV" )
 [ -n "$COMP_REASON" ] && COMP_ARGS+=( "--skip-compliance=$COMP_REASON" )
 
-${PYTHON_BIN:-python3} .claude/scripts/verify-flow-compliance.py "${COMP_ARGS[@]}"
+${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-flow-compliance.py "${COMP_ARGS[@]}"
 COMP_RC=$?
 if [ "$COMP_RC" -ne 0 ] && [ "$COMP_SEV" = "block" ]; then
   echo "⛔ Review flow compliance failed. See .flow-compliance-review.yaml or pass --skip-compliance=\"<reason>\"."
@@ -446,12 +448,12 @@ fi
 # even when goal_sequences[].result == "blocked" or sequence missing entirely.
 # This validator catches the fabrication BEFORE review exits, so /vg:test
 # never sees a lying matrix.
-MATRIX_LINK_VAL=".claude/scripts/validators/verify-matrix-evidence-link.py"
+MATRIX_LINK_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-matrix-evidence-link.py"
 if [ -f "$MATRIX_LINK_VAL" ]; then
   ${PYTHON_BIN:-python3} "$MATRIX_LINK_VAL" --phase-dir "$PHASE_DIR" --severity block
   MATRIX_LINK_RC=$?
   if [ "$MATRIX_LINK_RC" -ne 0 ]; then
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_evidence_link_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.matrix_evidence_link_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
     source scripts/lib/blocking-gate-prompt.sh
     EVIDENCE_PATH="${PHASE_DIR}/.vg/matrix-evidence-link-evidence.json"
@@ -495,8 +497,8 @@ if [ "$HAS_POST_LIFECYCLE" -gt 0 ] && [ -z "$POST_BASE_RC" ] && \
   echo "   blocks but no sandbox base_url available at run-complete."
   exit 1
 fi
-VG_SCRIPT_ROOT="${REPO_ROOT}/.claude/scripts"
-[ -f "${VG_SCRIPT_ROOT}/rcrurd-preflight.py" ] || VG_SCRIPT_ROOT="${REPO_ROOT}/scripts"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}"
+[ -f "${VG_SCRIPT_ROOT}/rcrurd-preflight.py" ] || VG_SCRIPT_ROOT="${REPO_ROOT:-.}/scripts"
 if [ -f "${VG_SCRIPT_ROOT}/rcrurd-preflight.py" ] && \
    [ -d "${PHASE_DIR}/FIXTURES" ] && [ -n "$POST_BASE_RC" ]; then
   # Codex-HIGH-1-ter fix: snapshot must exist when delta assertions present
@@ -507,7 +509,7 @@ if [ -f "${VG_SCRIPT_ROOT}/rcrurd-preflight.py" ] && \
     echo "⛔ RCRURD post_state — pre-snapshot missing but ${POST_NEEDS_SNAP}"
     echo "   fixture(s) declare delta assertions. Pre-mode at Phase 0.5"
     echo "   should have captured it. Re-run /vg:review from scratch."
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_post_snapshot_missing" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
   POST_OUT=$("${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/rcrurd-preflight.py" \
@@ -539,11 +541,11 @@ try:
     print(f"   {d.get(\"error\",\"unknown\")[:300]}")
 except: print("   (could not parse error)")
 '
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_post_setup_error" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
   if [ "$POST_RC" -eq 1 ] && [ "${VG_RCRURD_POST_SEVERITY:-block}" = "block" ]; then
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_post_state_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_post_state_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
     source scripts/lib/blocking-gate-prompt.sh
     EVIDENCE_PATH="${PHASE_DIR}/.vg/rcrurd-post-state-evidence.json"
@@ -566,7 +568,7 @@ fi
 # stale entries from PRIOR runs; this catches stale entries created by THIS run
 # (e.g. scanner recorded sequence but skipped submit, then matrix wrote READY).
 # Phase 3.2 dogfood found 36/39 mutation goals stale despite verdict=PASS.
-MATRIX_STALE_VAL=".claude/scripts/validators/verify-matrix-staleness.py"
+MATRIX_STALE_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-matrix-staleness.py"
 if [ -f "$MATRIX_STALE_VAL" ]; then
   STALE_SEV="block"
   [[ "${ARGUMENTS}" =~ --allow-stale-matrix ]] && STALE_SEV="warn"
@@ -578,7 +580,7 @@ import json
 try: print(json.load(open('${PHASE_DIR}/.matrix-staleness.json'))['suspected_count'])
 except: print('?')
 ")
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.matrix_staleness_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"suspected\":${SUSPECTED_N}}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.matrix_staleness_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"suspected\":${SUSPECTED_N}}" >/dev/null 2>&1 || true
 
     source scripts/lib/blocking-gate-prompt.sh
     EVIDENCE_PATH="${PHASE_DIR}/.vg/matrix-staleness-evidence.json"
@@ -605,7 +607,7 @@ fi
 # Codex-HIGH-4 fix: default to BLOCK (was warn). Migration grace via
 # explicit `review.provenance.enforcement: warn` in vg.config.md OR
 # --allow-legacy-provenance flag for phases pre-dating RFC v9.
-PROV_VAL=".claude/scripts/validators/verify-evidence-provenance.py"
+PROV_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-evidence-provenance.py"
 if [ -f "$PROV_VAL" ]; then
   # Resolve enforcement from config — env var wins, then grep config, default block
   PROV_MODE="${VG_PROVENANCE_ENFORCEMENT:-}"
@@ -620,7 +622,7 @@ if [ -f "$PROV_VAL" ]; then
   ${PYTHON_BIN:-python3} "$PROV_VAL" --phase "${PHASE_NUMBER}" $PROV_FLAGS
   PROV_RC=$?
   if [ "$PROV_RC" -ne 0 ] && [ "$PROV_MODE" = "block" ]; then
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.evidence_provenance_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.evidence_provenance_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
     source scripts/lib/blocking-gate-prompt.sh
     EVIDENCE_PATH="${PHASE_DIR}/.vg/evidence-provenance-evidence.json"
@@ -643,7 +645,7 @@ fi
 # 5 false-pass goals (G-31/G-34/G-35/G-44/G-52) modal opened nhưng chưa bao giờ
 # submit. Validator này check goal_sequences.steps[] có submit click + 2xx
 # network entry trước khi cho phép run-complete.
-MUT_SUBMIT_VAL=".claude/scripts/validators/verify-mutation-actually-submitted.py"
+MUT_SUBMIT_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-mutation-actually-submitted.py"
 if [ -f "$MUT_SUBMIT_VAL" ]; then
   MUT_FLAGS="--severity block"
   if [[ "${ARGUMENTS}" =~ --allow-cancel-only-mutations ]]; then
@@ -652,7 +654,7 @@ if [ -f "$MUT_SUBMIT_VAL" ]; then
   ${PYTHON_BIN:-python3} "$MUT_SUBMIT_VAL" --phase "${PHASE_NUMBER}" $MUT_FLAGS
   MUT_RC=$?
   if [ "$MUT_RC" -ne 0 ]; then
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.mutation_submit_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.mutation_submit_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
     source scripts/lib/blocking-gate-prompt.sh
     EVIDENCE_PATH="${PHASE_DIR}/.vg/mutation-submit-evidence.json"
@@ -677,14 +679,14 @@ fi
 TRACE_MODE="${VG_TRACEABILITY_MODE:-block}"
 
 # v2.46 L4 — RCRURD step depth (per goal_class threshold)
-RCRURD_VAL=".claude/scripts/validators/verify-rcrurd-depth.py"
+RCRURD_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-rcrurd-depth.py"
 if [ -f "$RCRURD_VAL" ]; then
   RCRURD_FLAGS="--severity ${TRACE_MODE}"
   [[ "${ARGUMENTS}" =~ --allow-shallow-scans ]] && RCRURD_FLAGS="$RCRURD_FLAGS --allow-shallow-scans"
   ${PYTHON_BIN:-python3} "$RCRURD_VAL" --phase "${PHASE_NUMBER}" $RCRURD_FLAGS
   RCRURD_RC=$?
   if [ "$RCRURD_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.rcrurd_depth_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.rcrurd_depth_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
     source scripts/lib/blocking-gate-prompt.sh
     EVIDENCE_PATH="${PHASE_DIR}/.vg/rcrurd-depth-evidence.json"
@@ -703,14 +705,14 @@ JSON
 fi
 
 # v2.46 L4 — asserted_quote vs business rule similarity
-ASSERTED_VAL=".claude/scripts/validators/verify-asserted-rule-match.py"
+ASSERTED_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-asserted-rule-match.py"
 if [ -f "$ASSERTED_VAL" ]; then
   ASSERTED_FLAGS="--severity ${TRACE_MODE}"
   [[ "${ARGUMENTS}" =~ --allow-asserted-drift ]] && ASSERTED_FLAGS="$ASSERTED_FLAGS --allow-asserted-drift"
   ${PYTHON_BIN:-python3} "$ASSERTED_VAL" --phase "${PHASE_NUMBER}" $ASSERTED_FLAGS
   ASSERTED_RC=$?
   if [ "$ASSERTED_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.asserted_drift_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.asserted_drift_blocked" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 
     source scripts/lib/blocking-gate-prompt.sh
     EVIDENCE_PATH="${PHASE_DIR}/.vg/asserted-drift-evidence.json"
@@ -729,7 +731,7 @@ JSON
 fi
 
 # v2.46 L4 — replay-evidence (structural + optional curl replay)
-REPLAY_VAL=".claude/scripts/validators/verify-replay-evidence.py"
+REPLAY_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-replay-evidence.py"
 if [ -f "$REPLAY_VAL" ]; then
   REPLAY_FLAGS="--severity warn"  # default warn — auth fixture not always available
   [[ "${ARGUMENTS}" =~ --enable-replay ]] && REPLAY_FLAGS="--severity ${TRACE_MODE} --enable-replay"
@@ -742,7 +744,7 @@ if [ -f "$REPLAY_VAL" ]; then
 fi
 
 # v2.46 L4 — cross-phase decision validity (D-XX from earlier phase still active)
-CROSS_VAL=".claude/scripts/validators/verify-cross-phase-decision-validity.py"
+CROSS_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-cross-phase-decision-validity.py"
 if [ -f "$CROSS_VAL" ]; then
   CROSS_FLAGS="--severity ${TRACE_MODE}"
   [[ "${ARGUMENTS}" =~ --allow-stale-decisions ]] && CROSS_FLAGS="$CROSS_FLAGS --allow-stale-decisions"
@@ -757,7 +759,7 @@ fi
 # v2.46 L6 — adversarial scanner-business-alignment verifier
 # Two-phase: emit prompts → orchestrator spawns Haiku verifier per prompt →
 # re-run validator with --verifier-results to gate.
-ALIGN_VAL=".claude/scripts/validators/verify-scanner-business-alignment.py"
+ALIGN_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-scanner-business-alignment.py"
 if [ -f "$ALIGN_VAL" ]; then
   PROMPTS_FILE="${PHASE_DIR}/.tmp/business-alignment-prompts.jsonl"
   RESULTS_FILE="${PHASE_DIR}/.tmp/business-alignment-results.jsonl"
@@ -791,7 +793,7 @@ fi
 # Defect entry per goal with status ∈ {BLOCKED, UNREACHABLE, FAILED, SUSPECTED}
 # that does NOT already have an open defect in .tester-pro/defects.json.
 # Severity inferred from priority + block_family heuristics.
-TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
+TESTER_PRO_CLI="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/tester-pro-cli.py"
 [ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
 if [ -f "$TESTER_PRO_CLI" ] && [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
   echo "━━━ D21 — Defect log generation ━━━"
@@ -857,7 +859,7 @@ print(f"opened {opened} new defect(s) from matrix")
 PYDEFECT
 fi
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator run-complete
 RUN_RC=$?
 if [ $RUN_RC -ne 0 ]; then
   echo "⛔ review run-complete BLOCK — review orchestrator output + fix before /vg:test" >&2

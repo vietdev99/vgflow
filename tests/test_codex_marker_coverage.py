@@ -33,6 +33,7 @@ CODEX_SKILLS = [
     "vg-test",
     "vg-deploy",
     "vg-accept",
+    "vg-roam",
     "vg-blueprint",
     "vg-scope",
 ]

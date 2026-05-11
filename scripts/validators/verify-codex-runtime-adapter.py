@@ -43,7 +43,6 @@ GENERIC_REQUIRED = (
     "Codex path",
     "Never skip source workflow gates",
     "BLOCK instead of silently degrading",
-    "commands/vg/_shared/lib/codex-spawn.sh",
     "VG_CODEX_MODEL_EXECUTOR",
     "VG_CODEX_MODEL_SCANNER",
     "review.haiku_scanner_spawned",
@@ -52,10 +51,16 @@ GENERIC_REQUIRED = (
     "UI/UX, security, and business-flow checks",
 )
 
+GENERIC_REQUIRED_ANY = (
+    (
+        "commands/vg/_shared/lib/codex-spawn.sh",
+        "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh",
+    ),
+)
+
 SUPPORT_REQUIRED = {
     "vg-reflector": (
         "<codex_skill_adapter>",
-        "commands/vg/_shared/lib/codex-spawn.sh",
         "VG_CODEX_MODEL_SCANNER",
         "Model mapping",
     ),
@@ -66,6 +71,10 @@ SUPPORT_REQUIRED = {
         "Pattern A",
         "codex exec",
     ),
+}
+
+SUPPORT_REQUIRED_ANY = {
+    "vg-reflector": GENERIC_REQUIRED_ANY,
 }
 
 
@@ -161,6 +170,15 @@ def validate(root: Path) -> dict[str, Any]:
                         f"{command_path.name}: missing {required!r}",
                     )
                 )
+        for choices in GENERIC_REQUIRED_ANY:
+            if not any(choice in mirror_text for choice in choices):
+                issues.append(
+                    _issue(
+                        "missing_runtime_contract",
+                        mirror_path,
+                        f"{command_path.name}: missing one of {choices!r}",
+                    )
+                )
 
     for skill_name, required_strings in SUPPORT_REQUIRED.items():
         skill_path = mirrors_dir / skill_name / "SKILL.md"
@@ -175,6 +193,15 @@ def validate(root: Path) -> dict[str, Any]:
                         "missing_support_runtime_contract",
                         skill_path,
                         f"{skill_name}: missing {required!r}",
+                    )
+                )
+        for choices in SUPPORT_REQUIRED_ANY.get(skill_name, ()):
+            if not any(choice in skill_text for choice in choices):
+                issues.append(
+                    _issue(
+                        "missing_support_runtime_contract",
+                        skill_path,
+                        f"{skill_name}: missing one of {choices!r}",
                     )
                 )
 
@@ -200,6 +227,16 @@ def validate(root: Path) -> dict[str, Any]:
                         "missing_support_runtime_contract",
                         mirror_path,
                         f"{skill_name}: missing {required!r}",
+                    )
+                )
+        required_choice_groups = SUPPORT_REQUIRED_ANY.get(skill_name, GENERIC_REQUIRED_ANY)
+        for choices in required_choice_groups:
+            if not any(choice in mirror_text for choice in choices):
+                issues.append(
+                    _issue(
+                        "missing_support_runtime_contract",
+                        mirror_path,
+                        f"{skill_name}: missing one of {choices!r}",
                     )
                 )
 

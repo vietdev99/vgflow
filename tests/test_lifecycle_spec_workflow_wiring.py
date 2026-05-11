@@ -82,10 +82,15 @@ def test_review_goal_comparison_consumes_lifecycle_specs() -> None:
 def test_curated_codex_skills_reference_lifecycle_generator() -> None:
     vg_test = (REPO_ROOT / "codex-skills" / "vg-test" / "SKILL.md").read_text(encoding="utf-8")
     vg_test_spec = (REPO_ROOT / "codex-skills" / "vg-test-spec" / "SKILL.md").read_text(encoding="utf-8")
+    test_preflight = (REPO_ROOT / "commands" / "vg" / "_shared" / "test" / "preflight.md").read_text(encoding="utf-8")
+    test_codegen = (REPO_ROOT / "commands" / "vg" / "_shared" / "test" / "codegen" / "delegation.md").read_text(encoding="utf-8")
 
-    assert "generate-lifecycle-specs.py --phase ${PHASE_NUMBER}" in vg_test
-    assert "verify-lifecycle-spec-depth.py" in vg_test
-    assert "formula.stages" in vg_test
+    assert "Read `_shared/test/preflight.md` and follow it exactly." in vg_test
+    assert "Read `_shared/test/codegen/overview.md` AND" in vg_test
+    assert "generate-lifecycle-specs.py" in test_preflight
+    assert '--phase "${PHASE_NUMBER}"' in test_preflight
+    assert "verify-lifecycle-spec-depth.py" in test_preflight
+    assert "formula.stages" in test_codegen
     assert "generate-deep-test-specs.py" in vg_test_spec
     assert "verify-deep-test-specs.py" in vg_test_spec
     assert "TEST-FIXTURE-DAG.json" in vg_test_spec

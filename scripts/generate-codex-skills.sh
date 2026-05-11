@@ -16,6 +16,7 @@ set -euo pipefail
 
 FORCE=false
 FORCE_OVERWRITE_CURATED=false
+ONLY_SKILLS=()
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=true ;;
@@ -26,8 +27,12 @@ for arg in "$@"; do
       FORCE=true
       FORCE_OVERWRITE_CURATED=true
       ;;
+    --skill=*)
+      ONLY_SKILLS+=("${arg#--skill=}")
+      ;;
     -h|--help)
-      sed -n '1,22p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '1,24p' "$0" | sed 's/^# \{0,1\}//'
+      echo "  --skill=<name>          Regenerate only one skill (e.g. test, vg-test)"
       exit 0
       ;;
     *)
@@ -75,6 +80,88 @@ strip_frontmatter() {
   ' "$src"
 }
 
+skill_selected() {
+  local name="$1"
+  local skill_name="$2"
+  if [ "${#ONLY_SKILLS[@]}" -eq 0 ]; then
+    return 0
+  fi
+  local wanted
+  for wanted in "${ONLY_SKILLS[@]}"; do
+    case "$wanted" in
+      "$name"|"$skill_name"|"vg-$name")
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+extract_hard_markers() {
+  local src="$1"
+  python - "$src" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.S)
+if not match:
+    raise SystemExit(0)
+frontmatter = match.group(1)
+markers = re.search(
+    r"^  must_touch_markers:\s*\n(.*?)(?=^  [a-zA-Z_]+:|\Z)",
+    frontmatter,
+    re.S | re.M,
+)
+if not markers:
+    markers = re.search(
+        r"^must_touch_markers:\s*\n(.*?)(?=^[a-zA-Z_]+:|\Z)",
+        frontmatter,
+        re.S | re.M,
+    )
+if not markers:
+    raise SystemExit(0)
+for marker in re.findall(r'^\s+-\s*"([^"]+)"\s*$', markers.group(1), re.M):
+    print(marker)
+PY
+}
+
+write_codex_marker_block() {
+  local src="$1"
+  local cmd_name="$2"
+  local markers
+  markers="$(extract_hard_markers "$src" || true)"
+  [ -n "$markers" ] || return 0
+
+  cat <<EOF
+
+<HARD-GATE-CODEX>
+Codex has no Claude PreToolUse/PostToolUse hook substrate. Claude hooks may
+auto-emit step markers, but Codex MUST emit the same hard markers explicitly
+after each matching STEP primary action.
+
+Use global VGFlow paths so global-only installs work without project-local
+\`.claude/scripts\` or \`.claude/commands\`:
+
+\`\`\`bash
+VG_HOME="\${VG_HOME:-\$HOME/.vgflow}"
+VG_SCRIPT_ROOT="\${VG_SCRIPT_ROOT:-\${VG_HOME}/scripts}"
+EOF
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
+    printf '"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step %s %s\n' "$cmd_name" "$marker"
+  done <<< "$markers"
+  cat <<'EOF'
+```
+
+Hook/spawn mechanics may differ by provider, but marker names, order, gates,
+must-write artifacts, and telemetry contract stay identical to the Claude
+command source.
+</HARD-GATE-CODEX>
+EOF
+}
+
 write_generic_adapter() {
   local invocation_name="$1"
   cat <<EOF
@@ -91,18 +178,21 @@ the workflow entrypoint. Keep the current Codex runtime, export
 \`VG_RUNTIME=codex\`, use Codex \`update_plan\` for the compact visible task
 window, and bind it with \`vg-orchestrator tasklist-projected --adapter codex\`.
 
-\`.claude/scripts/*\` and \`.claude/commands/*\` are canonical VGFlow source
-paths shared by both adapters; those paths do not mean the runtime changed to
-Claude. References below to "Claude CLI", \`TodoWrite\`, or Haiku describe the
-Claude adapter only. Codex must map them through this adapter contract instead
-of aborting the current run and relaunching Claude.
+VGFlow source paths are resolved through global \`VG_HOME\` (default:
+\`~/.vgflow\`). Project-local Claude workflow files may be absent in
+global-only installs; Codex must use
+\`\${VG_SCRIPT_ROOT:-\${VG_HOME:-\$HOME/.vgflow}/scripts}\` and
+\`\${VG_COMMAND_ROOT:-\${VG_HOME:-\$HOME/.vgflow}/commands/vg}\` for workflow
+helpers. References below to "Claude CLI", \`TodoWrite\`, or Haiku describe
+the Claude adapter only. Codex must map them through this adapter contract
+instead of aborting the current run and relaunching Claude.
 
 ### Tool mapping
 
 | Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as \`codex-inline\` when the source prompt distinguishes providers. |
-| Agent(...) / Task | Prefer \`commands/vg/_shared/lib/codex-spawn.sh\` or native Codex subagents | Use \`codex exec\` when exact model, timeout, output file, or schema control matters. |
+| Agent(...) / Task | Prefer \`\${VG_COMMAND_ROOT:-\${VG_HOME:-\$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh\` or native Codex subagents | Use \`codex exec\` when exact model, timeout, output file, or schema control matters. |
 | TaskCreate / TaskUpdate / TodoWrite | Compact Codex plan window + orchestrator step markers | Use \`tasklist-contract.json\` as source of truth. Do not paste the full hierarchy into Codex \`update_plan\`. Show at most 6 rows: active group/step first, next 2-3 pending steps, completed groups collapsed, and \`+N pending\`. After projecting, emit \`vg-orchestrator tasklist-projected --adapter codex\`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
@@ -119,7 +209,7 @@ in the body below.
 
 | Source pattern | Claude path | Codex path |
 |---|---|---|
-| Planner/research/checker Agent | Use the source \`Agent(...)\` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call \`commands/vg/_shared/lib/codex-spawn.sh --tier planner\` |
+| Planner/research/checker Agent | Use the source \`Agent(...)\` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call \`\${VG_COMMAND_ROOT:-\${VG_HOME:-\$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh --tier planner\` |
 | Build executor Agent | Use the source executor \`Agent(...)\` call | Use \`codex-spawn.sh --tier executor --sandbox workspace-write\` with explicit file ownership and expected artifact output |
 | Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured \`codex exec\`/Gemini/Claude commands from \`.claude/vg.config.md\`; fail if required CLI output is missing or unparsable |
 | Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
@@ -197,7 +287,7 @@ that model in the target account, via \`VG_CODEX_MODEL_PLANNER\`,
 For subprocess-based children, use:
 
 \`\`\`bash
-bash .claude/commands/vg/_shared/lib/codex-spawn.sh \\
+bash "\${VG_COMMAND_ROOT:-\${VG_HOME:-\$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh" \\
   --tier executor \\
   --prompt-file "\$PROMPT_FILE" \\
   --out "\$OUT_FILE" \\
@@ -339,6 +429,7 @@ write_codex_skill() {
   local skill_name="$3"
   local description="$4"
   local adapter_mode="${5:-generic}"
+  local command_marker_name="${6:-}"
   local preserved_adapter=""
   local target_invalid_yaml="false"
 
@@ -394,7 +485,7 @@ write_codex_skill() {
       echo "Skipped (curated content detected): ${skill_name} — use --force-overwrite-curated to override"
       return
     fi
-    adapter_mode="preserve"
+    adapter_mode="generic"
   fi
 
   mkdir -p "$(dirname "$target")"
@@ -416,6 +507,9 @@ EOF
       printf '%s\n' "$preserved_adapter"
     else
       write_generic_adapter "$skill_name"
+    fi
+    if [ -n "$command_marker_name" ]; then
+      write_codex_marker_block "$src" "$command_marker_name"
     fi
     echo ""
     echo ""
@@ -452,10 +546,13 @@ for src in "$COMMANDS_DIR"/*.md; do
   [ -f "$src" ] || continue
   name="$(basename "$src" .md)"
   case "$name" in _*|*-insert) continue ;; esac
+  if ! skill_selected "$name" "vg-${name}"; then
+    continue
+  fi
 
   target="$TARGET_DIR/vg-${name}/SKILL.md"
   description="$(extract_description "$src")"
-  write_codex_skill "$src" "$target" "vg-${name}" "$description" "generic"
+  write_codex_skill "$src" "$target" "vg-${name}" "$description" "generic" "$name"
 done
 
 # Support skills invoked by workflow commands. Codex does not have Claude's
@@ -464,6 +561,9 @@ done
 for src in "$SHARED_SKILLS_DIR"/*/SKILL.md; do
   [ -f "$src" ] || continue
   support="$(basename "$(dirname "$src")")"
+  if ! skill_selected "$support" "$support"; then
+    continue
+  fi
   target="$TARGET_DIR/$support/SKILL.md"
   description="$(extract_description "$src")"
   write_codex_skill "$src" "$target" "$support" "$description" "generic"

@@ -39,7 +39,7 @@ echo ""
 echo "▸ Evidence completeness check (rule: REQUIRED fields per tier — empty/null OK, missing = reject)"
 COMPLIANCE_OUT="${ROAM_DIR}/evidence-compliance.json"
 for MODEL_DIR in "${ROAM_MODEL_DIRS[@]}"; do
-  "${PYTHON_BIN:-python3}" .claude/scripts/verify-scanner-evidence-completeness.py \
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-scanner-evidence-completeness.py" \
     --jsonl-glob "${MODEL_DIR}/observe-*.jsonl" \
     --lens-from-filename \
     --threshold "${ROAM_EVIDENCE_THRESHOLD:-80}" \
@@ -59,7 +59,7 @@ for MODEL_DIR in "${ROAM_MODEL_DIRS[@]}"; do
 done
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "4_aggregate_logs" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/4_aggregate_logs.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 4_aggregate_logs 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 4_aggregate_logs 2>/dev/null || true
 ```
 
 ### Vocabulary validator (preserved as-is per `<rules>` rule 8)
@@ -84,7 +84,7 @@ findings into severity buckets. Output `ROAM-BUGS.md` + proposed
 ```bash
 vg-orchestrator step-active 5_analyze_findings
 
-"${PYTHON_BIN:-python3}" .claude/scripts/roam-analyze.py \
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/roam-analyze.py" \
   --raw-log "${ROAM_DIR}/RAW-LOG.jsonl" \
   --phase-dir "${PHASE_DIR}" \
   --output-md "${ROAM_DIR}/ROAM-BUGS.md" \
@@ -95,12 +95,12 @@ BUGS_COUNT=$("${PYTHON_BIN:-python3}" -c "import json; d=json.load(open('${ROAM_
 CRIT_COUNT=$("${PYTHON_BIN:-python3}" -c "import json; d=json.load(open('${ROAM_DIR}/RUN-SUMMARY.json')); print(d.get('by_severity',{}).get('critical',0))" 2>/dev/null || echo 0)
 echo "▸ Found ${BUGS_COUNT} bugs (${CRIT_COUNT} critical)"
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
   "roam.analysis.completed" \
   --actor "orchestrator" --outcome "INFO" --payload "{\"bugs\":${BUGS_COUNT},\"critical\":${CRIT_COUNT}}" 2>/dev/null || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "5_analyze_findings" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5_analyze_findings.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 5_analyze_findings 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 5_analyze_findings 2>/dev/null || true
 ```
 
 ### R1-R8 deterministic rules

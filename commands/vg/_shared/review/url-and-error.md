@@ -18,7 +18,7 @@ delete confirmations, or security/abuse expectations.
 ```bash
 CRUD_FLAGS=""
 [[ "${ARGUMENTS:-}" =~ --allow-no-crud-surface ]] && CRUD_FLAGS="--allow-missing"
-CRUD_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-crud-surface-contract.py"
+CRUD_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-crud-surface-contract.py"
 if [ -x "$CRUD_VAL" ]; then
   mkdir -p "${PHASE_DIR}/.tmp"
   "${PYTHON_BIN:-python3}" "$CRUD_VAL" --phase "${PHASE_NUMBER}" \
@@ -45,7 +45,7 @@ debt entry.
 
 ```bash
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-"${PYTHON_BIN}" .claude/scripts/validators/verify-url-state-sync.py \
+"${PYTHON_BIN}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-url-state-sync.py \
   --phase "${PHASE_NUMBER}" \
   --enforce-required-lenses \
   > "${PHASE_DIR}/.tmp/url-state-sync.json" 2>&1
@@ -53,14 +53,14 @@ URL_SYNC_RC=$?
 
 if [ "${URL_SYNC_RC}" != "0" ]; then
   if [[ "${RUN_ARGS:-}" == *"--allow-no-url-sync"* ]]; then
-    "${PYTHON_BIN}" .claude/scripts/vg-orchestrator override \
+    "${PYTHON_BIN}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator override \
       --flag skip-url-state-sync \
       --reason "URL state sync waived for ${PHASE_NUMBER} via --allow-no-url-sync (soft debt logged)"
     echo "⚠ URL state sync gate waived via --allow-no-url-sync"
   else
     echo "⛔ URL state sync declarations missing — see ${PHASE_DIR}/.tmp/url-state-sync.json"
     cat "${PHASE_DIR}/.tmp/url-state-sync.json"
-    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
     if [ -f "$DIAG_SCRIPT" ]; then
       "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
         --gate-id "review.url_state_sync" \
@@ -73,7 +73,7 @@ if [ "${URL_SYNC_RC}" != "0" ]; then
     echo ""
     echo "Fix options:"
     echo "  1. Add interactive_controls blocks to TEST-GOALS.md per goal."
-    echo "     Schema: .claude/commands/vg/_shared/templates/TEST-GOAL-enriched-template.md (Phase J section)."
+    echo "     Schema: ${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/templates/TEST-GOAL-enriched-template.md (Phase J section)."
     echo "  2. If state is genuinely local-only, declare url_sync: false + url_sync_waive_reason."
     echo "  3. Override (last resort): re-run with --allow-no-url-sync (logs soft OD debt)."
     exit 2
@@ -188,21 +188,21 @@ if [[ "${RUN_ARGS:-}" == *"--skip-runtime"* ]] || [[ -z "${VG_BROWSER_AVAILABLE:
   EXTRA_FLAGS="--skip-runtime"
 fi
 
-"${PYTHON_BIN}" .claude/scripts/validators/verify-url-state-runtime.py \
+"${PYTHON_BIN}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-url-state-runtime.py \
   --phase "${PHASE_NUMBER}" ${EXTRA_FLAGS} \
   > "${PHASE_DIR}/.tmp/url-state-runtime.json" 2>&1
 URL_RUNTIME_RC=$?
 
 if [ "${URL_RUNTIME_RC}" != "0" ]; then
   if [[ "${RUN_ARGS:-}" == *"--allow-runtime-drift"* ]]; then
-    "${PYTHON_BIN}" .claude/scripts/vg-orchestrator override \
+    "${PYTHON_BIN}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator override \
       --flag skip-url-state-runtime \
       --reason "URL state runtime drift waived for ${PHASE_NUMBER} via --allow-runtime-drift (soft debt logged)"
     echo "⚠ URL state runtime drift waived via --allow-runtime-drift"
   else
     echo "⛔ URL state runtime drift detected — see ${PHASE_DIR}/.tmp/url-state-runtime.json"
     cat "${PHASE_DIR}/.tmp/url-state-runtime.json"
-    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
     if [ -f "$DIAG_SCRIPT" ]; then
       "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
         --gate-id "review.url_state_runtime" \
@@ -290,7 +290,7 @@ Do not silently skip.
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
 
-"${PYTHON_BIN}" .claude/scripts/validators/verify-error-message-runtime.py \
+"${PYTHON_BIN}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-error-message-runtime.py \
   --phase "${PHASE_NUMBER}" \
   > "${PHASE_DIR}/.tmp/error-message-runtime.json" 2>&1
 ERROR_MESSAGE_RC=$?
@@ -298,7 +298,7 @@ ERROR_MESSAGE_RC=$?
 if [ "${ERROR_MESSAGE_RC}" != "0" ]; then
   echo "⛔ API error-message runtime lens failed — see ${PHASE_DIR}/.tmp/error-message-runtime.json"
   cat "${PHASE_DIR}/.tmp/error-message-runtime.json"
-  DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+  DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
   if [ -f "$DIAG_SCRIPT" ]; then
     "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
       --gate-id "review.error_message_runtime" \
@@ -317,6 +317,6 @@ if [ "${ERROR_MESSAGE_RC}" != "0" ]; then
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_9_error_message_runtime" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_9_error_message_runtime.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2_9_error_message_runtime 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2_9_error_message_runtime 2>/dev/null || true
 ```
 </step>

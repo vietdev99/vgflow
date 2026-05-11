@@ -24,7 +24,7 @@ during /vg:build STEP 6.5 pre-test-gate:
        e2e/**/*.{spec,test}.{ts,tsx,js,jsx}
      Override via config `paths.spec_glob`.
      count < min → severity=BLOCK by default; diagnostic suggests
-     /vg:test --codegen-from-goals (Stage 5 wires the codegen).
+     /vg:test-spec --regen before review can pass.
 
 Skip conditions (exit 0 with PASS, no enforcement):
   - UI-RUNTIME-CONTRACT.json missing (legacy phase / pre-v3.2.0)
@@ -196,8 +196,7 @@ def check_spec_count(contract: dict, repo_root: Path, spec_globs: list[str], out
             severity="HIGH",
             fix_hint=(
                 f"Mark missing goals as Status=TEST_SPEC_MISSING in GOAL-COVERAGE-MATRIX "
-                f"(v3.1.0 #173 Stage 1 taxonomy) and run /vg:test --codegen-from-goals to "
-                f"generate skeleton specs (Stage 5 will wire codegen). Override with "
+                f"and run /vg:test-spec --regen before rerunning /vg:review. Override with "
                 f"--skip-ui-runtime-contract + override-reason if intentional."
             ),
         ))

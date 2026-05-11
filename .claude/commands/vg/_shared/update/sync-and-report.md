@@ -72,6 +72,13 @@ touch "$CODEX_CONFIG"
 register_codex_agent "$CODEX_CONFIG" "vgflow-orchestrator" "VGFlow phase orchestrator for Codex. Coordinates VG skills, gates, and artifact writes."
 register_codex_agent "$CODEX_CONFIG" "vgflow-executor" "VGFlow bounded code executor for Codex child tasks."
 register_codex_agent "$CODEX_CONFIG" "vgflow-classifier" "VGFlow cheap classifier/scanner for read-only summaries and triage."
+CODEX_HOOK_INSTALLER="${CODEX_SOURCE}/scripts/codex-hooks-install.py"
+if [ -f "$CODEX_HOOK_INSTALLER" ]; then
+  python3 "$CODEX_HOOK_INSTALLER" --codex-home "$HOME/.codex" --vg-home "$CODEX_SOURCE"
+  echo "Codex hooks: refreshed ~/.codex/hooks.json"
+else
+  echo "⚠ Codex hooks: installer missing; Codex review may rely on manual markers"
+fi
 echo "Codex global deploy: refreshed ~/.codex skills/agents (global-only)"
 
 echo "Codex mirror: skills=${CODEX_SKILLS_UPDATED} agents=${CODEX_AGENTS_UPDATED}"

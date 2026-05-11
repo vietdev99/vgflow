@@ -228,6 +228,27 @@ refresh_global_codex() {
   echo "vgflow: refreshed ${deployed} global Codex skill(s) in ~/.codex/skills"
 }
 
+install_global_codex_hooks() {
+  local py=""
+  for cand in python3 python py; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      py="$cand"
+      break
+    fi
+  done
+  local installer="${VG_HOME}/scripts/codex-hooks-install.py"
+  local hook_vg_home="${HOME}/.vgflow"
+  if [ ! -d "${hook_vg_home}/scripts/codex-hooks" ]; then
+    hook_vg_home="${VG_HOME}"
+  fi
+  if [ -n "$py" ] && [ -f "$installer" ]; then
+    "$py" "$installer" --codex-home "${HOME}/.codex" --vg-home "${hook_vg_home}"
+    echo "vgflow: Codex hooks installed at ~/.codex/hooks.json"
+  else
+    echo "vgflow: warning: Codex hook installer unavailable; Codex review may rely on manual markers" >&2
+  fi
+}
+
 repair_playwright_mcp() {
   local py=""
   for cand in python3 python py; do
@@ -282,6 +303,7 @@ case "$cmd" in
     refresh_global_cli_link
     refresh_global_claude_commands
     refresh_global_codex
+    install_global_codex_hooks
     repair_playwright_mcp
     bash "${VG_HOME}/scripts/hooks/install-hooks.sh" \
       --target "${HOME}/.claude/settings.json" \
@@ -318,6 +340,7 @@ case "$cmd" in
     refresh_global_cli_link
     refresh_global_claude_commands
     refresh_global_codex
+    install_global_codex_hooks
     repair_playwright_mcp
     run_project_uninstall_helper "$(pwd)"
     bash "${VG_HOME}/scripts/hooks/install-hooks.sh" \

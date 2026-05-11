@@ -18,18 +18,21 @@ the workflow entrypoint. Keep the current Codex runtime, export
 `VG_RUNTIME=codex`, use Codex `update_plan` for the compact visible task
 window, and bind it with `vg-orchestrator tasklist-projected --adapter codex`.
 
-`.claude/scripts/*` and `.claude/commands/*` are canonical VGFlow source
-paths shared by both adapters; those paths do not mean the runtime changed to
-Claude. References below to "Claude CLI", `TodoWrite`, or Haiku describe the
-Claude adapter only. Codex must map them through this adapter contract instead
-of aborting the current run and relaunching Claude.
+VGFlow source paths are resolved through global `VG_HOME` (default:
+`~/.vgflow`). Project-local Claude workflow files may be absent in
+global-only installs; Codex must use
+`${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}` and
+`${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}` for workflow
+helpers. References below to "Claude CLI", `TodoWrite`, or Haiku describe
+the Claude adapter only. Codex must map them through this adapter contract
+instead of aborting the current run and relaunching Claude.
 
 ### Tool mapping
 
 | Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
-| Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
+| Agent(...) / Task | Prefer `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
 | TaskCreate / TaskUpdate / TodoWrite | Compact Codex plan window + orchestrator step markers | Use `tasklist-contract.json` as source of truth. Do not paste the full hierarchy into Codex `update_plan`. Show at most 6 rows: active group/step first, next 2-3 pending steps, completed groups collapsed, and `+N pending`. After projecting, emit `vg-orchestrator tasklist-projected --adapter codex`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
@@ -46,7 +49,7 @@ in the body below.
 
 | Source pattern | Claude path | Codex path |
 |---|---|---|
-| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `commands/vg/_shared/lib/codex-spawn.sh --tier planner` |
+| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh --tier planner` |
 | Build executor Agent | Use the source executor `Agent(...)` call | Use `codex-spawn.sh --tier executor --sandbox workspace-write` with explicit file ownership and expected artifact output |
 | Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured `codex exec`/Gemini/Claude commands from `.claude/vg.config.md`; fail if required CLI output is missing or unparsable |
 | Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
@@ -124,7 +127,7 @@ that model in the target account, via `VG_CODEX_MODEL_PLANNER`,
 For subprocess-based children, use:
 
 ```bash
-bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
+bash "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh" \
   --tier executor \
   --prompt-file "$PROMPT_FILE" \
   --out "$OUT_FILE" \
@@ -153,6 +156,41 @@ process that cannot see browser tools.
 
 Invoke this skill as `$vg-accept`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
+
+<HARD-GATE-CODEX>
+Codex has no Claude PreToolUse/PostToolUse hook substrate. Claude hooks may
+auto-emit step markers, but Codex MUST emit the same hard markers explicitly
+after each matching STEP primary action.
+
+Use global VGFlow paths so global-only installs work without project-local
+`.claude/scripts` or `.claude/commands`:
+
+```bash
+VG_HOME="${VG_HOME:-$HOME/.vgflow}"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME}/scripts}"
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 0_gate_integrity_precheck
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 0_load_config
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept create_task_tracker
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 0c_telemetry_suggestions
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 1_artifact_precheck
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 2_marker_precheck
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 3_sandbox_verdict_gate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 3b_unreachable_triage_gate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 3c_override_resolution_gate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 4_build_uat_checklist
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 4b_uat_narrative_autofire
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 5_interactive_uat
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 5_uat_quorum_gate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 6b_security_baseline
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 6c_learn_auto_surface
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 6_write_uat_md
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step accept 7_post_accept_actions
+```
+
+Hook/spawn mechanics may differ by provider, but marker names, order, gates,
+must-write artifacts, and telemetry contract stay identical to the Claude
+command source.
+</HARD-GATE-CODEX>
 
 
 
@@ -236,37 +274,6 @@ right after with one todo per `projection_items[]` entry (5 group headers
 Lifecycle: `replace-on-start` (first projection replaces stale list) +
 `close-on-complete` (final clear or completed sentinel).
 
-<HARD-GATE-CODEX>
-Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
-hook auto-emits `must_touch_markers` declared in `commands/vg/accept.md`;
-Codex does NOT receive that signal. AI MUST emit each HARD marker manually
-after the corresponding STEP's primary action completes — failure to do so
-causes the contract validator to reject the run with "8/N markers found".
-
-After each STEP's primary action completes, run:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept <marker>
-```
-
-Required HARD markers for /vg:accept (v2.65.0 A9):
-
-| STEP | Marker(s) to emit |
-|---|---|
-| STEP 1 (preflight) | `0_gate_integrity_precheck`, `0_load_config`, `create_task_tracker`, `0c_telemetry_suggestions` |
-| STEP 2 (gates) | `1_artifact_precheck`, `2_marker_precheck`, `3_sandbox_verdict_gate`, `3b_unreachable_triage_gate`, `3c_override_resolution_gate` |
-| STEP 3 (UAT checklist build) | `4_build_uat_checklist` |
-| STEP 4 (UAT narrative autofire) | `4b_uat_narrative_autofire` |
-| STEP 5 (interactive UAT) | `5_interactive_uat` |
-| STEP 6 (UAT quorum gate) | `5_uat_quorum_gate` |
-| STEP 7 (audit) | `6b_security_baseline`, `6c_learn_auto_surface`, `6_write_uat_md` |
-| STEP 8 (cleanup) | `7_post_accept_actions` |
-
-All 17 markers are HARD. None has severity:warn in `commands/vg/accept.md` —
-the close gate (Stop hook on Claude / Gate B in STEP 8 on Codex) blocks the
-run unless every applicable `.step-markers/<marker>.done` exists.
-</HARD-GATE-CODEX>
-
 ## Steps (5 checklist groups → 8 STEP sections)
 
 ### STEP 1 — preflight (4 light steps)
@@ -283,15 +290,6 @@ After STEP 1.create_task_tracker bash runs, you MUST call TodoWrite
 IMMEDIATELY with the projection items from
 `.vg/runs/<run_id>/tasklist-contract.json`.
 
-After STEP 1 completes (Codex hook fallback):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_gate_integrity_precheck
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0_load_config
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept create_task_tracker
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0c_telemetry_suggestions
-```
-
 ### STEP 2 — gates (3-tier preflight gates)
 
 Read `_shared/accept/gates.md` and follow it exactly.
@@ -305,16 +303,6 @@ This step covers:
 
 Each gate is fail-fast. Override only with `--override-reason="<text>"`
 (logs to override-debt register).
-
-After each gate passes (or override is logged):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 1_artifact_precheck
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 2_marker_precheck
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3_sandbox_verdict_gate
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3b_unreachable_triage_gate
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3c_override_resolution_gate
-```
 
 ### STEP 3 — UAT checklist build (HEAVY, subagent)
 
@@ -345,12 +333,6 @@ RIPPLE-ANALYSIS.md, SUMMARY*.md, build-state.log).
 After return, validate output JSON contract + present section counts to
 user (proceed/abort prompt).
 
-After STEP 3 returns (UAT checklist written):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 4_build_uat_checklist
-```
-
 ### STEP 4 — UAT narrative autofire
 
 Read `_shared/accept/uat/narrative.md` and follow it exactly.
@@ -360,12 +342,6 @@ This step covers `4b_uat_narrative_autofire` — deterministic
 TEST-GOALS frontmatter (`entry_url`, `navigation_steps`, `precondition`,
 `expected_behavior`) + design-ref blocks. Strings come ONLY from
 `narration-strings.yaml` (D-18 strict enforcement).
-
-After UAT-NARRATIVE.md is written:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 4b_uat_narrative_autofire
-```
 
 ### STEP 5 — interactive UAT (INLINE, NOT subagent)
 
@@ -382,12 +358,6 @@ This step covers `5_interactive_uat` — 50+ AskUserQuestion items across
 6 sections (Decisions, Goals, Ripple HIGH callers, Design refs,
 Deliverables, Mobile gates). User decisions persisted per-section.
 
-After all 6 sections persist `.uat-responses.json`:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_interactive_uat
-```
-
 ### STEP 6 — UAT quorum gate
 
 Read `_shared/accept/uat/quorum.md` and follow it exactly.
@@ -396,12 +366,6 @@ This step covers `5_uat_quorum_gate` — quorum math + rationalization
 guard. Counts SKIPs on critical items (Section A decisions, Section B
 READY goals); blocks unless `--allow-uat-skips` AND rationalization-guard
 passes.
-
-After quorum math passes (or `--allow-uat-skips` clears the gate):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 5_uat_quorum_gate
-```
 
 ### STEP 7 — audit (security + learn + UAT.md write)
 
@@ -416,14 +380,6 @@ This step covers 3 sub-steps:
 
 Use `vg-load --priority` (NOT flat TEST-GOALS.md) when enumerating goals
 for UAT.md (Phase F Task 30 absorption).
-
-After each STEP 7 sub-step finishes:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6b_security_baseline
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6c_learn_auto_surface
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6_write_uat_md
-```
 
 ### STEP 8 — cleanup (HEAVY, subagent + post-spawn gates)
 
@@ -460,12 +416,7 @@ After return, the MAIN AGENT runs 3 hard-exit gates (in `overview.md`):
 The Stop hook then verifies all 17 markers, must_write paths, and
 must_emit_telemetry events.
 
-After Gate C emits `accept.completed` and `run-complete` returns 0:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 7_post_accept_actions
-```
-
+**MANDATORY POST-WAVE CONTINUATION:** After ALL wave Agent calls return (vg-accept-uat-builder + vg-accept-cleanup), you MUST IMMEDIATELY proceed to the NEXT STEP (Gate A/B/C + reflector trigger) IN THE SAME ASSISTANT TURN. Do NOT end the turn after wave subagents return. The harness gates require sequential execution. See `vg-meta-skill.md` "Red Flags — Post-wave continuation" for rationale.
 
 ### Post-accept reflector trigger (Section 13.5 / meta-memory v1.1)
 

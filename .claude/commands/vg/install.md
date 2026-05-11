@@ -22,6 +22,7 @@ Global-only contract:
 - Workflow source lives in `~/.vgflow/`.
 - Codex skills live in `~/.codex/skills`.
 - Claude hooks live in `~/.claude/settings.json`.
+- Codex hooks live in `~/.codex/hooks.json` and are enabled by `codex_hooks = true`.
 - Project-local VG-owned `.claude/` and `.codex/` surfaces are pruned on every install/update.
 - `.vg/.install-target` is written as `global`.
 
@@ -162,6 +163,7 @@ echo "✓ vg:install complete"
 echo "  target:    ${RESOLVED}"
 echo "  marker:    ${MARKER}"
 echo "  hooks at:  ${HOME}/.claude/settings.json"
+echo "  codex:     ${HOME}/.codex/hooks.json"
 [ "$NEED_BACKUP" = "1" ] && echo "  backup:    ${BACKUP_DIR}"
 echo ""
 echo "Restart Claude Code / Codex session to load updated hooks."
@@ -173,6 +175,7 @@ echo "Restart Claude Code / Codex session to load updated hooks."
 <success_criteria>
 - `.vg/.install-target` written with `global`
 - `~/.claude/settings.json` contains VG hook entries in global mode
+- `~/.codex/hooks.json` contains VG hook entries in global mode
 - Project-local VG-owned `.claude/` and `.codex/` files are removed or backed up
 - `install.started` + `install.completed` telemetry events emitted
 - Restart hint printed to stdout

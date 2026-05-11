@@ -642,7 +642,7 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 **Hardening roadmap (deferred to later stages):**
 - Stage 3 (build): pre-test-gate greps `apps/*/dist/**/*.css` for each `required_tailwind_tokens[].class_name`; missing → BLOCK.
-- Stage 3 (build): spec-count gate counts `apps/*/tests/**/*.{spec,test}.{ts,tsx}` ≥ `min_spec_count.count`; missing → matrix Status=TEST_SPEC_MISSING + auto-route to /vg:test codegen (Stage 5).
+- Stage 3/4 (build → review): spec-count/lifecycle gate checks post-build test-spec contract coverage; missing → matrix Status=TEST_SPEC_MISSING + route to `/vg:test-spec --regen`, then rerun `/vg:review`.
 - Stage 4 (review): runtime route discovery diffed against `route_inventory[]`; divergence → hard-block.
 - Stage 4 (review): env preflight matches `env_contract.cookie_domain` against actual browser context; mismatch → ENV_MISMATCH (taxonomy lives in v3.1.0).
 

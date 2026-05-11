@@ -59,8 +59,8 @@ REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 #
 # v2.67.0 #160 introduced the 5-reason taxonomy. Issue #173 adds two more
 # UI-heavy review statuses so /vg:review can distinguish:
-#   - TEST_SPEC_MISSING: matrix Status=BLOCKED because no Playwright/test
-#     spec exists for the goal yet → /vg:test codegen path
+#   - TEST_SPEC_MISSING: matrix Status=BLOCKED because the post-build
+#     lifecycle test-spec contract is missing or stale → /vg:test-spec --regen
 #   - ENV_MISMATCH: cookie domain / auth host / sandbox vs local mismatch
 #     classified separately from APP_BLOCKED (env-contract repair, not code)
 #
@@ -77,7 +77,7 @@ class BlockedReason(Enum):
     PREREQ_MISSING = "prereq_missing"      # upstream patch DEFERRED → /vg:amend ${owner_phase}
     EXTERNAL_REQUIRED = "external_required"  # OAuth / WS / reset token required → operator action
     PROBE_INVALID = "probe_invalid"        # probe ran wrong (e.g. WS endpoint hit as GET) → flag probe bug
-    TEST_SPEC_MISSING = "test_spec_missing"  # v3.1.0 #173 — no Playwright/lifecycle spec exists → /vg:test codegen
+    TEST_SPEC_MISSING = "test_spec_missing"  # v3.7.1 — lifecycle test-spec missing/stale → /vg:test-spec --regen
     ENV_MISMATCH = "env_mismatch"          # v3.1.0 #173 — cookie domain / auth host / sandbox env mismatch → env-contract repair
 
 
@@ -90,13 +90,13 @@ def classify_blocked(evidence: dict) -> BlockedReason:
       - requires_external: bool — needs OAuth/WS/external trigger
       - runtime_response_present: bool — server responded
       - matches_contract: bool — response matches contract shape
-      - missing_spec: bool — no test/spec file covers this goal (v3.1.0 #173)
+      - missing_spec: bool — no post-build lifecycle test-spec covers this goal (v3.7.1)
       - env_mismatch: bool — auth/cookie/host env mismatch (v3.1.0 #173)
       - env_mismatch_reason: str — optional reason text (cookie_domain, auth_host, …)
 
     Routing rules (v3.1.0 #173):
       - env_mismatch → ENV_MISMATCH (cookie/host/sandbox repair — not app bug)
-      - missing_spec → TEST_SPEC_MISSING (route to /vg:test codegen)
+      - missing_spec → TEST_SPEC_MISSING (route to /vg:test-spec --regen)
       - probe_error containing "probe" → PROBE_INVALID (probe ran wrong)
       - other probe_error → WORKFLOW_BLOCKED (tool pipeline issue)
       - upstream_deferred → PREREQ_MISSING (route to /vg:amend)

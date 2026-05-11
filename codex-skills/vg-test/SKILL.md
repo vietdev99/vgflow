@@ -18,18 +18,21 @@ the workflow entrypoint. Keep the current Codex runtime, export
 `VG_RUNTIME=codex`, use Codex `update_plan` for the compact visible task
 window, and bind it with `vg-orchestrator tasklist-projected --adapter codex`.
 
-`.claude/scripts/*` and `.claude/commands/*` are canonical VGFlow source
-paths shared by both adapters; those paths do not mean the runtime changed to
-Claude. References below to "Claude CLI", `TodoWrite`, or Haiku describe the
-Claude adapter only. Codex must map them through this adapter contract instead
-of aborting the current run and relaunching Claude.
+VGFlow source paths are resolved through global `VG_HOME` (default:
+`~/.vgflow`). Project-local Claude workflow files may be absent in
+global-only installs; Codex must use
+`${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}` and
+`${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}` for workflow
+helpers. References below to "Claude CLI", `TodoWrite`, or Haiku describe
+the Claude adapter only. Codex must map them through this adapter contract
+instead of aborting the current run and relaunching Claude.
 
 ### Tool mapping
 
 | Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
-| Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
+| Agent(...) / Task | Prefer `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
 | TaskCreate / TaskUpdate / TodoWrite | Compact Codex plan window + orchestrator step markers | Use `tasklist-contract.json` as source of truth. Do not paste the full hierarchy into Codex `update_plan`. Show at most 6 rows: active group/step first, next 2-3 pending steps, completed groups collapsed, and `+N pending`. After projecting, emit `vg-orchestrator tasklist-projected --adapter codex`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
@@ -46,7 +49,7 @@ in the body below.
 
 | Source pattern | Claude path | Codex path |
 |---|---|---|
-| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `commands/vg/_shared/lib/codex-spawn.sh --tier planner` |
+| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh --tier planner` |
 | Build executor Agent | Use the source executor `Agent(...)` call | Use `codex-spawn.sh --tier executor --sandbox workspace-write` with explicit file ownership and expected artifact output |
 | Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured `codex exec`/Gemini/Claude commands from `.claude/vg.config.md`; fail if required CLI output is missing or unparsable |
 | Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
@@ -124,7 +127,7 @@ that model in the target account, via `VG_CODEX_MODEL_PLANNER`,
 For subprocess-based children, use:
 
 ```bash
-bash .claude/commands/vg/_shared/lib/codex-spawn.sh \
+bash "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh" \
   --tier executor \
   --prompt-file "$PROMPT_FILE" \
   --out "$OUT_FILE" \
@@ -153,6 +156,37 @@ process that cannot see browser tools.
 
 Invoke this skill as `$vg-test`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
+
+<HARD-GATE-CODEX>
+Codex has no Claude PreToolUse/PostToolUse hook substrate. Claude hooks may
+auto-emit step markers, but Codex MUST emit the same hard markers explicitly
+after each matching STEP primary action.
+
+Use global VGFlow paths so global-only installs work without project-local
+`.claude/scripts` or `.claude/commands`:
+
+```bash
+VG_HOME="${VG_HOME:-$HOME/.vgflow}"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME}/scripts}"
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 00_gate_integrity_precheck
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 00_session_lifecycle
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 0_parse_and_validate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 0c_telemetry_suggestions
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test create_task_tracker
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 0_state_update
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 5c_goal_verification
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 5c_fix
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 5c_auto_escalate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 5e_regression
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test 5f_security_audit
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test write_report
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test complete
+```
+
+Hook/spawn mechanics may differ by provider, but marker names, order, gates,
+must-write artifacts, and telemetry contract stay identical to the Claude
+command source.
+</HARD-GATE-CODEX>
 
 
 
@@ -243,9 +277,8 @@ không cần đọc Bash output. Hook không reject append vì tolerant match (B
 6. **Navigate via UI clicks** — browser_navigate BANNED except for initial login/domain switch.
 7. **Console monitoring (hard gate v1.14.4+)** — runtime: `browser_console_messages` check after EVERY action (5c goal verification). Codegen: every mutation spec MUST contain setup (`window.__consoleErrors` OR `page.on('console'/'pageerror')`) + assertion (`expect(errs.length).toBe(0)` pattern). Post-codegen gate 5d-r7 greps generated `.spec.ts`, BLOCKS if mutation spec thiếu console assertion. Override: `--allow-missing-console-check` log debt.
 8. **Goal-based codegen** — assertions from TEST-GOALS success criteria, paths from RUNTIME-MAP observation.
-9. **Lifecycle depth** — mutation/multi-actor goals MUST have `${PHASE_DIR}/LIFECYCLE-SPECS.json`. STEP 1 preflight auto-runs `.claude/scripts/generate-lifecycle-specs.py --phase ${PHASE_NUMBER}` when the file is missing or `--regen-lifecycle-specs` is passed, then blocks on `verify-lifecycle-spec-depth.py` if fixture_dag, actors, RCRURDR stages, artifact_capture, or cleanup are shallow.
-10. **Zero hardcode** — no endpoint, role, page name, or project-specific value in this workflow. All values from config or runtime observation.
-11. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as FINAL action:
+9. **Zero hardcode** — no endpoint, role, page name, or project-specific value in this workflow. All values from config or runtime observation.
+10. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as FINAL action:
     `touch "${PHASE_DIR}/.step-markers/{STEP_NAME}.done"`.
     Browser steps (5c-smoke, 5c-flow, 5d codegen) carry `profile="web-fullstack,web-frontend-only"`.
     Contract-curl (5b) carries `profile="web-fullstack,web-backend-only"`.
@@ -303,41 +336,6 @@ tool name per Claude Code docs).
 | "Subagent overkill cho step nặng" | Heavy step empirical 96.5% skip rate without subagent (Codex review confirmed) |
 | "Spawn Task() như cũ" | Tool name is `Agent`, not `Task` (Codex fix #3) |
 
-<HARD-GATE-CODEX>
-Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
-hook auto-emits `must_touch_markers` declared in `commands/vg/test.md`;
-Codex does NOT receive that signal. AI MUST emit each HARD marker manually
-after the corresponding STEP's primary action completes — failure to do so
-causes the contract validator to reject the run with "8/N markers found".
-
-After each STEP's primary action completes, run:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test <marker>
-```
-
-Required HARD markers for /vg:test (v2.65.0 A9):
-
-| STEP | Marker(s) to emit |
-|---|---|
-| Pre-STEP 1 (integrity precheck) | `00_gate_integrity_precheck`, `00_session_lifecycle` |
-| STEP 1 (preflight) | `0_parse_and_validate`, `0c_telemetry_suggestions`, `create_task_tracker`, `0_state_update` |
-| STEP 4 (goal verification subagent) | `5c_goal_verification`, `5c_fix`, `5c_auto_escalate` |
-| STEP 7 (regression + security) | `5e_regression`, `5f_security_audit` |
-| STEP 8 (close) | `write_report`, `complete` |
-
-`5c_fix` and `5c_auto_escalate` are emitted by the goal-verifier subagent
-(STEP 4) when its dual-mode flow detects fixable findings. STEP 6 (fix loop)
-re-emits them only if STEP 4 didn't. Both markers are HARD — at least one
-codepath must touch them, or the close gate blocks.
-
-Profile-gated markers (`5a_deploy`, `5b_runtime_contract_verify`, `5c_smoke`,
-`5c_flow`, `5d_codegen`, `5d_deep_probe`, `5d_mobile_codegen`,
-`5f_mobile_security_audit`, `5g_performance_check`, `5h_security_dynamic`)
-are advisory (severity: warn); emit them when their corresponding profile
-branch executes.
-</HARD-GATE-CODEX>
-
 ## Steps
 
 ### STEP 1 — preflight
@@ -348,18 +346,6 @@ This step covers: gate integrity precheck, session lifecycle, config-loader,
 bug-detection-guide, MCP server claim, parse + validate args, state update,
 telemetry suggestions, and `create_task_tracker` (emit-tasklist.py). MUST
 call TodoWrite immediately after `create_task_tracker` completes.
-
-After preflight returns (Codex hook fallback — these markers fire only on
-Claude via hooks):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 00_gate_integrity_precheck
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 00_session_lifecycle
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_parse_and_validate
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_state_update
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test create_task_tracker
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0c_telemetry_suggestions
-```
 
 ### STEP 2 — deploy
 
@@ -391,30 +377,12 @@ console monitoring, minor-fix gate (`severity-classify.py`), auto-escalate
 MODERATE/MAJOR back to review, and `5c_goal_verification` / `5c_fix` /
 `5c_auto_escalate` marker emission.
 
-After the goal-verifier subagent returns (Codex hook fallback — STEP 4
-markers must be persisted by the orchestrator since the subagent runs in
-its own process and its `mark-step` calls don't surface to the parent
-contract validator):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_goal_verification
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_fix
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_auto_escalate
-```
-
 ### STEP 5 — codegen (HEAVY, subagent + L1/L2 binding gate)
 
 Read `_shared/test/codegen/overview.md` AND
 `_shared/test/codegen/delegation.md`.
 
 Then spawn: `Agent(subagent_type="vg-test-codegen", prompt=<from delegation.md>)`.
-
-For mutation/multi-actor goals, codegen MUST read
-`${PHASE_DIR}/LIFECYCLE-SPECS.json` before writing specs and execute
-`formula.stages` in order: `read_before`, `create`, `read_after_create`,
-`update`, `read_after_update`, `delete`, `read_after_delete`. Create fixtures
-in `fixture_dag` order, capture artifacts declared in `artifact_capture[]`, and
-register `cleanup[]`.
 
 DO NOT generate `.spec.ts` files inline. The subagent enforces L1 (1 retry
 per goal) / L2 (AskUserQuestion escalation) binding gates, console assertion
@@ -432,6 +400,8 @@ After subagent completes, orchestrator reads:
 
 On L2 escalations from subagent: call AskUserQuestion with subagent's
 escalation message, then re-spawn with user answer injected.
+
+**MANDATORY POST-WAVE CONTINUATION:** After ALL wave Agent calls return (goal-verifier + codegen subagents), you MUST IMMEDIATELY proceed to the NEXT STEP IN THE SAME ASSISTANT TURN. Do NOT end the turn after wave subagents return. The harness gates require sequential execution. See `vg-meta-skill.md` "Red Flags — Post-wave continuation" for rationale.
 
 ### STEP 6 — fix loop + auto escalate
 
@@ -451,13 +421,6 @@ Covers 5e (npx playwright test — full regression suite), 5f (security audit
 (profile-gated), 5g_performance_check (profile-gated), 5h_security_dynamic
 (flag-gated). All findings written to SANDBOX-TEST.md security section.
 
-After STEP 7 finishes (regression + security audit done):
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5e_regression
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5f_security_audit
-```
-
 ### STEP 8 — close
 
 Read `_shared/test/close.md` and follow it exactly.
@@ -466,18 +429,6 @@ Covers: write_report (SANDBOX-TEST.md final verdict), complete marker
 (profile-filtered marker gate — BLOCKS if any required marker missing),
 bootstrap_reflection (vg-reflector subagent call — non-blocking severity:warn),
 telemetry `test.completed`, tasklist clear, run-complete signal.
-
-After SANDBOX-TEST.md is written (write_report) and BEFORE run-complete:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test write_report
-```
-
-After `vg-orchestrator run-complete` returns 0:
-
-```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test complete
-```
 
 
 ### Post-test reflector trigger (Section 13.5 / meta-memory v1.1)

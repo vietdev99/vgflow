@@ -326,7 +326,7 @@ def compose_acceptance_criteria(
         bullets.append(
             f"At /vg:build close, ≥{min_specs} Playwright/lifecycle spec(s) must exist "
             f"(one per goal_type=mutation goal). Missing → matrix status TEST_SPEC_MISSING "
-            f"and /vg:test codegen path triggers."
+            f"and /vg:test-spec --regen path triggers before review can pass."
         )
     else:
         bullets.append("No mutation goals declared — Playwright lifecycle spec count gate skipped.")

@@ -42,7 +42,7 @@ esac
 # Materialize the profile-aware checklist/plugin contract early. Full web runs
 # refresh it after RUNTIME-MAP discovery, but backend-only/CLI/library and
 # non-full modes still need a REVIEW-LENS-PLAN artifact and task contract.
-LENS_PLAN_SCRIPT="${REPO_ROOT}/.claude/scripts/review-lens-plan.py"
+LENS_PLAN_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py"
 if [ -f "$LENS_PLAN_SCRIPT" ]; then
   "${PYTHON_BIN:-python3}" "$LENS_PLAN_SCRIPT" \
     --phase-dir "$PHASE_DIR" \
@@ -52,7 +52,7 @@ if [ -f "$LENS_PLAN_SCRIPT" ]; then
       echo "⛔ Review checklist/lens plan generation failed for profile=${PROFILE:-${CONFIG_PROFILE:-web-fullstack}} mode=${REVIEW_MODE:-full}" >&2
       exit 1
     }
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
     "review.lens_plan_generated" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"platform\":\"${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}\",\"phase_profile\":\"${PHASE_PROFILE:-unknown}\",\"mode\":\"${REVIEW_MODE:-full}\",\"artifact\":\"REVIEW-LENS-PLAN.json\"}" \
     >/dev/null 2>&1 || true
@@ -76,8 +76,8 @@ Logic: parse SPECS `## Success criteria` checklist → run each bash command on 
 if [ "$REVIEW_MODE" != "infra-smoke" ]; then
   echo "↷ Skipping phaseP_infra_smoke (REVIEW_MODE=$REVIEW_MODE)"
 else
-  source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/phase-profile.sh" 2>/dev/null
-  source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh" 2>/dev/null || true
+  source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/phase-profile.sh" 2>/dev/null
+  source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/block-resolver.sh" 2>/dev/null || true
 
   # 1. Parse SPECS success_criteria
   SMOKE_JSON=$(parse_success_criteria "$PHASE_DIR")
@@ -219,14 +219,14 @@ PY
 
   echo "✓ Infra-smoke PASS (${READY_COUNT}/${TOTAL}) — phase provisioned as specified."
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_infra_smoke" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_infra_smoke.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_infra_smoke 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phaseP_infra_smoke 2>/dev/null || true
   mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
-  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+  if [ -f "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" \
       --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
       --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
         echo "⛔ Infra-smoke checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
-        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
         if [ -f "$DIAG_SCRIPT" ]; then
           "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
             --gate-id "review.phaseP_infra_smoke_lens_plan" \
@@ -303,7 +303,7 @@ else
     if [[ ! "${ARGUMENTS}" =~ --allow-empty-hotfix ]]; then
       exit 1
     fi
-    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+    source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/override-debt.sh" 2>/dev/null || true
     type -t log_override_debt >/dev/null 2>&1 && \
       log_override_debt "phaseP-delta-empty-hotfix" "${PHASE_NUMBER}" "hotfix has no code delta" "${PHASE_DIR}"
   fi
@@ -430,7 +430,7 @@ PY
     if [[ ! "${ARGUMENTS}" =~ --allow-orthogonal-hotfix ]]; then
       exit 1
     fi
-    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+    source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/override-debt.sh" 2>/dev/null || true
     # v2.6.1 (2026-04-26): fix arg-ordering bug — was passing flag-as-step,
     # phase-dir-as-reason, missing gate_id. Function signature is:
     # log_override_debt FLAG PHASE STEP REASON [GATE_ID]
@@ -534,16 +534,16 @@ PY
 
   mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_delta" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_delta.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_delta 2>/dev/null || true
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.phaseP_delta_verified" \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phaseP_delta 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.phaseP_delta_verified" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"parent\":\"${PARENT_REF}\",\"overlap_count\":${OVERLAP_COUNT:-0},\"failed_count\":${FAILED_COUNT:-0}}" >/dev/null 2>&1 || true
   mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
-  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+  if [ -f "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" \
       --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
       --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
         echo "⛔ Delta checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
-        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
         if [ -f "$DIAG_SCRIPT" ]; then
           "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
             --gate-id "review.phaseP_delta_lens_plan" \
@@ -587,7 +587,7 @@ else
     if [[ ! "${ARGUMENTS}" =~ --allow-no-bugref ]]; then
       exit 1
     fi
-    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+    source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/override-debt.sh" 2>/dev/null || true
     # v2.6.1 (2026-04-26): correct API call (FLAG PHASE STEP REASON GATE_ID)
     # gate_id="bugfix-bugref-required" enables auto-resolve when next review
     # finds the bugref later added.
@@ -611,7 +611,7 @@ else
     if [[ ! "${ARGUMENTS}" =~ --allow-empty-bugfix ]]; then
       exit 1
     fi
-    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/override-debt.sh" 2>/dev/null || true
+    source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/override-debt.sh" 2>/dev/null || true
     # v2.6.1 (2026-04-26): correct API call (FLAG PHASE STEP REASON GATE_ID)
     # gate_id="bugfix-code-delta-required" enables auto-resolve when next
     # review finds non-empty code delta in apps|packages|infra.
@@ -700,16 +700,16 @@ PY
 
   mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_regression" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_regression.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_regression 2>/dev/null || true
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.phaseP_regression_verified" \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phaseP_regression 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.phaseP_regression_verified" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"bug_ref\":\"${BUG_REF}\",\"code_count\":${CODE_COUNT},\"test_count\":${TEST_COUNT},\"test_linked\":${TEST_MENTIONS_BUG}}" >/dev/null 2>&1 || true
   mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
-  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+  if [ -f "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" \
       --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
       --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
         echo "⛔ Regression checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
-        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
         if [ -f "$DIAG_SCRIPT" ]; then
           "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
             --gate-id "review.phaseP_regression_lens_plan" \
@@ -771,14 +771,14 @@ open(out, 'w', encoding='utf-8').write('\n'.join(lines) + '\n')
 print("✓ GOAL-COVERAGE-MATRIX.md written (migration schema-verify)")
 PY
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_schema_verify" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_schema_verify.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_schema_verify 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phaseP_schema_verify 2>/dev/null || true
   mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
-  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+  if [ -f "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" \
       --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
       --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
         echo "⛔ Schema-verify checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
-        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
         if [ -f "$DIAG_SCRIPT" ]; then
           "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
             --gate-id "review.phaseP_schema_verify_lens_plan" \
@@ -836,14 +836,14 @@ open(out, 'w', encoding='utf-8').write('\n'.join(lines) + '\n')
 print("✓ GOAL-COVERAGE-MATRIX.md written (docs link-check)")
 PY
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phaseP_link_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phaseP_link_check.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phaseP_link_check 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phaseP_link_check 2>/dev/null || true
   mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
-  if [ -f "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" ]; then
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/review-lens-plan.py" \
+  if [ -f "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" ]; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py" \
       --phase-dir "$PHASE_DIR" --profile "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" --mode "$REVIEW_MODE" \
       --write --validate-only --json > "${PHASE_DIR}/.tmp/review-lens-plan-validation.json" 2>&1 || {
         echo "⛔ Link-check checklist evidence missing — see ${PHASE_DIR}/.tmp/review-lens-plan-validation.json" >&2
-        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
         if [ -f "$DIAG_SCRIPT" ]; then
           "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
             --gate-id "review.phaseP_link_check_lens_plan" \

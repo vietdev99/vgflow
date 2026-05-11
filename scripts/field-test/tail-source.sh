@@ -39,12 +39,26 @@ PREFIXER="$SCRIPT_DIR/prefix-iso.py"
 
 CHILD_PID=""
 
-cleanup() {
-  if [ -n "${CHILD_PID:-}" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
-    kill -TERM "$CHILD_PID" 2>/dev/null || true
-    sleep 0.3
-    kill -KILL "$CHILD_PID" 2>/dev/null || true
+kill_child_tree() {
+  local pid="${1:-}"
+  [ -n "$pid" ] || return 0
+  kill -0 "$pid" 2>/dev/null || return 0
+
+  # The child bash owns the tail/redactor/prefix pipeline. If we kill only
+  # that wrapper, grandchildren can be re-parented and keep pytest pipes open.
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$pid" 2>/dev/null || true
   fi
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 0.3
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -KILL -P "$pid" 2>/dev/null || true
+  fi
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+cleanup() {
+  kill_child_tree "${CHILD_PID:-}"
   exit 0
 }
 trap cleanup TERM INT
@@ -61,6 +75,8 @@ run_pipeline_once() {
       fi
       bash -c '
         set -o pipefail
+        cleanup_child() { for pid in $(jobs -pr); do kill -TERM "$pid" 2>/dev/null || true; done; }
+        trap "cleanup_child; exit 143" TERM INT
         tail -F -n 0 "$1" 2>>"$5" \
           | "$3" "$4" --pattern "$6" \
           | "$3" "$7" >> "$2"
@@ -70,6 +86,8 @@ run_pipeline_once() {
     command)
       bash -c '
         set -o pipefail
+        cleanup_child() { for pid in $(jobs -pr); do kill -TERM "$pid" 2>/dev/null || true; done; }
+        trap "cleanup_child; exit 143" TERM INT
         bash -c "$1" 2>>"$5" \
           | "$3" "$4" --pattern "$6" \
           | "$3" "$7" >> "$2"

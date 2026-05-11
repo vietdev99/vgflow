@@ -35,7 +35,7 @@ else
   echo "▸ Running auto-fix loop on top 5 bugs..."
 
   # NARRATION: spawning auto-fix subagent (UX courtesy).
-  bash scripts/vg-narrate-spawn.sh "auto-fix-loop" spawning "top-5 bugs from ROAM-BUGS.md" 2>/dev/null || true
+  bash "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-narrate-spawn.sh" "auto-fix-loop" spawning "top-5 bugs from ROAM-BUGS.md" 2>/dev/null || true
 
   # Implementation: read ROAM-BUGS.md, dispatch fix tasks via Agent tool with
   # the existing auto-fix subagent (Sonnet/Opus). After each fix re-run roam
@@ -51,11 +51,11 @@ else
   #
   # See ROAM-RFC-v1.md section 6 for full state machine.
 
-  bash scripts/vg-narrate-spawn.sh "auto-fix-loop" returned "fix loop complete" 2>/dev/null || true
+  bash "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-narrate-spawn.sh" "auto-fix-loop" returned "fix loop complete" 2>/dev/null || true
 fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "7_optional_fix_loop" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/7_optional_fix_loop.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step roam 7_optional_fix_loop 2>/dev/null || true
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step roam 7_optional_fix_loop 2>/dev/null || true
 ```
 
 ## Why preserved as-is

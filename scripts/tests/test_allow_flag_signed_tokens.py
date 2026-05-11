@@ -24,7 +24,15 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".claude").is_dir() and (parent / "scripts").is_dir():
+            return parent
+    return here.parents[2]
+
+
+REPO_ROOT = _repo_root()
 
 # Import allow_flag_gate via importlib (vg-orchestrator dir has a dash)
 import importlib.util as _ilu

@@ -236,6 +236,9 @@ runtime_contract:
     - event_type: "review.preflight_invariants_blocked"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
+    - event_type: "review.deep_test_spec_blocked"
+      phase: "${PHASE_NUMBER}"
+      severity: "warn"
     - event_type: "review.matrix_staleness_blocked"
       phase: "${PHASE_NUMBER}"
       severity: "warn"
@@ -384,7 +387,7 @@ Mandatory binding:
    Claude full hierarchy; Codex compact window only.
 3. Immediately call:
    ```bash
-   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator tasklist-projected --adapter auto
+   "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator tasklist-projected --adapter auto
    # auto locks to claude, codex, or fallback from runtime env
    ```
 4. At each step start, update the native UI to show the active step and call `vg-orchestrator step-active <step_name>`.
@@ -455,9 +458,9 @@ Pipeline: specs → scope → blueprint → build → test-spec → **review** �
 
 <process>
 
-**Config:** Read .claude/commands/vg/_shared/config-loader.md first.
+**Config:** Read ${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/config-loader.md first.
 
-**Bug detection (v1.11.2 R6 — MANDATORY):** Read `.claude/commands/vg/_shared/bug-detection-guide.md` BEFORE starting. Apply 6 detection patterns throughout: schema_violation, helper_error, user_pushback, ai_inconsistency, gate_loop, self_discovery. When detected: NARRATE intent + CALL `report_bug` via bash + CONTINUE workflow (non-blocking).
+**Bug detection (v1.11.2 R6 — MANDATORY):** Read `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/bug-detection-guide.md` BEFORE starting. Apply 6 detection patterns throughout: schema_violation, helper_error, user_pushback, ai_inconsistency, gate_loop, self_discovery. When detected: NARRATE intent + CALL `report_bug` via bash + CONTINUE workflow (non-blocking).
 
 <CRITICAL_MCP_RULE>
 **BEFORE any browser interaction**, you MUST run the Playwright lock claim:
