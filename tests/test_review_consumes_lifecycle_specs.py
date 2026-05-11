@@ -155,6 +155,95 @@ def test_review_matrix_consumes_lifecycle_specs_for_runtime_clean_goal(tmp_path:
     assert "LIFECYCLE-SPECS.json/TEST-FIXTURE-DAG.json/TEST-EXECUTION-PLAN.json" in matrix
 
 
+def test_review_matrix_preserves_runtime_test_pending_result(tmp_path: Path) -> None:
+    phase = tmp_path / "06-runtime-test-pending"
+    _write(
+        phase / "TEST-GOALS.md",
+        """
+        # Test Goals
+
+        ## Goal G-01: Team invite lifecycle
+        **Priority:** high
+        **Surface:** ui
+
+        **Success criteria:** Invitee accepts invite and becomes an active member.
+        """,
+    )
+    _write_json(
+        phase / "RUNTIME-MAP.json",
+        {
+            "verdict": "TEST_PENDING",
+            "runtime_blockers": {"status": "clear", "items": []},
+            "goal_sequences": {
+                "G-01": {
+                    "result": "test_pending",
+                    "review_evidence": {
+                        "note": "Review confirmed route rendering and clean console/network only."
+                    },
+                    "pending_evidence": [
+                        "rcrurd_persistence",
+                        "multi_actor_evidence",
+                    ],
+                }
+            },
+        },
+    )
+    _write_json(phase / ".surface-probe-results.json", {"results": {}})
+    _write_deep_specs(phase, {"G-01": _lifecycle_goal()})
+
+    stdout, matrix = _run_matrix(phase)
+
+    assert "VERDICT=TEST_PENDING" in stdout
+    assert "TEST_PENDING=1" in stdout
+    assert "FAILED=0" in stdout
+    assert "| high | 0 | 0 | 1 | 1 | 80% | 0.0% |" in matrix
+    assert (
+        "| G-01 | high | ui | TEST_PENDING | "
+        "runtime clean; pending evidence=rcrurd_persistence, multi_actor_evidence"
+    ) in matrix
+
+
+def test_review_matrix_merges_priority_from_index_table_and_api_runtime_pending(tmp_path: Path) -> None:
+    phase = tmp_path / "06-index-priority-api"
+    _write(
+        phase / "TEST-GOALS.md",
+        """
+        # Test Goals
+
+        | Goal | Title | Type | Priority | Decision refs |
+        |---|---|---|---|---|
+        | G-08 | WS-ticket mint -> WS handshake | mutation | critical | P1 |
+
+        ## G-08: WS-ticket mint -> WS handshake
+        **Surface:** api
+
+        **Success criteria:** Ticket mints and socket handshakes.
+        """,
+    )
+    _write_json(
+        phase / "RUNTIME-MAP.json",
+        {
+            "verdict": "TEST_PENDING",
+            "goal_sequences": {
+                "G-08": {
+                    "result": "test_pending",
+                    "pending_evidence": ["event_or_integration_evidence"],
+                }
+            },
+        },
+    )
+    _write_json(phase / ".surface-probe-results.json", {"results": {}})
+    _write_deep_specs(phase, {"G-08": _lifecycle_goal(surface="api")})
+
+    stdout, matrix = _run_matrix(phase)
+
+    assert "VERDICT=TEST_PENDING" in stdout
+    assert "TEST_PENDING=1" in stdout
+    assert "NOT_SCANNED=0" in stdout
+    assert "| critical | 0 | 0 | 1 | 1 | 100% | 0.0% |" in matrix
+    assert "| G-08 | critical | api | TEST_PENDING | runtime clean; pending evidence=event_or_integration_evidence" in matrix
+
+
 def test_review_matrix_uses_runner_family_for_lifecycle_only_goal(tmp_path: Path) -> None:
     phase = tmp_path / "07-cli"
     _write(

@@ -90,6 +90,21 @@ def _read_json_object(path):
         return {}
     return data if isinstance(data, dict) else {}
 
+def _normalize_priority(value, default='important'):
+    raw = str(value or default or 'important').strip().lower()
+    mapping = {
+        'p0': 'critical',
+        'p1': 'critical',
+        'p2': 'important',
+        'p3': 'nice-to-have',
+        'nice': 'nice-to-have',
+        'nice_to_have': 'nice-to-have',
+        'nice-to-have': 'nice-to-have',
+    }
+    return mapping.get(raw, raw or default)
+
+PRIORITY_VALUES = {'critical', 'high', 'important', 'medium', 'low', 'nice-to-have'}
+
 lifecycle = _read_json_object(phase_path / 'LIFECYCLE-SPECS.json')
 lifecycle_goals = lifecycle.get('goals') if isinstance(lifecycle.get('goals'), dict) else {}
 fixture_dag_artifact = _read_json_object(phase_path / 'TEST-FIXTURE-DAG.json')
@@ -123,7 +138,7 @@ def _parse_flat_blocks(text):
         out.append({
             'id': gid,
             'title': title[:80],
-            'priority': (prio.group(1) if prio else 'important').lower(),
+            'priority': _normalize_priority(prio.group(1) if prio else 'important'),
             'surface': (surface.group(1) if surface else 'ui').lower(),
             'infra_deps': [x.strip() for x in (infra.group(1) if infra else '').split(',') if x.strip()],
             'mutation_evidence': _field('Mutation evidence'),
@@ -146,18 +161,23 @@ def _parse_index_table(text):
         #   G-01 | login | P0 | G-01.md
         #   G-01 | login | critical | G-01.md
         #   G-01 | <title> | ui | important
+        #   G-01 | <title> | mutation | high | refs
         surface = ''
-        priority = ''
-        if len(rest) >= 2:
-            surface = rest[0].lower()
-            prio_raw = rest[1].lower()
-            # Normalize P0/P1/P2/P3 to severity words.
-            prio_map = {'p0': 'critical', 'p1': 'critical', 'p2': 'important', 'p3': 'nice-to-have'}
-            priority = prio_map.get(prio_raw, prio_raw)
+        priority = 'important'
+        for cell in rest:
+            candidate = _normalize_priority(cell)
+            if candidate in PRIORITY_VALUES:
+                priority = candidate
+                break
+        for cell in rest:
+            candidate = str(cell or '').strip().lower()
+            if candidate in {'ui', 'ui-mobile', 'api', 'cli', 'library'}:
+                surface = candidate
+                break
         out.append({
             'id': gid,
             'title': gid,
-            'priority': priority or 'important',
+            'priority': _normalize_priority(priority or 'important'),
             'surface': surface or 'ui',
             'infra_deps': [],
             'mutation_evidence': '',
@@ -187,7 +207,7 @@ def _parse_split_files(phase_dir_path):
         out.append({
             'id': gid,
             'title': gid,
-            'priority': (prio.group(1).lower() if prio else 'important'),
+            'priority': _normalize_priority(prio.group(1) if prio else 'important'),
             'surface': (surface.group(1).lower() if surface else 'ui'),
             'infra_deps': [],
             'mutation_evidence': '',
@@ -219,6 +239,19 @@ candidates.sort(key=lambda kv: len(kv[1]), reverse=True)
 method, goals = candidates[0]
 if not goals:
     goals = []
+table_by_id = {g.get('id'): g for g in table_goals if g.get('id')}
+for g in goals:
+    table_goal = table_by_id.get(g.get('id'))
+    if not table_goal:
+        continue
+    table_priority = table_goal.get('priority')
+    if table_priority in PRIORITY_VALUES:
+        g['priority'] = table_priority
+    table_surface = table_goal.get('surface')
+    if table_surface in {'ui', 'ui-mobile', 'api', 'cli', 'library'} and (
+        not g.get('surface') or g.get('surface') == 'ui'
+    ):
+        g['surface'] = table_surface
 print(f"⓵ matrix-merger: parsed {len(goals)} goals via '{method}' "
       f"(flat={len(flat_goals)}, table={len(table_goals)}, split={len(split_goals)})",
       file=sys.stderr)
@@ -262,7 +295,7 @@ for gid, spec in lifecycle_goals.items():
     goals.append({
         'id': gid,
         'title': str(spec.get('title') or gid)[:80],
-        'priority': str(spec.get('priority') or 'important').lower(),
+        'priority': _normalize_priority(spec.get('priority') or 'important'),
         'surface': _surface_from_lifecycle(spec, 'ui', plan),
         'infra_deps': [],
         'mutation_evidence': (spec.get('source_assertions') or {}).get('mutation_evidence', ''),
@@ -470,6 +503,25 @@ def _lifecycle_pending_evidence(goal, prefix='lifecycle contract pending'):
         f"{len(stages)} stages ({stage_hint}), {fixture_count} fixtures need /vg:test proof"
     )
 
+def _runtime_test_pending_evidence(goal, seq):
+    pending = seq.get('pending_evidence') if isinstance(seq, dict) else None
+    if isinstance(pending, list) and pending:
+        pending_hint = ', '.join(str(item) for item in pending[:4])
+    elif isinstance(pending, str) and pending.strip():
+        pending_hint = pending.strip()
+    else:
+        pending_hint = 'lifecycle/test evidence'
+    if _goal_needs_lifecycle_contract(goal):
+        return _lifecycle_pending_evidence(
+            goal,
+            f'runtime clean; pending evidence={pending_hint}',
+        )
+    note = ''
+    review_evidence = seq.get('review_evidence') if isinstance(seq, dict) else None
+    if isinstance(review_evidence, dict):
+        note = str(review_evidence.get('note') or '').strip()
+    return (f'runtime clean; pending evidence={pending_hint}; {note}').strip('; ')[:300]
+
 TEST_PENDING_PATTERNS = (
     'not exercised',
     'not observed',
@@ -532,13 +584,24 @@ if Path(probe_path).exists():
 # ─── Merge logic: compute status per goal ─────────────────────────
 for g in goals:
     gid = g['id']
+    seq = rm_seqs.get(gid)
+    if seq:
+        result = str(seq.get('result', 'unknown')).strip().lower().replace('-', '_')
+        if result in ('test_pending', 'pending', 'coverage_pending'):
+            g['status'] = 'TEST_PENDING'
+            g['evidence'] = _runtime_test_pending_evidence(g, seq)
+            continue
+        if result in ('failed', 'blocked', 'error') and g['surface'] not in ('ui', 'ui-mobile'):
+            reason = str(seq.get('failure_reason') or seq.get('error') or result)
+            g['status'] = 'TEST_PENDING' if _is_test_pending_evidence(reason) else 'BLOCKED'
+            g['evidence'] = f"runtime {result}: {reason[:80]}"
+            continue
 
     # UI goals: consult RUNTIME-MAP first
     if g['surface'] in ('ui', 'ui-mobile'):
-        seq = rm_seqs.get(gid)
         if seq:
-            result = seq.get('result', 'unknown')
-            if result == 'passed':
+            result = str(seq.get('result', 'unknown')).strip().lower().replace('-', '_')
+            if result in ('passed', 'pass', 'ready', 'ok'):
                 g['status'] = 'READY'
                 g['evidence'] = f"browser: {len(seq.get('steps',[]))} steps"
             elif result == 'failed':
@@ -626,7 +689,10 @@ for g in goals:
 total_by_status = {'READY': 0, 'BLOCKED': 0, 'TEST_PENDING': 0, 'NOT_SCANNED': 0, 'UNREACHABLE': 0, 'INFRA_PENDING': 0, 'FAILED': 0}
 by_priority = {
     'critical':     {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 100},
+    'high':         {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 80},
     'important':    {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 80},
+    'medium':       {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 50},
+    'low':          {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 50},
     'nice-to-have': {'total': 0, 'ready': 0, 'blocked': 0, 'other': 0, 'threshold': 50},
 }
 for g in goals:
@@ -694,7 +760,7 @@ lines = [
     '| Priority | Ready | Blocked | Other | Total | Threshold | Pass % | Status |',
     '|----------|-------|---------|-------|-------|-----------|--------|--------|',
 ]
-for prio in ('critical', 'important', 'nice-to-have'):
+for prio in ('critical', 'high', 'important', 'medium', 'low', 'nice-to-have'):
     info = by_priority[prio]
     if info['total'] == 0:
         lines.append(f'| {prio} | 0 | 0 | 0 | 0 | {info["threshold"]}% | n/a | — |')
