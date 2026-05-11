@@ -61,7 +61,32 @@ def diagnose(gate_id: str, phase_dir: Path, payload: Any, raw_text: str) -> dict
     title = "Review block needs diagnosis"
     family = "unknown"
 
-    if "lens_plan" in gate_id or any("evidence artifact missing" in str(i.get("reason")) for i in items):
+    if gate_id.endswith("deep_test_specs") or any(
+        str(k).startswith(("deep_test_spec_", "lifecycle_", "fixture_dag_", "execution_plan_"))
+        for k in kinds
+    ):
+        family = "deep_test_spec_artifact_gap"
+        title = "Post-build lifecycle test-spec artifacts are missing or too shallow"
+        for item in items[:12]:
+            typ = str(item.get("type") or "unknown")
+            msg = str(item.get("message") or item.get("expected") or "")
+            file = str(item.get("file") or "")
+            hint = str(item.get("fix_hint") or "")
+            bits = [typ]
+            if msg:
+                bits.append(msg)
+            if file:
+                bits.append(file)
+            if hint:
+                bits.append(f"hint: {hint}")
+            details.append(" — ".join(bits))
+        actions.extend([
+            f"Run `/vg:test-spec {phase}`. This creates `DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/*`, and `PLAYWRIGHT-SPEC-PLAN.md`.",
+            f"If `/vg:test-spec {phase}` blocks on missing build evidence, run `/vg:build {phase}` first, then rerun `/vg:test-spec {phase}`.",
+            f"After the validator passes, rerun `/vg:review {phase} --mode=full --force` so review consumes the lifecycle contract in `GOAL-COVERAGE-MATRIX.md`.",
+            "Do not advance to `/vg:test` while these artifacts are missing. This is a review precondition, not executable test coverage debt.",
+        ])
+    elif "lens_plan" in gate_id or any("evidence artifact missing" in str(i.get("reason")) for i in items):
         family = "lens_evidence_gap"
         title = "Required review checklist plugins did not produce evidence"
         grouped: dict[str, list[str]] = {}

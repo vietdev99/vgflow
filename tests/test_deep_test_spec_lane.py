@@ -138,6 +138,11 @@ def test_pipeline_wiring_places_test_spec_between_build_and_review() -> None:
     assert "/vg:test-spec" in lifecycle
     assert '"build", "test-spec", "review"' in phase_recon
     assert "/vg:test-spec ${PHASE_NUMBER} before /vg:review" in review_preflight
+    assert 'DEEP_SPEC_VALIDATOR="${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-deep-test-specs.py"' in review_preflight
+    assert 'DIAG_SCRIPT="${VG_HOME:-$HOME/.vgflow}/scripts/review-block-diagnostic.py"' in review_preflight
+    assert "review.deep_test_spec_blocked" in review_preflight
+    assert 'state["next_command"] = f"/vg:test-spec {phase}"' in review_preflight
+    assert "review.deep_test_spec_blocked" in review
 
 def test_test_spec_command_supports_global_only_install() -> None:
     command = (REPO_ROOT / "commands" / "vg" / "test-spec.md").read_text(encoding="utf-8")
@@ -150,3 +155,47 @@ def test_test_spec_command_supports_global_only_install() -> None:
     assert 'SCRIPT="${VG_HOME}/scripts/generate-deep-test-specs.py"' in command
     assert 'VALIDATOR="${VG_HOME}/scripts/validators/verify-deep-test-specs.py"' in command
     assert "--ai-response=" in command
+
+def test_review_block_diagnostic_routes_missing_lifecycle_to_test_spec(tmp_path: Path) -> None:
+    phase = _make_phase(tmp_path)
+    payload = {
+        "verdict": "BLOCK",
+        "evidence": [
+            {
+                "type": "deep_test_spec_missing",
+                "message": "LIFECYCLE-SPECS.json missing",
+                "file": str(phase / "LIFECYCLE-SPECS.json"),
+                "fix_hint": "Run /vg:test-spec 6 before /vg:review.",
+            },
+            {
+                "type": "fixture_dag_invalid_json",
+                "message": "TEST-FIXTURE-DAG.json is missing or invalid JSON",
+                "file": str(phase / "TEST-FIXTURE-DAG.json"),
+            },
+        ],
+    }
+    input_path = tmp_path / "deep-test-specs-review.json"
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "review-block-diagnostic.py"),
+            "--gate-id",
+            "review.deep_test_specs",
+            "--phase-dir",
+            str(phase),
+            "--input",
+            str(input_path),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode == 0
+    assert "deep_test_spec_artifact_gap" in result.stdout
+    assert "`/vg:test-spec 6`" in result.stdout
+    assert "`/vg:review 6 --mode=full --force`" in result.stdout
+    assert "Do not advance to `/vg:test`" in result.stdout

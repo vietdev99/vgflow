@@ -292,9 +292,11 @@ if [ "$DEEP_SPEC_REQUIRED" = "1" ] && \
    [ -z "${EVALUATE_ONLY:-}" ] && [ -z "${FIX_ONLY:-}" ]; then
   DEEP_SPEC_VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-deep-test-specs.py"
   [ -f "$DEEP_SPEC_VALIDATOR" ] || DEEP_SPEC_VALIDATOR="${REPO_ROOT}/scripts/validators/verify-deep-test-specs.py"
+  [ -f "$DEEP_SPEC_VALIDATOR" ] || DEEP_SPEC_VALIDATOR="${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-deep-test-specs.py"
 
   if [ ! -f "$DEEP_SPEC_VALIDATOR" ]; then
     echo "⛔ verify-deep-test-specs.py missing — re-sync VGFlow before review." >&2
+    echo "   Expected: ${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-deep-test-specs.py" >&2
     exit 1
   fi
 
@@ -306,6 +308,47 @@ if [ "$DEEP_SPEC_REQUIRED" = "1" ] && \
     echo "⛔ Deep test specs missing or shallow — run /vg:test-spec ${PHASE_NUMBER} before /vg:review." >&2
     echo "   Details: ${PHASE_DIR}/.tmp/deep-test-specs-review.json" >&2
     echo "   This is review-owned precondition, not /vg:test coverage debt." >&2
+
+    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    [ -f "$DIAG_SCRIPT" ] || DIAG_SCRIPT="${REPO_ROOT}/scripts/review-block-diagnostic.py"
+    [ -f "$DIAG_SCRIPT" ] || DIAG_SCRIPT="${VG_HOME:-$HOME/.vgflow}/scripts/review-block-diagnostic.py"
+    if [ -f "$DIAG_SCRIPT" ]; then
+      "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
+        --gate-id "review.deep_test_specs" \
+        --phase-dir "$PHASE_DIR" \
+        --input "${PHASE_DIR}/.tmp/deep-test-specs-review.json" \
+        --out-md "${PHASE_DIR}/.tmp/deep-test-specs-diagnostic.md" \
+        --out-json "${PHASE_DIR}/.tmp/deep-test-specs-diagnostic.json" \
+        >/dev/null 2>&1 || true
+      cat "${PHASE_DIR}/.tmp/deep-test-specs-diagnostic.md" 2>/dev/null || true
+    fi
+
+    PIPELINE_STATE="${PHASE_DIR}/PIPELINE-STATE.json"
+    "${PYTHON_BIN:-python3}" - "$PIPELINE_STATE" "$PHASE_NUMBER" <<'PY' 2>/dev/null || true
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+path = Path(sys.argv[1])
+phase = sys.argv[2]
+state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+state["status"] = "blocked"
+state["pipeline_step"] = "review-preflight-blocked"
+state["blocked_reason"] = "deep_test_specs_missing_or_shallow"
+state["next_command"] = f"/vg:test-spec {phase}"
+state["retry_command"] = f"/vg:review {phase} --mode=full --force"
+state["updated_at"] = datetime.now().isoformat()
+path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+PY
+
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "review.deep_test_spec_blocked" \
+      --step "0_parse_and_validate" \
+      --actor "llm-claimed" \
+      --outcome "BLOCK" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"details\":\"${PHASE_DIR}/.tmp/deep-test-specs-review.json\",\"next_command\":\"/vg:test-spec ${PHASE_NUMBER}\"}" \
+      >/dev/null 2>&1 || true
     exit 1
   fi
 fi
