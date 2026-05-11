@@ -36,7 +36,7 @@ SENTINEL = "[REDACTED]"
 # A "simple key segment" consists of one or more word-char runs joined by the
 # literal char-class [_-] optionally quantified with ?  (e.g. api[_-]?key).
 # No other metacharacters are allowed.
-_SIMPLE_KEY_RE = re.compile(r'^[\w]+(?:\[_\-\]\?[\w]+)*$')
+_SIMPLE_KEY_RE = re.compile(r'^[A-Za-z_][\w-]*(?:\[_\-\]\?[\w-]+)*$')
 
 
 def _compose_multiform(keys: str) -> str:
