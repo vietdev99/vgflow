@@ -299,6 +299,15 @@ Read `_shared/blueprint/contracts-overview.md` AND `_shared/blueprint/contracts-
 Then call `Agent(subagent_type="vg-blueprint-contracts", prompt=<from delegation>)`.
 DO NOT generate contracts inline.
 
+Contracts MUST create `${PHASE_DIR}/LIFECYCLE-SPECS.json` for
+side-effecting/multi-actor goals. Deterministic path:
+`.claude/scripts/generate-lifecycle-specs.py --phase ${PHASE_NUMBER}`, then
+`verify-lifecycle-spec-depth.py`. Common formula: select mutation/multi-actor
+goals from TEST-GOALS, infer actors, build `fixture_dag`, emit RCRURDR stages
+(`read_before`, `create`, `read_after_create`, `update`, `read_after_update`,
+`delete`, `read_after_delete`), add `artifact_capture[]` for token/email/event
+flows, and add `cleanup[]` for owned fixtures.
+
 After the contracts subagent returns (API-CONTRACTS.md, TEST-GOALS, expand
 from CRUD surfaces complete):
 

@@ -247,6 +247,16 @@ sys.exit(0 if inv is not None else 1)
   done
 fi
 
+# Generate lifecycle specs deterministically from phase docs before validating
+# depth. This gives every side-effecting goal a reusable R-C-R-U-R-D-R contract
+# for /vg:test codegen, while the validator below still blocks shallow output.
+LIFECYCLE_GEN="${REPO_ROOT:-.}/.claude/scripts/generate-lifecycle-specs.py"
+if [ -f "$LIFECYCLE_GEN" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" "$LIFECYCLE_GEN" --phase "${PHASE_NUMBER}" --json \
+    > "${PHASE_DIR}/.tmp/lifecycle-spec-generate-blueprint.json" 2>&1
+fi
+
 LIFECYCLE_DEPTH_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-lifecycle-spec-depth.py"
 if [ -f "$LIFECYCLE_DEPTH_VAL" ]; then
   mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null || true

@@ -237,11 +237,29 @@ Each goal:
     blueprint BLOCKED. The unstructured **Persistence check:** prose still
     required for human readability, but the YAML block is the machine contract.
 3d. **Closed-loop lifecycle specs (REQUIRED for side-effecting or multi-actor goals).**
-    Generate `${PHASE_DIR}/LIFECYCLE-SPECS.json` for every goal whose title,
-    goal_type, mutation evidence, persistence check, or dependencies imply a
-    state change, role switch, invite/accept, token/email artifact, realtime
-    emission, or CRUD lifecycle. If no goal needs lifecycle handling, still
-    write `{"schema_version":"1.0","goals":{}}`.
+    Primary path is deterministic: run
+    `python3 .claude/scripts/generate-lifecycle-specs.py --phase ${PHASE_NUMBER}`
+    after TEST-GOALS are written. The script generates
+    `${PHASE_DIR}/LIFECYCLE-SPECS.json` for every goal whose title, goal_type,
+    mutation evidence, persistence check, or dependencies imply a state change,
+    role switch, invite/accept, token/email artifact, realtime emission, or CRUD
+    lifecycle. If no goal needs lifecycle handling, it writes
+    `{"schema_version":"1.0","goals":{}}`. AI may refine values after the
+    script runs, but must preserve the formula fields and validator-required
+    depth.
+
+    Common formula:
+    - select side-effecting or multi-actor goals from TEST-GOALS split files or
+      TEST-GOALS.md;
+    - infer actors from domain text (admin/merchant/vendor/platform/secondary);
+    - build fixture_dag from actor sessions → owned resource → cross-phase deps
+      → artifact sink when needed;
+    - emit ordered R-C-R-U-R-D-R stages: read_before → create →
+      read_after_create → update → read_after_update → delete →
+      read_after_delete;
+    - add artifact_capture for email/token/webhook/queue/OAuth/notification
+      flows;
+    - add cleanup for owned_resource, actor_session, and external_artifacts.
 
     Shape:
     ```json

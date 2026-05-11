@@ -61,6 +61,9 @@ ONLY the spawn payload + return contract.
 - Mutation/multi-actor codegen MUST consume `${PHASE_DIR}/LIFECYCLE-SPECS.json`
   when present. Do not invent fixture prerequisites in the spec file; use the
   lifecycle fixture DAG, actor matrix, artifact_capture, and cleanup contract.
+  If it is missing, the orchestrator preflight runs
+  `.claude/scripts/generate-lifecycle-specs.py --phase ${PHASE_NUMBER}` from
+  existing phase docs, then validates depth before this subagent starts.
 
 ---
 
@@ -233,6 +236,8 @@ Validate with `verify-filter-test-coverage.py --phase ${PHASE_NUMBER}`.
 
 5. **Lifecycle specs for mutation/multi-actor goals**:
    - Read `LIFECYCLE-SPECS.json.goals[G-ID]` before writing the spec.
+   - Treat `formula.stages` as the canonical lifecycle order generated from
+     phase docs; do not drop a stage because the happy path looked shorter.
    - Create fixtures in `fixture_dag` order.
    - Use `actors[]` for role/session switching; never collapse multi-actor
      flows into one user.

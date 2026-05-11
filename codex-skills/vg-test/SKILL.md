@@ -243,8 +243,9 @@ không cần đọc Bash output. Hook không reject append vì tolerant match (B
 6. **Navigate via UI clicks** — browser_navigate BANNED except for initial login/domain switch.
 7. **Console monitoring (hard gate v1.14.4+)** — runtime: `browser_console_messages` check after EVERY action (5c goal verification). Codegen: every mutation spec MUST contain setup (`window.__consoleErrors` OR `page.on('console'/'pageerror')`) + assertion (`expect(errs.length).toBe(0)` pattern). Post-codegen gate 5d-r7 greps generated `.spec.ts`, BLOCKS if mutation spec thiếu console assertion. Override: `--allow-missing-console-check` log debt.
 8. **Goal-based codegen** — assertions from TEST-GOALS success criteria, paths from RUNTIME-MAP observation.
-9. **Zero hardcode** — no endpoint, role, page name, or project-specific value in this workflow. All values from config or runtime observation.
-10. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as FINAL action:
+9. **Lifecycle depth** — mutation/multi-actor goals MUST have `${PHASE_DIR}/LIFECYCLE-SPECS.json`. STEP 1 preflight auto-runs `.claude/scripts/generate-lifecycle-specs.py --phase ${PHASE_NUMBER}` when the file is missing or `--regen-lifecycle-specs` is passed, then blocks on `verify-lifecycle-spec-depth.py` if fixture_dag, actors, RCRURDR stages, artifact_capture, or cleanup are shallow.
+10. **Zero hardcode** — no endpoint, role, page name, or project-specific value in this workflow. All values from config or runtime observation.
+11. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as FINAL action:
     `touch "${PHASE_DIR}/.step-markers/{STEP_NAME}.done"`.
     Browser steps (5c-smoke, 5c-flow, 5d codegen) carry `profile="web-fullstack,web-frontend-only"`.
     Contract-curl (5b) carries `profile="web-fullstack,web-backend-only"`.
@@ -407,6 +408,13 @@ Read `_shared/test/codegen/overview.md` AND
 `_shared/test/codegen/delegation.md`.
 
 Then spawn: `Agent(subagent_type="vg-test-codegen", prompt=<from delegation.md>)`.
+
+For mutation/multi-actor goals, codegen MUST read
+`${PHASE_DIR}/LIFECYCLE-SPECS.json` before writing specs and execute
+`formula.stages` in order: `read_before`, `create`, `read_after_create`,
+`update`, `read_after_update`, `delete`, `read_after_delete`. Create fixtures
+in `fixture_dag` order, capture artifacts declared in `artifact_capture[]`, and
+register `cleanup[]`.
 
 DO NOT generate `.spec.ts` files inline. The subagent enforces L1 (1 retry
 per goal) / L2 (AskUserQuestion escalation) binding gates, console assertion

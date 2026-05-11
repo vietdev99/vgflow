@@ -269,6 +269,16 @@ fi
 # fixture dependency specs before codegen/replay. RUNTIME-MAP depth proves
 # review observed a flow; this gate proves /vg:test has enough fixture DAG,
 # actor, artifact-capture, and cleanup information to generate a real test.
+LIFECYCLE_GEN="${REPO_ROOT}/.claude/scripts/generate-lifecycle-specs.py"
+if [ -f "$LIFECYCLE_GEN" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp"
+  if [ ! -f "${PHASE_DIR}/LIFECYCLE-SPECS.json" ] || \
+     printf '%s' "${ARGUMENTS:-}" | grep -qE -- '(^|[[:space:]])--regen-lifecycle-specs([[:space:]]|$)'; then
+    "${PYTHON_BIN:-python3}" "$LIFECYCLE_GEN" --phase "${PHASE_NUMBER}" --json \
+      > "${PHASE_DIR}/.tmp/lifecycle-spec-generate-test.json" 2>&1
+  fi
+fi
+
 LIFECYCLE_DEPTH_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-lifecycle-spec-depth.py"
 if [ -f "$LIFECYCLE_DEPTH_VAL" ]; then
   mkdir -p "${PHASE_DIR}/.tmp"
@@ -278,7 +288,7 @@ if [ -f "$LIFECYCLE_DEPTH_VAL" ]; then
   if [ "$LIFECYCLE_DEPTH_RC" != "0" ]; then
     echo "⛔ Lifecycle spec-depth gate failed — see ${PHASE_DIR}/.tmp/lifecycle-spec-depth-test.json"
     echo "   Mutation/multi-actor goals need LIFECYCLE-SPECS.json with fixture_dag, actors, full RCRURDR stages, artifact_capture when applicable, and cleanup."
-    echo "   Repair blueprint/test goals before /vg:test can generate closed-loop lifecycle specs."
+    echo "   Re-run /vg:test ${PHASE_NUMBER} --regen-lifecycle-specs or repair blueprint/test goals before codegen."
     exit 1
   fi
 fi
