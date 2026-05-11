@@ -1,5 +1,37 @@
 # Changelog
 
+## v3.7.1 — contract drift hardening + review diagnostic + global wiring (2026-05-12)
+
+Three independent fixes landed:
+
+### Fix — wire verify-contract-runtime as BLOCK gate at build close (Codex finding)
+
+Codex GPT-5.5 second-opinion review challenged a 4-gate proposal as over-engineered. Repo already had `scripts/validators/verify-contract-runtime.py` (378 lines, B7.2 / OHOK gap A2 — "phantom endpoints declared in contract, never implemented"). Registry severity was `warn` and the validator was **never invoked** in build close — dead code at harness level.
+
+The "phantom endpoint declared but not implemented" failure mode previously surfaced only at review step 5b curl — 1+ hours after the wave committed. Cost ~5s catch at build close vs 1+ hour at review.
+
+- `registry.yaml` severity promoted `warn` → `block` for contract-runtime.
+- `close.md` invokes validator BEFORE PR-E runtime truthcheck (cheap static check first, slow runtime probe second).
+- `--skip-contract-runtime` flag added with `--override-reason` debt-emit convention matching `--skip-truthcheck`.
+- Emits `build.contract_runtime_blocked` event on block.
+
+Codex's lighter design: 1 wiring + 1 policy change instead of 4 new gates. (commit 564a39a)
+
+### Fix — review diagnostic surface for missing deep test-spec lane (#183)
+
+When lifecycle/test-spec artifacts are missing or shallow, review now writes a block diagnostic with concrete next commands instead of failing opaque. Records `PIPELINE-STATE.next_command=/vg:test-spec {phase}`, `retry_command=/vg:review {phase} --mode=full --force`, and emits `review.deep_test_spec_blocked` telemetry.
+
+- Review preflight resolves validators from global `~/.vgflow` when project-local `.claude/scripts` pruned.
+- Extends `review-block-diagnostic.py` to classify deep test-spec / lifecycle / fixture / execution-plan gaps.
+- Codex-skills mirror regenerated (95+ skill files refreshed). (commit d885db9)
+
+### Fix — global Claude VG command wiring (#182)
+
+- Links `~/.claude/commands/vg` to `~/.vgflow/commands/vg` during install/update.
+- Ensures `vg` CLI reachable from `~/.local/bin` when no `vg` on PATH.
+- Includes missing hook scripts in executable checks.
+- Regression tests for global Claude command wiring + doctor output. (commit 9cb2ed1)
+
 ## v3.7.0 — /vg:field-test new skill (2026-05-11)
 
 User-driven field-test capture distinct from AI-auto /vg:roam. Human roams the deployed app in an MCP Playwright browser via a floating Start/Stop/Mark overlay; AI silently captures browser console + network + clicks + nav chain + per-Mark notes + correlated API server log tails. On Stop, an analyzer subagent produces `FIELD-REPORT.md` and appends entries to `.vg/KNOWN-ISSUES.json`.
