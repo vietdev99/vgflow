@@ -591,6 +591,20 @@ Emit per gate-blocked variant: `review.edge_case_variant_blocked` with
 
 Parse goals: ID, description, success criteria, mutation evidence, dependencies, priority.
 
+**Post-build lifecycle contract (v3.6.7) — review MUST consume `/vg:test-spec` artifacts, not only gate their existence.**
+
+Load these artifacts before mapping goals:
+- `${PHASE_DIR}/LIFECYCLE-SPECS.json` — side-effecting / multi-actor lifecycle contract per goal.
+- `${PHASE_DIR}/TEST-FIXTURE-DAG.json` — fixture dependency graph and cleanup order.
+- `${PHASE_DIR}/TEST-EXECUTION-PLAN.json` — runner family per phase profile (`web`, `mobile`, `backend`, `cli`, `library`, `mixed`).
+- `${PHASE_DIR}/DEEP-TEST-SPECS.md` — human-readable provenance and gap context.
+
+Review uses them as the lifecycle comparison contract:
+- Runtime blockers still produce `BLOCKED` and stay in review/debug.
+- Missing RCRURDR lifecycle proof with clean runtime produces `TEST_PENDING`, then advances to `/vg:test`.
+- Runner-native phases (`mobile`, `backend`, `cli`, `library`) must not be forced into Playwright/browser semantics; use `TEST-EXECUTION-PLAN.json.family`.
+- If lifecycle artifacts name a goal that legacy `TEST-GOALS.md` parsing missed, include that goal in `GOAL-COVERAGE-MATRIX.md` so review cannot silently drop it.
+
 **Surface classification (v1.9.1 R1 — lazy migration, runs BEFORE browser discover decisions):**
 
 ```bash
@@ -716,6 +730,12 @@ fi
 - Nếu probe BLOCKED → map → STATUS: BLOCKED với evidence là probe reason.
 - Nếu probe INFRA_PENDING → map → STATUS: INFRA_PENDING.
 - Nếu probe SKIPPED (can't parse criteria) → fallthrough to NOT_SCANNED branch → buộc user cải thiện TEST-GOALS hoặc override.
+
+**Lifecycle contract integration (v3.6.7):**
+- If `LIFECYCLE-SPECS.json.goals[G-XX]` exists and runtime/probe found a real API/render/data blocker → keep `BLOCKED`.
+- If runtime/probe is clean but RCRURDR stages, fixture DAG, actor handoff, artifact capture, or cleanup are not proven by review evidence → mark `TEST_PENDING`, not `BLOCKED`.
+- If no browser sequence exists for a runner-native lifecycle goal (`family in {mobile, backend, cli, library}`) → mark `TEST_PENDING` with runner/family evidence from `TEST-EXECUTION-PLAN.json`.
+- If a web lifecycle goal has no `goal_sequences[G-XX]` → keep `NOT_SCANNED`; review must still discover the route/action before `/vg:test` can generate reliable replay steps.
 
 **Infra dependency filter (config-driven):**
 
@@ -933,6 +953,19 @@ else
   # Legacy path: orchestrator writes matrix directly using template below
 fi
 
+# Bind GOAL-COVERAGE-MATRIX.md provenance to both runtime evidence and
+# post-build lifecycle artifacts. This makes run-complete catch stale matrix
+# reuse and lifecycle-spec drift after review.
+EMIT_MANIFEST="${REPO_ROOT}/.claude/scripts/emit-evidence-manifest.py"
+[ -f "$EMIT_MANIFEST" ] || EMIT_MANIFEST="${REPO_ROOT}/scripts/emit-evidence-manifest.py"
+if [ -f "$EMIT_MANIFEST" ] && [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
+  "${PYTHON_BIN:-python3}" "$EMIT_MANIFEST" \
+    --path "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" \
+    --producer "vg:review phase4_goal_comparison" \
+    --source-inputs "${PHASE_DIR}/TEST-GOALS.md,${PHASE_DIR}/RUNTIME-MAP.json,${PHASE_DIR}/.surface-probe-results.json,${PHASE_DIR}/DEEP-TEST-SPECS.md,${PHASE_DIR}/LIFECYCLE-SPECS.json,${PHASE_DIR}/TEST-FIXTURE-DAG.json,${PHASE_DIR}/TEST-EXECUTION-PLAN.json" \
+    --quiet || true
+fi
+
 # Defense-in-depth: matrix-merger now downgrades shallow mutation sequences, but
 # keep an explicit validator so legacy/hand-written RUNTIME-MAP files cannot
 # mark create/update/delete goals READY from list-only evidence.
@@ -1040,8 +1073,9 @@ fi
 ```markdown
 # Goal Coverage Matrix — Phase {phase}
 **Generated:** {ISO-timestamp}
-**Source:** RUNTIME-MAP.json + .surface-probe-results.json
-**Merger:** _shared/lib/matrix-merger.sh v1.9.2.4
+**Source:** RUNTIME-MAP.json + .surface-probe-results.json + LIFECYCLE-SPECS.json + TEST-FIXTURE-DAG.json + TEST-EXECUTION-PLAN.json
+**Merger:** _shared/lib/matrix-merger.sh v2.65.1
+**Lifecycle contracts consumed:** {N} goal(s); fixture nodes={N}; deep_specs_present={true|false}
 
 ## Summary
 - Total goals: {N}
