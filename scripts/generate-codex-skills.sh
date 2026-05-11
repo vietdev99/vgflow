@@ -269,6 +269,70 @@ target_has_curated_codex_content() {
   return 1
 }
 
+target_skill_frontmatter_invalid() {
+  local target="$1"
+  if [ ! -f "$target" ]; then
+    return 1
+  fi
+  python - "$target" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+try:
+    import yaml
+except Exception:
+    # If PyYAML is absent, do not guess. The generator can still emit valid
+    # YAML for newly written files; this guard only repairs existing targets.
+    sys.exit(1)
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.match(r"^---\n(.*?)\n---(?:\n|\Z)", text, re.S)
+if not match:
+    sys.exit(0)
+
+try:
+    front = yaml.safe_load(match.group(1)) or {}
+except yaml.YAMLError:
+    sys.exit(0)
+
+if not isinstance(front, dict):
+    sys.exit(0)
+if not front.get("name") or not front.get("description"):
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+repair_codex_skill_frontmatter() {
+  local target="$1"
+  local skill_name="$2"
+  local description_yaml="$3"
+
+  python - "$target" "$skill_name" "$description_yaml" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+name = sys.argv[2]
+description = sys.argv[3]
+text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+
+match = re.match(r"^---\n.*?\n---(?:\n|\Z)", text, re.S)
+body = text[match.end():] if match else text
+frontmatter = (
+    "---\n"
+    f'name: "{name}"\n'
+    f'description: "{description}"\n'
+    "metadata:\n"
+    f'  short-description: "{description}"\n'
+    "---\n\n"
+)
+path.write_text(frontmatter + body.lstrip("\n"), encoding="utf-8")
+PY
+}
+
 write_codex_skill() {
   local src="$1"
   local target="$2"
@@ -276,6 +340,7 @@ write_codex_skill() {
   local description="$4"
   local adapter_mode="${5:-generic}"
   local preserved_adapter=""
+  local target_invalid_yaml="false"
 
   if [ -z "$description" ]; then
     description="VGFlow skill generated from ${src#$REPO_ROOT/}"
@@ -290,7 +355,17 @@ write_codex_skill() {
   description_yaml="${description//\\/\\\\}"
   description_yaml="${description_yaml//\"/\\\"}"
 
+  if target_skill_frontmatter_invalid "$target"; then
+    target_invalid_yaml="true"
+  fi
+
   if [ -f "$target" ] && [ "$FORCE" = "false" ]; then
+    if [ "$target_invalid_yaml" = "true" ]; then
+      repair_codex_skill_frontmatter "$target" "$skill_name" "$description_yaml"
+      REPAIRED=$((REPAIRED + 1))
+      echo "Repaired invalid YAML frontmatter: ${skill_name}"
+      return
+    fi
     SKIPPED=$((SKIPPED + 1))
     return
   fi
@@ -309,6 +384,12 @@ write_codex_skill() {
   #     survives, in case it carries provider-mapping customizations.
   if target_has_curated_codex_content "$target"; then
     if [ "${FORCE_OVERWRITE_CURATED:-false}" != "true" ]; then
+      if [ "$target_invalid_yaml" = "true" ]; then
+        repair_codex_skill_frontmatter "$target" "$skill_name" "$description_yaml"
+        REPAIRED=$((REPAIRED + 1))
+        echo "Repaired invalid YAML frontmatter (curated content preserved): ${skill_name}"
+        return
+      fi
       SKIPPED=$((SKIPPED + 1))
       echo "Skipped (curated content detected): ${skill_name} — use --force-overwrite-curated to override"
       return
@@ -365,6 +446,7 @@ copy_support_assets() {
 
 GENERATED=0
 SKIPPED=0
+REPAIRED=0
 
 for src in "$COMMANDS_DIR"/*.md; do
   [ -f "$src" ] || continue
@@ -389,4 +471,4 @@ for src in "$SHARED_SKILLS_DIR"/*/SKILL.md; do
 done
 
 echo ""
-echo "Summary: ${GENERATED} generated, ${SKIPPED} skipped (use --force to overwrite)"
+echo "Summary: ${GENERATED} generated, ${SKIPPED} skipped, ${REPAIRED} repaired (use --force to overwrite)"
