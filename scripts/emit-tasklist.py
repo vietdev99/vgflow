@@ -39,11 +39,24 @@ except Exception:  # pragma: no cover - legacy fallback for partial installs
     find_repo_root = None
     find_vg_home = None
 
-PROJECT_ROOT = (
-    find_repo_root(__file__)
-    if find_repo_root
-    else Path(os.environ.get("VG_REPO_ROOT") or os.environ.get("VG_PROJECT") or os.getcwd()).resolve()
-)
+def _resolve_project_root() -> Path:
+    env = os.environ.get("VG_REPO_ROOT") or os.environ.get("VG_PROJECT")
+    if env:
+        return Path(env).resolve()
+
+    # Restore-mode tests and some harness calls operate in a temp/project
+    # directory that has `.vg/` but no `.git/`. Treat that as project state.
+    cwd = Path.cwd().resolve()
+    for candidate in [cwd, *cwd.parents]:
+        if (candidate / ".vg").exists():
+            return candidate
+
+    if find_repo_root:
+        return find_repo_root(__file__)
+    return cwd
+
+
+PROJECT_ROOT = _resolve_project_root()
 VG_HOME = (
     find_vg_home(__file__)
     if find_vg_home
