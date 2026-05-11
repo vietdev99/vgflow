@@ -63,8 +63,13 @@ def main() -> int:
         )
         return 1
 
+    forced = args.force and pid > 0 and _pid_alive(pid)
+
     shutil.rmtree(lock, ignore_errors=False)
-    print(f"✓ released stuck lock (pid={pid} not alive)", file=sys.stderr)
+    if forced:
+        print(f"✓ force-released lock (pid={pid}, liveness check bypassed)", file=sys.stderr)
+    else:
+        print(f"✓ released stuck lock (pid={pid} not alive)", file=sys.stderr)
     return 0
 
 

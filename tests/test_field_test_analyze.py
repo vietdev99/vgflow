@@ -189,3 +189,27 @@ def test_field_report_written(tmp_path):
     assert "FIELD-REPORT" in body or "Field Test Report" in body
     assert "ft-test-session" in body  # sid
     assert "HIGH" in body  # severity tag
+
+
+def test_severity_high_on_spaced_json_level_error(tmp_path):
+    """Critical regression: build-bundle.py emits json.dumps with default
+    separators (space after colon). analyze.py must classify spaced JSON
+    'level: "error"' as HIGH, not silently miss it."""
+    session = _seed_session(tmp_path, marks=[{
+        "n": 0, "ts": "2026-05-11T10:00:05.000Z",
+        "url": "http://localhost:3000/x",
+        "user_note": "blank screen",
+        # NOTE the space between : and " — this is what build-bundle.py emits.
+        "console_window": [
+            '{"ts": "2026-05-11T10:00:04.500Z", "level": "error", "args": ["Failed to load resource"]}',
+        ],
+        "network_window": [],
+        "api_log_correlated": {},
+    }])
+    known = tmp_path / "KNOWN-ISSUES.json"
+    subprocess.run([sys.executable, str(ANALYZER), "--session-dir", str(session),
+                    "--known-issues", str(known)], check=True)
+    payload = json.loads(known.read_text(encoding="utf-8"))
+    assert payload["issues"][0]["severity"] == "HIGH", (
+        "spaced JSON level=error must be classified HIGH (default json.dumps separators)"
+    )

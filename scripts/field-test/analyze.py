@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -52,8 +53,10 @@ def _classify_severity(mark: dict) -> str:
     for ln in (mark.get("console_window") or []):
         if HIGH_CONSOLE_PATTERNS.search(ln):
             return "HIGH"
-        # Also: level=error in JSON-formatted console entries
-        if '"level":"error"' in ln or "'level': 'error'" in ln:
+        # Also: level=error in JSON-formatted console entries.
+        # Use regex to handle both compact ("level":"error") and spaced ("level": "error")
+        # separators — json.dumps() default emits a space after the colon.
+        if re.search(r'"level"\s*:\s*"error"', ln) or re.search(r"'level'\s*:\s*'error'", ln):
             return "HIGH"
 
     if has_4xx:
@@ -114,7 +117,11 @@ def append_known_issues(known_path: Path, issues_to_add: list[dict]) -> None:
             payload["issues"].append(issue)
             existing_keys.add(key)
             added += 1
-    known_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # Atomic write: write to .tmp then os.replace (atomic on both POSIX + Windows).
+    # Kill mid-write leaves the .tmp, not a partial known_path.
+    tmp_write = known_path.with_suffix(known_path.suffix + ".tmp")
+    tmp_write.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp_write, known_path)
     print(f"KNOWN-ISSUES.json: appended {added} new entries (total {len(payload['issues'])})", file=sys.stderr)
 
 

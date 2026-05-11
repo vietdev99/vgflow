@@ -56,3 +56,19 @@ def test_release_lock_force_releases_live_pid(tmp_path):
                        capture_output=True, text=True)
     assert r.returncode == 0
     assert not lock_dir.exists()
+
+
+def test_release_lock_force_message_distinguishes_live_vs_dead(tmp_path):
+    """Important fix: --force on a live PID must NOT print 'not alive'."""
+    lock_dir = tmp_path / ".vg" / "field-test" / ".active"
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "owner").write_text("ft-live")
+    (lock_dir / "pid").write_text(str(os.getpid()))  # alive
+    r = subprocess.run([sys.executable, str(RELEASE_LOCK), "--root", str(tmp_path), "--force"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0
+    combined = r.stdout + r.stderr
+    assert "not alive" not in combined, (
+        "force-release of a live PID must NOT claim 'not alive' in success message"
+    )
+    assert "force" in combined.lower() or "bypassed" in combined.lower()
