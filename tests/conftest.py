@@ -51,12 +51,23 @@ def read_command_full(cmd: str) -> str:
 def _bash_path(p: str) -> str:
     """Return a Git-Bash-safe form of a path. On Windows convert backslashes
     to forward slashes so bash does not interpret them as escape chars.
+    Also resolves 8.3 short-names (LIONEL~1 → Lionel Messi) so that
+    Git Bash tools like `tail -F` can locate the file.
     """
     if os.name != "nt":
         return p
+    path_obj = Path(p)
+    # Resolve expands 8.3 short names and normalises separators; only call
+    # when the path looks like a Windows path (has backslash or is absolute).
+    if "\\" in p or path_obj.is_absolute():
+        try:
+            resolved = path_obj.resolve()
+            return resolved.as_posix()
+        except (OSError, ValueError):
+            pass
     if "\\" not in p:
         return p
-    return Path(p).as_posix()
+    return path_obj.as_posix()
 
 
 def _find_git_bash() -> str | None:
