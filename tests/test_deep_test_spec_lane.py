@@ -98,6 +98,17 @@ def test_generate_deep_test_specs_post_build(tmp_path: Path) -> None:
     assert execution["phase_profile"] == "web-fullstack"
     assert execution["goals"]["G-ACCESS-GRANT"]["entrypoints"]
 
+    validated = subprocess.run(
+        [sys.executable, str(VAL), "--phase", "6"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert validated.returncode == 0, validated.stdout + validated.stderr
+    assert json.loads(validated.stdout)["verdict"] == "PASS"
+
 
 def test_verify_deep_test_specs_blocks_missing(tmp_path: Path) -> None:
     _make_phase(tmp_path)

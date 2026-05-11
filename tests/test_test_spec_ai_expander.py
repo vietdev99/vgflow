@@ -26,6 +26,16 @@ def test_detects_non_web_phase_profiles_from_artifacts(tmp_path: Path) -> None:
     assert expander.detect_phase_profile(_phase(tmp_path / "lib", "Library public API function with property invariant")) == "library"
 
 
+def test_surface_field_does_not_force_mixed_profile_when_code_is_web(tmp_path: Path) -> None:
+    root = tmp_path / "app"
+    phase = _phase(root, "Surface: account portal\nProfile: feature\nResponsive mobile tables and device/browser display\n")
+    source = root / "src" / "screens"
+    source.mkdir(parents=True)
+    (source / "page.tsx").write_text("export default function Page() { return <main /> }", encoding="utf-8")
+
+    assert expander.detect_phase_profile(phase, root) == "web-fullstack"
+
+
 def test_execution_plan_attaches_runner_by_profile() -> None:
     lifecycle = {
         "phase": "06-sample",

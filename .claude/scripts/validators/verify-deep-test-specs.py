@@ -27,7 +27,7 @@ REQUIRED_LOCALIZER_FILES = (
     ("TEST-SPEC-LOCALIZER/OUTPUT.template.json", 20),
 )
 
-REQUIRED_STAGES = {
+REQUIRED_STAGES = (
     "read_before",
     "create",
     "read_after_create",
@@ -35,7 +35,7 @@ REQUIRED_STAGES = {
     "read_after_update",
     "delete",
     "read_after_delete",
-}
+)
 
 SUPPORTED_PROFILES = {
     "web-fullstack",
@@ -104,7 +104,7 @@ def validate_goal_contract(out: Output, args: argparse.Namespace, phase_dir: Pat
         if isinstance(step, dict)
     ]
     if stages != list(REQUIRED_STAGES):
-        missing = sorted(REQUIRED_STAGES - set(stages))
+        missing = sorted(set(REQUIRED_STAGES) - set(stages))
         detail = f" missing: {', '.join(missing)}" if missing else ""
         add_error(out, args, type="lifecycle_stage_missing", message=f"{goal_id} lifecycle stages not in required order.{detail}", file=lifecycle_path, expected="full ordered RCRURDR stages")
 

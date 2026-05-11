@@ -139,7 +139,7 @@ PROFILE_RUNNERS: dict[str, dict[str, Any]] = {
 }
 
 PROFILE_RE = re.compile(
-    r"^\s*(?:phase_profile|profile|platform|surface)\s*[:=]\s*[\"']?([A-Za-z0-9_-]+)[\"']?\s*$",
+    r"^\s*(?:phase_profile|profile|platform)\s*[:=]\s*[\"']?([A-Za-z0-9_-]+)[\"']?\s*$",
     re.MULTILINE,
 )
 
@@ -173,30 +173,62 @@ def normalize_profile(value: str | None) -> str:
     raw = aliases.get(raw, raw)
     return raw if raw in PROFILE_RUNNERS else "mixed"
 
+def iter_root_hint_files(root: Path, limit: int = 5000) -> list[Path]:
+    excluded = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".vg",
+        ".planning",
+        "node_modules",
+        "dist",
+        "build",
+        "coverage",
+        ".next",
+        ".nuxt",
+        ".cache",
+        ".venv",
+        "venv",
+        "__pycache__",
+    }
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if len(files) >= limit:
+            break
+        if any(part in excluded for part in path.parts):
+            continue
+        if path.is_file():
+            files.append(path)
+    return files
+
 def detect_phase_profile(phase_dir: Path, root: Path | None = None) -> str:
     for name in (".phase-profile", "SPECS.md", "CONTEXT.md", "PLAN.md", "BLUEPRINT.md"):
         text = read(phase_dir / name, limit=5000)
         match = PROFILE_RE.search(text)
         if match:
-            return normalize_profile(match.group(1))
+            raw = match.group(1)
+            profile = normalize_profile(raw)
+            if profile != "mixed" or raw.strip().lower().replace("_", "-") == "mixed":
+                return profile
 
     combined = "\n".join(
         read(phase_dir / name, limit=12000)
         for name in ("SPECS.md", "CONTEXT.md", "TEST-GOALS.md", "API-DOCS.md")
     ).lower()
-    if re.search(r"\b(maestro|android|ios|react native|flutter|mobile|apk|ipa|emulator|device)\b", combined):
+    if re.search(r"\b(maestro|appium|detox|xctest|espresso|android|ios|react native|flutter|expo|apk|ipa|emulator|xcode|gradle)\b", combined):
         return "mobile-hybrid"
     if re.search(r"\b(cli|command|argv|stdin|stdout|stderr|exit code)\b", combined):
         return "cli-tool"
-    if re.search(r"\b(library|sdk|package|public api|function|class|unit test)\b", combined):
+    ui_terms = r"\b(page|screen|button|form|modal|route|browser|click|dashboard|sidebar|table|portal|ui|responsive)\b"
+    if re.search(r"\b(library|sdk|public api|package api|npm package|unit/property test)\b", combined) and not re.search(ui_terms, combined):
         return "library"
     sample_paths: list[str] = []
     if root:
-        sample_paths = [str(path).lower() for path in list(root.rglob("*"))[:2000] if path.is_file()]
+        sample_paths = [str(path).lower() for path in iter_root_hint_files(root)]
         if any(part.endswith((".tsx", ".jsx", ".vue", ".svelte")) for part in sample_paths):
             return "web-fullstack"
     if re.search(r"\b(api|endpoint|queue|worker|database|db|webhook|rpc|grpc)\b", combined):
-        if not re.search(r"\b(page|screen|button|form|modal|route|browser|click)\b", combined):
+        if not re.search(ui_terms, combined):
             return "backend-only"
 
     if root:
