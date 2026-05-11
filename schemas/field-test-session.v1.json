@@ -31,7 +31,7 @@
     "phase_goal": {
       "type": ["string", "null"],
       "description": "v2.1: optional cross-ref to a phase goal ID — accepts domain IDs (G-AUTH-00, G-FE-ADMIN-DLQ-01) post-PR-#177 generic ID rewrite",
-      "pattern": "^G-[A-Za-z0-9][A-Za-z0-9_.-]*$"
+      "pattern": "^G-[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$"
     }
   }
 }
