@@ -17,17 +17,17 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🔎 Phase 2a.5 — API contract probe"
 echo "   Curl API contracts trước browser discovery"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2a_api_contract_probe >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2a_api_contract_probe >/dev/null 2>&1 || true
 
 API_PROBE_OUT="${PHASE_DIR}/api-contract-precheck.txt"
 API_DOCS_CHECK_OUT="${PHASE_DIR}/api-docs-check.txt"
-VG_SCRIPT_ROOT="${REPO_ROOT:-.}/.claude/scripts"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}"
 [ -d "$VG_SCRIPT_ROOT" ] || VG_SCRIPT_ROOT="${REPO_ROOT:-.}/scripts"
 PROBE_SCRIPT="${VG_SCRIPT_ROOT}/review-api-contract-probe.py"
 INTERFACE_CHECK_OUT="${PHASE_DIR}/.tmp/interface-standards-review.json"
 
 if [ ! -f "$PROBE_SCRIPT" ]; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_helper\"}" >/dev/null 2>&1 || true
 
   source scripts/lib/blocking-gate-prompt.sh
@@ -37,7 +37,7 @@ if [ ! -f "$PROBE_SCRIPT" ]; then
 {
   "gate": "api_precheck",
   "summary": "API contract probe setup error — missing helper: $PROBE_SCRIPT",
-  "fix_hint": "Ensure review-api-contract-probe.py exists in .claude/scripts/ or scripts/"
+  "fix_hint": "Ensure review-api-contract-probe.py exists in ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/ or scripts/"
 }
 JSON
   blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
@@ -56,7 +56,7 @@ if [ -f "$INTERFACE_VAL" ]; then
   cat "$INTERFACE_CHECK_OUT"
   if [ "$INTERFACE_RC" -ne 0 ]; then
     echo "⛔ Interface standards gate failed — review cannot continue with undefined API/FE error semantics." >&2
-    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
     if [ -f "$DIAG_SCRIPT" ]; then
       "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
         --gate-id "review.interface_standards" \
@@ -73,14 +73,14 @@ else
   exit 1
 fi
 
-"${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-api-docs-coverage.py \
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-api-docs-coverage.py \
   --phase "${PHASE_NUMBER}" \
   > "${API_DOCS_CHECK_OUT}" 2>&1
 API_DOCS_RC=$?
 cat "${API_DOCS_CHECK_OUT}"
 if [ "$API_DOCS_RC" -ne 0 ]; then
   echo "⛔ API docs coverage failed — browser discovery is not allowed to continue with incomplete API-DOCS.md." >&2
-  DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+  DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
   if [ -f "$DIAG_SCRIPT" ]; then
     "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
       --gate-id "review.api_docs_contract_coverage" \
@@ -121,7 +121,7 @@ if m:
 [ -z "$API_PROBE_BASE" ] && API_PROBE_BASE="${VG_BASE_URL:-}"
 
 if [ -z "$API_PROBE_BASE" ]; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_base_url\"}" >/dev/null 2>&1 || true
 
   source scripts/lib/blocking-gate-prompt.sh
@@ -139,7 +139,7 @@ JSON
   # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
 fi
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_started" \
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_started" \
   --payload "$(printf '{"phase":"%s","base_url":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}")" >/dev/null 2>&1 || true
 
 PROBE_CMD=("${PYTHON_BIN:-python3}" "$PROBE_SCRIPT"
@@ -158,7 +158,7 @@ API_PROBE_RC=$?
 cat "$API_PROBE_OUT"
 
 if [ "$API_PROBE_RC" -ne 0 ]; then
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_blocked" \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "$(printf '{"phase":"%s","base_url":"%s","rc":%s}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "${API_PROBE_RC}")" >/dev/null 2>&1 || true
 
   source scripts/lib/blocking-gate-prompt.sh
@@ -186,11 +186,11 @@ if [ "$MANIFEST_RC" -ne 0 ]; then
   exit 1
 fi
 
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.api_precheck_completed" \
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_completed" \
   --payload "$(printf '{"phase":"%s","base_url":"%s","artifact":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "api-contract-precheck.txt")" >/dev/null 2>&1 || true
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2a_api_contract_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2a_api_contract_probe.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2a_api_contract_probe 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2a_api_contract_probe 2>/dev/null || true
 ```
 
 </step>
@@ -203,7 +203,7 @@ fi
 Orchestrator PHẢI in dòng tiếng người BEFORE mỗi sub-phase + BEFORE mỗi view/goal đang xử lý. Khác test.md: review chạy parallel nhiều Haiku, narration ở orchestrator level không cần per-step.
 
 ```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2_browser_discovery >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2_browser_discovery >/dev/null 2>&1 || true
 narrate_phase() {
   # $1=phase_name, $2=intent tiếng Việt
   echo ""
@@ -375,7 +375,7 @@ Deploy to target environment:
    (skip if auth_command not in config — MCP login handles auth instead)
 ```
 
-Read `.claude/commands/vg/_shared/env-commands.md` — deploy(env) + preflight(env).
+Read `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/env-commands.md` — deploy(env) + preflight(env).
 
 ### 2a-infra: Tự động khởi động hạ tầng (v1.14.0+)
 
@@ -596,7 +596,7 @@ Next actions — choose scenario that matches your error, follow the exact comma
 
 ```bash
 # v1.9.2 P4 — Scenario F resolver (replaces legacy A/B/C prompt)
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh" 2>/dev/null || true
+source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/block-resolver.sh" 2>/dev/null || true
 if type -t block_resolve >/dev/null 2>&1; then
   export VG_CURRENT_PHASE="$PHASE_NUMBER" VG_CURRENT_STEP="review.infra-unavailable"
   BR_GATE_CONTEXT="External infra (${UNAVAILABLE_SERVICES:-unknown}) not reachable on env='${ENV}'. ${INFRA_PENDING_GOALS:-?} goals blocked. User must choose: continue local with skip, switch to sandbox, or partial (local + sandbox retry)."
@@ -954,7 +954,7 @@ Each agent scans 1 view exhaustively with a FIXED workflow — no discretion to 
 render + inject promoted project rules so scanners see project-specific checks
 (e.g. "verify data persists after mutation" rule L-050 will fire here):
 ```bash
-source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/bootstrap-inject.sh"
+source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/bootstrap-inject.sh"
 BOOTSTRAP_RULES_BLOCK=$(vg_bootstrap_render_block "${BOOTSTRAP_PAYLOAD_FILE:-}" "review")
 vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "review" "${PHASE_NUMBER}"
 ```
@@ -1102,7 +1102,7 @@ For each view in view_assignments:
     # Agent() calls in one tool_use block. Sequential mode: emit
     # immediately before each Agent() call individually.
     Bash:
-      ${PYTHON_BIN} .claude/scripts/vg-orchestrator emit-event \
+      ${PYTHON_BIN} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
         "review.haiku_scanner_spawned" \
         --step "2b-2" --actor "orchestrator" --outcome "INFO" \
         --payload "$(printf '{"view":"%s","role":"%s","idx":%d,"total":%d,"spawn_mode":"%s"}' \

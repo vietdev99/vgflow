@@ -9,7 +9,7 @@ have mid-loop telemetry instead of a black box.
 → `narrate_phase "Phase 3 — Fix loop (iteration ${I}/${MAX_ITER:-5})" "Sửa bug MINOR, escalate MODERATE/MAJOR"`
 
 ```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase3_fix_loop >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase3_fix_loop >/dev/null 2>&1 || true
 
 # v2.65.0 A4 — fix-loop iteration cap (max_iter=5)
 # Each iteration body MUST emit review.fix_iteration_started with
@@ -306,7 +306,7 @@ Narrator chỉ hiển thị model id user đã config, KHÔNG hardcode "Sonnet"/
      echo "$FIXED_FILES" > "${PHASE_DIR}/.fix-ripple-input.txt"
 
      # Run ripple analysis on fixed files
-     ${PYTHON_BIN} .claude/scripts/build-caller-graph.py \
+     ${PYTHON_BIN} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/build-caller-graph.py \
        --changed-files-input "${PHASE_DIR}/.fix-ripple-input.txt" \
        --config .claude/vg.config.md \
        --graphify-graph "$GRAPHIFY_GRAPH_PATH" \
@@ -387,7 +387,7 @@ if [ "${SKIP_QA_CHECK:-0}" = "1" ]; then
   echo "▸ Phase 3d.5: --skip-qa-check set (debt-tracked); skipping QA-Checker meta-verification" >&2
   mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
   touch "${PHASE_DIR}/.step-markers/phase3d_5_qa_checker.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase3d_5_qa_checker 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase3d_5_qa_checker 2>/dev/null || true
 else
   bash scripts/vg-narrate-spawn.sh vg-review-qa-checker spawning "QA-check ${PHASE_NUMBER} fix commits"
   # Then: Agent(subagent_type="vg-review-qa-checker",
@@ -417,7 +417,7 @@ Repeat 3a-3d until:
 
 ```bash
 # Emit at the start of each iteration (after ITER + VIOLATION_COUNT are known).
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
   "review.fix_iteration_started" --actor "review" --outcome "INFO" \
   --metadata "{\"iter\":${ITER},\"max_iter\":${MAX_ITER:-5},\"violations\":${VIOLATION_COUNT:-0}}" \
   >/dev/null 2>&1 || true
@@ -458,9 +458,9 @@ diagnostic_l2 single-advisory fallback:
 
 ```bash
 if [ "${ITER:-1}" -eq "${MAX_ITER:-5}" ] && [ -n "${REMAINING_ERRORS}" ] && \
-   { [ -f "${REPO_ROOT}/.claude/scripts/spawn-diagnostic-l2.py" ] || [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; }; then
+   { [ -f "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/spawn-diagnostic-l2.py" ] || [ -f "${REPO_ROOT}/scripts/spawn-diagnostic-l2.py" ]; }; then
   echo "━━━ Phase 3e — Diagnostic L2 fallback (iter ${ITER} hit cap=${MAX_ITER:-5}) ━━━"
-  DIAGNOSTIC_L2="${REPO_ROOT}/.claude/scripts/spawn-diagnostic-l2.py"
+  DIAGNOSTIC_L2="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/spawn-diagnostic-l2.py"
   [ -f "$DIAGNOSTIC_L2" ] || DIAGNOSTIC_L2="${REPO_ROOT}/scripts/spawn-diagnostic-l2.py"
   L2_ARGS=(
     --phase "${PHASE_NUMBER}"
@@ -477,7 +477,7 @@ except: print('')
   if [ -n "$L2_PROPOSAL_ID" ]; then
     echo "  L2 proposal generated: $L2_PROPOSAL_ID"
     # Open DEFECT-LOG entry referencing the proposal
-    TESTER_PRO_CLI="${REPO_ROOT}/.claude/scripts/tester-pro-cli.py"
+    TESTER_PRO_CLI="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/tester-pro-cli.py"
     [ -f "$TESTER_PRO_CLI" ] || TESTER_PRO_CLI="${REPO_ROOT}/scripts/tester-pro-cli.py"
     if [ -f "$TESTER_PRO_CLI" ]; then
       "${PYTHON_BIN:-python3}" "$TESTER_PRO_CLI" defect new \
@@ -490,7 +490,7 @@ except: print('')
     # User gate is provider-native after spawn-diagnostic-l2.py:
     # Claude Code uses AskUserQuestion; Codex asks in the main thread/UI.
     # On accept → run-complete sees applied; on reject → BLOCK below.
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
       "review.diagnostic_l2_spawned" \
       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"proposal_id\":\"$L2_PROPOSAL_ID\"}" \
       >/dev/null 2>&1 || true
@@ -510,7 +510,7 @@ fi
 → `narrate_phase "Phase 4 — Goal comparison" "So khớp ${N} goals từ TEST-GOALS với views đã khám phá"`
 
 ```bash
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase4_goal_comparison >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase4_goal_comparison >/dev/null 2>&1 || true
 ```
 
 ### 4.0: RCRURD runtime verification (Task 23 — Codex GPT-5.5 review 2026-05-03)
@@ -536,7 +536,7 @@ if [ -d "${PHASE_DIR}/TEST-GOALS" ]; then
     fixture="${PHASE_DIR}/FIXTURES/$(basename "$goal" .md).action.json"
     [ -f "$fixture" ] && payload=$(cat "$fixture")
 
-    "${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-rcrurd-runtime.py \
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-rcrurd-runtime.py \
       --goal-file "$goal" \
       --phase "${PHASE_NUMBER}" \
       --action-payload "$payload" \
@@ -550,14 +550,14 @@ if [ "$RCRURD_RAN" -gt 0 ]; then
     echo "⛔ Phase 4.0 RCRURD runtime — at least one mutation goal failed (of ${RCRURD_RAN} run)"
     echo "   Evidence: ${EVIDENCE_DIR}/*.json"
     echo "   Route through classifier (Task 7) — most are IN_SCOPE for current phase"
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
       "review.rcrurd_runtime_failed" \
       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"evidence_dir\":\"${EVIDENCE_DIR}\",\"goals_run\":${RCRURD_RAN}}" \
       2>/dev/null || true
     exit 1
   fi
 
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
     "review.rcrurd_runtime_passed" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"goals_run\":${RCRURD_RAN}}" \
     2>/dev/null || true
@@ -609,7 +609,7 @@ Review uses them as the lifecycle comparison contract:
 
 ```bash
 # shellcheck source=_shared/lib/goal-classifier.sh
-. .claude/commands/vg/_shared/lib/goal-classifier.sh
+. ${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/goal-classifier.sh
 set +e
 classify_goals_if_needed "${PHASE_DIR}/TEST-GOALS.md" "${PHASE_DIR}"
 gc_rc=$?
@@ -674,7 +674,7 @@ For phases có CẢ UI goals (cần browser) VÀ backend goals (api/data/integra
 
 ```bash
 # Run surface probes cho goals có surface ≠ ui
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/surface-probe.sh" 2>/dev/null || true
+source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/surface-probe.sh" 2>/dev/null || true
 if type -t run_surface_probe >/dev/null 2>&1; then
   PROBE_RESULTS_JSON="${PHASE_DIR}/.surface-probe-results.json"
   echo '{"probed_at":"'"$(date -u +%FT%TZ)"'","results":{' > "$PROBE_RESULTS_JSON"
@@ -718,8 +718,8 @@ print(f'Phase 4a surface probes: {len(d)} backend goals probed → {dict(c)}')")
   # READY goals flagged matrix_status_without_runtime_sequence.
   # Idempotent: re-runs overwrite synthetic entries by gid, never overwrites
   # real browser-recorded sequences.
-  if [ -f "${REPO_ROOT}/.claude/scripts/backfill-surface-probe-runtime.py" ]; then
-    "${PYTHON_BIN:-python3}" "${REPO_ROOT}/.claude/scripts/backfill-surface-probe-runtime.py" \
+  if [ -f "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/backfill-surface-probe-runtime.py" ]; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/backfill-surface-probe-runtime.py" \
       --phase-dir "$PHASE_DIR" 2>&1 | sed 's/^/▸ /' || true
   fi
 fi
@@ -877,7 +877,7 @@ if [ "$INTERMEDIATE" -gt 0 ]; then
     # If L1 fails, L2 architect proposal is presented through provider-native L3 prompt.
     # L4 only when L2 proposal rejected AND no user direction.
     # See _shared/lib/block-resolver.sh
-    source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/block-resolver.sh" 2>/dev/null || true
+    source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/block-resolver.sh" 2>/dev/null || true
     if type -t block_resolve >/dev/null 2>&1; then
       export VG_CURRENT_PHASE="$PHASE_NUMBER" VG_CURRENT_STEP="review.4c-pre"
       BR_GATE_CONTEXT="NOT_SCANNED/FAILED goals block review exit. ${INTERMEDIATE} intermediate goals need conclusion (READY/BLOCKED/UNREACHABLE/INFRA_PENDING)."
@@ -930,7 +930,7 @@ fi
 # Call matrix-merger.sh helper — reads RUNTIME-MAP + probe-results + TEST-GOALS,
 # computes per-goal status with priority precedence (browser > probe > code_exists),
 # writes canonical GOAL-COVERAGE-MATRIX.md with summary + by-priority + details + gate.
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/matrix-merger.sh" 2>/dev/null || true
+source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/matrix-merger.sh" 2>/dev/null || true
 if type -t merge_and_write_matrix >/dev/null 2>&1; then
   MERGE_OUTPUT=$(merge_and_write_matrix "$PHASE_DIR" \
     "${PHASE_DIR}/TEST-GOALS.md" \
@@ -958,7 +958,7 @@ fi
 # stale matrix reuse, lifecycle-spec drift, AND stale runtime-map reuse after
 # review. Closes #175: must_write artifacts existed on disk but had no
 # evidence-manifest entries → manual emit-evidence-manifest calls required.
-EMIT_MANIFEST="${REPO_ROOT}/.claude/scripts/emit-evidence-manifest.py"
+EMIT_MANIFEST="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/emit-evidence-manifest.py"
 [ -f "$EMIT_MANIFEST" ] || EMIT_MANIFEST="${REPO_ROOT}/scripts/emit-evidence-manifest.py"
 if [ -f "$EMIT_MANIFEST" ]; then
   if [ -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
@@ -980,7 +980,7 @@ fi
 # Defense-in-depth: matrix-merger now downgrades shallow mutation sequences, but
 # keep an explicit validator so legacy/hand-written RUNTIME-MAP files cannot
 # mark create/update/delete goals READY from list-only evidence.
-CRUD_DEPTH_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-runtime-map-crud-depth.py"
+CRUD_DEPTH_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-runtime-map-crud-depth.py"
 if [ -f "$CRUD_DEPTH_VAL" ]; then
   mkdir -p "${PHASE_DIR}/.tmp"
   "${PYTHON_BIN:-python3}" "$CRUD_DEPTH_VAL" --phase "${PHASE_NUMBER}" \
@@ -1000,7 +1000,7 @@ fi
 # Override per-phase: --skip-content-invariants=<reason> logs OVERRIDE-DEBT
 if [[ ! "$ARGUMENTS" =~ --skip-content-invariants ]]; then
   for VALIDATOR in verify-interface-standards verify-goal-security verify-goal-perf verify-security-baseline verify-haiku-scan-completeness verify-runtime-map-coverage verify-crud-runs-coverage verify-error-message-runtime verify-route-inventory; do
-    VAL_PATH="${REPO_ROOT}/.claude/scripts/validators/${VALIDATOR}.py"
+    VAL_PATH="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/${VALIDATOR}.py"
     if [ -f "$VAL_PATH" ]; then
       mkdir -p "${PHASE_DIR}/.tmp"
       VAL_OUT="${PHASE_DIR}/.tmp/${VALIDATOR}-diagnostic-input.txt"
@@ -1029,7 +1029,7 @@ if [[ ! "$ARGUMENTS" =~ --skip-content-invariants ]]; then
         echo "   v2.35.0 hardened gate: review cannot PASS with empty/incomplete artifacts."
         echo "   Either re-run /vg:review ${PHASE_NUMBER} with proper scanner/dispatch coverage,"
         echo "   or pass --skip-content-invariants=\"<reason>\" to log OVERRIDE-DEBT."
-        DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+        DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
         if [ -f "$DIAG_SCRIPT" ]; then
           "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
             --gate-id "review.${VALIDATOR}" \
@@ -1047,7 +1047,7 @@ if [[ ! "$ARGUMENTS" =~ --skip-content-invariants ]]; then
   done
 fi
 
-LENS_PLAN_SCRIPT="${REPO_ROOT}/.claude/scripts/review-lens-plan.py"
+LENS_PLAN_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py"
 if [ -f "$LENS_PLAN_SCRIPT" ] && [[ ! "$ARGUMENTS" =~ --skip-lens-plan-gate ]]; then
   mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
   "${PYTHON_BIN:-python3}" "$LENS_PLAN_SCRIPT" \
@@ -1062,7 +1062,7 @@ if [ -f "$LENS_PLAN_SCRIPT" ] && [[ ! "$ARGUMENTS" =~ --skip-lens-plan-gate ]]; 
     echo ""
     echo "⛔ Review lens plan gate FAILED — required checklist plugins lack evidence."
     echo "   See ${PHASE_DIR}/.tmp/review-lens-plan-validation.json"
-    DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+    DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
     if [ -f "$DIAG_SCRIPT" ]; then
       "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
         --gate-id "review.lens_plan_gate" \
@@ -1125,7 +1125,7 @@ echo "🔍 Triage + áp dụng action cho UNREACHABLE goals (v1.14.0+)..."
 # v1.14.3 H3 — pre-scan test source for @deferred markers so triage sees them
 # alongside scope tags. Fixes gap where executor-written it.skip('@deferred X')
 # was ignored (tests were skipped but matrix still BLOCKED).
-DEFER_SCANNER=".claude/scripts/scan-deferred-tests.py"
+DEFER_SCANNER="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/scan-deferred-tests.py"
 if [ -f "$DEFER_SCANNER" ]; then
   echo "▸ Pre-scan: @deferred markers in test source..."
   ${PYTHON_BIN:-python3} "$DEFER_SCANNER" \
@@ -1134,7 +1134,7 @@ if [ -f "$DEFER_SCANNER" ]; then
 fi
 
 # Chạy triage (sinh .unreachable-triage.json + UNREACHABLE-TRIAGE.md)
-source "${REPO_ROOT}/.claude/commands/vg/_shared/lib/unreachable-triage.sh" 2>/dev/null || true
+source "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/unreachable-triage.sh" 2>/dev/null || true
 if type -t triage_unreachable_goals >/dev/null 2>&1; then
   triage_unreachable_goals "$PHASE_DIR" "$PHASE_NUMBER"
 else
@@ -1445,7 +1445,7 @@ if [ "$GATE_PASS" = "true" ]; then
   # v1.14.0+ A.4 — write trigger cho CROSS-PHASE-DEPS aggregator
   # Nếu có goal DEFERRED → append vào .vg/CROSS-PHASE-DEPS.md (idempotent)
   if [ "$DEFERRED" -gt 0 ]; then
-    CPD_SCRIPT="${REPO_ROOT}/.claude/scripts/vg_cross_phase_deps.py"
+    CPD_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg_cross_phase_deps.py"
     if [ -f "$CPD_SCRIPT" ]; then
       PYTHONIOENCODING=utf-8 ${PYTHON_BIN} "$CPD_SCRIPT" append "$PHASE_NUMBER" 2>&1 | sed 's/^/  /'
     else

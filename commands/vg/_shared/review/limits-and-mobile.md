@@ -13,7 +13,7 @@ RUNTIME_MAP="${PHASE_DIR}/RUNTIME-MAP.json"
 if [ ! -f "$RUNTIME_MAP" ]; then
   echo "⚠ RUNTIME-MAP.json chưa tồn tại — bỏ qua limit check (Phase 2 có thể skipped hoặc failed)."
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_exploration_limits" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_exploration_limits.done"
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2_exploration_limits 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2_exploration_limits 2>/dev/null || true
 else
   MAX_VIEW="${CONFIG_REVIEW_MAX_ACTIONS_PER_VIEW:-50}"
   MAX_TOTAL="${CONFIG_REVIEW_MAX_ACTIONS_TOTAL:-200}"
@@ -106,7 +106,7 @@ PY
 
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_exploration_limits" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_exploration_limits.done"
 
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2_exploration_limits 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2_exploration_limits 2>/dev/null || true
 fi
 ```
 
@@ -124,7 +124,7 @@ because filter-steps.py resolves `mobile-*` to the 5 mobile profiles.
 
 ```bash
 # 1. Verify wrapper present
-WRAPPER="${REPO_ROOT}/.claude/scripts/maestro-mcp.py"
+WRAPPER="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/maestro-mcp.py"
 if [ ! -f "$WRAPPER" ]; then
   echo "⛔ maestro-mcp.py missing. Run vgflow installer."
   exit 1
@@ -374,8 +374,8 @@ written by `/vg:blueprint` step 2_fidelity_profile_lock (D-08).
 **6a. D-12c — UI flag presence (cheap precondition, runs first):**
 
 ```bash
-if [ -x "${REPO_ROOT}/.claude/scripts/validators/verify-phase-ui-flag.py" ]; then
-  ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/validators/verify-phase-ui-flag.py" \
+if [ -x "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-phase-ui-flag.py" ]; then
+  ${PYTHON_BIN} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-phase-ui-flag.py" \
       --phase "${PHASE_NUMBER}" > "${VG_TMP}/ui-flag.json" 2>&1
   UIF=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/ui-flag.json')).get('verdict','SKIP'))" 2>/dev/null)
   case "$UIF" in
@@ -390,8 +390,8 @@ fi
 
 ```bash
 if [ -f "${PHASE_DIR}/UI-MAP.md" ] \
-   && [ -x "${REPO_ROOT}/.claude/scripts/verify-ui-structure.py" ]; then
-  THRESHOLD=$(${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/lib/threshold-resolver.py" \
+   && [ -x "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-ui-structure.py" ]; then
+  THRESHOLD=$(${PYTHON_BIN} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/lib/threshold-resolver.py" \
       --phase "${PHASE_NUMBER}" 2>/dev/null || echo "0.85")
 
   # Discover waves with owned subtrees by inspecting planner UI-MAP for owner_wave_id values.
@@ -415,7 +415,7 @@ print(' '.join(sorted(seen)))
 
   WAVE_BLOCK=0
   for WAVE_ID in $WAVES; do
-    ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/verify-ui-structure.py" \
+    ${PYTHON_BIN} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-ui-structure.py" \
         --phase "${PHASE_NUMBER}" \
         --scope "owner-wave-id=${WAVE_ID}" \
         --threshold "${THRESHOLD}" \
@@ -440,9 +440,9 @@ fi
 **6c. D-12e — Holistic phase-wide drift (runs once at phase end):**
 
 ```bash
-if [ -x "${REPO_ROOT}/.claude/scripts/verify-holistic-drift.py" ] \
+if [ -x "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-holistic-drift.py" ] \
    && [ -f "${PHASE_DIR}/UI-MAP.md" ]; then
-  ${PYTHON_BIN} "${REPO_ROOT}/.claude/scripts/verify-holistic-drift.py" \
+  ${PYTHON_BIN} "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-holistic-drift.py" \
       --phase "${PHASE_NUMBER}" \
       > "${VG_TMP}/holistic-drift.json" 2>&1 || true
   HV=$(${PYTHON_BIN} -c "import json,sys; print(json.load(open('${VG_TMP}/holistic-drift.json')).get('verdict','SKIP'))" 2>/dev/null)
@@ -473,7 +473,7 @@ slot and logs override-debt.
 DF_THRESHOLD="$(vg_config_get visual_checks.design_fidelity_threshold_pct 5.0 2>/dev/null || echo 5.0)"
 
 if [ -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
-  DF_PAIRS=$(PYTHONPATH="${REPO_ROOT}/.claude/scripts/lib:${REPO_ROOT}/scripts/lib:${PYTHONPATH:-}" ${PYTHON_BIN} - "${PHASE_DIR}/RUNTIME-MAP.json" "${PHASE_DIR}" "${REPO_ROOT}" "${REPO_ROOT}/.claude/vg.config.md" <<'PY'
+  DF_PAIRS=$(PYTHONPATH="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/lib:${REPO_ROOT}/scripts/lib:${PYTHONPATH:-}" ${PYTHON_BIN} - "${PHASE_DIR}/RUNTIME-MAP.json" "${PHASE_DIR}" "${REPO_ROOT}" "${REPO_ROOT}/.claude/vg.config.md" <<'PY'
 import json, sys
 from pathlib import Path
 from design_ref_resolver import first_screenshot, parse_config_file, resolve_design_assets
@@ -598,7 +598,7 @@ screenshots against per-platform sanity rules.
 VISUAL_ISSUES=()
 VIS_DIR="${PHASE_DIR}/visual-checks"
 mkdir -p "$VIS_DIR"
-WRAPPER="${REPO_ROOT}/.claude/scripts/maestro-mcp.py"
+WRAPPER="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/maestro-mcp.py"
 ```
 
 ### Check 1: Font / text rendering (per captured screenshot)

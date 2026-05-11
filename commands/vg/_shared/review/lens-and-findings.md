@@ -154,7 +154,7 @@ if [ -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
 else
 
   # 1. Emit dispatch plan FIRST (trust anchor — declares all APPLICABLE dispatches)
-  "${PYTHON_BIN:-python3}" .claude/scripts/lens-dispatch/emit-dispatch-plan.py \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/lens-dispatch/emit-dispatch-plan.py \
     --phase-dir "${PHASE_DIR}" \
     --phase "${PHASE_NUMBER}" \
     --profile "$(python3 -c "import yaml,sys; d=yaml.safe_load(open('${PHASE_DIR}/.phase-profile').read()); print(d.get('phase_profile','web-fullstack'))" 2>/dev/null || echo "web-fullstack")" \
@@ -164,7 +164,7 @@ else
     exit 1
   }
 
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
     "review.lens_dispatch_emitted" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"plan_path\":\"${PHASE_DIR}/LENS-DISPATCH-PLAN.json\"}" \
     >/dev/null 2>&1 || true
@@ -180,7 +180,7 @@ python scripts/spawn_recursive_probe.py "${ARGS[@]}"
 if [ ! -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
 
   # 3. Coverage gate — assert every APPLICABLE dispatch has matching artifact
-  "${PYTHON_BIN:-python3}" .claude/scripts/validators/verify-lens-runs-coverage.py \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-lens-runs-coverage.py \
     --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" \
     --runs-dir "${PHASE_DIR}/runs" \
     --phase "${PHASE_NUMBER}" \
@@ -188,14 +188,14 @@ if [ ! -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
   COVERAGE_RC=$?
 
   # 4. Render coverage matrix (always — gives user the picture even on failure)
-  "${PYTHON_BIN:-python3}" .claude/scripts/aggregators/lens-coverage-matrix.py \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/aggregators/lens-coverage-matrix.py \
     --dispatch-plan "${PHASE_DIR}/LENS-DISPATCH-PLAN.json" \
     --runs-dir "${PHASE_DIR}/runs" \
     --output "${PHASE_DIR}/LENS-COVERAGE-MATRIX.md" || true
 
   # 5. Coverage failure → Task 33 wrapper (NOT exit 1 — user gets 4 options)
   if [ "$COVERAGE_RC" -ne 0 ]; then
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
       "review.lens_coverage_blocked" \
       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"evidence\":\"${PHASE_DIR}/.lens-coverage-evidence.json\"}" \
       >/dev/null 2>&1 || true
@@ -475,7 +475,7 @@ within 60s (the D-17 hook-triggered noise pattern), so manual `/vg:learn`
 invocations don't show up as false positives.
 
 ```bash
-PHANTOM_VALIDATOR="${REPO_ROOT}/.claude/scripts/validators/verify-haiku-spawn-fired.py"
+PHANTOM_VALIDATOR="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-haiku-spawn-fired.py"
 if [ -x "$PHANTOM_VALIDATOR" ] && [ -f "${REPO_ROOT}/.vg/events.db" ]; then
   ${PYTHON_BIN} "$PHANTOM_VALIDATOR" --phase "${PHASE_NUMBER}" \
       > "${VG_TMP}/haiku-spawn-audit.json" 2>&1 || true
@@ -504,7 +504,7 @@ review steps must execute. This is the harness-level binding between the
 visible step list and the smaller checks/lenses.
 
 ```bash
-LENS_PLAN_SCRIPT="${REPO_ROOT}/.claude/scripts/review-lens-plan.py"
+LENS_PLAN_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-lens-plan.py"
 if [ -f "$LENS_PLAN_SCRIPT" ]; then
   "${PYTHON_BIN:-python3}" "$LENS_PLAN_SCRIPT" \
     --phase-dir "$PHASE_DIR" \
@@ -516,7 +516,7 @@ if [ -f "$LENS_PLAN_SCRIPT" ]; then
     echo "⛔ Review lens plan generation failed — cannot prove plugin checklist coverage." >&2
     exit 1
   fi
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
     "review.lens_plan_generated" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"artifact\":\"REVIEW-LENS-PLAN.json\"}" \
     >/dev/null 2>&1 || true
@@ -537,11 +537,11 @@ Bridges the design gap between **Step 3 (click many components)** and **Step 4 (
 ```bash
 echo ""
 echo "━━━ Phase 2c — Enrich TEST-GOALS from runtime discovery ━━━"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2c_enrich_test_goals >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2c_enrich_test_goals >/dev/null 2>&1 || true
 
 ENRICH_THRESHOLD=$(vg_config_get "review.enrich_min_elements" "3" 2>/dev/null || echo "3")
 
-${PYTHON_BIN:-python3} .claude/scripts/enrich-test-goals.py \
+${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/enrich-test-goals.py \
   --phase-dir "$PHASE_DIR" \
   --threshold "$ENRICH_THRESHOLD"
 ENRICH_RC=$?
@@ -567,7 +567,7 @@ esac
 # This catches the failure mode where Haiku ran but classification missed everything
 # (e.g. element schema drift, parser bug). Per-phase override via --skip-enrich-validate.
 if [[ ! "$ARGUMENTS" =~ --skip-enrich-validate ]]; then
-  ${PYTHON_BIN:-python3} .claude/scripts/enrich-test-goals.py \
+  ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/enrich-test-goals.py \
     --phase-dir "$PHASE_DIR" \
     --threshold "$ENRICH_THRESHOLD" \
     --validate-only
@@ -582,7 +582,7 @@ if [[ ! "$ARGUMENTS" =~ --skip-enrich-validate ]]; then
     exit 1
   fi
 fi
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2c_enrich_test_goals 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2c_enrich_test_goals 2>/dev/null || true
 ```
 </step>
 
@@ -599,11 +599,11 @@ If contract incomplete OR env preflight fails → review aborts BEFORE spawning 
 ```bash
 echo ""
 echo "━━━ Phase 2c-pre — Contract completeness + env preflight ━━━"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2c_pre_dispatch_gates >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2c_pre_dispatch_gates >/dev/null 2>&1 || true
 
 # Contract completeness gate (severity warn first release for dogfood)
 COMPLETE_SEV=$(vg_config_get "review.contract_completeness.severity" "warn" 2>/dev/null || echo "warn")
-${PYTHON_BIN:-python3} .claude/scripts/verify-contract-completeness.py \
+${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-contract-completeness.py \
   --phase-dir "$PHASE_DIR" \
   --code-root "${REPO_ROOT}" \
   --severity "$COMPLETE_SEV"
@@ -620,14 +620,14 @@ if grep -q '"kit"\s*:\s*"crud-roundtrip"\|"kit"\s*:\s*"approval-flow"\|"kit"\s*:
     ENV_REASON="${BASH_REMATCH[1]}"
     echo "  ⚠ ENV-CONTRACT skipped: $ENV_REASON (logged to OVERRIDE-DEBT)"
   else
-    ${PYTHON_BIN:-python3} .claude/scripts/verify-env-contract.py \
+    ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/verify-env-contract.py \
       --phase-dir "$PHASE_DIR" \
       > "${PHASE_DIR}/.tmp/env-contract-review.txt" 2>&1
     ENV_RC=$?
     if [ "$ENV_RC" -ne 0 ] && [ "$ENV_SEV" = "block" ]; then
       echo "⛔ ENV-CONTRACT preflight FAIL — fix env or pass --skip-env-contract=\"<reason>\""
       cat "${PHASE_DIR}/.tmp/env-contract-review.txt" 2>/dev/null || true
-      DIAG_SCRIPT="${REPO_ROOT}/.claude/scripts/review-block-diagnostic.py"
+      DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
       if [ -f "$DIAG_SCRIPT" ]; then
         "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
           --gate-id "review.env_contract" \
@@ -645,7 +645,7 @@ fi
 emit_telemetry_v2 "review_phase2c_pre_gates" "${PHASE_NUMBER}" \
   "review.2c-pre" "pre_dispatch_gates" "PASS" \
   "{\"contract_complete_rc\":${COMPLETE_RC:-0}}" 2>/dev/null || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2c_pre_dispatch_gates 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2c_pre_dispatch_gates 2>/dev/null || true
 ```
 </step>
 
@@ -661,7 +661,7 @@ Dispatches Gemini Flash workers per `(resource × role)` declared with `kit: cru
 ```bash
 echo ""
 echo "━━━ Phase 2d — CRUD round-trip lens dispatch ━━━"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2d_crud_roundtrip_dispatch >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2d_crud_roundtrip_dispatch >/dev/null 2>&1 || true
 
 # Skip if no CRUD-SURFACES or no resources declare this kit
 if [ ! -f "${PHASE_DIR}/CRUD-SURFACES.md" ]; then
@@ -674,7 +674,7 @@ else
   REPO_TOKENS_PATH="${REPO_ROOT}/.review-fixtures/tokens.local.yaml"
   if [ ! -f "$TOKENS_PATH" ] && [ ! -f "$REPO_TOKENS_PATH" ]; then
     echo "  Bootstrapping auth tokens..."
-    ${PYTHON_BIN:-python3} .claude/scripts/review-fixture-bootstrap.py \
+    ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-fixture-bootstrap.py \
       --phase-dir "$PHASE_DIR" || {
         echo "  ⚠ Auth fixture bootstrap failed — Phase 2d skipped (workers cannot authenticate)"
       }
@@ -684,7 +684,7 @@ else
     COST_CAP=$(vg_config_get "review.crud_roundtrip.cost_cap_usd" "1.50" 2>/dev/null || echo "1.50")
     CONCURRENCY=$(vg_config_get "review.crud_roundtrip.concurrency" "2" 2>/dev/null || echo "2")
 
-    ${PYTHON_BIN:-python3} .claude/scripts/spawn-crud-roundtrip.py \
+    ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/spawn-crud-roundtrip.py \
       --phase-dir "$PHASE_DIR" \
       --concurrency "$CONCURRENCY" \
       --cost-cap "$COST_CAP"
@@ -704,7 +704,7 @@ else
     fi
   fi
 fi
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2d_crud_roundtrip_dispatch 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2d_crud_roundtrip_dispatch 2>/dev/null || true
 ```
 </step>
 
@@ -718,10 +718,10 @@ Reads run artifacts from Phase 2d and derives `REVIEW-FINDINGS.json` (machine-re
 ```bash
 echo ""
 echo "━━━ Phase 2e — Findings derivation ━━━"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2e_findings_merge >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2e_findings_merge >/dev/null 2>&1 || true
 
 if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/null | grep -v INDEX.json)" ]; then
-  ${PYTHON_BIN:-python3} .claude/scripts/derive-findings.py \
+  ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/derive-findings.py \
     --phase-dir "$PHASE_DIR"
   DERIVE_RC=$?
 
@@ -735,7 +735,7 @@ if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/n
 else
   echo "  (no run artifacts to derive — skipping)"
 fi
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2e_findings_merge 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2e_findings_merge 2>/dev/null || true
 ```
 </step>
 
@@ -752,13 +752,13 @@ Output: `${PHASE_DIR}/COVERAGE-CHALLENGE.json` with downgrades + warnings. v2.40
 ```bash
 echo ""
 echo "━━━ Phase 2e-post — Manager adversarial challenge ━━━"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2e_post_challenge >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2e_post_challenge >/dev/null 2>&1 || true
 
 if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/null | grep -v INDEX.json)" ]; then
   CHALLENGE_RATE=$(vg_config_get "review.challenge.sample_rate" "25" 2>/dev/null || echo "25")
   CHALLENGE_SEV=$(vg_config_get "review.challenge.severity" "warn" 2>/dev/null || echo "warn")
 
-  ${PYTHON_BIN:-python3} .claude/scripts/challenge-coverage.py \
+  ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/challenge-coverage.py \
     --phase-dir "$PHASE_DIR" \
     --sample-rate "$CHALLENGE_RATE" \
     --severity "$CHALLENGE_SEV"
@@ -774,7 +774,7 @@ if [ -d "${PHASE_DIR}/runs" ] && [ -n "$(ls -A ${PHASE_DIR}/runs/*.json 2>/dev/n
     "review.2e-post" "coverage_challenge" "PASS" \
     "{\"sample_rate\":${CHALLENGE_RATE}}" 2>/dev/null || true
 fi
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2e_post_challenge 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2e_post_challenge 2>/dev/null || true
 ```
 </step>
 
@@ -802,10 +802,10 @@ Auto-fix routing in this phase only sends `APP_BLOCKED` goals to `/vg:build`. Ot
 ```bash
 echo ""
 echo "━━━ Phase 2f — Route findings to /vg:build (auto-fix loop) ━━━"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active phase2f_route_auto_fix >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2f_route_auto_fix >/dev/null 2>&1 || true
 
 if [ -f "${PHASE_DIR}/REVIEW-FINDINGS.json" ]; then
-  ${PYTHON_BIN:-python3} .claude/scripts/route-findings-to-build.py \
+  ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/route-findings-to-build.py \
     --phase-dir "$PHASE_DIR"
   ROUTE_RC=$?
 
@@ -864,6 +864,6 @@ PY
 else
   echo "  (no REVIEW-FINDINGS.json — skipping)"
 fi
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2f_route_auto_fix 2>/dev/null || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2f_route_auto_fix 2>/dev/null || true
 ```
 </step>

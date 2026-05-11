@@ -3,16 +3,88 @@
 # Falls back to bash-native primitives (v1.15.2) when binary absent.
 #
 # Exposed functions:
+#   vg_script_path REL              — resolve VG script from project/repo/global
+#   vg_command_path REL             — resolve VG command asset from project/repo/global
+#   vg_source_lib NAME              — source _shared/lib/NAME from resolved command root
+#   vg_orch ARGS...                 — run vg-orchestrator through resolved script root
 #   vg_run_start   CMD PHASE [ARGS]   — write current-run.json + emit run.started
 #   vg_run_complete [OUTCOME]         — emit completed + delete current-run.json
 #   vg_emit        EVENT [PAYLOAD]    — emit event via orchestrator (or lazy-source telemetry.sh fallback)
 #   vg_mark_step   NAMESPACE NAME     — touch step marker via orchestrator
 
 VG_RUN_FILE="${VG_RUN_FILE:-${REPO_ROOT:-.}/.vg/current-run.json}"
-VG_ORCHESTRATOR="${VG_ORCHESTRATOR:-${REPO_ROOT:-.}/.claude/scripts/vg-orchestrator}"
+VG_HOME="${VG_HOME:-${HOME}/.vgflow}"
+
+_vg_first_existing_dir() {
+  local candidate
+  for candidate in "$@"; do
+    [ -n "$candidate" ] && [ -d "$candidate" ] && {
+      printf '%s\n' "$candidate"
+      return 0
+    }
+  done
+  return 1
+}
+
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-$(_vg_first_existing_dir \
+  "${REPO_ROOT:-.}/.claude/scripts" \
+  "${REPO_ROOT:-.}/scripts" \
+  "${VG_HOME}/scripts" \
+  2>/dev/null || printf '%s\n' "${VG_HOME}/scripts")}"
+
+VG_COMMAND_ROOT="${VG_COMMAND_ROOT:-$(_vg_first_existing_dir \
+  "${REPO_ROOT:-.}/.claude/commands/vg" \
+  "${REPO_ROOT:-.}/commands/vg" \
+  "${VG_HOME}/commands/vg" \
+  2>/dev/null || printf '%s\n' "${VG_HOME}/commands/vg")}"
+
+vg_script_path() {
+  local rel="${1#/}" candidate
+  for candidate in \
+    "${REPO_ROOT:-.}/.claude/scripts/${rel}" \
+    "${REPO_ROOT:-.}/scripts/${rel}" \
+    "${VG_HOME}/scripts/${rel}"; do
+    [ -e "$candidate" ] && {
+      printf '%s\n' "$candidate"
+      return 0
+    }
+  done
+  printf '%s\n' "${VG_SCRIPT_ROOT}/${rel}"
+  return 1
+}
+
+vg_command_path() {
+  local rel="${1#/}" candidate
+  for candidate in \
+    "${REPO_ROOT:-.}/.claude/commands/vg/${rel}" \
+    "${REPO_ROOT:-.}/commands/vg/${rel}" \
+    "${VG_HOME}/commands/vg/${rel}"; do
+    [ -e "$candidate" ] && {
+      printf '%s\n' "$candidate"
+      return 0
+    }
+  done
+  printf '%s\n' "${VG_COMMAND_ROOT}/${rel}"
+  return 1
+}
+
+vg_source_lib() {
+  local name="$1" path
+  path="$(vg_command_path "_shared/lib/${name}" 2>/dev/null)" || return 1
+  [ -f "$path" ] || return 1
+  # shellcheck source=/dev/null
+  source "$path"
+}
+
+VG_ORCHESTRATOR="${VG_ORCHESTRATOR:-$(vg_script_path vg-orchestrator 2>/dev/null || printf '%s\n' "${VG_SCRIPT_ROOT}/vg-orchestrator")}"
 
 _vg_orchestrator_available() {
   [ -f "${VG_ORCHESTRATOR}/__main__.py" ] && command -v "${PYTHON_BIN:-python3}" >/dev/null 2>&1
+}
+
+vg_orch() {
+  _vg_orchestrator_available || return 127
+  "${PYTHON_BIN:-python3}" "$VG_ORCHESTRATOR" "$@"
 }
 
 vg_run_start() {
@@ -70,7 +142,8 @@ vg_emit() {
 
   # v1.15.2 telemetry.sh fallback
   if ! type -t emit_telemetry_v2 >/dev/null 2>&1; then
-    local tel_sh="${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/telemetry.sh"
+    local tel_sh
+    tel_sh="$(vg_command_path "_shared/lib/telemetry.sh" 2>/dev/null)" || tel_sh=""
     [ -f "$tel_sh" ] && source "$tel_sh" 2>/dev/null
     type -t telemetry_init >/dev/null 2>&1 && telemetry_init 2>/dev/null
   fi

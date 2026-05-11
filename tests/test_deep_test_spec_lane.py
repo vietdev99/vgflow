@@ -138,8 +138,8 @@ def test_pipeline_wiring_places_test_spec_between_build_and_review() -> None:
     assert "/vg:test-spec" in lifecycle
     assert '"build", "test-spec", "review"' in phase_recon
     assert "/vg:test-spec ${PHASE_NUMBER} before /vg:review" in review_preflight
-    assert 'DEEP_SPEC_VALIDATOR="${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-deep-test-specs.py"' in review_preflight
-    assert 'DIAG_SCRIPT="${VG_HOME:-$HOME/.vgflow}/scripts/review-block-diagnostic.py"' in review_preflight
+    assert 'DEEP_SPEC_VALIDATOR="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-deep-test-specs.py"' in review_preflight
+    assert 'DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"' in review_preflight
     assert "review.deep_test_spec_blocked" in review_preflight
     assert 'state["next_command"] = f"/vg:test-spec {phase}"' in review_preflight
     assert "review.deep_test_spec_blocked" in review
