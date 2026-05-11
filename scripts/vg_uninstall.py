@@ -74,6 +74,9 @@ ROOT_FILES = (
     "vg-ext",
 )
 
+LEGACY_CONFIG = ".claude/vg.config.md"
+MODERN_CONFIG = ".vg/config.md"
+
 
 def _read_json(path: Path) -> dict | None:
     try:
@@ -174,8 +177,32 @@ def _remove_agent_entries_from_toml(config_path: Path, *, apply: bool) -> bool:
     return changed
 
 
-def _collect_paths(root: Path, purge_state: bool) -> list[Path]:
+def _same_file_bytes(left: Path, right: Path) -> bool:
+    try:
+        return left.read_bytes() == right.read_bytes()
+    except OSError:
+        return False
+
+
+def _plan_config_migration(root: Path, purge_state: bool) -> tuple[str, Path | None, Path | None]:
+    """Plan legacy config migration for global-only project cleanup."""
+    if purge_state:
+        return ("none", None, None)
+
+    legacy = root / LEGACY_CONFIG
+    modern = root / MODERN_CONFIG
+    if not legacy.exists():
+        return ("none", None, None)
+    if not modern.exists():
+        return ("migrate", legacy, modern)
+    if _same_file_bytes(legacy, modern):
+        return ("remove_legacy", legacy, modern)
+    return ("conflict", legacy, modern)
+
+
+def _collect_paths(root: Path, purge_state: bool, extra_paths: Iterable[Path] = ()) -> list[Path]:
     paths = [root / rel for rel in (*CLAUDE_PATHS, *CODEX_PATHS, *ROOT_FILES)]
+    paths.extend(extra_paths)
 
     claude_skills = root / ".claude" / "skills"
     if claude_skills.exists():
@@ -267,7 +294,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         if path.exists() and _remove_agent_entries_from_toml(path, apply=args.apply):
             changed_toml.append(path)
 
-    remove_paths = _collect_paths(root, args.purge_state)
+    config_action, legacy_config, modern_config = _plan_config_migration(root, args.purge_state)
+    extra_remove_paths: list[Path] = []
+    if config_action in {"migrate", "remove_legacy"} and legacy_config is not None:
+        extra_remove_paths.append(legacy_config)
+    remove_paths = _collect_paths(root, args.purge_state, extra_remove_paths)
     backup_root = root / ".vgflow-uninstall-backup" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     print("VGFlow uninstall")
@@ -281,6 +312,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"PRUNE hooks: {path}")
     for path in changed_toml:
         print(f"PRUNE codex config: {path}")
+    if config_action == "migrate" and legacy_config is not None and modern_config is not None:
+        print(f"MIGRATE config: {legacy_config} -> {modern_config}")
+    elif config_action == "remove_legacy" and legacy_config is not None and modern_config is not None:
+        print(f"REMOVE duplicate legacy config: {legacy_config} (canonical: {modern_config})")
+    elif config_action == "conflict" and legacy_config is not None and modern_config is not None:
+        print(f"KEEP legacy config: {legacy_config} differs from {modern_config}")
     for path in remove_paths:
         print(f"REMOVE: {path}")
 
@@ -288,6 +325,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("")
         print("Dry-run only. Re-run with --apply to remove. Add --purge-state to remove .vg/.planning data.")
         return 0
+
+    if config_action == "migrate" and legacy_config is not None and modern_config is not None:
+        modern_config.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_config, modern_config)
 
     for path in remove_paths:
         if path.exists():

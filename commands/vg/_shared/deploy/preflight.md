@@ -18,6 +18,24 @@ if [ -z "$PHASE_DIR" ] || [ ! -d "$PHASE_DIR" ]; then
   exit 1
 fi
 
+# Resolve project config. Global-only installs keep project data in .vg/config.md;
+# legacy project-local installs used .claude/vg.config.md.
+VG_CONFIG_PATH="${VG_CONFIG_PATH:-}"
+if [ -z "$VG_CONFIG_PATH" ]; then
+  for candidate in ".vg/config.md" ".claude/vg.config.md" "vg.config.md"; do
+    if [ -f "$candidate" ]; then
+      VG_CONFIG_PATH="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$VG_CONFIG_PATH" ]; then
+  echo "⛔ Config not found. Expected .vg/config.md or legacy .claude/vg.config.md."
+  echo "   Run /vg:init or /vg:update --repair to restore project config."
+  exit 1
+fi
+export VG_CONFIG_PATH
+
 # Build-complete check (override: --allow-build-incomplete)
 BUILD_STATUS=$(${PYTHON_BIN:-python3} -c "
 import json
@@ -120,13 +138,15 @@ if [[ "$ARGUMENTS" =~ --envs=([a-z,]+) ]]; then
   SELECTED_ENVS="${BASH_REMATCH[1]}"
 elif [[ "$ARGUMENTS" =~ --all-envs ]]; then
   SELECTED_ENVS=$(${PYTHON_BIN:-python3} -c "
-import re
-text = open('.claude/vg.config.md', encoding='utf-8').read()
-m = re.search(r'^environments:\s*\$', text, re.M)
+import os, re
+text = open(os.environ['VG_CONFIG_PATH'], encoding='utf-8').read()
+m = re.search(r'^environments:\s*$', text, re.M)
 if not m: print(''); exit()
-section = text[m.end():m.end()+10000]
+tail = text[m.end():]
+end = re.search(r'^[A-Za-z_][A-Za-z0-9_-]*:\s*', tail, re.M)
+section = tail[:end.start()] if end else tail
 envs = []
-for em in re.finditer(r'^\s+(local|sandbox|staging|prod):\s*\$', section, re.M):
+for em in re.finditer(r'^[ \t]{2}([A-Za-z0-9_-]+):\s*$', section, re.M):
   if em.group(1) != 'local':
     envs.append(em.group(1))
 print(','.join(envs))")
@@ -161,7 +181,7 @@ fi
 
 # Validate each env exists in config
 for env in $(echo "$SELECTED_ENVS" | tr ',' ' '); do
-  if ! grep -qE "^[[:space:]]+${env}:[[:space:]]*\$" .claude/vg.config.md; then
+  if ! grep -qE "^[[:space:]]+${env}:[[:space:]]*\$" "$VG_CONFIG_PATH"; then
     echo "⛔ Env '${env}' not found in vg.config.md environments — abort"
     exit 1
   fi

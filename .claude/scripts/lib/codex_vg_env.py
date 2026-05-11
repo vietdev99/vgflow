@@ -81,6 +81,13 @@ def load_config(config_path: Path) -> dict[str, Any]:
             stack.append((indent, child))
     return root
 
+def resolve_config_path(root: Path) -> Path:
+    for rel in (".vg/config.md", ".claude/vg.config.md", "vg.config.md"):
+        candidate = root / rel
+        if candidate.exists():
+            return candidate
+    return root / ".vg" / "config.md"
+
 
 def cfg_get(config: dict[str, Any], dotted: str, default: Any = "") -> Any:
     cur: Any = config
@@ -214,7 +221,7 @@ class VGEnv:
 
 def build_env(phase: str, start: Path | None = None) -> VGEnv:
     root = repo_root(start)
-    config_path = root / ".claude" / "vg.config.md"
+    config_path = resolve_config_path(root)
     config = load_config(config_path)
     planning_rel = cfg_get(config, "paths.planning_dir", cfg_get(config, "paths.planning", ".vg"))
     phases_rel = cfg_get(config, "paths.phases_dir", cfg_get(config, "paths.phases", f"{planning_rel}/phases"))

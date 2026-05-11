@@ -32,6 +32,23 @@ fi
 VG_TMP="${TMPDIR:-/tmp}"
 mkdir -p "$VG_TMP" 2>/dev/null
 
+# --- Config path (v3 global-only layout first, legacy fallback) ---
+if [ -z "${VG_CONFIG_PATH:-}" ]; then
+  VG_CONFIG_PATH=""
+  for candidate in ".vg/config.md" ".claude/vg.config.md" "vg.config.md"; do
+    if [ -f "$candidate" ]; then
+      VG_CONFIG_PATH="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$VG_CONFIG_PATH" ]; then
+  echo "⛔ CONFIG ERROR: neither .vg/config.md nor .claude/vg.config.md found."
+  echo "  Run /vg:init to generate config."
+  exit 1
+fi
+export VG_CONFIG_PATH
+
 # --- Graphify detection (single source of truth) ---
 GRAPHIFY_ENABLED=$(awk '/^graphify:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /enabled:/{print $2; exit}' "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null | tr -d '"\r' || echo "false")
 
@@ -125,31 +142,12 @@ After sourcing: all bash blocks MUST use `${PYTHON_BIN}`, `${VG_TMP}/`, `${REPO_
 
 ## How to Load Config
 
-1. **Resolve config path** — v2.84.0 dual-mode lookup (v3 layout first, legacy fallback):
-   - **NEW v3 layout:** `.vg/config.md` (post `vg-migrate-v3.sh` migration)
-   - **LEGACY:** `.claude/vg.config.md` (v2.x project-local install)
-2. **If neither exists** → STOP: "Config not found. Run `/vg:init` to create config."
+1. **Resolve config path** — prefer `.vg/config.md`, fallback `.claude/vg.config.md`, then legacy root `vg.config.md`.
+2. **If file missing** → STOP: "Config not found. Run `/vg:init` to create config."
 
 ### BOM Strip + Required Field Validation
 
 ```bash
-# v2.84.0 Stage 7 critical: dual-mode config path resolution.
-# Post `vg-migrate-v3.sh` migration, vg.config.md moves to .vg/config.md
-# (vg. prefix dropped inside .vg/ — see resolve_vg_doc()). Legacy projects
-# still have .claude/vg.config.md. Probe both, prefer new layout.
-VG_CONFIG_PATH=""
-for candidate in ".vg/config.md" ".claude/vg.config.md"; do
-  if [ -f "$candidate" ]; then
-    VG_CONFIG_PATH="$candidate"
-    break
-  fi
-done
-if [ -z "$VG_CONFIG_PATH" ]; then
-  echo "⛔ CONFIG ERROR: neither .vg/config.md nor .claude/vg.config.md found."
-  echo "  Run /vg:init to generate config."
-  exit 1
-fi
-
 # Strip BOM + CRLF (Windows editors may add UTF-8 BOM and CR line endings)
 # — tightened 2026-04-17, CR strip added 2026-05-02 (Issue #88).
 # Write stripped content to a clean temp file so downstream parsers can use it.
@@ -497,7 +495,7 @@ their `.claude/vg.config.md`.
 **Read pattern (used by every inject site + reflector trigger):**
 
 ```bash
-META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" "${VG_CONFIG_PATH:-.claude/vg.config.md}" 2>/dev/null \
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" "$VG_CONFIG_PATH" 2>/dev/null \
                    | awk '{print $2}' | tr -d '"\r' || echo "disabled")
 # Defaults to disabled when key absent — fail-safe.
 ```
