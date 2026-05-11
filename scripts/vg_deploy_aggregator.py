@@ -39,7 +39,16 @@ for _stream in (sys.stdout, sys.stderr):
 
 VG_ROOT = Path(".vg")
 PHASES_DIR = VG_ROOT / "phases"
-CONFIG_PATH = Path(".claude") / "vg.config.md"
+
+def resolve_config_path(root: Path = Path(".")) -> Path | None:
+    """Return project VG config path, preferring v3 global-only layout."""
+    for rel in (".vg/config.md", ".claude/vg.config.md", "vg.config.md"):
+        candidate = root / rel
+        if candidate.exists():
+            return candidate
+    return None
+
+CONFIG_PATH = resolve_config_path()
 
 
 def _load_sandbox_runtime_keys() -> tuple[str, str]:
@@ -57,7 +66,7 @@ def _load_sandbox_runtime_keys() -> tuple[str, str]:
     """
     # INTENTIONAL_HARDCODE: docstring example + helper fallback (Phase K1 register §4)
     fallback_alias, fallback_path = "vollx", "/home/vollx/vollxssp"
-    if not CONFIG_PATH.exists():
+    if CONFIG_PATH is None or not CONFIG_PATH.exists():
         return fallback_alias, fallback_path
     try:
         text = CONFIG_PATH.read_text(encoding="utf-8", errors="replace")

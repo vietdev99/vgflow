@@ -117,6 +117,64 @@ def test_uninstall_apply_moves_vg_surfaces_to_backup(tmp_path: Path) -> None:
     assert list(backups[0].rglob("build.md"))
 
 
+def test_uninstall_migrates_legacy_config_before_pruning(tmp_path: Path) -> None:
+    (tmp_path / ".claude" / "commands" / "vg").mkdir(parents=True)
+    (tmp_path / ".claude" / "commands" / "vg" / "build.md").write_text("x", encoding="utf-8")
+    (tmp_path / ".claude" / "vg.config.md").write_text("project_name: legacy\n", encoding="utf-8")
+
+    rc = vg_uninstall.cmd_run(
+        type(
+            "Args",
+            (),
+            {"root": str(tmp_path), "apply": True, "purge_state": False},
+        )()
+    )
+
+    assert rc == 0
+    assert (tmp_path / ".vg" / "config.md").read_text(encoding="utf-8") == "project_name: legacy\n"
+    assert not (tmp_path / ".claude" / "vg.config.md").exists()
+    backups = list((tmp_path / ".vgflow-uninstall-backup").glob("*"))
+    assert list(backups[0].rglob("vg.config.md"))
+
+
+def test_uninstall_removes_duplicate_legacy_config_when_modern_matches(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir(parents=True)
+    (tmp_path / ".vg").mkdir(parents=True)
+    (tmp_path / ".claude" / "vg.config.md").write_text("project_name: same\n", encoding="utf-8")
+    (tmp_path / ".vg" / "config.md").write_text("project_name: same\n", encoding="utf-8")
+
+    rc = vg_uninstall.cmd_run(
+        type(
+            "Args",
+            (),
+            {"root": str(tmp_path), "apply": True, "purge_state": False},
+        )()
+    )
+
+    assert rc == 0
+    assert (tmp_path / ".vg" / "config.md").read_text(encoding="utf-8") == "project_name: same\n"
+    assert not (tmp_path / ".claude" / "vg.config.md").exists()
+
+
+def test_uninstall_keeps_divergent_legacy_config(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir(parents=True)
+    (tmp_path / ".vg").mkdir(parents=True)
+    (tmp_path / ".claude" / "vg.config.md").write_text("project_name: legacy\n", encoding="utf-8")
+    (tmp_path / ".vg" / "config.md").write_text("project_name: modern\n", encoding="utf-8")
+
+    rc = vg_uninstall.cmd_run(
+        type(
+            "Args",
+            (),
+            {"root": str(tmp_path), "apply": True, "purge_state": False},
+        )()
+    )
+
+    assert rc == 0
+    assert (tmp_path / ".claude" / "vg.config.md").read_text(encoding="utf-8") == "project_name: legacy\n"
+    assert (tmp_path / ".vg" / "config.md").read_text(encoding="utf-8") == "project_name: modern\n"
+
+
 def test_uninstall_does_not_touch_global_codex_config(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "home"
     global_config = home / ".codex" / "config.toml"

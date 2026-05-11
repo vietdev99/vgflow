@@ -39,7 +39,7 @@ After `phase.deploy_completed` emits, spawn vg-reflector subagent IF
 
 ```bash
 # Check rollout flag
-META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" "$VG_CONFIG_PATH" 2>/dev/null | awk '{print $2}' || echo "disabled")
 
 if [ "$META_MEMORY_MODE" != "disabled" ] && [ "$EVENT_TYPE" = "phase.deploy_completed" ]; then
   # Narrate spawn (orchestrator UX baseline R2)

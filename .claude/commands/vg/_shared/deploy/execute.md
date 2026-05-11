@@ -35,14 +35,24 @@ try:
 except Exception:
   print('')" 2>/dev/null)
 
-  read_cmd() { ${PYTHON_BIN:-python3} -c "
-import re
-text = open('.claude/vg.config.md', encoding='utf-8').read()
-em = re.search(r'^[[:space:]]+${env}:[[:space:]]*\$', text, re.M)
-if not em: print(''); exit()
-section = text[em.end():em.end()+5000]
-m = re.search(r'^[[:space:]]+$1:[[:space:]]*\"([^\"]*)\"', section, re.M)
-print(m.group(1) if m else '')" 2>/dev/null; }
+  read_cmd() {
+    VG_DEPLOY_ENV="$env" VG_DEPLOY_KEY="$1" ${PYTHON_BIN:-python3} <<'PY' 2>/dev/null
+import os, re
+cfg = os.environ['VG_CONFIG_PATH']
+env = os.environ.get('VG_DEPLOY_ENV', '')
+key = os.environ.get('VG_DEPLOY_KEY', '')
+text = open(cfg, encoding='utf-8').read()
+em = re.search(r'^[ \t]+%s:[ \t]*$' % re.escape(env), text, re.M)
+if not em:
+    print('')
+    raise SystemExit
+tail = text[em.end():]
+nm = re.search(r'^[ \t]{2}[A-Za-z0-9_-]+:[ \t]*$', tail, re.M)
+section = tail[:nm.start()] if nm else tail
+m = re.search(r'^[ \t]+%s:[ \t]*["\']?([^"\'\n]*)' % re.escape(key), section, re.M)
+print(m.group(1).strip() if m else '')
+PY
+  }
 
   PRE_CMD=$(read_cmd "pre")
   BUILD_CMD=$(read_cmd "build")
@@ -65,7 +75,7 @@ open('${DEPLOY_RESULTS_JSON}', 'w').write(json.dumps(d))"
   # Loads deploy-specific procedural+declarative rules and exposes them via
   # BOOTSTRAP_RULES_BLOCK env var so the vg-deploy-executor capsule can read
   # them. Gated by vg.config.md::meta_memory_mode (default OFF — disabled).
-  META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" vg.config.md 2>/dev/null | awk '{print $2}' || echo "disabled")
+  META_MEMORY_MODE=$(grep -E "^meta_memory_mode:" "$VG_CONFIG_PATH" 2>/dev/null | awk '{print $2}' || echo "disabled")
   BOOTSTRAP_RULES_BLOCK=""
   if [ "$META_MEMORY_MODE" = "inject-as-advice" ] || [ "$META_MEMORY_MODE" = "default" ]; then
     HAS_DOCKERFILE=$([ -f Dockerfile ] && echo "true" || echo "false")
