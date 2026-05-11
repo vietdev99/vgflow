@@ -160,3 +160,33 @@ def test_must_touch_markers_lifecycle_complete():
     for marker in ("0_preflight", "5_capture_loop", "6_stop_finalize",
                    "7_analyze", "complete"):
         assert marker in fm, f"must_touch_markers missing {marker!r}"
+
+
+def test_step1_documents_redact_flag_precedence():
+    """I2 fix: Step 1 must document that --redact=<regex> in $ARGUMENTS
+    skips the AskUserQuestion prompt for redaction."""
+    body = SKILL.read_text(encoding="utf-8")
+    # Locate Step 1 block (between "## Step 1" and "## Step 2")
+    m = re.search(r"## Step 1:.*?(?=## Step 2:)", body, re.DOTALL)
+    assert m, "Step 1 section not found"
+    step1 = m.group(0)
+    assert "--redact" in step1, "Step 1 must reference --redact flag"
+    # Look for precedence wording
+    assert "precedence" in step1.lower() or "skip" in step1.lower(), (
+        "Step 1 must document --redact precedence over AskUserQuestion"
+    )
+
+
+def test_step7_re_resolves_emit_manifest_variable():
+    """I3 fix: Step 7 must re-assign EMIT_MANIFEST to survive subshell isolation
+    from Step 6."""
+    body = SKILL.read_text(encoding="utf-8")
+    m = re.search(r"## Step 7:.*?(?=## Step 8:)", body, re.DOTALL)
+    assert m, "Step 7 section not found"
+    step7 = m.group(0)
+    # Count emit-manifest path assignments in Step 7 — must include the canonical or fallback path
+    assert "emit-evidence-manifest.py" in step7
+    # Step 7 must assign EMIT_MANIFEST (not just reuse from Step 6)
+    assert re.search(r'EMIT_MANIFEST\s*=\s*"', step7), (
+        "Step 7 must re-assign EMIT_MANIFEST (subshell-safe)"
+    )

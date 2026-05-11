@@ -103,9 +103,17 @@ trap 'rm -rf "${REPO_ROOT}/.vg/field-test/.active"' EXIT
 ## Step 1: Resolve config (`1_resolve_config`)
 
 Use `AskUserQuestion` to confirm:
-- Redaction regex (default loaded from `vg.config.md` `field_test.default_redaction`).
-- API log sources (from `vg.config.md` `field_test.api_log_sources`).
-- Base URL (from `--base-url` flag OR config OR prompt).
+- **Redaction regex** — precedence order:
+  1. If `--redact=<regex>` was passed in `$ARGUMENTS`, use it directly (skip the question).
+  2. Else if `vg.config.md` has `field_test.default_redaction`, prompt with it as default.
+  3. Else prompt with hard-coded multi-form default (`password|token|secret|api[_-]?key|email|phone`).
+- **API log sources** — precedence:
+  1. If `vg.config.md` has `field_test.api_log_sources`, prompt to confirm/edit.
+  2. Else prompt user for at least one source.
+- **Base URL** — precedence:
+  1. `--base-url=<url>` flag from `$ARGUMENTS`.
+  2. `vg.config.md` `field_test.default_base_url`.
+  3. Prompt user.
 
 Write `${SESSION_DIR}/session.json` matching `schemas/field-test-session.v1.json`.
 
@@ -245,6 +253,10 @@ ${PYTHON_BIN} "${REPO_ROOT}/scripts/field-test/analyze.py" \
   --known-issues "${REPO_ROOT}/.vg/KNOWN-ISSUES.json"
 
 # v2.1 / #175: emit evidence-manifest for FIELD-REPORT.md.
+# Re-resolve EMIT_MANIFEST in case Step 7 runs in a fresh subshell separated
+# from Step 6 (Agent dispatch, etc.).
+EMIT_MANIFEST="${REPO_ROOT}/.claude/scripts/emit-evidence-manifest.py"
+[ -f "$EMIT_MANIFEST" ] || EMIT_MANIFEST="${REPO_ROOT}/scripts/emit-evidence-manifest.py"
 if [ -f "$EMIT_MANIFEST" ] && [ -f "${SESSION_DIR}/FIELD-REPORT.md" ]; then
   ${PYTHON_BIN} "$EMIT_MANIFEST" \
     --path "${SESSION_DIR}/FIELD-REPORT.md" \
