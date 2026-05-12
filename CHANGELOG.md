@@ -1,5 +1,42 @@
 # Changelog
 
+## v4.0.0 — Pipeline refactor (BREAKING) (2026-05-12)
+
+**Pipeline order change:**
+- Old: `specs → scope → blueprint → build → test-spec → review → test → accept`
+- New: `specs → scope → blueprint → build → review → test-spec → test → accept`
+
+**Ownership moves:**
+- `/vg:review` → discovery-only (browser nav + RUNTIME-MAP + matrix INTENT). Phase 3 fix-loop + Phase 4 matrix verdict REMOVED.
+- `/vg:test-spec` → owns codegen. Spawns `vg-test-codegen` subagent (was in `/vg:test` STEP 5). Adds lens smart-routing per `goal_type` + Step 4.5 `npx playwright --list` self-review.
+- `/vg:test` → owns fix-loop + matrix verdict (4-state final). Adds user-confirm gate before auto-fix (A: auto, B: manual, C: skip+debt).
+
+**New flags:**
+- `/vg:phase --skip-test` — stop after test-spec
+- `/vg:phase --skip-codegen` — test-spec docs only, no `.spec.ts`
+
+**New subagent:** `vg-test-fixer` — fix failing tests, max 3 retry per goal, HARD-GATE edits only `src/` + `tests/e2e/lifecycle/`.
+
+**File relocations:**
+- `commands/vg/_shared/review/fix-loop-and-goals.md` → `commands/vg/_shared/test/fix-loop-and-verdict.md`
+- Marker rename: `phase3_fix_loop` → `step5_fix_loop`
+- Marker rename: `phase4_goal_comparison` → `step7_matrix_verdict`
+- New marker: `phase2.5_matrix_intent` (review)
+- New marker: `4_codegen` + `4_self_review` (test-spec)
+
+**Codex parity:** 4 mirrors regenerated (`vg-review`, `vg-test-spec`, `vg-test`, `vg-phase`). Strict structural equivalence enforced via `verify-codex-mirror-equivalence.py` (62 pairs).
+
+**Migration impact:**
+- In-flight phases pre-`build` → no impact
+- In-flight phases at `review` (v3.7.2 logic) → finish with v3.7.2 logic 1 last time, next phase uses v4.0
+- In-flight phases at `test` (v3.7.2 codegen) → finish with v3.7.2 logic 1 last time
+
+**Rollback:** `git revert <v4.0.0-commit>` + run `scripts/generate-codex-skills.sh --force`.
+
+**Test regression baseline:** 222 failed / 819 passed (identical to v3.7.2 baseline — no new failures introduced).
+
+---
+
 ## v3.7.2 — sync global-only + review auto-chain prompt (2026-05-12)
 
 ### Feat — `/vg:review` Option A auto-chain prompt (commit 5bd3fdb)
