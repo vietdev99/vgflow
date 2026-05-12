@@ -1120,3 +1120,17 @@ field_test:
   session_max_size_mb: 200
   max_session_hours: 4
 ```
+
+# H4 Batch 7: idempotency probe safety (5b-2 in /vg:test)
+# test.idempotency.enabled: false by default — must opt-in explicitly.
+# blocked_envs: HARD-GATE refuses these environment values (comma-separated).
+# allowed_envs is an alias accepted by vg_config_get (use blocked_envs to configure).
+test:
+  idempotency:
+    enabled: false                                    # default OFF — opt-in only
+    blocked_envs: production,prod,live                # HARD-GATE refuses these envs
+    allowed_envs: dev,staging,test                    # informational — not enforced by gate
+    # Note: when enabled+non-blocked env, probe double-POSTs to $BASE_URL with
+    # real Bearer token. Cleanup DELETE attempted on each created record.
+    # Cleanup failures emit test.idempotency_polluted event — inspect ledger
+    # at ${VG_TMP}/idempotency-cleanup.json.

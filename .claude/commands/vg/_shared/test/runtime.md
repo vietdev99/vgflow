@@ -51,16 +51,49 @@ For each endpoint: `curl` → `jq` response keys → compare vs contract.
 Error samples: check envelope per INTERFACE-STANDARDS.md (`ok:false → error.code + error.message`).
 Result: All match → PASS. Any mismatch → BLOCK (list specifics).
 
-### 5b-2: Idempotency check (auto-ON for critical_domains)
+### 5b-2: Idempotency check (DEFAULT OFF — opt-in safety gate)
 
-Skip if `config.critical_domains` empty, no matching endpoints, or `$BASE_URL` unset.
-Billing/auth/payout endpoints MUST be idempotent — double-submit must NOT duplicate.
+> **H4 SAFETY (Batch 7):** This check double-submits POST/PUT/DELETE to live `$BASE_URL` with real `Bearer ${AUTH_TOKEN}`. **Default: OFF.** Opt-in via `config.test.idempotency.enabled: true`. Hard-gates against production-like environments. Failed cleanup emits `test.idempotency_polluted` event.
+
+**Skip if (any one skips):**
+- `config.test.idempotency.enabled` not `true` (default)
+- `ENVIRONMENT` in `config.test.idempotency.blocked_envs` (default: `production,prod,live`)
+- `$BASE_URL` unset
+- `config.critical_domains` empty
+- No matching endpoints in vg-load index
 
 ```bash
-CRITICAL_DOMAINS="${config.critical_domains:-billing,auth,payout,payment,transaction}"
-IDEMPOTENCY_FAILS=0
+# H4 Batch 7: production-pollution safety gates
+IDEM_ENABLED=$(vg_config_get test.idempotency.enabled "false" 2>/dev/null || echo "false")
+if [ "${IDEM_ENABLED}" != "true" ]; then
+  echo "5b-2 idempotency: SKIPPED (config.test.idempotency.enabled=false)"
+  echo "  Set 'test.idempotency.enabled: true' in vg.config.md to opt in (NON-PROD only)."
+  IDEMPOTENCY_SKIPPED=1
+fi
 
-# Phase F Task 30 — endpoint enumeration via vg-load index, not flat read
+if [ "${IDEMPOTENCY_SKIPPED:-0}" != "1" ]; then
+  BLOCKED_ENVS=$(vg_config_get test.idempotency.blocked_envs "production,prod,live" 2>/dev/null || echo "production,prod,live")
+  CUR_ENV="${ENVIRONMENT:-${VG_ENV:-unknown}}"
+  for blocked in $(echo "$BLOCKED_ENVS" | tr ',' ' '); do
+    if [ "${CUR_ENV,,}" = "${blocked,,}" ]; then
+      echo "⛔ 5b-2 idempotency BLOCKED: ENVIRONMENT='${CUR_ENV}' in blocked list."
+      echo "  Idempotency probe creates real records via double-POST — refuse production."
+      echo "  Override via test.idempotency.blocked_envs config (NOT recommended)."
+      "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event "test.idempotency_blocked_production" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"env\":\"${CUR_ENV}\"}" >/dev/null 2>&1 || true
+      IDEMPOTENCY_SKIPPED=1
+      break
+    fi
+  done
+fi
+
+if [ "${IDEMPOTENCY_SKIPPED:-0}" != "1" ]; then
+CRITICAL_DOMAINS=$(vg_config_get critical_domains "billing,auth,payout,payment,transaction" 2>/dev/null || echo "billing,auth,payout,payment,transaction")
+IDEMPOTENCY_FAILS=0
+IDEM_CLEANUP_LEDGER="${VG_TMP}/idempotency-cleanup.json"
+echo "[]" > "$IDEM_CLEANUP_LEDGER"
+
+# Phase F Task 30 — endpoint enumeration via vg-load index
 echo "$CONTRACTS_INDEX" | ${PYTHON_BIN:-python3} -c "
 import json, sys
 idx = json.load(sys.stdin)
@@ -75,7 +108,7 @@ for ep in idx.get('endpoints', []):
 CRITICAL_COUNT=$(wc -l < "${VG_TMP}/critical-payloads.txt" | tr -d ' ')
 
 if [ "$CRITICAL_COUNT" -gt 0 ] && [ -n "$BASE_URL" ]; then
-  echo "Idempotency check: ${CRITICAL_COUNT} critical-domain mutation endpoints"
+  echo "Idempotency check: ${CRITICAL_COUNT} critical-domain mutation endpoints (env=${CUR_ENV})"
   while IFS=$'\t' read -r METHOD ENDPOINT PAYLOAD; do
     [ -z "$ENDPOINT" ] && continue
     [ -z "$PAYLOAD" ] && PAYLOAD='{}'
@@ -90,6 +123,16 @@ if [ "$CRITICAL_COUNT" -gt 0 ] && [ -n "$BASE_URL" ]; then
     if [ "$STATUS1" = "201" ] && [ "$STATUS2" = "201" ]; then
       ID1=$(echo "$RESP1" | sed '$d' | ${PYTHON_BIN:-python3} -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
       ID2=$(echo "$RESP2" | head -1 | ${PYTHON_BIN:-python3} -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+      # H4 Batch 7: Track BOTH created IDs for cleanup — even when idempotency passes (server returned same ID twice = no dup, ID2 may still be a real new record on PUT)
+      for created_id in "$ID1" "$ID2"; do
+        [ -n "$created_id" ] || continue
+        ${PYTHON_BIN:-python3} -c "
+import json
+with open('${IDEM_CLEANUP_LEDGER}', encoding='utf-8') as f: data = json.load(f)
+data.append({'method': '${METHOD}', 'path': '${ENDPOINT}', 'id': '${created_id}'})
+with open('${IDEM_CLEANUP_LEDGER}', 'w', encoding='utf-8') as f: json.dump(data, f)
+" 2>/dev/null
+      done
       if [ -n "$ID1" ] && [ -n "$ID2" ] && [ "$ID1" != "$ID2" ]; then
         echo "  CRITICAL: ${METHOD} ${ENDPOINT} — double-submit created 2 records (${ID1} vs ${ID2})"
         IDEMPOTENCY_FAILS=$((IDEMPOTENCY_FAILS + 1))
@@ -101,10 +144,45 @@ if [ "$CRITICAL_COUNT" -gt 0 ] && [ -n "$BASE_URL" ]; then
   [ "$IDEMPOTENCY_FAILS" -gt 0 ] \
     && echo "  ⛔ ${IDEMPOTENCY_FAILS} idempotency failures" \
     || echo "  ✓ All critical-domain endpoints pass idempotency check"
+
+  # H4 Batch 7: Cleanup pass — DELETE every created record
+  CLEANUP_FAILS=0
+  CLEANUP_COUNT=0
+  while IFS= read -r entry; do
+    METHOD=$(echo "$entry" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('method',''))" 2>/dev/null)
+    PATH_TPL=$(echo "$entry" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('path',''))" 2>/dev/null)
+    REC_ID=$(echo "$entry" | ${PYTHON_BIN:-python3} -c "import json,sys; print(json.loads(sys.stdin.read()).get('id',''))" 2>/dev/null)
+    [ -z "$REC_ID" ] && continue
+    # Best-effort DELETE — only attempt if base path resembles a resource collection (POST /xs → DELETE /xs/$id)
+    if [ "$METHOD" = "POST" ]; then
+      DEL_URL="${BASE_URL}${PATH_TPL%/}/${REC_ID}"
+      DEL_CODE=$(curl -sf -X DELETE "$DEL_URL" \
+        -H "Authorization: Bearer ${AUTH_TOKEN}" \
+        -w "%{http_code}" -o /dev/null 2>/dev/null || echo "000")
+      CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
+      if [ "$DEL_CODE" != "204" ] && [ "$DEL_CODE" != "200" ] && [ "$DEL_CODE" != "404" ]; then
+        echo "  ⚠ idempotency cleanup DELETE ${DEL_URL} → ${DEL_CODE}"
+        CLEANUP_FAILS=$((CLEANUP_FAILS + 1))
+      fi
+    fi
+  done < <(${PYTHON_BIN:-python3} -c "
+import json
+data = json.load(open('${IDEM_CLEANUP_LEDGER}', encoding='utf-8'))
+for e in data: print(json.dumps(e))
+" 2>/dev/null)
+
+  if [ "$CLEANUP_FAILS" -gt 0 ]; then
+    echo "  ⚠ ${CLEANUP_FAILS}/${CLEANUP_COUNT} idempotency cleanup DELETE attempts failed — review ${IDEM_CLEANUP_LEDGER}"
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event "test.idempotency_polluted" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"cleanup_fails\":${CLEANUP_FAILS},\"cleanup_total\":${CLEANUP_COUNT},\"ledger\":\"${IDEM_CLEANUP_LEDGER}\"}" >/dev/null 2>&1 || true
+  else
+    [ "$CLEANUP_COUNT" -gt 0 ] && echo "  ✓ idempotency cleanup: ${CLEANUP_COUNT} records DELETE'd"
+  fi
+fi
 fi
 ```
 
-Result: `IDEMPOTENCY_FAILS > 0` → FAIL (same severity as contract mismatch).
+Result: `IDEMPOTENCY_FAILS > 0` → FAIL (same severity as contract mismatch). Cleanup failure emits `test.idempotency_polluted` event (advisory, does NOT fail step on its own — user must inspect ledger).
 
 Display:
 ```
