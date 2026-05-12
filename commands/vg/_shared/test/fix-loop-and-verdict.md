@@ -1,5 +1,5 @@
-<step name="phase3_fix_loop" mode="full">
-## Phase 3: FIX LOOP (max 5 iterations)
+<step name="step3_fix_loop" mode="full">
+## Step 3: FIX LOOP (post-test execute) (max 5 iterations)
 
 **Iteration cap (v2.65.0 A4):** `MAX_ITER=5`. Bumped from 3 → 5 because multi-class
 violation buckets (e.g. 1 SPEC_GAP + 2 CODE_BUG together) typically need 4–5 passes
@@ -9,7 +9,7 @@ have mid-loop telemetry instead of a black box.
 → `narrate_phase "Phase 3 — Fix loop (iteration ${I}/${MAX_ITER:-5})" "Sửa bug MINOR, escalate MODERATE/MAJOR"`
 
 ```bash
-"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase3_fix_loop >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active step3_fix_loop >/dev/null 2>&1 || true
 
 # v2.65.0 A4 — fix-loop iteration cap (max_iter=5)
 # Each iteration body MUST emit review.fix_iteration_started with
@@ -504,13 +504,13 @@ fi
 > sau-incident: proposal nào được accept/reject, fix tham chiếu commit nào.
 </step>
 
-<step name="phase4_goal_comparison" mode="full">
-## Phase 4: GOAL COMPARISON
+<step name="step5_matrix_verdict" mode="full">
+## Step 5: MATRIX VERDICT (post-fix-loop)
 
 → `narrate_phase "Phase 4 — Goal comparison" "So khớp ${N} goals từ TEST-GOALS với views đã khám phá"`
 
 ```bash
-"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase4_goal_comparison >/dev/null 2>&1 || true
+"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active step5_matrix_verdict >/dev/null 2>&1 || true
 ```
 
 ### 4.0: RCRURD runtime verification (Task 23 — Codex GPT-5.5 review 2026-05-03)
@@ -654,7 +654,7 @@ from pathlib import Path
 payload = {
     "view": "backend://surface-probes",
     "surface": "backend",
-    "generated_by": "phase4_goal_comparison.pure_backend_fastpath",
+    "generated_by": "step5_matrix_verdict.pure_backend_fastpath",
     "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "results": [],
     "forms": [],
@@ -971,7 +971,7 @@ if [ -f "$EMIT_MANIFEST" ]; then
   if [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
     "${PYTHON_BIN:-python3}" "$EMIT_MANIFEST" \
       --path "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" \
-      --producer "vg:review phase4_goal_comparison" \
+      --producer "vg:review step5_matrix_verdict" \
       --source-inputs "${PHASE_DIR}/TEST-GOALS.md,${PHASE_DIR}/RUNTIME-MAP.json,${PHASE_DIR}/.surface-probe-results.json,${PHASE_DIR}/DEEP-TEST-SPECS.md,${PHASE_DIR}/LIFECYCLE-SPECS.json,${PHASE_DIR}/TEST-FIXTURE-DAG.json,${PHASE_DIR}/TEST-EXECUTION-PLAN.json" \
       --quiet || true
   fi
