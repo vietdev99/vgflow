@@ -204,6 +204,10 @@ def _extract_endpoints(goal: dict[str, Any]) -> list[dict[str, str]]:
     return endpoints
 
 
+APPROVER_WORDS = re.compile(r"\b(approve|approver|admin|reviewer|review|moderate|gatekeep)\b", re.IGNORECASE)
+INVITEE_WORDS = re.compile(r"\b(invitee|invited|accept|collaborator|guest|member)\b", re.IGNORECASE)
+
+
 def _infer_actors(goal: dict[str, Any]) -> list[dict[str, Any]]:
     text = _combined(goal).lower()
     actors: list[dict[str, Any]] = []
@@ -221,7 +225,13 @@ def _infer_actors(goal: dict[str, Any]) -> list[dict[str, Any]]:
         add("admin", "admin", "admin_session")
     if "owner" in text:
         add("owner_actor", "resource_owner", "owner_session")
-    if any(word in text for word in ("invitee", "reviewer", "approver", "collaborator", "member")):
+    if INVITEE_WORDS.search(text):
+        add("invitee", "invitee", "invitee_session")
+    if "approver" in text or "approve" in text:
+        add("approver", "approver", "approver_session")
+    if "reviewer" in text or "review" in text:
+        add("reviewer", "reviewer", "reviewer_session")
+    if any(word in text for word in ("collaborator", "member")):
         add("secondary_actor", "secondary_user", "secondary_session")
     if "external system" in text or "oauth" in text or "webhook" in text:
         add("external_actor", "external_system_or_webhook", "signed_callback_context")
@@ -231,6 +241,32 @@ def _infer_actors(goal: dict[str, Any]) -> list[dict[str, Any]]:
     elif _is_multi_actor(goal) and len(actors) == 1:
         add("secondary_actor", "secondary_user_or_external_system", "secondary_session")
     return actors
+
+
+def _stage_actor(stage: str, goal: dict[str, Any], actors: list[dict[str, Any]]) -> str:
+    """Resolve which actor performs this stage.
+
+    Heuristic:
+    - Single actor → that actor for all stages.
+    - update/read_after_update + 'admin'/'approver' words in goal → admin/approver actor.
+    - read_after_create/read_after_update + 'invitee'/'accept' words → invitee actor.
+    - Default → actors[0].
+    """
+    if not actors:
+        return "primary"
+    if len(actors) == 1:
+        return actors[0]["id"]
+    haystack = _combined(goal)
+    if stage in {"update", "read_after_update"} and APPROVER_WORDS.search(haystack):
+        # Find admin/approver actor
+        for a in actors:
+            if a["id"] in {"admin", "approver", "reviewer"}:
+                return a["id"]
+    if stage in {"read_after_create"} and INVITEE_WORDS.search(haystack):
+        for a in actors:
+            if a["id"] in {"invitee", "collaborator", "member"}:
+                return a["id"]
+    return actors[0]["id"]
 
 
 def _fixture_dag(goal: dict[str, Any], actors: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -356,7 +392,6 @@ def _artifact_capture(goal: dict[str, Any]) -> list[dict[str, str]]:
 
 def _goal_spec(goal: dict[str, Any], contracts: list[dict[str, str]] | None = None) -> dict[str, Any]:
     actors = _infer_actors(goal)
-    actor_id = actors[0]["id"]
     fixture_dag = _fixture_dag(goal, actors)
     _contracts = contracts or []
     return {
@@ -381,7 +416,7 @@ def _goal_spec(goal: dict[str, Any], contracts: list[dict[str, str]] | None = No
             "Capture request_id/correlation id for every mutation.",
             "Assert canonical response envelope and error shape.",
         ],
-        "steps": [_step(stage, goal, actor_id, _contracts) for stage in REQUIRED_STAGES],
+        "steps": [_step(stage, goal, _stage_actor(stage, goal, actors), _contracts) for stage in REQUIRED_STAGES],
         "artifact_capture": _artifact_capture(goal),
         "cleanup": [
             {"target": fixture["id"], "action": fixture["cleanup"]}
