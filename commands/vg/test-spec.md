@@ -474,6 +474,40 @@ Agent(
 
 </step>
 
+<step name="4_self_review">
+
+## Step 4.5: codegen self-review (`4_self_review`)
+
+After codegen, verify generated `.spec.ts` files compile via `npx playwright --list`. Catch syntax errors before `/vg:test` Step 2 execute time.
+
+**Run check:**
+
+```bash
+SELF_REVIEW_LOG="${PHASE_DIR}/.step-markers/test-spec/4_self_review.log"
+mkdir -p "$(dirname "$SELF_REVIEW_LOG")"
+
+RETRY=0
+MAX_RETRY=2
+while [ $RETRY -le $MAX_RETRY ]; do
+  if npx playwright --list tests/e2e/lifecycle/ > "$SELF_REVIEW_LOG" 2>&1; then
+    echo "✓ Codegen self-review PASS (retry=$RETRY)"
+    break
+  fi
+  RETRY=$((RETRY + 1))
+  if [ $RETRY -gt $MAX_RETRY ]; then
+    echo "⛔ Codegen self-review FAIL after $MAX_RETRY retries — see $SELF_REVIEW_LOG"
+    echo "Escalate to user. Manual fix or rollback codegen."
+    exit 1
+  fi
+  echo "⚠ Self-review FAIL (retry=$RETRY) — re-running codegen subagent"
+  # Re-spawn vg-test-codegen with prior output context
+done
+
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_self_review 2>/dev/null || true
+```
+
+</step>
+
 <step name="4_complete">
 ```bash
 "${PYTHON_BIN:-python3}" - <<PY
