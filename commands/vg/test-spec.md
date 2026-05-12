@@ -428,6 +428,52 @@ fi
 `${PHASE_DIR}/TEST-SPEC-CROSSAI.md` — review preflight (already reads diagnostic surface per PR #183) extended to surface CrossAI verdict + findings count in `GOAL-COVERAGE-MATRIX.md` provenance.
 </step>
 
+<step name="4_codegen">
+
+## Step 4: codegen (`4_codegen`)
+
+Spawn `vg-test-codegen` subagent to generate Playwright lifecycle specs per goal. Smart-routing applies lens set per `goal_type` from `GOAL-COVERAGE-MATRIX.json`.
+
+**Smart-routing lens map:**
+
+| `goal_type` | Lens set |
+|---|---|
+| `mutation` | `idor` + `mass-assignment` + `authz-negative` + `business-logic` |
+| `read` | `authz` + `info-disclosure` + `tenant-boundary` |
+| `auth` | `auth-jwt` + `csrf` + `duplicate-submit` |
+| `default` | `business-coherence` + `input-injection` |
+
+**Subagent invocation:**
+
+Read `commands/vg/_shared/test/codegen/delegation.md` and `commands/vg/_shared/test/codegen/overview.md` (existing files, no change). Then:
+
+```
+Agent(
+  subagent_type="vg-test-codegen",
+  prompt=<from delegation.md template>,
+  input={
+    phase_dir: "${PHASE_DIR}",
+    phase_number: "${PHASE_NUMBER}",
+    phase_profile: "${PHASE_PROFILE}",
+    runtime_map_path: "${PHASE_DIR}/RUNTIME-MAP.json",
+    goal_coverage_matrix_path: "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json",
+    generated_tests_dir: "tests/e2e/lifecycle/",
+    lens_routing_map: <smart-routing map above>
+  }
+)
+```
+
+**Output contract:**
+- `tests/e2e/lifecycle/G-XX.{lens}.spec.ts` — one file per goal × lens
+- `${PHASE_DIR}/CODEGEN-MANIFEST.json` — list of generated files + their L1/L2 binding state
+
+**Mark step:**
+```bash
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_codegen 2>/dev/null || true
+```
+
+</step>
+
 <step name="4_complete">
 ```bash
 "${PYTHON_BIN:-python3}" - <<PY
