@@ -979,6 +979,32 @@ git add ${PHASE_DIR}/SUMMARY*.md ${PLANNING_DIR}/STATE.md ${PLANNING_DIR}/ROADMA
 git commit -m "build({phase}): {completed}/{total} plans executed"
 ```
 
+### Wave contract-runtime advisory (v4.0.x Item 1 — Codex deferred)
+
+```bash
+# v4.0.x Item 1 (Codex deferred) — wave-level verify-contract-runtime ADVISORY.
+# Build close (run_complete) owns the BLOCK gate (see close.md after v3.7.1
+# fix). Wave-level is intentionally ADVISORY: catches phantom-endpoint drift
+# the moment wave N commits, so wave N+1 spawning isn't compounding the gap.
+# Failure here emits warn telemetry but does NOT abort the build — defer to
+# build close for terminal verdict.
+CONTRACT_RUNTIME_VAL=".claude/scripts/validators/verify-contract-runtime.py"
+if [ -f "$CONTRACT_RUNTIME_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
+  ${PYTHON_BIN:-python3} "$CONTRACT_RUNTIME_VAL" \
+    --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
+    > "${PHASE_DIR}/.tmp/contract-runtime-wave.diag" 2>&1 || true
+  CONTRACT_WAVE_RC=$?
+  if [ "$CONTRACT_WAVE_RC" -ne 0 ]; then
+    echo "⚠ Wave contract-runtime advisory: phantom endpoints detected (see ${PHASE_DIR}/.tmp/contract-runtime-wave.diag)"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "build.wave_contract_runtime_warn" \
+      --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"wave\":\"${CURRENT_WAVE:-unknown}\"}" \
+      >/dev/null 2>&1 || true
+  fi
+fi
+```
+
 ### Schema validation (BLOCK on SUMMARY.md frontmatter drift)
 
 ```bash
