@@ -68,6 +68,11 @@ ENDPOINT_RE = re.compile(
     r"\b(GET|POST|PUT|PATCH|DELETE|OPTIONS)\s+(/[A-Za-z0-9_./:{}?&=%-]+)"
 )
 
+ENDPOINT_HEADER_RE = re.compile(
+    r"^#{2,4}\s+(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)\s*$",
+    re.MULTILINE,
+)
+
 EMPTY_VALUES = {"", "none", "n/a", "na", "null", "-", "[]", "{}"}
 
 
@@ -261,7 +266,48 @@ def _fixture_dag(goal: dict[str, Any], actors: list[dict[str, Any]]) -> list[dic
     return fixtures
 
 
-def _step(stage: str, goal: dict[str, Any], actor_id: str) -> dict[str, Any]:
+def _parse_api_contracts(phase_dir: Path) -> list[dict[str, str]]:
+    """Parse API-CONTRACTS.md → list of {method, path} dicts."""
+    contracts_path = phase_dir / "API-CONTRACTS.md"
+    if not contracts_path.is_file():
+        return []
+    text = _read(contracts_path)
+    return [
+        {"method": m.group(1), "path": m.group(2)}
+        for m in ENDPOINT_HEADER_RE.finditer(text)
+    ]
+
+
+def _bind_endpoint(stage: str, goal: dict[str, Any], contracts: list[dict[str, str]]) -> dict[str, str] | None:
+    """Match stage to a contract endpoint via heuristic on stage verb + goal text."""
+    if not contracts:
+        return None
+    verb_map: dict[str, tuple[str, ...]] = {
+        "create": ("POST",),
+        "read_before": ("GET",),
+        "read_after_create": ("GET",),
+        "update": ("PUT", "PATCH"),
+        "read_after_update": ("GET",),
+        "delete": ("DELETE",),
+        "read_after_delete": ("GET",),
+    }
+    candidates_methods = verb_map.get(stage, ())
+    if not candidates_methods:
+        return None
+    # First: try match in mutation_evidence + dependencies + persistence_check text
+    haystack = " ".join(str(goal.get(k) or "") for k in
+                        ("mutation_evidence", "persistence_check", "dependencies", "title"))
+    for c in contracts:
+        if c["method"] in candidates_methods and c["path"] in haystack:
+            return {"method": c["method"], "path": c["path"]}
+    # Fallback: first contract entry whose method matches
+    for c in contracts:
+        if c["method"] in candidates_methods:
+            return {"method": c["method"], "path": c["path"]}
+    return None
+
+
+def _step(stage: str, goal: dict[str, Any], actor_id: str, contracts: list[dict[str, str]] | None = None) -> dict[str, Any]:
     title = goal["title"]
     mutation_evidence = goal.get("mutation_evidence") or "created resource id, state transition, response envelope, or emitted event from TEST-GOALS"
     persistence = goal.get("persistence_check") or "fresh read must prove persisted state, derived state, permissions, and absence of stale cached data"
@@ -284,9 +330,12 @@ def _step(stage: str, goal: dict[str, Any], actor_id: str) -> dict[str, Any]:
         "delete": ["cleanup mutation response or fixture cleanup receipt", "audit reason", "session/job/resource cleanup marker"],
         "read_after_delete": ["404/empty active list or terminal status", "revoked sessions/jobs", "cleanup confirmation"],
     }
+    endpoint = _bind_endpoint(stage, goal, contracts or [])
     return {
+        "name": stage,
         "stage": stage,
         "actor": actor_id,
+        "endpoint": endpoint,
         "action": actions[stage],
         "evidence": evidence[stage],
     }
@@ -305,10 +354,11 @@ def _artifact_capture(goal: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-def _goal_spec(goal: dict[str, Any]) -> dict[str, Any]:
+def _goal_spec(goal: dict[str, Any], contracts: list[dict[str, str]] | None = None) -> dict[str, Any]:
     actors = _infer_actors(goal)
     actor_id = actors[0]["id"]
     fixture_dag = _fixture_dag(goal, actors)
+    _contracts = contracts or []
     return {
         "title": goal["title"],
         "priority": goal.get("priority") or "important",
@@ -331,7 +381,7 @@ def _goal_spec(goal: dict[str, Any]) -> dict[str, Any]:
             "Capture request_id/correlation id for every mutation.",
             "Assert canonical response envelope and error shape.",
         ],
-        "steps": [_step(stage, goal, actor_id) for stage in REQUIRED_STAGES],
+        "steps": [_step(stage, goal, actor_id, _contracts) for stage in REQUIRED_STAGES],
         "artifact_capture": _artifact_capture(goal),
         "cleanup": [
             {"target": fixture["id"], "action": fixture["cleanup"]}
@@ -369,8 +419,9 @@ def _find_phase_dir(phase: str, explicit: str | None) -> Path:
 
 def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
     goals = _parse_goals(phase_dir)
+    contracts = _parse_api_contracts(phase_dir)
     selected = [goal for goal in goals if include_readonly or _needs_lifecycle(goal)]
-    specs = {goal["id"]: _goal_spec(goal) for goal in selected}
+    specs = {goal["id"]: _goal_spec(goal, contracts) for goal in selected}
     return {
         "schema_version": "1.0",
         "phase": phase_dir.name,
