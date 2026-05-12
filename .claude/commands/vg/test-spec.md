@@ -1,7 +1,7 @@
 ---
 name: vg:test-spec
 description: Post-build deep test-spec authoring — derive lifecycle specs, fixture DAG, localizer prompt, and execution plan before review
-argument-hint: "<phase> [--regen] [--max-files=N] [--ai-response=path]"
+argument-hint: "<phase> [--regen] [--max-files=N] [--ai-response=path] [--crossai-review] [--no-crossai-review]"
 allowed-tools:
   - Read
   - Write
@@ -32,11 +32,16 @@ runtime_contract:
     - "1_build_artifact_gate"
     - "2_generate_deep_specs"
     - "3_validate_deep_specs"
+    - "3_crossai_sweep"
     - "4_complete"
   must_emit_telemetry:
     - event_type: "test_spec.started"
       phase: "${PHASE_NUMBER}"
     - event_type: "test_spec.generated"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "test_spec.crossai_skipped"
+      phase: "${PHASE_NUMBER}"
+    - event_type: "test_spec.crossai_completed"
       phase: "${PHASE_NUMBER}"
     - event_type: "test_spec.completed"
       phase: "${PHASE_NUMBER}"
@@ -208,6 +213,213 @@ fi
 touch "${PHASE_DIR}/.step-markers/test-spec/3_validate_deep_specs.done"
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 3_validate_deep_specs 2>/dev/null || true
 ```
+</step>
+
+<step name="3_crossai_sweep">
+
+## Step 3.5: CrossAI sweep (`3_crossai_sweep`)
+
+Test-spec is the ONLY post-build artifact phase without CrossAI semantic review.
+Deterministic validators (`verify-lifecycle-spec-depth.py`, `verify-deep-test-specs.py`)
+catch SYNTAX gaps. They cannot catch SEMANTIC gaps — missing actors on multi-actor
+goals, preconditions that contradict API contracts, fixture DAG cycles, RCRURDR
+transition skips, cleanup order errors.
+
+This step adds an adversarial gap-hunt sweep over LIFECYCLE-SPECS.json +
+TEST-FIXTURE-DAG.json + TEST-EXECUTION-PLAN.json + DEEP-TEST-SPECS.md. Reuses
+the shared `crossai-invoke.md` invoker (same pattern as `blueprint/verify.md:550+`).
+
+### Trigger rules (Option B + A)
+
+Flag precedence (highest first):
+1. `--no-crossai-review` in `$ARGUMENTS` → SKIP unconditionally. Emit
+   `test_spec.crossai_skipped` with reason `operator-override`.
+2. `--crossai-review` in `$ARGUMENTS` → FORCE on regardless of profile / goals.
+3. Auto-trigger condition (Option B):
+   - ANY goal in LIFECYCLE-SPECS.json has `goal_type` containing `mutation` OR
+     `multi-actor` OR `realtime` OR `financial` (high-stakes semantic surface)
+   - OR `verify-lifecycle-spec-depth.py` previously returned WARN (not BLOCK)
+   - OR profile in `{mobile, realtime, fintech}` from `vg.config.md`
+   → FIRE the sweep.
+4. None of the above → SKIP with reason `low-stakes-profile`. Emit
+   `test_spec.crossai_skipped`.
+
+```bash
+vg-orchestrator step-active 3_crossai_sweep
+
+CROSSAI_SHOULD_RUN="false"
+CROSSAI_TRIGGER_REASON=""
+
+if [[ "${ARGUMENTS}" =~ --no-crossai-review ]]; then
+  CROSSAI_TRIGGER_REASON="operator-override-no"
+elif [[ "${ARGUMENTS}" =~ --crossai-review ]]; then
+  CROSSAI_SHOULD_RUN="true"
+  CROSSAI_TRIGGER_REASON="operator-override-force"
+else
+  # Option B — auto-trigger heuristics.
+  AUTO_TRIGGER=$(${PYTHON_BIN:-python3} - "${PHASE_DIR}" "${PROFILE:-${CONFIG_PROFILE:-web-fullstack}}" <<'PY'
+import json, os, sys
+phase_dir = sys.argv[1]
+profile = (sys.argv[2] or '').lower()
+high_stakes_profiles = {'mobile', 'realtime', 'fintech', 'financial'}
+high_stakes_goal_types = {'mutation', 'multi-actor', 'realtime', 'financial'}
+
+if profile in high_stakes_profiles:
+    print(f"profile-high-stakes:{profile}")
+    sys.exit(0)
+
+lifecycle_path = os.path.join(phase_dir, 'LIFECYCLE-SPECS.json')
+if os.path.exists(lifecycle_path):
+    try:
+        data = json.load(open(lifecycle_path, encoding='utf-8'))
+        goals = data.get('goals') or {}
+        for gid, spec in goals.items():
+            if not isinstance(spec, dict):
+                continue
+            gtype = str(spec.get('goal_type') or '').lower()
+            if any(s in gtype for s in high_stakes_goal_types):
+                print(f"goal-high-stakes:{gid}:{gtype}")
+                sys.exit(0)
+            actors = spec.get('actors') or {}
+            if isinstance(actors, dict) and len(actors) >= 2:
+                print(f"goal-multi-actor:{gid}")
+                sys.exit(0)
+    except Exception as e:
+        print(f"lifecycle-parse-err:{e}", file=sys.stderr)
+
+# Check lifecycle-depth verdict file if present
+depth_verdict = os.path.join(phase_dir, '.tmp', 'lifecycle-spec-depth.json')
+if os.path.exists(depth_verdict):
+    try:
+        v = json.load(open(depth_verdict, encoding='utf-8'))
+        if str(v.get('severity') or '').lower() == 'warn':
+            print("depth-warn")
+            sys.exit(0)
+    except Exception:
+        pass
+
+print("none")
+PY
+)
+  if [ "$AUTO_TRIGGER" != "none" ] && [ -n "$AUTO_TRIGGER" ]; then
+    CROSSAI_SHOULD_RUN="true"
+    CROSSAI_TRIGGER_REASON="auto:${AUTO_TRIGGER}"
+  else
+    CROSSAI_TRIGGER_REASON="low-stakes-skip"
+  fi
+fi
+
+if [ "$CROSSAI_SHOULD_RUN" != "true" ]; then
+  echo "▸ CrossAI sweep SKIPPED (reason: ${CROSSAI_TRIGGER_REASON})"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "test_spec.crossai_skipped" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"${CROSSAI_TRIGGER_REASON}\"}" \
+    >/dev/null 2>&1 || true
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test-spec 3_crossai_sweep 2>/dev/null || true
+  mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+  touch "${PHASE_DIR}/.step-markers/3_crossai_sweep.done"
+else
+  echo "▸ CrossAI sweep starting — phase ${PHASE_NUMBER} (trigger: ${CROSSAI_TRIGGER_REASON})"
+
+  CROSSAI_CTX="${VG_TMP:-${PHASE_DIR}/.vg-tmp}/vg-crossai-${PHASE_NUMBER}-test-spec-review.md"
+  mkdir -p "$(dirname "$CROSSAI_CTX")" 2>/dev/null
+  {
+    echo "# CrossAI Test-Spec Sweep — Phase ${PHASE_NUMBER}"
+    echo ""
+    echo "Trigger reason: ${CROSSAI_TRIGGER_REASON}"
+    echo ""
+    echo "## Adversarial gap-hunt task"
+    echo ""
+    echo "Deterministic validators passed syntax. Now find SEMANTIC gaps:"
+    echo "1. Multi-actor lifecycle: actors declared match the goal type?"
+    echo "2. Preconditions: contradict API contract invariants? (e.g. items:[] when contract says owner always present)"
+    echo "3. Fixture DAG: cycles? missing dependencies? cleanup order reverse-correct?"
+    echo "4. RCRURDR: transition skips? read_after_X missing? assertions specific (not vague)?"
+    echo "5. Cleanup chain: covers all test-owned fixtures? handles failure cleanup?"
+    echo "6. Runner family (TEST-EXECUTION-PLAN.json): matches profile? non-web phase not forced into Playwright?"
+    echo "7. Source assertions: mutation_evidence + persistence_check actually verifiable?"
+    echo "8. Goal coverage: are there obvious goals from CONTEXT decisions that LIFECYCLE-SPECS missed?"
+    echo ""
+    echo "Verdict: pass (score >=7, no major gaps) | flag (>=5 minor gaps) | block (missing/wrong) | inconclusive (CLIs unreachable)."
+    echo ""
+    echo "## Artifacts"
+    echo "---"; cat "${PHASE_DIR}/LIFECYCLE-SPECS.json" 2>/dev/null || echo '(LIFECYCLE-SPECS.json missing)'
+    echo "---"; cat "${PHASE_DIR}/TEST-FIXTURE-DAG.json" 2>/dev/null || echo '(TEST-FIXTURE-DAG.json missing)'
+    echo "---"; cat "${PHASE_DIR}/TEST-EXECUTION-PLAN.json" 2>/dev/null || echo '(TEST-EXECUTION-PLAN.json missing)'
+    echo "---"; cat "${PHASE_DIR}/DEEP-TEST-SPECS.md" 2>/dev/null || echo '(DEEP-TEST-SPECS.md missing)'
+    echo "---"; cat "${PHASE_DIR}/CONTEXT.md" 2>/dev/null || echo '(CONTEXT.md missing)'
+    echo "---"; cat "${PHASE_DIR}/API-CONTRACTS.md" 2>/dev/null || echo '(API-CONTRACTS.md missing)'
+  } > "$CROSSAI_CTX"
+
+  export CONTEXT_FILE="$CROSSAI_CTX"
+  export OUTPUT_DIR="${PHASE_DIR}/crossai"
+  export LABEL="test-spec-review"
+  source "${REPO_ROOT}/.claude/commands/vg/_shared/crossai-invoke.md" 2>/dev/null || true
+  # crossai-invoke populates CROSSAI_VERDICT, OK_COUNT, TOTAL_CLIS, CLI_STATUS[]
+
+  # Write summary digest to TEST-SPEC-CROSSAI.md for review to consume.
+  {
+    echo "# TEST-SPEC-CROSSAI.md — Phase ${PHASE_NUMBER}"
+    echo ""
+    echo "**Verdict:** ${CROSSAI_VERDICT:-unknown}"
+    echo "**Trigger reason:** ${CROSSAI_TRIGGER_REASON}"
+    echo "**CLIs agreed:** ${OK_COUNT:-?}/${TOTAL_CLIS:-?}"
+    echo ""
+    echo "## Raw findings"
+    echo ""
+    for f in "${PHASE_DIR}"/crossai/result-*test-spec-review*.xml; do
+      [ -f "$f" ] || continue
+      echo "### $(basename "$f")"
+      echo '```xml'
+      cat "$f"
+      echo '```'
+      echo ""
+    done
+  } > "${PHASE_DIR}/TEST-SPEC-CROSSAI.md"
+
+  case "${CROSSAI_VERDICT:-unknown}" in
+    pass)
+      echo "✓ CrossAI: PASS (${OK_COUNT:-?}/${TOTAL_CLIS:-?} CLIs agreed)"
+      ;;
+    flag)
+      echo "⚠ CrossAI: FLAG — minor concerns logged at ${PHASE_DIR}/TEST-SPEC-CROSSAI.md"
+      echo "   Review will consume the findings; proceeding to 4_complete."
+      ;;
+    block)
+      echo "⛔ CrossAI: BLOCK — major/critical gaps in test-spec contracts."
+      echo "   ${PHASE_DIR}/TEST-SPEC-CROSSAI.md contains findings."
+      echo "   Re-run with --regen to apply fixes, or --no-crossai-review to skip + log debt."
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+        "test_spec.crossai_completed" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"verdict\":\"block\"}" \
+        >/dev/null 2>&1 || true
+      exit 2
+      ;;
+    inconclusive)
+      echo "⛔ CrossAI: INCONCLUSIVE (${OK_COUNT:-0}/${TOTAL_CLIS:-?} CLIs reachable)"
+      if [[ "$ARGUMENTS" =~ --allow-crossai-inconclusive ]]; then
+        echo "  Override accepted — logging debt and proceeding."
+      else
+        echo "  Use --allow-crossai-inconclusive --override-reason='<X>' to proceed."
+        exit 2
+      fi
+      ;;
+  esac
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "test_spec.crossai_completed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"verdict\":\"${CROSSAI_VERDICT:-unknown}\",\"trigger\":\"${CROSSAI_TRIGGER_REASON}\"}" \
+    >/dev/null 2>&1 || true
+
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test-spec 3_crossai_sweep 2>/dev/null || true
+  mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+  touch "${PHASE_DIR}/.step-markers/3_crossai_sweep.done"
+fi
+```
+
+### Output consumed by review
+
+`${PHASE_DIR}/TEST-SPEC-CROSSAI.md` — review preflight (already reads diagnostic surface per PR #183) extended to surface CrossAI verdict + findings count in `GOAL-COVERAGE-MATRIX.md` provenance.
 </step>
 
 <step name="4_complete">
