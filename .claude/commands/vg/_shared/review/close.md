@@ -867,3 +867,87 @@ if [ $RUN_RC -ne 0 ]; then
 fi
 ```
 </step>
+
+<step name="auto_chain_prompt" mode="all">
+### Step 12: Optional auto-chain prompt
+
+After the run-complete orchestrator step succeeds, read `PIPELINE-STATE.json` to
+check whether the review wrote a `next_command` / `retry_command` hint (PR #183
+diagnostic surface). If a hint is set, offer the operator a 3-choice prompt to
+chain the next skill in the same session, exit, or inspect findings first.
+
+Flag precedence:
+- `--auto-chain` in `$ARGUMENTS` → skip prompt, immediately invoke the suggested
+  skill via the `Skill` tool (CI / headless mode).
+- `--no-chain` in `$ARGUMENTS` → skip prompt, exit normally (operator pre-opted
+  out of chaining for this run).
+- Otherwise → AskUserQuestion with 3 choices.
+
+```bash
+# Read PIPELINE-STATE.next_command — written by review preflight at
+# commands/vg/_shared/review/preflight.md:345-346 when lifecycle artifacts shallow/missing.
+PIPELINE_STATE_FILE="${REPO_ROOT}/.vg/PIPELINE-STATE.json"
+NEXT_CMD=""
+RETRY_CMD=""
+if [ -f "$PIPELINE_STATE_FILE" ]; then
+  NEXT_CMD=$(${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    s = json.load(open('$PIPELINE_STATE_FILE', encoding='utf-8'))
+    print(s.get('next_command') or '')
+except Exception: print('')
+")
+  RETRY_CMD=$(${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    s = json.load(open('$PIPELINE_STATE_FILE', encoding='utf-8'))
+    print(s.get('retry_command') or '')
+except Exception: print('')
+")
+fi
+
+if [ -n "$NEXT_CMD" ] || [ -n "$RETRY_CMD" ]; then
+  if [[ "${ARGUMENTS}" =~ --no-chain ]]; then
+    echo "  auto-chain: SKIPPED via --no-chain"
+    echo "  Suggested next: $NEXT_CMD"
+    [ -n "$RETRY_CMD" ] && echo "  Or retry:       $RETRY_CMD"
+  elif [[ "${ARGUMENTS}" =~ --auto-chain ]]; then
+    echo "  auto-chain: AUTO via --auto-chain flag"
+    echo "  Next command queued for AI to invoke: $NEXT_CMD"
+    # AI MUST invoke this command via the Skill tool in the next turn.
+  else
+    echo "  auto-chain: PROMPT operator (use --auto-chain to skip, --no-chain to disable)"
+    echo "  next_command:  $NEXT_CMD"
+    [ -n "$RETRY_CMD" ] && echo "  retry_command: $RETRY_CMD"
+  fi
+fi
+```
+
+**AI instructions** (skill body — read by AI, NOT executed):
+
+After running the bash above, check `$NEXT_CMD` / `$RETRY_CMD` and decide:
+
+1. **If both are empty** → review verdict CLEAN, no chain needed. Exit step.
+2. **If `--no-chain` in ARGUMENTS** → respect operator opt-out. Print the suggested
+   commands as plain text and exit step.
+3. **If `--auto-chain` in ARGUMENTS** → directly invoke the suggested skill via
+   the `Skill` tool, no AskUserQuestion. Prefer `next_command` over `retry_command`
+   when both set. The `Skill` invocation must use `skill: "<extracted-name>"`
+   with `args: "<extracted-args>"` parsed from the command string (e.g.
+   `/vg:test-spec 6` → `skill: "vg:test-spec"`, `args: "6"`).
+4. **Otherwise** → call `AskUserQuestion` with these 3 options:
+   - **Chain `$NEXT_CMD` now** — invoke the suggested skill via `Skill` tool
+   - **Skip and exit** — print the suggested command(s) as plain text, end review
+   - **Inspect findings first** — show key diagnostic paths
+     (`${PHASE_DIR}/.tmp/deep-test-specs-review.json`,
+     `${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md`, recent emitted events), then re-ask
+
+If the verdict is BLOCK and `retry_command` is set, the prompt should mention
+both options (chain `next_command` to address the root cause, or `retry_command`
+to re-run review with `--mode=full --force` after manual fixes).
+
+**Important — Skill tool dispatch contract**: when invoking via `Skill`, parse
+the command string as: leading `/` strip, first whitespace-separated token →
+`skill` arg, remainder → `args` arg. Example: `/vg:test-spec 6 --regen` →
+`Skill(skill="vg:test-spec", args="6 --regen")`.
+</step>
