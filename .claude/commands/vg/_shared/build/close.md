@@ -1,8 +1,10 @@
 # build close (STEP 7)
 
-<!-- # Exception: oversized ref (539 lines) — combines step 10 + 12 from
+<!-- # Exception: oversized ref (761 lines) — combines step 10 + 12 from
      backup (90 + 395 = 485 source lines) plus PR-D OpenAPI export + PR-E
-     truthcheck loop scaffolding; ceiling 600 in test_build_references_exist.py.
+     truthcheck loop scaffolding + Item 3 contract-runtime proof-artifact
+     handoff + Item 4 PR-E read-endpoint light probe (Codex deferred).
+     Ceiling raised to 800 in test_build_references_exist.py.
      The truthcheck loop's inline Python keeps fixture orchestration atomic
      in one place (recipe_executor + lease + write_captured); splitting it
      would scatter 2-phase commit semantics. -->
