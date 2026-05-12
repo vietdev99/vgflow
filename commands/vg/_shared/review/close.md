@@ -86,7 +86,7 @@ the gating logic.
 After writing all files, verify they exist before committing:
 ```
 Required files — BLOCK commit if ANY missing:
-  ✓ ${PHASE_DIR}/RUNTIME-MAP.json     ← downstream /vg:test reads this, NOT .md
+  ✓ ${PHASE_DIR}/RUNTIME-MAP.json     ← downstream /vg:test-spec reads this, NOT .md
   ✓ ${PHASE_DIR}/RUNTIME-MAP.md
   ✓ ${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md
 
@@ -290,7 +290,7 @@ Review complete for Phase {N} — PASS.
   Artifacts: RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md{REVIEW_FEEDBACK_SUFFIX}
 
 Next:
-  /vg:test {phase}            # codegen + run regression suite
+  /vg:test-spec {phase}       # generate test-spec + codegen (v4.0 — test-spec now precedes test)
 ```
 
 ### When verdict = FLAG (passed but with improvements)
@@ -305,7 +305,7 @@ Findings (improvements — non-blocking):
   ... (full detail in REVIEW-FEEDBACK.md)
 
 Next (pick one):
-  /vg:test {phase}                          # proceed — flags are advisory
+  /vg:test-spec {phase}                     # proceed — flags are advisory (v4.0)
   edit {file:line}; git commit; /vg:next    # fix flags first, then continue
 ```
 
@@ -318,9 +318,9 @@ Review complete for Phase {N} — TEST_PENDING.
   Coverage pending: mutation/realtime/multi-step lifecycle proof
 
 Next:
-  /vg:test {phase}            # codegen + Playwright proves lifecycle evidence
+  /vg:test-spec {phase}       # generate test-spec + codegen (v4.0); /vg:test then runs Playwright
 
-Do not loop back to /vg:review unless /vg:test surfaces a concrete runtime/code blocker.
+Do not loop back to /vg:review unless /vg:test-spec or /vg:test surfaces a concrete runtime/code blocker.
 ```
 
 ### When verdict = BLOCK (cannot proceed)

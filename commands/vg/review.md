@@ -1,6 +1,6 @@
 ---
 name: vg:review
-description: Post-build review — code scan + browser discovery + fix loop + goal comparison → RUNTIME-MAP
+description: Post-build review — code scan + browser discovery + matrix INTENT → RUNTIME-MAP (discovery-only)
 argument-hint: "<phase> [--target-env=local|staging|sandbox|prod | --local | --sandbox | --staging | --prod] [--mode=full|delta|regression|schema-verify|link-check|infra-smoke] [--scanner=haiku-only|codex-inline|codex-supplement|gemini-supplement|council-all] [--skip-deepscan] [--with-deepscan] [--non-interactive] [--skip-scan] [--skip-discovery] [--fix-only] [--skip-crossai] [--skip-qa-check] [--evaluate-only] [--retry-failed] [--re-scan-goals=G-XX,G-YY] [--dogfood] [--force] [--full-scan] [--allow-no-crud-surface] [--skip-lens-plan-gate] [--auto-chain] [--no-chain]"
 allowed-tools:
   - Read
@@ -157,8 +157,6 @@ runtime_contract:
       severity: "warn"
     - name: "phase2_9_error_message_runtime"
       severity: "warn"
-    - name: "phase3_fix_loop"
-      severity: "warn"
     # v2.68.0 C2 — QA-Checker meta-verification (vg-review-qa-checker).
     # The dedicated fix-loop tail spawn checks that fix commits actually
     # address the original review finding (not suppression hacks / false
@@ -167,10 +165,10 @@ runtime_contract:
     # FAILs and --skip-qa-check absent. Escape hatch logs override-debt.
     - name: "phase3d_5_qa_checker"
       required_unless_flag: "--skip-qa-check"
-    - name: "phase4_goal_comparison"
-      severity: "warn"
 
     # ─── Post-discovery (warn) ───
+    - name: "phase2.5_matrix_intent"
+      severity: "warn"
     - name: "unreachable_triage"
       severity: "warn"
     - name: "crossai_review"
@@ -518,10 +516,11 @@ Includes 4 steps: phase2_exploration_limits, phase2_mobile_discovery, phase2_5_v
 Read `_shared/review/url-and-error.md` and follow it exactly.
 Includes 3 steps: phase2_7_url_state_sync, phase2_8_url_state_runtime, phase2_9_error_message_runtime.
 
-### Fix loop + goal comparison (extracted v2.70.0 T8 — largest section)
+### Matrix INTENT (discovery-only, v4.0)
 
-Read `_shared/review/fix-loop-and-goals.md` and follow it exactly.
-Includes 2 steps: phase3_fix_loop (max 5 iterations), phase4_goal_comparison.
+Compute 3-verdict intent: `READY` / `BLOCKED` / `NOT_SCANNED`. Fix-loop + final verdict deferred to `/vg:test` (Step 3 + Step 5).
+
+Read `_shared/review/matrix-intent.md` and follow it exactly.
 
 ### Close section (extracted v2.70.0 T9 — final extraction)
 
@@ -535,7 +534,7 @@ Includes 5 steps: unreachable_triage, crossai_review, write_artifacts, bootstrap
 - Browser discovery explored all reachable views organically
 - RUNTIME-MAP.json produced with actual runtime observations (canonical JSON)
 - RUNTIME-MAP.md derived from JSON (human-readable)
-- Fix loop resolved code bugs (if any)
+- Matrix INTENT computed (READY/BLOCKED/NOT_SCANNED)
 - TEST-GOALS mapped to discovered paths
 - GOAL-COVERAGE-MATRIX.md shows weighted goal readiness
 - Gate passed (weighted: 100% critical, 80% important, 50% nice-to-have)
