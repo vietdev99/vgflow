@@ -1,5 +1,62 @@
 # Changelog
 
+## v4.2.0 — Lifecycle-specs contract richness (Batch 1: G7+G9+G12) (2026-05-13)
+
+Audit + Codex GPT-5.5 second-opinion identified that `generate-lifecycle-specs.py`
+was a scaffold generator emitting template-filled placeholders. Codegen had to
+re-derive endpoints, decisions, and actor switching from raw TEST-GOAL text → drift.
+
+Codex's verdict: *"v4.0 đã tách lane đúng hướng, nhưng generate-lifecycle-specs.py
+chưa đủ chín để làm contract source. Hiện tại nó là scaffold generator."*
+
+Batch 1 ships 3 critical fixes:
+
+### G7 — Endpoint binding from API-CONTRACTS.md
+
+Generator now reads `API-CONTRACTS.md` and binds an endpoint per stage via
+verb-to-method heuristic (create→POST, delete→DELETE, etc.) with text-match
+preference for goal-relevant endpoints. Every step now has `endpoint` field
+(may be null). LIFECYCLE-SPECS.json schema additive.
+
+### G9 — D-XX decision propagation from CONTEXT.md
+
+Generator reads `CONTEXT.md`, extracts `D-XX` decision blocks + `expected_assertion`
+field. Goals matching D-XX in dependencies/text get `decision_refs` array. Each
+step gets `assertions[]` array with `{source: D-XX, check: ...}` entries. Codegen
+no longer has to mine CONTEXT.md.
+
+### G12 — Per-stage actor switching for multi-actor goals
+
+Previously `_goal_spec()` hardcoded `actor_id = actors[0]["id"]` and used SAME actor
+for all 7 stages. Multi-actor goals executed as single-actor in lifecycle.
+
+`_stage_actor()` now resolves actor per stage based on stage semantics + goal
+text. Approval stage with admin words → admin actor. read_after_create with
+invitee words → invitee actor. Single-actor goals unchanged.
+
+### Tests
+
+9 new tests across 3 files. All pre-existing tests still pass (additive schema).
+
+### Deferred to v4.3 (Batch 2)
+
+- G2: per-verb stage derivation (delete-only → R+D+R, not full RCRURDR)
+- G14: read-only goals get lifecycle with precondition spec
+
+### Deferred to v4.4 (Batch 3)
+
+- G8: discrete assertion arrays (already partial in G9)
+- G11: post-codegen runtime conformance gate
+- G13: validator semantic checks
+- G3: step body from binding (not template)
+
+### Closes
+
+Audit findings (11 gaps) + Codex GPT-5.5 review (3 additional gaps: G12 actor
+collapse, G13 shape-only validator, G14 read-only coverage hole).
+
+Plan + design: `docs/plans/2026-05-13-lifecycle-specs-redesign-{design,plan}.md`.
+
 ## v4.1.0 — Codex deferred items: 4-stage contract-drift coverage net (2026-05-12)
 
 Closes phantom-endpoint drift at 4 stages instead of 1. Codex GPT-5.5 second-opinion identified 4 deferred wirings after the v3.7.1 fix (commit `564a39a` wired `verify-contract-runtime.py` as BLOCK gate at build close). Each item reuses existing primitives, no new validators.
