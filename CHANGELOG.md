@@ -1,5 +1,23 @@
 # Changelog
 
+## v4.4.0 — Test safety: idempotency probe default OFF + cleanup (Batch 7 / H4 CRITICAL) (2026-05-13)
+
+Audit (Codex GPT-5.5 + manual) Gap H4: 5b-2 idempotency check inside
+runtime.md was auto-ON for critical_domains (billing/auth/payout/payment/
+transaction). Double-POSTed real Bearer-token payloads to live BASE_URL.
+Never cleaned up the duplicates. Production pollution on every test run.
+
+Fix:
+- Default OFF — opt-in via `config.test.idempotency.enabled: true`.
+- Production HARD-GATE — refuses `ENVIRONMENT` in
+  `config.test.idempotency.blocked_envs` (default: production,prod,live).
+- Cleanup pass — tracks created IDs in `idempotency-cleanup.json`. After
+  probe runs DELETE for each. Failed cleanup emits
+  `test.idempotency_polluted` event.
+- Skipped state observable — explanatory log line, never silent.
+
+Audit reference: `docs/plans/2026-05-13-pipeline-flow-audit.md` H4.
+
 ## v4.3.0 — Verdict + marker integrity (Batch 9, 3 CRITICAL fixes) (2026-05-13)
 
 Codex GPT-5.5 audit (2026-05-13) found 3 CRITICAL gaps where /vg:test
