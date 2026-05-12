@@ -228,8 +228,9 @@ When TRUST_REVIEW=true:
 3. Skip DEFERRED goals (phase target not deployed):
    - Emit status: "SKIPPED", reason: "DEFERRED — phase target not deployed".
 
-4. Skip READY goals:
-   - Emit status: "PASSED", source: "trust-review — review 100% gate".
+4. READY goals — split by review depth:
+   - `READY_BEHAVIORAL`: review captured assertion evidence. Emit `status: "PASSED", source: "trust-review — behavioral evidence"`.
+   - `READY_STRUCTURAL` or bare `READY`: review only confirmed structural readiness. Emit `status: "TEST_PENDING", source: "trust-review — structural only, replay required"`. Test lane MUST run goal replay (do NOT auto-pass).
 
 5. UNREACHABLE goals:
    - Try one alternative navigation path.
