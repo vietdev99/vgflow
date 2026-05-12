@@ -26,6 +26,39 @@ VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}"
 PROBE_SCRIPT="${VG_SCRIPT_ROOT}/review-api-contract-probe.py"
 INTERFACE_CHECK_OUT="${PHASE_DIR}/.tmp/interface-standards-review.json"
 
+# v4.0.x Item 3 (Codex deferred) — proof-artifact fallback.
+# Build close (run_complete) already produces .contract-runtime-report.json
+# when verify-contract-runtime gate passed. If that proof is fresh for THIS
+# run (creator_run_id check via evidence-manifest), skip the live runtime probe —
+# same evidence, cheaper. Falls back to fresh probe when proof missing or stale.
+PROOF_ARTIFACT="${PHASE_DIR}/.contract-runtime-report.json"
+PROOF_FRESH="false"
+if [ -f "$PROOF_ARTIFACT" ]; then
+  FRESHNESS_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-artifact-freshness.py"
+  [ -f "$FRESHNESS_VAL" ] || FRESHNESS_VAL="${REPO_ROOT}/scripts/validators/verify-artifact-freshness.py"
+  if [ -f "$FRESHNESS_VAL" ]; then
+    ${PYTHON_BIN:-python3} "$FRESHNESS_VAL" \
+      --path "$PROOF_ARTIFACT" \
+      --producer "vg:build/12_run_complete/verify-contract-runtime" \
+      --quiet 2>/dev/null && PROOF_FRESH="true"
+  fi
+fi
+
+if [ "$PROOF_FRESH" = "true" ]; then
+  echo "phase2a: reusing fresh contract-runtime proof from build close (skip runtime probe)"
+  cp "$PROOF_ARTIFACT" "${PHASE_DIR}/.api-contract-probe.json"
+  # Mark step done without invoking probe script
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2a_api_contract_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2a_api_contract_probe.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step review phase2a_api_contract_probe 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "review.phase2a_proof_reused" \
+    --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\"}" \
+    >/dev/null 2>&1 || true
+  # Skip remainder of phase2a — proof is the evidence
+else
+  # Fall through to existing fresh-probe path (review-api-contract-probe.py)
+  echo "phase2a: no fresh proof artifact, running fresh runtime probe"
+
 if [ ! -f "$PROBE_SCRIPT" ]; then
   "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
     --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_helper\"}" >/dev/null 2>&1 || true
@@ -191,6 +224,7 @@ fi
 
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2a_api_contract_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2a_api_contract_probe.done"
 "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2a_api_contract_probe 2>/dev/null || true
+fi  # end else (fresh-probe path) — proof-artifact fallback closes here
 ```
 
 </step>

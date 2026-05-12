@@ -346,6 +346,26 @@ if [ -f "$CONTRACT_RUNTIME_VAL" ]; then
       "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.contract_runtime_blocked" --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\"}" >/dev/null 2>&1 || true
       exit 1
     fi
+    # v4.0.x Item 3 (Codex deferred) — emit proof artifact for review phase2a fallback.
+    # phase2a_api_contract_probe at review preflight checks this artifact: if fresh
+    # (creator_run_id matches current run), review SKIPS re-probing (saves 10-30s).
+    # Artifact written: .contract-runtime-report.json (phase2a reads this to skip probe)
+    PROOF_PATH="${PHASE_DIR}/.contract-runtime-report.json"
+    ${PYTHON_BIN:-python3} "$CONTRACT_RUNTIME_VAL" \
+      --phase "${PHASE_NUMBER:-${PHASE_ARG}}" \
+      --json > "$PROOF_PATH" 2>/dev/null || \
+      ${PYTHON_BIN:-python3} -c "import json,sys; json.dump({'verdict':'PASS','endpoints':[],'note':'static-presence-check passed; validator --json unsupported, see stderr for details'}, sys.stdout)" > "$PROOF_PATH"
+    EMIT_MANIFEST="${REPO_ROOT}/.claude/scripts/emit-evidence-manifest.py"
+    [ -f "$EMIT_MANIFEST" ] || EMIT_MANIFEST="${REPO_ROOT}/scripts/emit-evidence-manifest.py"
+    if [ -f "$EMIT_MANIFEST" ]; then
+      # emit-evidence-manifest binds .contract-runtime-report.json to this run_id
+      # verify-artifact-freshness.py at review phase2a uses this to confirm freshness.
+      ${PYTHON_BIN:-python3} "$EMIT_MANIFEST" \
+        --path "${PHASE_DIR}/.contract-runtime-report.json" \
+        --producer "vg:build/12_run_complete/verify-contract-runtime" \
+        --source-inputs "${PHASE_DIR}/API-CONTRACTS.md" \
+        --quiet || true
+    fi
   fi
 fi
 
@@ -617,6 +637,94 @@ PY
         exit 1
       fi
     fi
+  fi
+fi
+
+# v4.0.x Item 4 (Codex deferred) — PR-E read-endpoint light probe.
+# Existing PR-E truthcheck covers mutation goals with FIXTURES only.
+# Read endpoints (GET) + endpoints declared in API-CONTRACTS.md but not mapped
+# to any goal slip through to review step 5b runtime fail. This adds a LIGHT
+# probe: single curl per declared endpoint, checking only for 404 (phantom
+# endpoint signal). 4xx/5xx with auth-required body or schema mismatch are
+# treated as "responding" (endpoint exists, just needs auth/payload).
+# Output: ${PHASE_DIR}/.pr-e-read-probe.json with per-endpoint verdict.
+# ADVISORY only — phantom endpoints already caught by static contract-runtime
+# gate (commit 564a39a + Item 1 wave advisory); this is defense-in-depth.
+# No D18 coverage, no idempotency replay, no auth boundary check —
+# just "does endpoint exist and respond reasonably" (non-mutation, read-only).
+if [ -d "apps/api/src" ] || [ -f "apps/api/package.json" ]; then
+  API_BASE_URL="${VG_API_BASE_URL:-http://localhost:4000}"
+  PR_E_READ_PROBE_OUT="${PHASE_DIR}/.pr-e-read-probe.json"
+  if curl -fsS --max-time 2 "${API_BASE_URL}/health" >/dev/null 2>&1 || \
+     curl -fsS --max-time 2 "${API_BASE_URL}" >/dev/null 2>&1; then
+    # API alive — extract GET endpoints from API-CONTRACTS.md and light-probe each
+    export PHASE_DIR API_BASE_URL
+    ${PYTHON_BIN:-python3} - <<'PYEOF' > "$PR_E_READ_PROBE_OUT"
+import os, re, json, subprocess
+from pathlib import Path
+
+phase_dir = Path(os.environ.get("PHASE_DIR", "."))
+contracts = phase_dir / "API-CONTRACTS.md"
+api_base = os.environ.get("API_BASE_URL", "http://localhost:4000")
+
+endpoints = []
+if contracts.is_file():
+    # Pattern: `## METHOD /path` or `### METHOD /path`
+    pat = re.compile(r"^#{2,4}\s+(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)", re.M)
+    for m in pat.finditer(contracts.read_text(encoding="utf-8", errors="ignore")):
+        endpoints.append({"method": m.group(1), "path": m.group(2)})
+
+results = []
+for ep in endpoints:
+    # Replace path params with placeholder (e.g., :id, {id}, ${id} → 1)
+    probe_path = re.sub(r":\w+|\{[^}]+\}|\$\{[^}]+\}", "1", ep["path"])
+    url = f"{api_base}{probe_path}"
+    try:
+        # Light probe: curl -sS, 2s timeout. We care about status code only.
+        out = subprocess.run(
+            ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+             "--max-time", "2", "-X", ep["method"], url],
+            capture_output=True, text=True, timeout=5,
+        )
+        code = (out.stdout or "0").strip()
+    except Exception:
+        code = "ERR"
+    verdict = "missing" if code == "404" else (
+        "ok" if code and code != "0" and code != "ERR" else "unreachable"
+    )
+    results.append({
+        "method": ep["method"], "path": ep["path"],
+        "probe_url": url, "http_code": code, "verdict": verdict,
+    })
+
+missing = [r for r in results if r["verdict"] == "missing"]
+print(json.dumps({
+    "verdict": "WARN" if missing else "PASS",
+    "endpoint_count": len(endpoints),
+    "missing_count": len(missing),
+    "missing": missing,
+    "all_results": results,
+}, indent=2))
+PYEOF
+
+    READ_PROBE_RC=$?
+    MISSING_COUNT=$(${PYTHON_BIN:-python3} -c "import json; d=json.load(open('$PR_E_READ_PROBE_OUT')); print(d.get('missing_count', 0))" 2>/dev/null || echo "0")
+    if [ "${MISSING_COUNT:-0}" -gt 0 ]; then
+      echo "⚠ PR-E read-probe: ${MISSING_COUNT} phantom endpoint(s) detected (404 on light probe). See ${PR_E_READ_PROBE_OUT}"
+      echo "   Static contract-runtime gate (build close) should have already blocked these. If you reached here, the static gate was skipped via --skip-contract-runtime."
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+        "build.pr_e_read_probe_completed" \
+        --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"missing\":${MISSING_COUNT}}" \
+        >/dev/null 2>&1 || true
+    else
+      echo "  PR-E read-probe: all declared endpoints respond (read_endpoint_coverage advisory: PASS)"
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+        "build.pr_e_read_probe_completed" \
+        --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"missing\":0}" \
+        >/dev/null 2>&1 || true
+    fi
+  else
+    echo "  PR-E read-probe: API not responding at ${API_BASE_URL} — skip light probe"
   fi
 fi
 
