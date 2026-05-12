@@ -302,6 +302,53 @@ def _fixture_dag(goal: dict[str, Any], actors: list[dict[str, Any]]) -> list[dic
     return fixtures
 
 
+DECISION_HEADER_RE = re.compile(
+    r"^#{2,3}\s+(D-[\w.-]+):?\s*(.+?)\s*$",
+    re.MULTILINE,
+)
+DECISION_FIELD_RE = re.compile(
+    r"^\*\*expected_assertion:\*\*\s*(.+?)(?=^\*\*|\n##|\n#\s+D-|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+DECISION_REF_RE = re.compile(r"\b(D-[\w.-]+)\b")
+
+
+def _parse_context_decisions(phase_dir: Path) -> dict[str, dict[str, str]]:
+    """Parse CONTEXT.md → {D-ID: {title, expected_assertion}}."""
+    ctx_path = phase_dir / "CONTEXT.md"
+    if not ctx_path.is_file():
+        return {}
+    text = _read(ctx_path)
+    decisions: dict[str, dict[str, str]] = {}
+    matches = list(DECISION_HEADER_RE.finditer(text))
+    for i, m in enumerate(matches):
+        d_id = m.group(1)
+        title = m.group(2).strip()
+        # Body = text from end of this header to next header or end
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[start:end]
+        assertion_match = DECISION_FIELD_RE.search(body)
+        decisions[d_id] = {
+            "title": title,
+            "expected_assertion": assertion_match.group(1).strip() if assertion_match else "",
+        }
+    return decisions
+
+
+def _goal_decision_refs(goal: dict[str, Any], decisions: dict[str, dict[str, str]]) -> list[str]:
+    """Extract D-XX refs from goal text — match against parsed decisions."""
+    if not decisions:
+        return []
+    haystack = _combined(goal)
+    found: set[str] = set()
+    for m in DECISION_REF_RE.finditer(haystack):
+        d_id = m.group(1)
+        if d_id in decisions:
+            found.add(d_id)
+    return sorted(found)
+
+
 def _parse_api_contracts(phase_dir: Path) -> list[dict[str, str]]:
     """Parse API-CONTRACTS.md → list of {method, path} dicts."""
     contracts_path = phase_dir / "API-CONTRACTS.md"
@@ -343,7 +390,14 @@ def _bind_endpoint(stage: str, goal: dict[str, Any], contracts: list[dict[str, s
     return None
 
 
-def _step(stage: str, goal: dict[str, Any], actor_id: str, contracts: list[dict[str, str]] | None = None) -> dict[str, Any]:
+def _step(
+    stage: str,
+    goal: dict[str, Any],
+    actor_id: str,
+    contracts: list[dict[str, str]] | None = None,
+    decisions: dict[str, dict[str, str]] | None = None,
+    decision_refs: list[str] | None = None,
+) -> dict[str, Any]:
     title = goal["title"]
     mutation_evidence = goal.get("mutation_evidence") or "created resource id, state transition, response envelope, or emitted event from TEST-GOALS"
     persistence = goal.get("persistence_check") or "fresh read must prove persisted state, derived state, permissions, and absence of stale cached data"
@@ -367,11 +421,25 @@ def _step(stage: str, goal: dict[str, Any], actor_id: str, contracts: list[dict[
         "read_after_delete": ["404/empty active list or terminal status", "revoked sessions/jobs", "cleanup confirmation"],
     }
     endpoint = _bind_endpoint(stage, goal, contracts or [])
+    # Build assertions from decision_refs + API-CONTRACTS
+    assertions: list[dict[str, str]] = []
+    if stage in {"create", "update"}:
+        for d_id in (decision_refs or []):
+            d_data = (decisions or {}).get(d_id, {})
+            ea = d_data.get("expected_assertion", "").strip()
+            if ea:
+                assertions.append({"source": d_id, "check": ea})
+    if endpoint:
+        assertions.append({
+            "source": "API-CONTRACTS",
+            "check": f"{endpoint['method']} {endpoint['path']} returns expected envelope and status",
+        })
     return {
         "name": stage,
         "stage": stage,
         "actor": actor_id,
         "endpoint": endpoint,
+        "assertions": assertions,
         "action": actions[stage],
         "evidence": evidence[stage],
     }
@@ -390,10 +458,16 @@ def _artifact_capture(goal: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-def _goal_spec(goal: dict[str, Any], contracts: list[dict[str, str]] | None = None) -> dict[str, Any]:
+def _goal_spec(
+    goal: dict[str, Any],
+    contracts: list[dict[str, str]] | None = None,
+    decisions: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
     actors = _infer_actors(goal)
     fixture_dag = _fixture_dag(goal, actors)
     _contracts = contracts or []
+    _decisions = decisions or {}
+    decision_refs = _goal_decision_refs(goal, _decisions)
     return {
         "title": goal["title"],
         "priority": goal.get("priority") or "important",
@@ -416,7 +490,11 @@ def _goal_spec(goal: dict[str, Any], contracts: list[dict[str, str]] | None = No
             "Capture request_id/correlation id for every mutation.",
             "Assert canonical response envelope and error shape.",
         ],
-        "steps": [_step(stage, goal, _stage_actor(stage, goal, actors), _contracts) for stage in REQUIRED_STAGES],
+        "decision_refs": decision_refs,
+        "steps": [
+            _step(stage, goal, _stage_actor(stage, goal, actors), _contracts, _decisions, decision_refs)
+            for stage in REQUIRED_STAGES
+        ],
         "artifact_capture": _artifact_capture(goal),
         "cleanup": [
             {"target": fixture["id"], "action": fixture["cleanup"]}
@@ -455,8 +533,9 @@ def _find_phase_dir(phase: str, explicit: str | None) -> Path:
 def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
     goals = _parse_goals(phase_dir)
     contracts = _parse_api_contracts(phase_dir)
+    decisions = _parse_context_decisions(phase_dir)
     selected = [goal for goal in goals if include_readonly or _needs_lifecycle(goal)]
-    specs = {goal["id"]: _goal_spec(goal, contracts) for goal in selected}
+    specs = {goal["id"]: _goal_spec(goal, contracts, decisions) for goal in selected}
     return {
         "schema_version": "1.0",
         "phase": phase_dir.name,
