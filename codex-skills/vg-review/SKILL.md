@@ -1,8 +1,8 @@
 ---
 name: "vg-review"
-description: "Post-build review — code scan + browser discovery + fix loop + goal comparison → RUNTIME-MAP"
+description: "Post-build review — code scan + browser discovery + matrix INTENT → RUNTIME-MAP (discovery-only)"
 metadata:
-  short-description: "Post-build review — code scan + browser discovery + fix loop + goal comparison → RUNTIME-MAP"
+  short-description: "Post-build review — code scan + browser discovery + matrix INTENT → RUNTIME-MAP (discovery-only)"
 ---
 
 <codex_skill_adapter>
@@ -19,19 +19,20 @@ the workflow entrypoint. Keep the current Codex runtime, export
 window, and bind it with `vg-orchestrator tasklist-projected --adapter codex`.
 
 VGFlow source paths are resolved through global `VG_HOME` (default:
-`~/.vgflow`). Project-local Claude workflow files may be absent in global-only
-installs; Codex must use `${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}`
-and `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}` for workflow
-helpers. References below to "Claude CLI", `TodoWrite`, or Haiku describe the
-Claude adapter only. Codex must map them through this adapter contract instead
-of aborting the current run and relaunching Claude.
+`~/.vgflow`). Project-local Claude workflow files may be absent in
+global-only installs; Codex must use
+`${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}` and
+`${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}` for workflow
+helpers. References below to "Claude CLI", `TodoWrite`, or Haiku describe
+the Claude adapter only. Codex must map them through this adapter contract
+instead of aborting the current run and relaunching Claude.
 
 ### Tool mapping
 
 | Claude Code concept | Codex-compatible pattern | Notes |
 |---|---|---|
 | AskUserQuestion | Ask concise questions in the main Codex thread | Codex does not expose the same structured prompt tool inside generated skills. Persist answers where the skill requires it; prefer Codex-native options such as `codex-inline` when the source prompt distinguishes providers. |
-| Agent(...) / Task | Prefer `commands/vg/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
+| Agent(...) / Task | Prefer `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh` or native Codex subagents | Use `codex exec` when exact model, timeout, output file, or schema control matters. |
 | TaskCreate / TaskUpdate / TodoWrite | Compact Codex plan window + orchestrator step markers | Use `tasklist-contract.json` as source of truth. Do not paste the full hierarchy into Codex `update_plan`. Show at most 6 rows: active group/step first, next 2-3 pending steps, completed groups collapsed, and `+N pending`. After projecting, emit `vg-orchestrator tasklist-projected --adapter codex`. |
 | Playwright MCP | Main Codex orchestrator MCP tools, or smoke-tested subagents | If an MCP-using subagent cannot access tools in a target environment, fall back to orchestrator-driven/inline scanner flow. |
 | Graphify MCP | Python/CLI graphify calls | VGFlow's build/review paths already use deterministic scripts where possible. |
@@ -48,7 +49,7 @@ in the body below.
 
 | Source pattern | Claude path | Codex path |
 |---|---|---|
-| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `commands/vg/_shared/lib/codex-spawn.sh --tier planner` |
+| Planner/research/checker Agent | Use the source `Agent(...)` call and configured model tier | Use native Codex subagents only if the local Codex version has been smoke-tested; otherwise write the child prompt to a temp file and call `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/lib/codex-spawn.sh --tier planner` |
 | Build executor Agent | Use the source executor `Agent(...)` call | Use `codex-spawn.sh --tier executor --sandbox workspace-write` with explicit file ownership and expected artifact output |
 | Adversarial/CrossAI reviewer | Use configured external CLIs and consensus validators | Use configured `codex exec`/Gemini/Claude commands from `.claude/vg.config.md`; fail if required CLI output is missing or unparsable |
 | Haiku scanner / Playwright / Maestro / MCP-heavy work | Use Claude subagents where the source command requires them | Keep MCP-heavy work in the main Codex orchestrator unless child MCP access was smoke-tested; scanner work may run inline/sequential instead of parallel, but must write the same scan artifacts and events |
@@ -71,40 +72,6 @@ orchestrator that writes `.vg/events.db`:
 Codex hook parity is evidence-based: `.vg/events.db`, step markers,
 `must_emit_telemetry`, and `run-complete` output are authoritative. A Codex
 run is not complete just because the model says it is complete.
-
-<HARD-GATE-CODEX>
-Codex has no PreToolUse/PostToolUse hooks. Claude Code's `vg-step-tracker.py`
-hook auto-emits `must_touch_markers` declared in `commands/vg/review.md`;
-Codex does NOT receive that signal. AI MUST emit each HARD marker manually
-after the corresponding STEP's primary action completes — failure to do so
-causes the contract validator to reject the run with "8/N markers found".
-
-After each STEP's primary action completes, run:
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review <marker>
-```
-
-Required HARD markers for /vg:review (v2.65.0 A9):
-
-| STEP | Marker |
-|---|---|
-| Pre-STEP 0 (integrity precheck) | `00_gate_integrity_precheck` |
-| STEP 0 (parse + validate) | `0_parse_and_validate` |
-| STEP 0b (goal coverage gate) | `0b_goal_coverage_gate` |
-| Final close | `complete` |
-
-The remaining markers in `must_touch_markers:` (phase1_*, phase2_*, phaseP_*,
-crossai_review, write_artifacts, bootstrap_reflection, env-mode-gate, etc.)
-are advisory (severity: warn) or flag-gated; emit them when the matching
-profile branch executes.
-
-v2.67.0 #158 — lens telemetry parity: the body below explicitly calls
-`mark-step review 2b3_lens_dispatch_complete` and
-`mark-step review 2b3_lens_matrix_rendered` after the matching steps so
-Codex matches the Claude PostToolUse hook's marker coverage on the
-LENS-DISPATCH-PLAN.json + LENS-COVERAGE-MATRIX.md must_write artifacts.
-</HARD-GATE-CODEX>
 
 Before executing command bash blocks from a Codex skill, export
 `VG_RUNTIME=codex`. This is an adapter signal, not a source replacement:
@@ -190,6 +157,28 @@ process that cannot see browser tools.
 Invoke this skill as `$vg-review`. Treat all user text after the skill name as arguments.
 </codex_skill_adapter>
 
+<HARD-GATE-CODEX>
+Codex has no Claude PreToolUse/PostToolUse hook substrate. Claude hooks may
+auto-emit step markers, but Codex MUST emit the same hard markers explicitly
+after each matching STEP primary action.
+
+Use global VGFlow paths so global-only installs work without project-local
+`.claude/scripts` or `.claude/commands`:
+
+```bash
+VG_HOME="${VG_HOME:-$HOME/.vgflow}"
+VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME}/scripts}"
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step review 00_gate_integrity_precheck
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step review 0_parse_and_validate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step review 0b_goal_coverage_gate
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step review complete
+```
+
+Hook/spawn mechanics may differ by provider, but marker names, order, gates,
+must-write artifacts, and telemetry contract stay identical to the Claude
+command source.
+</HARD-GATE-CODEX>
+
 
 
 
@@ -261,7 +250,7 @@ Mandatory binding:
    Claude full hierarchy; Codex compact window only.
 3. Immediately call:
    ```bash
-   "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" tasklist-projected --adapter auto
+   "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator tasklist-projected --adapter auto
    # auto locks to claude, codex, or fallback from runtime env
    ```
 4. At each step start, update the native UI to show the active step and call `vg-orchestrator step-active <step_name>`.
@@ -315,7 +304,7 @@ plan row or the next row. Do not exceed the 6-row `codex_plan_window` budget.
     `create_task_tracker` preflight runs filter-steps.py to count expected steps for `$PROFILE`.
     Browser-based steps (phase 2 discovery) carry `profile="web-fullstack,web-frontend-only"` — skipped for backend-only/cli/library.
 11. **Resume model (v1.14.4+)** — no mid-phase-2 resume. Step-level idempotency via `.step-markers/*.done` + per-view atomic `scan-*.json` is sufficient. If discovery dies mid-run, re-run `/vg:review {phase}` from scratch OR `/vg:review {phase} --retry-failed` (requires RUNTIME-MAP already written).
-12. **Post-build test-spec gate (v3.6.7)** — first full review requires `/vg:test-spec {phase}` artifacts (`DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/PROMPT.md`, `PLAYWRIGHT-SPEC-PLAN.md`). Review consumes them as the lifecycle contract; it does not invent deep test specs late.
+12. **Post-build test-spec gate (v3.6.6)** — first full review requires `/vg:test-spec {phase}` artifacts (`DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/PROMPT.md`, `PLAYWRIGHT-SPEC-PLAN.md`). Review consumes them as the lifecycle contract; it does not invent deep test specs late.
 </rules>
 
 <objective>
@@ -326,13 +315,13 @@ Pipeline: specs → scope → blueprint → build → test-spec → **review** �
 4 Phases:
 - Phase 1: CODE SCAN — grep contracts + count elements (fast, automated, <10 sec)
 - Phase 2: BROWSER DISCOVERY — MCP Playwright organic exploration → RUNTIME-MAP
-- Phase 3: FIX LOOP — errors found → fix → redeploy → re-discover (max 3 iterations)
+- Phase 3: FIX LOOP — errors found → fix → redeploy → re-discover (max 5 iterations, v2.65.0 A4)
 - Phase 4: GOAL COMPARISON — map TEST-GOALS to discovered paths → weighted gate
 </objective>
 
 <process>
 
-**Config:** Read `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/config-loader.md` first.
+**Config:** Read ${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/config-loader.md first.
 
 **Bug detection (v1.11.2 R6 — MANDATORY):** Read `${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg}/_shared/bug-detection-guide.md` BEFORE starting. Apply 6 detection patterns throughout: schema_violation, helper_error, user_pushback, ai_inconsistency, gate_loop, self_discovery. When detected: NARRATE intent + CALL `report_bug` via bash + CONTINUE workflow (non-blocking).
 
@@ -352,130 +341,57 @@ If ALL 5 servers locked → BLOCK. The lock manager auto-sweeps stale locks (TTL
 on every claim — if still no slot free, it's genuinely contended. Do NOT manually cleanup other sessions' locks.
 </CRITICAL_MCP_RULE>
 
-### Pre-STEP — integrity precheck (HARD)
-
-Before any other STEP runs, the canonical command body's preflight invokes
-the integrity precheck. On Codex, after the precheck completes, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review 00_gate_integrity_precheck
-```
-
 ### Preflight section (extracted v2.70.0)
 
 Read `_shared/review/preflight.md` and follow it exactly.
 Includes 7 steps: 00_gate_integrity_precheck, 00_session_lifecycle, 0_parse_and_validate, 0a_env_mode_gate, 0b_goal_coverage_gate, 0c_telemetry_suggestions, create_task_tracker.
-
-After preflight's primary actions complete (args parsed, env-mode gate satisfied,
-goal coverage gate green, task tracker emitted), emit the HARD markers manually
-(Codex hook fallback):
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review 0_parse_and_validate
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review 0b_goal_coverage_gate
-```
-
-WARN markers (`00_session_lifecycle`, `0a_env_mode_gate`,
-`0c_telemetry_suggestions`, `create_task_tracker`) are advisory — emit when the
-matching code path runs, but missing them does not fail the contract.
 
 ### Phase profile branch (Section 2 — extracted v2.70.0)
 
 Read `_shared/review/phase-p-variants.md` and follow it exactly.
 Includes 6 steps: phase_profile_branch, phaseP_infra_smoke, phaseP_delta, phaseP_regression, phaseP_schema_verify, phaseP_link_check.
 
-phaseP_* markers are flag-gated; emit only when the matching profile branch
-executes (e.g. `phaseP_delta` for `--mode delta`, `phaseP_infra_smoke` for
-`--mode infra-smoke`).
 
 ### Code scan section (extracted v2.70.0 T3)
 
 Read `_shared/review/code-scan.md` and follow it exactly.
 Includes 2 steps: phase1_code_scan, phase1_5_ripple_and_god_node.
 
-After code scan + ripple/god-node analysis complete, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review phase1_code_scan
-```
 
 ### API contract probe + browser discovery (extracted v2.70.0 T4)
 
 Read `_shared/review/api-and-discovery.md` and follow it exactly.
 Includes 2 steps: phase2a_api_contract_probe, phase2_browser_discovery.
 
-CODEX NOTE: For browser discovery, the main Codex orchestrator owns
-Playwright MCP; do NOT spawn `codex exec` for MCP-heavy work. After API
-probe + browser discovery complete, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review phase2a_api_contract_probe
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review phase2_browser_discovery
-```
 
 ### Lens probe + findings derivation (extracted v2.70.0 T5)
 
 Read `_shared/review/lens-and-findings.md` and follow it exactly.
 Includes 8 steps: phase2_5_recursive_lens_probe, phase2b_collect_merge, phase2c_enrich_test_goals, phase2c_pre_dispatch_gates, phase2d_crud_roundtrip_dispatch, phase2e_findings_merge, phase2e_post_challenge, phase2f_route_auto_fix.
 
-After LENS-DISPATCH-PLAN.json + LENS-COVERAGE-MATRIX.md must_write artifacts
-land, emit (v2.67.0 #158 lens telemetry parity — matches Claude PostToolUse
-hook's marker coverage):
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review 2b3_lens_dispatch_complete
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review 2b3_lens_matrix_rendered
-```
 
 ### Exploration limits + mobile + visual checks (extracted v2.70.0 T6)
 
 Read `_shared/review/limits-and-mobile.md` and follow it exactly.
 Includes 4 steps: phase2_exploration_limits, phase2_mobile_discovery, phase2_5_visual_checks, phase2_5_mobile_visual_checks.
 
-Mobile/visual markers are profile-gated (`mobile-*` profile for mobile
-discovery, `web-fullstack`/`web-frontend-only` for visual checks). Emit only
-when the matching profile branch executes.
 
 ### URL state + error message runtime (extracted v2.70.0 T7)
 
 Read `_shared/review/url-and-error.md` and follow it exactly.
 Includes 3 steps: phase2_7_url_state_sync, phase2_8_url_state_runtime, phase2_9_error_message_runtime.
 
-These steps are `web-fullstack,web-frontend-only` profile-gated. Emit when
-matching profile branch executes; advisory severity (warn).
+### Matrix INTENT (discovery-only, v4.0)
 
-### Fix loop + goal comparison (extracted v2.70.0 T8 — largest section)
+Compute 3-verdict intent: `READY` / `BLOCKED` / `NOT_SCANNED`. Fix-loop + final verdict deferred to `/vg:test` (Step 3 + Step 5).
 
-Read `_shared/review/fix-loop-and-goals.md` and follow it exactly.
-Includes 2 steps: phase3_fix_loop (max 5 iterations), phase4_goal_comparison.
-
-CODEX NOTE: For fix loop, source `Agent(...)` calls map to
-`codex-spawn.sh --tier executor --sandbox workspace-write` (per
-codex_spawn_precedence table above — `/vg:review` fix agents). After fix loop
-+ goal comparison complete, emit:
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review phase3_fix_loop
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review phase4_goal_comparison
-```
+Read `_shared/review/matrix-intent.md` and follow it exactly.
 
 ### Close section (extracted v2.70.0 T9 — final extraction)
 
 Read `_shared/review/close.md` and follow it exactly.
 Includes 5 steps: unreachable_triage, crossai_review, write_artifacts, bootstrap_reflection, complete.
 
-After write_artifacts persists RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md and
-crossai_review consensus completes (final-wave only), emit the HARD markers
-+ run-complete:
-
-```bash
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review crossai_review
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review write_artifacts
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review complete
-```
-
-The terminal `vg-orchestrator run-complete` MUST be called by `_shared/review/close.md`;
-on non-zero exit, fix evidence and retry per Stop hook parity contract above.
 </process>
 
 <success_criteria>
@@ -483,7 +399,7 @@ on non-zero exit, fix evidence and retry per Stop hook parity contract above.
 - Browser discovery explored all reachable views organically
 - RUNTIME-MAP.json produced with actual runtime observations (canonical JSON)
 - RUNTIME-MAP.md derived from JSON (human-readable)
-- Fix loop resolved code bugs (if any)
+- Matrix INTENT computed (READY/BLOCKED/NOT_SCANNED)
 - TEST-GOALS mapped to discovered paths
 - GOAL-COVERAGE-MATRIX.md shows weighted goal readiness
 - Gate passed (weighted: 100% critical, 80% important, 50% nice-to-have)

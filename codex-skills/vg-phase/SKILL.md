@@ -166,7 +166,7 @@ Full pipeline (3 stages):
 ```
 Project init:     /vg:project → /vg:roadmap → /vg:map (optional)
 Phase planning:   /vg:prioritize → /vg:specs → /vg:scope → /vg:scope-review
-Phase execution:  /vg:blueprint → /vg:build → /vg:test-spec → /vg:review → /vg:test → /vg:accept
+Phase execution:  /vg:blueprint → /vg:build → /vg:review → /vg:test-spec → /vg:test → /vg:accept
 ```
 
 This command runs the **phase execution** stage (8 steps): specs → scope → blueprint → build → test-spec → review → test → accept.
@@ -344,9 +344,9 @@ Run steps sequentially. **For each step:**
 | 1 | scope | `/vg:scope {phase}` | TASK_SCOPE | CONTEXT.md |
 | 2 | blueprint | `/vg:blueprint {phase}` | TASK_BLUEPRINT | PLAN*.md + API-CONTRACTS.md |
 | 3 | build | `/vg:build {phase}` | TASK_BUILD | SUMMARY*.md |
-| 4 | test-spec | `/vg:test-spec {phase}` | TASK_TEST_SPEC | DEEP-TEST-SPECS.md + LIFECYCLE-SPECS.json |
-| 5 | review | `/vg:review {phase}` | TASK_REVIEW | RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md |
-| 6 | test | `/vg:test {phase}` | TASK_TEST | *-SANDBOX-TEST.md with verdict != FAILED |
+| 4 | review | `/vg:review {phase}` | TASK_REVIEW | RUNTIME-MAP.json + MATRIX-INTENT.json |
+| 5 | test-spec | `/vg:test-spec {phase}` | TASK_TEST_SPEC | DEEP-TEST-SPECS.md + LIFECYCLE-SPECS.json + tests/e2e/lifecycle/*.spec.ts |
+| 6 | test | `/vg:test {phase}` | TASK_TEST | MATRIX-VERDICT.json with verdict != FAILED |
 | 7 | accept | `/vg:accept {phase}` | TASK_ACCEPT | *-UAT.md with status "complete" |
 
 **Fast-path (AI-recommended):**
@@ -354,12 +354,16 @@ Before starting, assess scope complexity:
 - Small change (1-2 files, no new pages) → **⛔ forced user pause** (review skip = fewer gates, higher risk of missed drift):
   Invoke `AskUserQuestion`:
     - header: "Skip review step?"
-    - question: "Phase scope nhỏ (1-2 files). Recommend bỏ qua /vg:review → chạy: specs → scope → blueprint → build → test-spec → test → accept. Review giúp phát hiện runtime drift, bỏ qua nhanh hơn nhưng rủi ro hơn. Approve skip?"
+    - question: "Phase scope nhỏ (1-2 files). Recommend bỏ qua /vg:review → chạy: specs → scope → blueprint → build → test-spec → test → accept. Bỏ qua review nghĩa test-spec không có RUNTIME-MAP, codegen sẽ dựa trên contracts tĩnh. Approve skip?"
     - options:
       - "Yes — skip review (phase nhỏ, ít drift risk)"
       - "No — chạy full pipeline có review (safer)"
   Không auto-skip. Nếu user chọn Yes → `TodoWrite`/`TaskUpdate: taskId=TASK_REVIEW, status="completed"` (mark skipped + log reason to override-debt: "user-approved skip for small scope").
 - Medium/large change → full pipeline (không hỏi, review luôn chạy)
+
+**v4.0 flags:**
+- `--skip-test` — stop after test-spec (manual UAT). Pipeline 7 stages → 6 stages.
+- `--skip-codegen` — test-spec gens only 8 docs, no `.spec.ts` files. Use khi /vg:test sẽ chạy trên test infra bên ngoài.
 </step>
 
 <step name="4_complete">

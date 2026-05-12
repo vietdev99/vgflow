@@ -1,8 +1,8 @@
 ---
 name: "vg-test"
-description: "Clean goal verification + independent smoke + codegen regression + security audit"
+description: "Execute Playwright tests + fix-loop (user-confirm) + matrix verdict + security audit"
 metadata:
-  short-description: "Clean goal verification + independent smoke + codegen regression + security audit"
+  short-description: "Execute Playwright tests + fix-loop (user-confirm) + matrix verdict + security audit"
 ---
 
 <codex_skill_adapter>
@@ -259,8 +259,8 @@ Pattern (PostToolUse hook tolerant — chấp nhận cả group title match + su
     `  ↳ Task 93: integration test`
   - review browser discovery: `  ↳ View /campaigns: 12 actions captured`,
     `  ↳ Lens lens-modal-state: 3 modals probed`
-  - test codegen: `  ↳ G-04: spec.ts generated`,
-    `  ↳ G-07: spec.ts (deep-probe variants pending)`
+  - test fix-loop: `  ↳ Iter 1/5: 3 failing goals → spawned vg-test-fixer`,
+    `  ↳ Iter 2/5: 1 remaining → re-running playwright`
 
 This gives operator visibility into "AI sẽ làm gì tiếp / tiến độ tới đâu" mà
 không cần đọc Bash output. Hook không reject append vì tolerant match (B11.6+).
@@ -275,30 +275,38 @@ không cần đọc Bash output. Hook không reject append vì tolerant match (B
 4. **MINOR-only fix (auto-gated v1.14.4+)** — AI MUST emit `fix-plans.json` before attempting fix. Pre-flight script `severity-classify.py` auto-classifies dựa trên: file count ≥3 → MODERATE, touches `apps/api/**/routes|schemas|contracts` → MODERATE, touches `packages/**|apps/web/**/lib|apps/web/**/hooks` → MODERATE, `change_type=new_feature|contract` → MAJOR. Auto-escalate MODERATE/MAJOR → REVIEW-FEEDBACK.md, kick back to review. AI không được tự classify MINOR bypass gate.
 5. **Independent smoke first** — spot-check RUNTIME-MAP accuracy before trusting it.
 6. **Navigate via UI clicks** — browser_navigate BANNED except for initial login/domain switch.
-7. **Console monitoring (hard gate v1.14.4+)** — runtime: `browser_console_messages` check after EVERY action (5c goal verification). Codegen: every mutation spec MUST contain setup (`window.__consoleErrors` OR `page.on('console'/'pageerror')`) + assertion (`expect(errs.length).toBe(0)` pattern). Post-codegen gate 5d-r7 greps generated `.spec.ts`, BLOCKS if mutation spec thiếu console assertion. Override: `--allow-missing-console-check` log debt.
-8. **Goal-based codegen** — assertions from TEST-GOALS success criteria, paths from RUNTIME-MAP observation.
+7. **Console monitoring (hard gate v1.14.4+)** — runtime: `browser_console_messages` check after EVERY action (5c goal verification). Codegen (v4.0: produced by `/vg:test-spec`, not `/vg:test`): every mutation spec MUST contain setup (`window.__consoleErrors` OR `page.on('console'/'pageerror')`) + assertion (`expect(errs.length).toBe(0)` pattern). Override: `--allow-missing-console-check` log debt.
+8. **Pre-built specs** — v4.0 `/vg:test` does NOT generate `.spec.ts`; it executes the suite produced by `/vg:test-spec` (Step 4_codegen). Missing suite = BLOCK.
 9. **Zero hardcode** — no endpoint, role, page name, or project-specific value in this workflow. All values from config or runtime observation.
 10. **Profile enforcement (UNIVERSAL)** — every `<step>` MUST, as FINAL action:
     `touch "${PHASE_DIR}/.step-markers/{STEP_NAME}.done"`.
-    Browser steps (5c-smoke, 5c-flow, 5d codegen) carry `profile="web-fullstack,web-frontend-only"`.
+    Browser steps (5c-smoke, 5c-flow) carry `profile="web-fullstack,web-frontend-only"`.
     Contract-curl (5b) carries `profile="web-fullstack,web-backend-only"`.
     `create_task_tracker` preflight filters to applicable steps only; missing markers at step complete → BLOCK.
 </rules>
 
 <objective>
-Step 5 of V5.1 pipeline. Clean goal verification — review already discovered + fixed. Test only verifies goals and generates regression tests.
+Step 7 of V4.0 pipeline. Execute pre-built Playwright suite (from `/vg:test-spec`)
+against deployed phase, run user-confirm fix-loop on failures, compute matrix verdict.
 
 Pipeline: specs → scope → blueprint → build → test-spec → review → **test** → accept
+
+v4.0 split:
+- `/vg:test-spec` Step 4_codegen owns `.spec.ts` generation (L1/L2 binding gate,
+  console-assertion enforcement, vg-test-codegen subagent).
+- `/vg:review` is discovery-only (no fix-loop, no matrix verdict).
+- `/vg:test` (this skill) executes the suite, runs the fix-loop (user-confirm
+  gate: A auto-fix / B manual / C skip+debt), then emits MATRIX-VERDICT.json.
 
 Sub-steps:
 - 5a: DEPLOY — push + build + restart on target
 - 5b: RUNTIME CONTRACT VERIFY — curl + jq per endpoint
 - 5c-smoke: INDEPENDENT SPOT CHECK — cross-check RUNTIME-MAP accuracy
 - 5c-goal: GOAL VERIFICATION — verify each goal via known paths (topological sort)
-- 5c-fix: MINOR FIX ONLY — minor fix in test, moderate/major escalate to review
-- 5d: CODEGEN — generate .spec.ts from verified goals + RUNTIME-MAP paths
-- 5e: REGRESSION RUN — npx playwright test
+- step5_fix_loop: user-confirm fix-loop on failing goals (A/B/C gate)
+- 5e: REGRESSION RUN — npx playwright test (full suite)
 - 5f: SECURITY AUDIT — grep + optional deep scan
+- step7_matrix_verdict: 4-state per-goal verdict + flip next_command → /vg:accept
 </objective>
 
 <HARD-GATE>
@@ -314,9 +322,12 @@ TodoWrite MUST include sub-items (`↳` prefix) for each group header;
 flat projection (group-headers only) is rejected by PostToolUse depth
 check (Task 44b Rule V2).
 
-Codegen MUST spawn vg-test-codegen (NOT inline). Goal verification MUST
-spawn vg-test-goal-verifier. Console monitoring MUST run after every
-action — silent error skip detected by Stop hook.
+Goal verification MUST spawn vg-test-goal-verifier (NOT inline). Fix-loop
+auto-fix path MUST spawn vg-test-fixer (NOT inline). Console monitoring
+MUST run after every action — silent error skip detected by Stop hook.
+
+Note (v4.0): codegen subagent (`vg-test-codegen`) is no longer spawned from
+this skill — it now lives in `/vg:test-spec` Step 4_codegen.
 
 For Agent spawning use the `Agent` tool — NOT `Task` (Codex confirmed correct
 tool name per Claude Code docs).
@@ -326,11 +337,12 @@ tool name per Claude Code docs).
 
 | Thought | Reality |
 |---|---|
-| "Codegen 1 spec.ts file, đơn giản, làm inline" | 645-line step has L1/L2 binding gates that vg-test-codegen subagent enforces |
+| "Codegen ở đây luôn — sửa spec inline" | v4.0: codegen lives in `/vg:test-spec` Step 4. `/vg:test` is execute-only, không sinh `.spec.ts` |
+| "Failing goals → tự auto-fix luôn cho nhanh" | v4.0 user-confirm gate là MANDATORY: A/B/C answer required trước khi spawn vg-test-fixer |
 | "Goal verification chỉ là replay nhanh" | 303-line step has dual-mode: trust-review default + legacy replay fallback |
 | "Skip TodoWrite — emit-tasklist đủ rồi" | PostToolUse hook fires on TodoWrite to emit native_tasklist_projected; missing = audit FAIL #8 |
-| "Console errors là warning, ignore được" | Console monitoring is hard-gate post-codegen; mutation specs without console assertion BLOCK |
-| "Re-codegen hoài cũng được, max=3" | L1 max 1 retry per goal; L2 escalates to AskUserQuestion (don't loop) |
+| "Console errors là warning, ignore được" | Console monitoring là hard-gate; mutation spec không có console assertion → BLOCK |
+| "Re-fix-loop hoài cũng được" | MAX_ITER=5 per fix-loop; iter limit hit → diagnostic L2 fallback (user gate, không auto-apply) |
 | "Tasklist không quan trọng, để sau" | PreToolUse Bash hook BLOCKS step-active without signed evidence |
 | "Step này đơn giản, bỏ qua" | Marker thiếu = Stop hook fail = run cannot complete |
 | "Subagent overkill cho step nặng" | Heavy step empirical 96.5% skip rate without subagent (Codex review confirmed) |
@@ -377,42 +389,47 @@ console monitoring, minor-fix gate (`severity-classify.py`), auto-escalate
 MODERATE/MAJOR back to review, and `5c_goal_verification` / `5c_fix` /
 `5c_auto_escalate` marker emission.
 
-### STEP 5 — codegen (HEAVY, subagent + L1/L2 binding gate)
+### STEP 5 — fix loop + user-confirm gate
 
-Read `_shared/test/codegen/overview.md` AND
-`_shared/test/codegen/delegation.md`.
+Read `_shared/test/fix-loop-and-verdict.md` Step 5 (`step5_fix_loop`) and
+follow it exactly. The shared file contains the full fix-loop algorithm
+(3a error summary, 3b classify, 3c fix routing, 3d re-verify, 3d.5
+QA-checker, 3e iterate + L2 fallback) relocated from `/vg:review` Phase 3.
 
-Then spawn: `Agent(subagent_type="vg-test-codegen", prompt=<from delegation.md>)`.
+**User-confirm gate (v4.0 NEW):**
 
-DO NOT generate `.spec.ts` files inline. The subagent enforces L1 (1 retry
-per goal) / L2 (AskUserQuestion escalation) binding gates, console assertion
-in every mutation spec, post-codegen gate 5d-r7 grep, and emits the
-`5d_codegen` orchestrator marker. `5d_binding_gate` is subagent-internal
-(not surfaced as an orchestrator marker — see codegen/overview.md STEP 5.7
-note + commit `04a5e79`). `5d_deep_probe` and `5d_mobile_codegen` markers
-are emitted inside their orchestrator-side ref steps after the subagent
-returns.
+Before spawning any fix subagent, compute `failing_goals` from the Playwright
+JSON output produced by `goal-verifier`. If `failing_goals > 0`, call
+`AskUserQuestion` with the following options:
 
-After subagent completes, orchestrator reads:
-- `_shared/test/codegen/deep-probe.md` — orchestrator-side deep probe actions.
-- If profile `mobile-*`: `_shared/test/codegen/mobile-codegen.md` — mobile
-  codegen path with native test runner.
+```
+AskUserQuestion:
+  A) Auto-fix     — spawn vg-test-fixer subagent
+  B) Manual fix   — block, wait for user to fix + re-run
+  C) Skip fix-loop — emit override-debt, continue with failing goals
+```
 
-On L2 escalations from subagent: call AskUserQuestion with subagent's
-escalation message, then re-spawn with user answer injected.
+Behaviour by answer:
+- **A** → spawn `vg-test-fixer` (defined in `agents/vg-test-fixer/SKILL.md`,
+  delivered by T9) with the fix-loop body from `fix-loop-and-verdict.md`.
+- **B** → write `${PHASE_DIR}/FIX-LOOP-BLOCKED.md` documenting the failing
+  goals + expected fix scope, then exit so user can fix manually.
+- **C** → append failing goal IDs to `${PLANNING_DIR}/KNOWN-ISSUES.md` and
+  emit `--skip-fix-loop` debt entry. Pipeline continues.
 
-**MANDATORY POST-WAVE CONTINUATION:** After ALL wave Agent calls return (goal-verifier + codegen subagents), you MUST IMMEDIATELY proceed to the NEXT STEP IN THE SAME ASSISTANT TURN. Do NOT end the turn after wave subagents return. The harness gates require sequential execution. See `vg-meta-skill.md` "Red Flags — Post-wave continuation" for rationale.
+Mark step at completion:
 
-### STEP 6 — fix loop + auto escalate
+```bash
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test step5_fix_loop 2>/dev/null || true
+```
 
-Read `_shared/test/fix-loop.md` and follow it exactly.
+**MANDATORY POST-WAVE CONTINUATION:** After the goal-verifier Agent call
+returns (STEP 4), you MUST IMMEDIATELY proceed to STEP 5 (this step) IN THE
+SAME ASSISTANT TURN. Do NOT end the turn after the subagent returns. The
+harness gates require sequential execution. See `vg-meta-skill.md` "Red
+Flags — Post-wave continuation" for rationale.
 
-Covers the post-codegen fix loop: run playwright regression, triage failures,
-attempt MINOR fixes (MODERATE/MAJOR auto-escalate to review), re-run, cap
-at configured max iterations. Emits `5c_fix` / `5c_auto_escalate` markers
-(if not already emitted by goal-verifier in STEP 4).
-
-### STEP 7 — regression + security
+### STEP 6 — regression + security
 
 Read `_shared/test/regression-security.md` and follow it exactly.
 
@@ -420,6 +437,27 @@ Covers 5e (npx playwright test — full regression suite), 5f (security audit
 — grep patterns + optional dynamic lens scan), 5f_mobile_security_audit
 (profile-gated), 5g_performance_check (profile-gated), 5h_security_dynamic
 (flag-gated). All findings written to SANDBOX-TEST.md security section.
+
+### STEP 7 — matrix verdict
+
+Compute final per-goal verdict (4-state):
+`READY` / `BLOCKED` / `TEST_PENDING` / `NOT_SCANNED`.
+
+Read `_shared/test/fix-loop-and-verdict.md` Step 7 (`step7_matrix_verdict`)
+and follow it exactly. The shared file contains the full verdict algorithm
+(4.0 RCRURD runtime, 4a load goals + edge cases, 4b map → RUNTIME-MAP,
+4c-pre NOT_SCANNED resolution, 4c write matrix, 4d inline triage, 4e/4f
+100% gate decision) relocated from `/vg:review` Phase 4.
+
+Output:
+- `${PHASE_DIR}/MATRIX-VERDICT.json` (machine-readable per-goal verdict)
+- Flip `PIPELINE-STATE.json.next_command` → `/vg:accept`
+
+Mark step at completion:
+
+```bash
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test step7_matrix_verdict 2>/dev/null || true
+```
 
 ### STEP 8 — close
 

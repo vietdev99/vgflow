@@ -173,7 +173,9 @@ VG_SCRIPT_ROOT="${VG_SCRIPT_ROOT:-${VG_HOME}/scripts}"
 "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test-spec 2_generate_deep_specs
 "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test-spec 3_validate_deep_specs
 "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test-spec 3_crossai_sweep
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test-spec 4_complete
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test-spec 4_codegen
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test-spec 4_self_review
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/vg-orchestrator" mark-step test-spec 5_complete
 ```
 
 Hook/spawn mechanics may differ by provider, but marker names, order, gates,
@@ -519,7 +521,7 @@ else
       ;;
     flag)
       echo "⚠ CrossAI: FLAG — minor concerns logged at ${PHASE_DIR}/TEST-SPEC-CROSSAI.md"
-      echo "   Review will consume the findings; proceeding to 4_complete."
+      echo "   Review will consume the findings; proceeding to 5_complete."
       ;;
     block)
       echo "⛔ CrossAI: BLOCK — major/critical gaps in test-spec contracts."
@@ -558,7 +560,87 @@ fi
 `${PHASE_DIR}/TEST-SPEC-CROSSAI.md` — review preflight (already reads diagnostic surface per PR #183) extended to surface CrossAI verdict + findings count in `GOAL-COVERAGE-MATRIX.md` provenance.
 </step>
 
-<step name="4_complete">
+<step name="4_codegen">
+
+## Step 4: codegen (`4_codegen`)
+
+Spawn `vg-test-codegen` subagent to generate Playwright lifecycle specs per goal. Smart-routing applies lens set per `goal_type` from `GOAL-COVERAGE-MATRIX.json`.
+
+**Smart-routing lens map:**
+
+| `goal_type` | Lens set |
+|---|---|
+| `mutation` | `idor` + `mass-assignment` + `authz-negative` + `business-logic` |
+| `read` | `authz` + `info-disclosure` + `tenant-boundary` |
+| `auth` | `auth-jwt` + `csrf` + `duplicate-submit` |
+| `default` | `business-coherence` + `input-injection` |
+
+**Subagent invocation:**
+
+Read `commands/vg/_shared/test/codegen/delegation.md` and `commands/vg/_shared/test/codegen/overview.md` (existing files, no change). Then:
+
+```
+Agent(
+  subagent_type="vg-test-codegen",
+  prompt=<from delegation.md template>,
+  input={
+    phase_dir: "${PHASE_DIR}",
+    phase_number: "${PHASE_NUMBER}",
+    phase_profile: "${PHASE_PROFILE}",
+    runtime_map_path: "${PHASE_DIR}/RUNTIME-MAP.json",
+    goal_coverage_matrix_path: "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json",
+    generated_tests_dir: "tests/e2e/lifecycle/",
+    lens_routing_map: <smart-routing map above>
+  }
+)
+```
+
+**Output contract:**
+- `tests/e2e/lifecycle/G-XX.{lens}.spec.ts` — one file per goal × lens
+- `${PHASE_DIR}/CODEGEN-MANIFEST.json` — list of generated files + their L1/L2 binding state
+
+**Mark step:**
+```bash
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_codegen 2>/dev/null || true
+```
+
+</step>
+
+<step name="4_self_review">
+
+## Step 4.5: codegen self-review (`4_self_review`)
+
+After codegen, verify generated `.spec.ts` files compile via `npx playwright --list`. Catch syntax errors before `/vg:test` Step 2 execute time.
+
+**Run check:**
+
+```bash
+SELF_REVIEW_LOG="${PHASE_DIR}/.step-markers/test-spec/4_self_review.log"
+mkdir -p "$(dirname "$SELF_REVIEW_LOG")"
+
+RETRY=0
+MAX_RETRY=2
+while [ $RETRY -le $MAX_RETRY ]; do
+  if npx playwright --list tests/e2e/lifecycle/ > "$SELF_REVIEW_LOG" 2>&1; then
+    echo "✓ Codegen self-review PASS (retry=$RETRY)"
+    break
+  fi
+  RETRY=$((RETRY + 1))
+  if [ $RETRY -gt $MAX_RETRY ]; then
+    echo "⛔ Codegen self-review FAIL after $MAX_RETRY retries — see $SELF_REVIEW_LOG"
+    echo "Escalate to user. Manual fix or rollback codegen."
+    exit 1
+  fi
+  echo "⚠ Self-review FAIL (retry=$RETRY) — re-running codegen subagent"
+  # Re-spawn vg-test-codegen with prior output context
+done
+
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_self_review 2>/dev/null || true
+```
+
+</step>
+
+<step name="5_complete">
 ```bash
 "${PYTHON_BIN:-python3}" - <<PY
 import json
@@ -577,10 +659,10 @@ state["updated_at"] = datetime.now().isoformat()
 p.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 PY
 
-touch "${PHASE_DIR}/.step-markers/test-spec/4_complete.done"
-"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_complete 2>/dev/null || true
+touch "${PHASE_DIR}/.step-markers/test-spec/5_complete.done"
+"${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 5_complete 2>/dev/null || true
 "${PYTHON_BIN:-python3}" "$ORCH" emit-event \
-  "test_spec.completed" --step "4_complete" --actor "llm-claimed" \
+  "test_spec.completed" --step "5_complete" --actor "llm-claimed" \
   --outcome "PASS" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
 "${PYTHON_BIN:-python3}" "$ORCH" run-complete --outcome PASS 2>/dev/null || true
 
