@@ -129,6 +129,73 @@ def _bind_endpoint(stage: str, goal: dict, contracts: dict) -> dict | None:
 - G5: fixture DAG from goal dependencies graph
 - G6: artifact_capture per goal artifact_kind field
 
+## Batch 5 — Test execution observability (NEW, ship after Batch 1)
+
+### Problem
+
+Pre-v4.0 review chạy e2e qua MCP Playwright HEADED → user xem live. v4.0 đã tách review (discovery-only) khỏi test (codegen + regression). Hiện trạng test execution:
+
+| Step | Visibility | Source |
+|---|---|---|
+| `5c_smoke` (test/runtime.md:130) | HEADED via MCP — OK | giữ nguyên |
+| `5c_flow` (test/runtime.md:162) | HEADED via MCP — OK | giữ nguyên |
+| `5e_regression` (test/regression-security.md:39) | **HEADLESS — user mù** | `npx playwright test` không config |
+
+→ Generated Playwright spec chạy headless mặc định. User không thấy browser, không xem được hành vi, debug khó.
+
+### Fix design
+
+**Layered visibility control:**
+
+1. **Generated playwright config** — `${GENERATED_TESTS_DIR}/playwright.config.generated.ts` auto-created (currently file mentioned line 42-43 but không chỉ định nội dung). Defaults:
+   ```ts
+   export default defineConfig({
+     use: {
+       headless: !!process.env.CI,
+       launchOptions: { slowMo: process.env.CI ? 0 : 250 },
+       trace: 'retain-on-failure',
+       video: 'retain-on-failure',
+       screenshot: 'only-on-failure',
+     },
+     reporter: process.env.CI ? [['dot']] : [['list'], ['html', { open: 'never' }]],
+     workers: process.env.CI ? undefined : 1,  // serial when headed for watchability
+   });
+   ```
+
+2. **Config flag** — `vg.config.template.md` thêm block:
+   ```
+   ## test
+   execution:
+     headed_default: auto   # auto | true | false (auto = headed when TTY)
+     slow_mo_ms: 250
+     show_trace_on_failure: true
+   ```
+
+3. **CLI args** — `/vg:test` chấp nhận:
+   - `--headed` / `--headless` → override config
+   - `--ui` → spawn `npx playwright test --ui` (full inspector)
+   - `--slow-mo=<ms>` → override slowMo
+
+4. **`--auto-chain` semantics** — auto-chain implies CI mode → force headless + dot reporter (giữ pipeline tốc độ).
+
+5. **Reporter switch** — interactive: `list` (mỗi spec in tên ngay khi start, status khi done). CI: `dot` (1 ký tự/spec).
+
+### Acceptance criteria
+
+1. `5e_regression` step generates `playwright.config.generated.ts` if missing, with profile-driven defaults.
+2. Headed mode khi: không có `CI` env + không có `--auto-chain` + `headed_default` không phải `false`.
+3. `--headed` flag force on. `--headless` flag force off.
+4. Trace + video + screenshot artifacts saved on failure, path emitted to SANDBOX-TEST.md.
+5. `--ui` flag spawns Playwright UI inspector (block until close).
+6. Config flag respected: `headed_default: false` → headless ngay cả khi interactive.
+7. Tests: integration test verifying generated config has `headless: !!process.env.CI` line + 1 unit test for CLI arg precedence.
+
+### Out of scope (Batch 5)
+
+- Live console streaming to terminal (Playwright `list` reporter đã đủ)
+- Per-step screenshot capture (chỉ on-failure trong batch này)
+- Trace viewer auto-open (chỉ link path; user mở thủ công)
+
 ## Deferred (v5.1+)
 
 - G15: single source of truth — consolidate 5 artifacts into 1 phase-contract.json (large refactor, defer)
