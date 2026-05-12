@@ -516,6 +516,48 @@ print(','.join(missing))
     exit 1
   fi
 fi
+
+# v4.0.x Item 2 (Codex deferred) — FE-BE call graph ADVISORY probe.
+# Compares FE fetch/axios calls vs BE route registrations. Codex emphasized
+# ADVISORY only: dynamic routes (/api/users/${id} ↔ /api/users/:id),
+# generated clients, and framework-specific prefixes produce false positives
+# that make this UNSUITABLE as a hard gate. Output goes to the discovery
+# matrix as a heads-up; reviewer treats it as a hint, not a verdict.
+# v4.0 discovery-only review model: this fits perfectly — "report what you find".
+FE_BE_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-fe-be-call-graph.py"
+[ -f "$FE_BE_VAL" ] || FE_BE_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-fe-be-call-graph.py"
+[ -f "$FE_BE_VAL" ] || FE_BE_VAL="${REPO_ROOT:-.}/scripts/validators/verify-fe-be-call-graph.py"
+if [ -f "$FE_BE_VAL" ]; then
+  mkdir -p "${PHASE_DIR}/.tmp"
+  # Detect FE + BE roots from phase dir (graceful fallback to repo root)
+  _FE_ROOT="${PHASE_DIR}/src"
+  [ -d "$_FE_ROOT" ] || _FE_ROOT="${REPO_ROOT:-.}/src"
+  [ -d "$_FE_ROOT" ] || _FE_ROOT="${REPO_ROOT:-.}/frontend"
+  [ -d "$_FE_ROOT" ] || _FE_ROOT="${REPO_ROOT:-.}"
+  _BE_ROOT="${PHASE_DIR}/server"
+  [ -d "$_BE_ROOT" ] || _BE_ROOT="${REPO_ROOT:-.}/server"
+  [ -d "$_BE_ROOT" ] || _BE_ROOT="${REPO_ROOT:-.}/backend"
+  [ -d "$_BE_ROOT" ] || _BE_ROOT="${REPO_ROOT:-.}/api"
+  [ -d "$_BE_ROOT" ] || _BE_ROOT="${REPO_ROOT:-.}"
+  "${PYTHON_BIN:-python3}" "$FE_BE_VAL" \
+    --fe-root "$_FE_ROOT" \
+    --be-root "$_BE_ROOT" \
+    --phase "${PHASE_NUMBER:-${PHASE_ARG:-unknown}}" \
+    --evidence-out "${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.json" \
+    > "${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.diag" 2>&1 || true
+  FE_BE_RC=$?
+  if [ "$FE_BE_RC" -ne 0 ]; then
+    echo "⚠ verify-fe-be-call-graph.py advisory: FE-BE drift detected (see ${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.diag)"
+    echo "   NOT a hard block — dynamic routes / generated clients produce false positives. Discovery-only hint."
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
+      "review.fe_be_drift_warn" \
+      --step "0_parse_and_validate" \
+      --actor "llm-claimed" \
+      --outcome "WARN" \
+      --payload "{\"phase\":\"${PHASE_NUMBER:-unknown}\",\"diag\":\"${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.diag\"}" \
+      >/dev/null 2>&1 || true
+  fi
+fi
 ```
 </step>
 
