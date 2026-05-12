@@ -1,5 +1,53 @@
 # Changelog
 
+## v4.3.0 — Verdict + marker integrity (Batch 9, 3 CRITICAL fixes) (2026-05-13)
+
+Codex GPT-5.5 audit (2026-05-13) found 3 CRITICAL gaps where /vg:test
+could report PASSED when reality was broken. Pipeline correctness lies.
+
+### C4 — review READY no longer auto-promotes to test PASSED
+
+Pre-fix: review verdict `READY` (endpoint observed + selectors resolved,
+structural only) was auto-PASSED in TRUST_REVIEW mode without replay.
+Structural scan became behavioral success.
+
+Post-fix: `matrix-intent.md` splits into `READY_STRUCTURAL` (default) +
+`READY_BEHAVIORAL` (requires persisted assertion evidence). TRUST_REVIEW
+Step D point 4 only auto-passes BEHAVIORAL. STRUCTURAL → TEST_PENDING
+forces test lane replay.
+
+### C5 — step-status ledger overrides goal-only verdict
+
+Pre-fix: final VERDICT computed from goal-*-result.json + priority
+buckets only. Step BLOCK/FAIL (deploy/contract/smoke/regression/security)
+invisible. User misrouted to /vg:accept on broken pipelines.
+
+Post-fix: `.test-step-status.json` ledger (atomic writes via
+scripts/step-status-ledger.py). close.md verdict reads ledger before
+final extraction. Any step BLOCK/FAIL forces FAILED with
+STEP_BLOCK_OVERRIDE.
+
+### C9 — terminal marker gate verifies content + run_id
+
+Pre-fix: marker-schema.sh defined hardened schema (phase|step|git_sha|
+iso_ts|run_id) with verify_marker() forgery detection. But test/close.md
+terminal gate only checked file existence. Empty/stale/forged .done
+files satisfied gate.
+
+Post-fix: marker-schema.sh adds verify_all_markers_strict_runid() helper.
+test/close.md sources lib + invokes strict-mode verification with active
+VG_RUN_ID match. Bypass requires explicit VG_MARKER_STRICT=0 flag.
+
+### Tests
+
+12 new tests across 3 files. All pre-existing tests still pass.
+
+### Audit reference
+
+Closes Gaps C4 + C5 + C9 from `docs/plans/2026-05-13-pipeline-flow-audit.md`.
+
+---
+
 ## v4.2.0 — Lifecycle-specs contract richness (Batch 1: G7+G9+G12) (2026-05-13)
 
 Audit + Codex GPT-5.5 second-opinion identified that `generate-lifecycle-specs.py`
