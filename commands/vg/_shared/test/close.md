@@ -576,6 +576,24 @@ if [ -n "$(echo "$MISSING_TEST_MARKERS" | xargs)" ]; then
 fi
 ```
 
+### 8.3.5b — C9 Batch 9: marker integrity gate (strict mode + run_id match)
+
+```bash
+# C9 Batch 9: marker integrity gate — strict mode + run_id match
+MARKER_LIB="${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}/commands/vg/_shared}/lib/marker-schema.sh"
+[ -f "$MARKER_LIB" ] || MARKER_LIB="commands/vg/_shared/lib/marker-schema.sh"
+[ -f "$MARKER_LIB" ] || MARKER_LIB=".claude/commands/vg/_shared/lib/marker-schema.sh"
+if [ -f "$MARKER_LIB" ]; then
+  source "$MARKER_LIB"
+  export VG_MARKER_STRICT=1
+  if ! verify_all_markers_strict_runid "${PHASE_DIR}" "${PHASE_NUMBER}" "${VG_RUN_ID:-}"; then
+    echo "⛔ Marker integrity gate failed — empty/stale/forged markers detected" >&2
+    echo "   Set VG_MARKER_STRICT=0 to bypass (UNSAFE — only for migration)." >&2
+    exit 1
+  fi
+fi
+```
+
 ### 8.3.6 — Tester-pro D22/D23 reports (RFC v9)
 
 ```bash

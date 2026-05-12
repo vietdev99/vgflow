@@ -233,5 +233,39 @@ verify_all_markers() {
   return 0
 }
 
+# verify_all_markers_strict_runid <phase_dir> <expected_phase> <expected_run_id>
+# Strict mode + run_id match for every .done marker under phase_dir.
+# Returns 0 if all markers parse + match phase + match run_id; non-zero else.
+verify_all_markers_strict_runid() {
+  local phase_dir="$1"
+  local expected_phase="$2"
+  local expected_run_id="$3"
+  local marker_dir="${phase_dir}/.step-markers"
+
+  if [ ! -d "$marker_dir" ]; then
+    echo "verify_all_markers_strict_runid: no .step-markers dir under $phase_dir" >&2
+    return 2
+  fi
+
+  local rc=0
+  local marker
+  for marker in "$marker_dir"/*.done; do
+    [ -f "$marker" ] || continue
+    local step
+    step="$(basename "$marker" .done)"
+    # Strict mode forces content check
+    VG_MARKER_STRICT=1 verify_marker "$marker" "$expected_phase" "$step" >&2 || { rc=1; continue; }
+    # Run_id match
+    local content marker_run_id
+    content="$(cat "$marker" 2>/dev/null)"
+    marker_run_id="$(printf '%s' "$content" | awk -F'|' '{print $6}')"
+    if [ -n "$expected_run_id" ] && [ "$marker_run_id" != "$expected_run_id" ]; then
+      echo "verify_all_markers_strict_runid: run_id mismatch on $marker (got='$marker_run_id' expected='$expected_run_id')" >&2
+      rc=1
+    fi
+  done
+  return $rc
+}
+
 # Export functions when sourced
-export -f mark_step read_marker verify_marker verify_all_markers 2>/dev/null || true
+export -f mark_step read_marker verify_marker verify_all_markers verify_all_markers_strict_runid 2>/dev/null || true
