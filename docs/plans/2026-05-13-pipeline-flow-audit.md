@@ -207,4 +207,157 @@ Original v5.0 batches (2/3/4/5) unchanged. H1/H5/H9/H11 absorbed into Batch 5 (c
 ---
 
 **Audit method:** Grep + Read on `commands/vg/_shared/{review,test}/*.md` + `commands/vg/_shared/test/{codegen,goal-verification}/*.md`. No assumptions — every gap has explicit file:line evidence verifiable via `grep -n`.
-**Codex consult:** attempted twice with `gpt-5.5` model on 9router provider. Both runs produced empty assistant output (PONG smoke worked, 5KB audit prompt failed silently). Workaround: manual audit. Future: try `gpt-5-codex` model + explicit `--reasoning-summary none` if codex audit needed.
+
+**Codex consult (3rd attempt SUCCESS):** Earlier 2 attempts failed (empty output). Root cause: VGFlow's working `codex-spawn.sh` uses `--output-last-message FILE` + `--sandbox workspace-write`. Adding both flags + waiting ~12 min for `gpt-5.5` xhigh reasoning produced 11 distinct gaps below. Pattern: `codex exec --sandbox workspace-write --cd PATH --output-last-message FILE - < PROMPT`.
+
+---
+
+# Codex second-opinion findings (2026-05-13, 11 gaps)
+
+> Independent audit by Codex `gpt-5.5` 9router xhigh reasoning. Different methodology than mine — Codex read deeper into TRUST_REVIEW path + marker schema + verdict computation. Confirmed in-source before accept.
+
+## Gap C1: Deploy step marks complete with NO evidence
+
+**Lane:** test
+**Severity:** HIGH
+**File:line:** `commands/vg/_shared/test/deploy.md:29, 51`
+**Symptom:** `5a_deploy` step body is prose comments + unconditional marker write. User can see `{sha}`, `{health}`, `{services}` display contract but zero artifact proves deploy happened.
+**Root cause:** No machine-readable deploy artifact required. Marker write is `touch ... .done` unconditional.
+**Proposed fix:** Require `test-deploy-report.json` or `DEPLOY-STATE.json` with local/target SHA, restart result, health checks, service status + evidence-manifest binding. Block marker if missing.
+**Batch fit:** **Batch 5** (observability)
+
+## Gap C2: Smoke check (5c_smoke) marker without artifact
+
+**Lane:** test
+**Severity:** HIGH
+**File:line:** `commands/vg/_shared/test/runtime.md:130, 153`
+**Symptom:** 5c_smoke prose says "stratified sample 5 views, browser_snapshot, compare fingerprint" but step can be marked done with no run, no screenshot, no `{matches}/5` persistence. Same user-blind effect as headless but step may not execute at all.
+**Root cause:** Display prose without artifact contract. Marker fires regardless.
+**Proposed fix:** Step writes `smoke-check.json` with per-view sample + screenshot/log paths. Gate marker on schema validation + count.
+**Batch fit:** **Batch 5**
+
+## Gap C3: URL runtime validator checks param presence, not semantic correctness
+
+**Lane:** review
+**Severity:** HIGH
+**File:line:** `commands/vg/_shared/review/url-and-error.md:177` + `scripts/validators/verify-url-state-runtime.py:412`
+**Symptom:** Filter "passes" when `?status=pending` appears in URL even if table still shows wrong rows. Phase 2.8 prose REQUIRES `result_semantics` but validator only checks URL param exists post-interaction.
+**Root cause:** Validator scope mismatch with documented intent.
+**Proposed fix:** Validate `result_semantics.passed == true` + type-specific evidence (filter row-set, sort order, pagination window change, search result match). Missing semantic evidence = BLOCK.
+**Batch fit:** **Batch 3** (G13 validator semantics family)
+
+## Gap C4: review `READY` → test `PASSED` without replay (TRUST REVIEW)
+
+**Lane:** cross-lane
+**Severity:** **CRITICAL**
+**File:line:** `commands/vg/_shared/review/matrix-intent.md:5` + `commands/vg/_shared/test/goal-verification/delegation.md:231-232`
+**Symptom:** Goal becomes `TEST-PASSED` without actual test execution if review observed endpoint + selectors. Structural scan auto-promotes to behavioral success.
+**Root cause:** Review `READY` = "endpoint observed + selectors resolved" (structural). `TRUST_REVIEW=true` mode (Step D point 4 in delegation.md) maps READY → PASSED by policy:
+```
+4. Skip READY goals:
+   - Emit status: "PASSED", source: "trust-review — review 100% gate".
+```
+**Proposed fix:** Split verdict: `READY_STRUCTURAL` (current) vs `READY_BEHAVIORAL` (review persisted per-goal assertion evidence). TRUST REVIEW only auto-passes BEHAVIORAL; STRUCTURAL must replay in test.
+**Batch fit:** **New Batch 9** (verdict integrity — critical correctness)
+
+## Gap C5: Final VERDICT ignores contract/security/smoke/regression blockers
+
+**Lane:** cross-lane
+**Severity:** **CRITICAL**
+**File:line:** `commands/vg/_shared/test/close.md:71` + `commands/vg/_shared/test/regression-security.md:98`
+**Symptom:** Critical non-goal failures omitted from computed VERDICT + Next routing + SANDBOX-TEST.md status if goal result buckets look good. User misrouted to `/vg:accept` despite security/contract failures.
+**Root cause:** Verdict script reads `goal-*-result.json` + priority buckets only. Step-level outcomes from deploy/runtime contract verify/smoke/regression/security/traceability/flow compliance NOT ingested.
+**Proposed fix:** Introduce `.test-step-status.json` step-status ledger. Final verdict = max(goal coverage, hard-blocking step outcomes). Any BLOCK/FAIL on contract/security/traceability overrides goal-only PASS.
+**Batch fit:** **New Batch 9** (verdict integrity)
+
+## Gap C6: Goal-verifier subagent return shape-only check
+
+**Lane:** test
+**Severity:** HIGH
+**File:line:** `commands/vg/_shared/test/goal-verification/overview.md:159, 183`
+**Symptom:** Subagent returns non-empty `goals_verified[]` + `baseline_console_check_pass:bool` and harness rewrites GOAL-COVERAGE-MATRIX.md + emits telemetry even if goal IDs wrong, statuses invalid, evidence files non-existent.
+**Root cause:** Post-spawn validation = array length + boolean presence. No reconciliation against vg-load index, no `evidence_ref` existence check.
+**Proposed fix:** Strict schema validation — exact goal ID set match, status enum, screenshot/evidence path existence, baseline artifact existence, per-goal provenance trace.
+**Batch fit:** **Batch 4** (cleanup quality)
+
+## Gap C7: Codegen subagent return shape-only check
+
+**Lane:** test-spec
+**Severity:** HIGH
+**File:line:** `commands/vg/_shared/test/codegen/overview.md:163, 183`
+**Symptom:** One dummy spec + `bindings_satisfied: true` satisfies orchestration even if files missing on disk, READY goals silently dropped, no actual binding check ran.
+**Root cause:** Validation = `spec_files.length > 0` + `bindings_satisfied` presence. No file-exists check, no binding header parse, no reconciliation vs review intent.
+**Proposed fix:** Validate every returned file exists, parse headers for goal/rule bindings, reconcile READY/MANUAL/DEFERRED goals vs generated outputs, require persisted binding report artifact.
+**Batch fit:** **Batch 4**
+
+## Gap C8: Phase 2a proof reuse skips OTHER mandatory gates
+
+**Lane:** review
+**Severity:** HIGH
+**File:line:** `commands/vg/_shared/review/api-and-discovery.md:29, 47, 81`
+**Symptom:** Fresh `.contract-runtime-report.json` skips not just live API probe, but ALSO interface-standards validation + API-docs coverage. Review proceeds to browser discovery on stale docs/semantics.
+**Root cause:** Proof shortcut exits Phase 2a early — one artifact gates multiple distinct subgates with different inputs.
+**Proposed fix:** Split Phase 2a into proof domains. Contract probe reuses fresh proof. Interface standards + API-docs coverage each need their own fresh proof or live run.
+**Batch fit:** **Batch 2** (high prio — fits review hardening)
+
+## Gap C9: Terminal marker gate checks existence only, not run_id
+
+**Lane:** cross-lane
+**Severity:** **CRITICAL**
+**File:line:** `commands/vg/_shared/lib/marker-schema.sh:4` (defines hardened schema) + `commands/vg/_shared/test/close.md:532` (checks existence only)
+**Symptom:** Empty/stale `.done` files satisfy terminal marker gate. Forged or old marker makes step appear complete without current-run execution provenance.
+**Root cause:** Harness defines marker schema `phase|step|git_sha|iso_ts|run_id` (marker-schema.sh:9) with `verify_marker()` strict check (line 106-165 with forgery detection line 165). But close gates only check file existence + many steps still use `touch ... .done` fallback + `mark-step ... || true`.
+**Proposed fix:** Close gates call `verify_marker`/`verify_all_markers` strict mode + require run_id match active run. Stop accepting bare `touch` markers (or accept only as explicit `inconclusive` markers).
+**Batch fit:** **New Batch 9** (verdict + marker integrity)
+
+## Gap C10: `GAPS_FOUND` cleanup deletes the very traces needed (overlap with H1)
+
+**Lane:** test
+**Severity:** MEDIUM
+**File:line:** `commands/vg/_shared/test/close.md:382-388`
+**Symptom:** When verdict = `GAPS_FOUND`, videos + traces deleted even though unresolved issues remain. User gets less debug evidence precisely when needed.
+**Root cause:** Cleanup treats `GAPS_FOUND` same as `PASSED` — line 383 condition `[ "$VERDICT" = "PASSED" ] || [ "$VERDICT" = "GAPS_FOUND" ]`.
+**Proposed fix:** Keep failure artifacts for ANY verdict ≠ PASSED. Even for GAPS_FOUND retain traces for failed/blocked goals + print preserved paths into SANDBOX-TEST.md.
+**Batch fit:** **Batch 5** (extends H1 fix — same cleanup block)
+
+## Gap C11: URL runtime fragmented skip/waive knobs, no shared status
+
+**Lane:** cross-lane
+**Severity:** MEDIUM
+**File:line:** `commands/vg/_shared/review/url-and-error.md:41, 110, 196` + `scripts/validators/verify-url-state-runtime.py:303`
+**Symptom:** Same concept bypassed 3 different ways: declaration waiver (`--allow-no-url-sync`), runtime suppression (`--skip-runtime`), drift waiver (`--allow-runtime-drift`). Downstream lanes can't distinguish "passed" vs "not executed".
+**Root cause:** Bypass semantics across multiple flags + WARN-only validator path. No canonical status artifact for consumers.
+**Proposed fix:** Emit single `url-runtime-status.json` with explicit state enum: `passed | drift | skipped | unexecuted | waived`. Collapse to one canonical override path with structured debt metadata.
+**Batch fit:** **Batch 2** (cross-lane integration)
+
+---
+
+## Combined gap inventory (Hn manual + Cn Codex = 23 total)
+
+Codex's 3 CRITICAL findings are NEW — not in my manual audit:
+- **C4** READY → PASSED without replay (verdict integrity)
+- **C5** Final VERDICT ignores non-goal blockers (verdict integrity)
+- **C9** Marker existence ≠ marker verification (provenance)
+
+These 3 form basis of **proposed Batch 9 — verdict + marker integrity**, the most consequential correctness work.
+
+## Updated Top 3 (revised after Codex)
+
+1. **C4 + C5 + C9 (Batch 9 family)** — Verdict integrity. Without these, READY goals auto-pass + non-goal failures invisible + markers forgeable. Pipeline can report PASSED when reality is broken.
+2. **H4** (idempotency target pollution) — still critical, ships before any production-like dogfood.
+3. **C8 + H2** (Phase 2a proof split + FE-BE advisory dead) — review observability fixes.
+
+## Updated batch summary
+
+| Batch | Theme | Gaps |
+|---|---|---|
+| **2** (deferred) | + Phase 2a proof split + URL fragmented flags | G2, G14, C8, C11 |
+| **3** | + URL semantic validation + verdict step-status | G8, G11, G13, G3, H3, C3 |
+| **4** | + subagent shape-vs-semantic checks | G1, G4, G5, G6, H10, C6, C7 |
+| **5** | + GAPS_FOUND trace preservation | (existing 5.1-5.6), H1, H5, H9, H11, C1, C2, C10 |
+| **6** (new) | review observability bugs | H2, H6, H8 |
+| **7** (new) | test safety / idempotency cleanup | H4 |
+| **8** (new) | cross-lane integration | H7, H12 |
+| **9** (new) | **verdict + marker integrity (CRITICAL)** | **C4, C5, C9** |
+
+Batches 6/7/8/9 are new vs original v5.0 design. Batch 9 is highest priority (3 CRITICAL findings).
