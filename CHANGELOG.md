@@ -1,5 +1,49 @@
 # Changelog
 
+## v4.10.0 — Validator semantics + step content (Batch 3 / G13+C3+G11+H3+G3+G8) (2026-05-13)
+
+FINAL batch closing all 23 audit gaps. Six validator/step-content gaps where
+validators checked shape not semantics, and step bodies relied on template
+strings instead of binding data.
+
+### G13 — Lifecycle validator semantic checks (MEDIUM)
+
+`verify-lifecycle-spec-depth.py` was shape-only. Added `_semantic_checks()`:
+1. Stage verb vs endpoint method (create→POST, delete→DELETE, etc).
+2. Each assertion entry must have a `source` field.
+3. `step.actor` must exist in `goal.actors[]` set.
+Advisory mode by default (prints warnings, exit 0). `--strict` flag escalates.
+
+### C3 — URL validator checks result_semantics (HIGH)
+
+`verify-url-state-runtime.py` already enforces `result_semantics` for filter
+controls (checks `passed=true` + `rows_checked` int). Gap closed by verifying
+the existing implementation is correct and adding tests.
+
+### G11 — Post-codegen lifecycle conformance gate (LOW)
+
+New `verify-codegen-lifecycle-conformance.py` validator. For each goal in
+`LIFECYCLE-SPECS.json`, verifies generated `*.spec.ts` file references every
+step's stage name OR endpoint path. Wired into `regression-security.md` before
+`5e_regression` runs. Advisory mode (exit 0 always).
+
+### H3 — Validator output surfaced on PASS path (MEDIUM)
+
+Validator loop in `fix-loop-and-verdict.md` tails last 5 lines of each
+validator's diagnostic output (inline visibility on PASS path) and writes
+`${VALIDATOR}-summary.json` with verdict + evidence_count for structured
+downstream access.
+
+### G3+G8 — Step description from binding + discrete assertion arrays (LOW)
+
+`generate-lifecycle-specs.py` `_step()` now calls `_step_description(stage,
+goal, endpoint)` helper when endpoint binding succeeds. Per-stage formatting
+embeds method + path (e.g. `POST /api/orders with sample payload from
+API-CONTRACTS`). Falls back to default template when endpoint absent.
+Combined with G7+G9 from Batch 1, step content is fully data-driven.
+
+---
+
 ## v4.9.0 — Cleanup quality + subagent strict schema (Batch 4 / G1+G4+G5+G6+H10+C6+C7) (2026-05-13)
 
 Audit Gaps G1, G4, G5, G6 (lifecycle generator quality), H10 (reflector
