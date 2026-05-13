@@ -1,5 +1,24 @@
 # Changelog
 
+## v4.15.1 — Codex mirror sync after Batches 10/11/12 (2026-05-13)
+
+Patch: v4.15.0 release CI failed `verify-codex-mirror-equivalence.py` —
+codex-skills/{vg-amend, vg-LIFECYCLE, vg-roadmap, vg-test-spec}/SKILL.md
+drifted from canonical commands/vg/ sources after Batches 10/11/12 added:
+- next_command emit (Batch 10 F1)
+- amend invalidation block (Batch 11 F5)
+- LIFECYCLE doc refresh (Batch 10 F2+F10)
+- roadmap domain/team fields (Batch 12 F7)
+
+Fix:
+- vg-amend, vg-LIFECYCLE, vg-roadmap: regenerated via
+  `bash scripts/generate-codex-skills.sh --force`.
+- vg-test-spec: manual sync (curated guard blocked auto-regen). Added 2
+  lines for next_command emit matching F1 Batch 10 pattern.
+
+`verify-codex-mirror-equivalence.py`: drift 4 → 0.
+`test_codex_test_accept_step_parity.py`: 2/2 pass.
+
 ## v4.15.0 — Batch 12 FINAL: scale infrastructure F6+F7+F8+F9 (2026-05-13)
 
 Closes last 4 flow-chain audit findings (F6/F7/F8/F9). Scale verdict
