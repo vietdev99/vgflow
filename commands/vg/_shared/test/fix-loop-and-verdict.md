@@ -1060,6 +1060,22 @@ if [[ ! "$ARGUMENTS" =~ --skip-content-invariants ]]; then
       esac
       VAL_RC=$?
       cat "$VAL_OUT"
+      # H3 Batch 3: surface validator outputs so PASS path leaves inspectable evidence
+      SUMMARY_OUT="${PHASE_DIR}/.tmp/${VALIDATOR}-summary.json"
+      # Tail last 5 lines of the diag for inline user visibility on PASS path
+      echo "  -- last lines of ${VALIDATOR} output:"
+      tail -n 5 "$VAL_OUT" 2>/dev/null | sed 's/^/    /'
+      # Try parse final JSON line as summary
+      ${PYTHON_BIN:-python3} -c "
+import json, sys
+try:
+    lines = open('$VAL_OUT', encoding='utf-8').read().strip().splitlines()
+    last_line = lines[-1] if lines else '{}'
+    d = json.loads(last_line)
+    json.dump({'validator': '$VALIDATOR', 'verdict': d.get('verdict'), 'evidence_count': len(d.get('evidence', []))}, open('$SUMMARY_OUT', 'w', encoding='utf-8'))
+except Exception:
+    pass
+" 2>/dev/null || true
       if [ "$VAL_RC" -ne 0 ]; then
         echo ""
         echo "⛔ Verdict gate invariant FAILED: ${VALIDATOR}"
