@@ -44,40 +44,129 @@ if [ -f "$PROOF_ARTIFACT" ]; then
   fi
 fi
 
+# C8 Batch 2: proof reuse only skips live probe — interface + api-docs still run
+SKIP_LIVE_PROBE=false
 if [ "$PROOF_FRESH" = "true" ]; then
-  echo "phase2a: reusing fresh contract-runtime proof from build close (skip runtime probe)"
+  echo "phase2a: reusing fresh contract-runtime proof from build close (skip live probe only)"
   cp "$PROOF_ARTIFACT" "${PHASE_DIR}/.api-contract-probe.json"
-  # Mark step done without invoking probe script
-  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2a_api_contract_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2a_api_contract_probe.done"
-  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step review phase2a_api_contract_probe 2>/dev/null || true
+  SKIP_LIVE_PROBE=true
   "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
     "review.phase2a_proof_reused" \
-    --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\"}" \
+    --payload "{\"phase\":\"${PHASE_NUMBER:-${PHASE_ARG}}\",\"scope\":\"live_probe_only\"}" \
     >/dev/null 2>&1 || true
-  # Skip remainder of phase2a — proof is the evidence
-else
+fi
+
+if [ "$SKIP_LIVE_PROBE" != "true" ]; then
   # Fall through to existing fresh-probe path (review-api-contract-probe.py)
   echo "phase2a: no fresh proof artifact, running fresh runtime probe"
 
-if [ ! -f "$PROBE_SCRIPT" ]; then
-  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
-    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_helper\"}" >/dev/null 2>&1 || true
+  if [ ! -f "$PROBE_SCRIPT" ]; then
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_helper\"}" >/dev/null 2>&1 || true
 
-  source scripts/lib/blocking-gate-prompt.sh
-  EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
-  mkdir -p "$(dirname "$EVIDENCE_PATH")"
-  cat > "$EVIDENCE_PATH" <<JSON
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
 {
   "gate": "api_precheck",
   "summary": "API contract probe setup error — missing helper: $PROBE_SCRIPT",
   "fix_hint": "Ensure review-api-contract-probe.py exists in ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/ or scripts/"
 }
 JSON
-  blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
-  # AI controller calls AskUserQuestion → resolve via Leg 2.
-  # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
-fi
+    blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
+  fi
 
+  # Resolve base URL from the same canonical source used by Phase 0.5 preflight.
+  API_PROBE_BASE=$("${PYTHON_BIN:-python3}" -c "
+import re, sys
+path = '${PHASE_DIR}/ENV-CONTRACT.md'
+try:
+    text = open(path, encoding='utf-8').read()
+except OSError:
+    sys.exit(0)
+m = re.search(r'^target:\\s*\\n((?:[ \\t].*\\n)+)', text, re.MULTILINE)
+if m:
+    body = m.group(1)
+    bm = re.search(r'^\\s*base_url:\\s*[\"\\']?([^\"\\'\\s#]+)', body, re.MULTILINE)
+    if bm:
+        print(bm.group(1))
+" 2>/dev/null)
+  [ -z "$API_PROBE_BASE" ] && API_PROBE_BASE="${VG_BASE_URL:-}"
+
+  if [ -z "$API_PROBE_BASE" ]; then
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_base_url\"}" >/dev/null 2>&1 || true
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "api_precheck",
+  "summary": "API contract probe setup error — no base_url found in ENV-CONTRACT.md and VG_BASE_URL is empty",
+  "fix_hint": "Set target.base_url in ENV-CONTRACT.md or export VG_BASE_URL"
+}
+JSON
+    blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
+  fi
+
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_started" \
+    --payload "$(printf '{"phase":"%s","base_url":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}")" >/dev/null 2>&1 || true
+
+  PROBE_CMD=("${PYTHON_BIN:-python3}" "$PROBE_SCRIPT"
+    --contracts "${PHASE_DIR}/API-CONTRACTS.md"
+    --base-url "$API_PROBE_BASE"
+    --out "$API_PROBE_OUT")
+
+  # Optional auth token from deploy/auth bootstrap. If absent, 401/403 still count
+  # as route-exists evidence for auth-protected endpoints.
+  if [ -n "${AUTH_TOKEN:-}" ]; then
+    PROBE_CMD+=(--header "Authorization: Bearer ${AUTH_TOKEN}")
+  fi
+
+  "${PROBE_CMD[@]}"
+  API_PROBE_RC=$?
+  cat "$API_PROBE_OUT"
+
+  if [ "$API_PROBE_RC" -ne 0 ]; then
+    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
+      --payload "$(printf '{"phase":"%s","base_url":"%s","rc":%s}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "${API_PROBE_RC}")" >/dev/null 2>&1 || true
+
+    source scripts/lib/blocking-gate-prompt.sh
+    EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
+    mkdir -p "$(dirname "$EVIDENCE_PATH")"
+    cat > "$EVIDENCE_PATH" <<JSON
+{
+  "gate": "api_precheck",
+  "summary": "API contract probe failed — browser discovery is not allowed to start on stale/broken API surface",
+  "fix_hint": "Fix the API surface issues found in api-contract-precheck.txt before continuing review"
+}
+JSON
+    blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
+    # AI controller calls AskUserQuestion → resolve via Leg 2.
+    # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
+  fi
+
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/emit-evidence-manifest.py" \
+    --path "${PHASE_DIR}/api-contract-precheck.txt" \
+    --source-inputs "${PHASE_DIR}/API-CONTRACTS.md,.claude/vg.config.md" \
+    --producer "vg:review/phase2a_api_contract_probe"
+  MANIFEST_RC=$?
+  if [ "$MANIFEST_RC" -ne 0 ]; then
+    echo "⛔ API contract probe wrote report but failed to bind evidence to current run." >&2
+    exit 1
+  fi
+
+  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_completed" \
+    --payload "$(printf '{"phase":"%s","base_url":"%s","artifact":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "api-contract-precheck.txt")" >/dev/null 2>&1 || true
+fi  # end SKIP_LIVE_PROBE gate — live probe only
+
+# C8: interface-standards + api-docs coverage ALWAYS run, regardless of proof status
 mkdir -p "${PHASE_DIR}/.tmp" 2>/dev/null
 INTERFACE_VAL="${VG_SCRIPT_ROOT}/validators/verify-interface-standards.py"
 if [ -f "$INTERFACE_VAL" ]; then
@@ -136,95 +225,8 @@ if [ "$API_DOCS_MANIFEST_RC" -ne 0 ]; then
   exit 1
 fi
 
-# Resolve base URL from the same canonical source used by Phase 0.5 preflight.
-API_PROBE_BASE=$("${PYTHON_BIN:-python3}" -c "
-import re, sys
-path = '${PHASE_DIR}/ENV-CONTRACT.md'
-try:
-    text = open(path, encoding='utf-8').read()
-except OSError:
-    sys.exit(0)
-m = re.search(r'^target:\\s*\\n((?:[ \\t].*\\n)+)', text, re.MULTILINE)
-if m:
-    body = m.group(1)
-    bm = re.search(r'^\\s*base_url:\\s*[\"\\']?([^\"\\'\\s#]+)', body, re.MULTILINE)
-    if bm:
-        print(bm.group(1))
-" 2>/dev/null)
-[ -z "$API_PROBE_BASE" ] && API_PROBE_BASE="${VG_BASE_URL:-}"
-
-if [ -z "$API_PROBE_BASE" ]; then
-  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
-    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"missing_base_url\"}" >/dev/null 2>&1 || true
-
-  source scripts/lib/blocking-gate-prompt.sh
-  EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
-  mkdir -p "$(dirname "$EVIDENCE_PATH")"
-  cat > "$EVIDENCE_PATH" <<JSON
-{
-  "gate": "api_precheck",
-  "summary": "API contract probe setup error — no base_url found in ENV-CONTRACT.md and VG_BASE_URL is empty",
-  "fix_hint": "Set target.base_url in ENV-CONTRACT.md or export VG_BASE_URL"
-}
-JSON
-  blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
-  # AI controller calls AskUserQuestion → resolve via Leg 2.
-  # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
-fi
-
-"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_started" \
-  --payload "$(printf '{"phase":"%s","base_url":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}")" >/dev/null 2>&1 || true
-
-PROBE_CMD=("${PYTHON_BIN:-python3}" "$PROBE_SCRIPT"
-  --contracts "${PHASE_DIR}/API-CONTRACTS.md"
-  --base-url "$API_PROBE_BASE"
-  --out "$API_PROBE_OUT")
-
-# Optional auth token from deploy/auth bootstrap. If absent, 401/403 still count
-# as route-exists evidence for auth-protected endpoints.
-if [ -n "${AUTH_TOKEN:-}" ]; then
-  PROBE_CMD+=(--header "Authorization: Bearer ${AUTH_TOKEN}")
-fi
-
-"${PROBE_CMD[@]}"
-API_PROBE_RC=$?
-cat "$API_PROBE_OUT"
-
-if [ "$API_PROBE_RC" -ne 0 ]; then
-  "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_blocked" \
-    --payload "$(printf '{"phase":"%s","base_url":"%s","rc":%s}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "${API_PROBE_RC}")" >/dev/null 2>&1 || true
-
-  source scripts/lib/blocking-gate-prompt.sh
-  EVIDENCE_PATH="${PHASE_DIR}/.vg/api-precheck-evidence.json"
-  mkdir -p "$(dirname "$EVIDENCE_PATH")"
-  cat > "$EVIDENCE_PATH" <<JSON
-{
-  "gate": "api_precheck",
-  "summary": "API contract probe failed — browser discovery is not allowed to start on stale/broken API surface",
-  "fix_hint": "Fix the API surface issues found in api-contract-precheck.txt before continuing review"
-}
-JSON
-  blocking_gate_prompt_emit "api_precheck" "$EVIDENCE_PATH" "error"
-  # AI controller calls AskUserQuestion → resolve via Leg 2.
-  # Leg 2 exit codes: 0=continue, 1=continue-with-debt, 2=route-amend (exit 0), 3=abort (exit 1), 4=re-prompt.
-fi
-
-"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT}/emit-evidence-manifest.py" \
-  --path "${PHASE_DIR}/api-contract-precheck.txt" \
-  --source-inputs "${PHASE_DIR}/API-CONTRACTS.md,.claude/vg.config.md" \
-  --producer "vg:review/phase2a_api_contract_probe"
-MANIFEST_RC=$?
-if [ "$MANIFEST_RC" -ne 0 ]; then
-  echo "⛔ API contract probe wrote report but failed to bind evidence to current run." >&2
-  exit 1
-fi
-
-"${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event "review.api_precheck_completed" \
-  --payload "$(printf '{"phase":"%s","base_url":"%s","artifact":"%s"}' "${PHASE_NUMBER}" "${API_PROBE_BASE}" "api-contract-precheck.txt")" >/dev/null 2>&1 || true
-
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2a_api_contract_probe" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2a_api_contract_probe.done"
 "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2a_api_contract_probe 2>/dev/null || true
-fi  # end else (fresh-probe path) — proof-artifact fallback closes here
 ```
 
 </step>
