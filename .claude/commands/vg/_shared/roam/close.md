@@ -19,6 +19,16 @@ mode that lives outside the main pipeline.
 ```bash
 vg-orchestrator step-active complete
 
+# F12 Batch 14: emit phase.roam_completed FIRST so the reflector trigger in
+# roam.md (which checks $EVENT_TYPE = "phase.roam_completed") actually fires.
+# roam.session.completed remains the FINAL Stop-hook witness (HARD-GATE).
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+  "phase.roam_completed" \
+  --actor "roam" \
+  --outcome "INFO" \
+  --metadata "{\"phase\":\"${PHASE_NUMBER:-unknown}\"}" \
+  >/dev/null 2>&1 || true
+
 "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
   "roam.session.completed" \
   --actor "orchestrator" --outcome "INFO" \
