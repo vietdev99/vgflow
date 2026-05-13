@@ -184,13 +184,36 @@ PROMPT_FILE="${PHASE_DIR}/.fix-prompt-${ERR_ID:-$idx}.md"
 if [ "${VG_RUNTIME:-claude}" = "codex" ]; then
   # Codex path (v2.65.0 A6) — no Agent tool; use codex-spawn.sh executor tier.
   # Sandbox=workspace-write because fix-agents edit code/tests.
+  set +e
   bash commands/vg/_shared/lib/codex-spawn.sh \
        --tier executor \
        --task "fix-${ERR_ID:-$idx}" \
        --sandbox workspace-write \
        --prompt-file "${PROMPT_FILE}" \
-       --out "${PHASE_DIR}/.fix-out-${ERR_ID:-$idx}.json" \
-    || { echo "⚠ codex-spawn fix-agent failed for ${ERR_ID:-$idx} — escalate to REVIEW-FEEDBACK.md" >&2; }
+       --out "${PHASE_DIR}/.fix-out-${ERR_ID:-$idx}.json"
+  CODEX_FIX_RC=$?
+  set -e
+  if [ "$CODEX_FIX_RC" -ne 0 ]; then
+    echo "⚠ codex-spawn fix-agent failed for ${ERR_ID:-$idx} (rc=${CODEX_FIX_RC}) — see CODEX-FIX-FAILURES.json + escalating to REVIEW-FEEDBACK.md" >&2
+    # Persist failure record to phase dir
+    ${PYTHON_BIN:-python3} - <<PYEOF
+import json
+from pathlib import Path
+from datetime import datetime, timezone
+p = Path("${PHASE_DIR}/CODEX-FIX-FAILURES.json")
+data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {"failures": []}
+data.setdefault("failures", []).append({
+    "err_id": "${ERR_ID:-unknown}",
+    "rc": ${CODEX_FIX_RC},
+    "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "attempt": ${TOTAL_ITER:-0},
+})
+p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+PYEOF
+    # Emit event
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event "test.codex_fix_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"err_id\":\"${ERR_ID:-unknown}\",\"rc\":${CODEX_FIX_RC},\"attempt\":${TOTAL_ITER:-0}}" >/dev/null 2>&1 || true
+  fi
 else
   # Claude path — preserve existing Agent tool spawn (narrate first, then call).
   bash scripts/vg-narrate-spawn.sh general-purpose spawning "fix-${ERR_ID:-$idx}" 2>/dev/null || true
