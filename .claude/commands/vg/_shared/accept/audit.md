@@ -585,3 +585,53 @@ PYEOF
 fi
 ```
 </step>
+
+<step name="6d_crossai_findings_gate">
+## Step 6d — F4 CrossAI findings gate (Batch 11)
+
+CrossAI gap-hunt findings written to `${PHASE_DIR}/crossai/review-check.report.json`
+by review lane. Accept must BLOCK on unacknowledged HIGH/CRITICAL findings.
+Override via `--allow-crossai-findings` (logs debt to OVERRIDE-DEBT.md).
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 6d_crossai_findings_gate 2>/dev/null || true
+
+# F4 Batch 11: CrossAI findings cross-check — gap-hunt output must not ship
+# unacknowledged through accept. HIGH/CRITICAL severity findings BLOCK unless
+# --allow-crossai-findings override (logged as debt).
+CROSSAI_DIR="${PHASE_DIR}/crossai"
+CROSSAI_REPORT="${CROSSAI_DIR}/review-check.report.json"
+if [ -d "$CROSSAI_DIR" ] && [ -f "$CROSSAI_REPORT" ]; then
+  ${PYTHON_BIN:-python3} - <<PYEOF
+import json, sys
+from pathlib import Path
+data = json.loads(Path("${CROSSAI_REPORT}").read_text(encoding="utf-8"))
+findings = data.get("findings", [])
+high_findings = [f for f in findings if (f.get("severity","") or "").upper() in ("HIGH", "CRITICAL")]
+print(f"CrossAI findings: total={len(findings)}, HIGH+={len(high_findings)}")
+if not high_findings:
+    sys.exit(0)
+allow = "--allow-crossai-findings" in "${ARGUMENTS:-}"
+if allow:
+    print(f"⚠ {len(high_findings)} HIGH CrossAI findings allowed via --allow-crossai-findings (debt logged)")
+    sys.exit(0)
+print(f"⛔ F4 BLOCK: {len(high_findings)} unacknowledged HIGH/CRITICAL CrossAI findings")
+for f in high_findings[:5]:
+    print(f"  - [{f.get('severity')}] {f.get('title','(no title)')}")
+print(f"   Override: re-run /vg:accept with --allow-crossai-findings (logs debt)")
+sys.exit(1)
+PYEOF
+  CROSSAI_RC=$?
+  if [ "$CROSSAI_RC" != "0" ]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "accept.crossai_findings_block" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"report\":\"${CROSSAI_REPORT}\"}" \
+      >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+touch "${PHASE_DIR}/.step-markers/6d_crossai_findings_gate.done" 2>/dev/null || true
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 6d_crossai_findings_gate 2>/dev/null || true
+```
+</step>
