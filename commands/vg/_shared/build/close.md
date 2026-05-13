@@ -252,6 +252,53 @@ mkdir -p "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "12_run_complete" "${PHASE_DIR}") || touch "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers/12_run_complete.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step build 12_run_complete 2>/dev/null || true
 
+# Rule 2 Batch 13: collect per-task diff stats + complexity gate (simplicity-first)
+COMPLEXITY_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-task-complexity.py"
+[ -f "$COMPLEXITY_VAL" ] || COMPLEXITY_VAL="${REPO_ROOT:-.}/scripts/validators/verify-task-complexity.py"
+[ -f "$COMPLEXITY_VAL" ] || COMPLEXITY_VAL=".claude/scripts/validators/verify-task-complexity.py"
+TASK_STATS="${PHASE_DIR}/.task-diff-stats.json"
+if [ -f "$COMPLEXITY_VAL" ] && [ -d "${PHASE_DIR}/.step-markers" ]; then
+  # Collect git diff stats per task: parse PLAN.md for ## Task T-XX headers
+  ${PYTHON_BIN:-python3} - <<'PYEOF' > "$TASK_STATS"
+import json, subprocess, re
+from pathlib import Path
+import os
+phase_dir = Path(os.environ.get("PHASE_DIR", "."))
+stats = {}
+plan_path = phase_dir / "PLAN.md"
+task_ids = []
+if plan_path.is_file():
+    for m in re.finditer(r"##\s+Task\s+(T-\d+)\b", plan_path.read_text(encoding="utf-8")):
+        task_ids.append(m.group(1))
+# Also scan step-markers for any T-XX.done markers (marker schema compat)
+markers_dir = phase_dir / ".step-markers"
+if markers_dir.is_dir():
+    for mf in markers_dir.glob("*T-*.done"):
+        tid = re.search(r"(T-\d+)", mf.name)
+        if tid and tid.group(1) not in task_ids:
+            task_ids.append(tid.group(1))
+for task_id in task_ids:
+    diff = subprocess.run(
+        ["git", "diff", "--shortstat", "HEAD~1", "HEAD"],
+        capture_output=True, text=True, cwd=str(phase_dir.parents[2] if len(phase_dir.parts) >= 3 else "."),
+    )
+    out = diff.stdout.strip()
+    files = int((re.search(r"(\d+) files? changed", out) or type('', (), {'group': lambda s, n: '0'})()).group(1) or 0)
+    ins = int((re.search(r"(\d+) insertions?", out) or type('', (), {'group': lambda s, n: '0'})()).group(1) or 0)
+    dels = int((re.search(r"(\d+) deletions?", out) or type('', (), {'group': lambda s, n: '0'})()).group(1) or 0)
+    stats[task_id] = {"files_changed": files, "loc_delta": ins + dels}
+print(json.dumps(stats, indent=2))
+PYEOF
+  # Run validator per task — advisory (no exit 1 unless user passes --strict-complexity)
+  while IFS= read -r task_id || [ -n "$task_id" ]; do
+    [[ -z "$task_id" ]] && continue
+    STRICT_FLAG=""
+    [[ "${ARGUMENTS}" =~ --strict-complexity ]] && STRICT_FLAG="--strict"
+    "${PYTHON_BIN:-python3}" "$COMPLEXITY_VAL" \
+      --phase-dir "${PHASE_DIR}" --task-id "$task_id" $STRICT_FLAG || true
+  done < <(grep -oP '(?<=## Task )T-\d+' "${PHASE_DIR}/PLAN.md" 2>/dev/null || echo "")
+fi
+
 # v2.38.0 — Flow compliance audit (closes "AI bypass step via override" loophole)
 # Severity warn first release for dogfood; promote to block via vg.config.md.
 if [[ ! "$ARGUMENTS" =~ --skip-compliance ]]; then
