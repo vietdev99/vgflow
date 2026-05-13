@@ -2,6 +2,20 @@
 
 4 steps: 5b_runtime_contract_verify, 5c_smoke, 5c_flow, 5c_mobile_flow.
 
+<!-- H7 Batch 8: skip-event emitter helper — sourced at runtime before each step -->
+```bash
+# H7 Batch 8: HARD-GATE skip emit helper
+emit_step_skipped_by_profile() {
+  local step="$1"
+  local profile="${2:-${PHASE_PROFILE:-${PROFILE:-unknown}}}"
+  local substitute="${3:-}"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+    "test.step_skipped_by_profile" \
+    --payload "{\"phase\":\"${PHASE_NUMBER:-unknown}\",\"step\":\"${step}\",\"profile\":\"${profile}\",\"substitute\":\"${substitute}\"}" \
+    >/dev/null 2>&1 || true
+}
+```
+
 <HARD-GATE>
 Profile gating (each step runs only for its listed profiles):
 - `web-fullstack`     → 5b_runtime_contract_verify + 5c_smoke + 5c_flow
@@ -22,6 +36,16 @@ contracts --index` for endpoint enumeration — do NOT cat flat API-CONTRACTS.md
 ## STEP 3.1 — runtime contract verify (5b_runtime_contract_verify) [profile: web-fullstack,web-backend-only]
 
 HARD-GATE: web-frontend-only + mobile-* MUST skip this step.
+
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-frontend-only|mobile-*)
+    emit_step_skipped_by_profile "5b_runtime_contract_verify" "${PHASE_PROFILE:-${PROFILE:-}}" ""
+    # no substitute — step is genuinely N/A for this profile
+    ;;
+esac
+```
 
 Verify each deployed endpoint against the blueprint contract (curl + jq, no AI).
 Read `.claude/commands/vg/_shared/env-commands.md` — `contract_verify_curl(phase_dir)`.
@@ -208,6 +232,15 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 HARD-GATE: web-backend-only + mobile-* MUST skip this step.
 
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-backend-only|mobile-*)
+    emit_step_skipped_by_profile "5c_smoke" "${PHASE_PROFILE:-${PROFILE:-}}" "5b_runtime_contract_verify"
+    ;;
+esac
+```
+
 Cross-check RUNTIME-MAP vs current app state. Browser: HEADED. Login via
 `config.credentials[ENV]`. RUNTIME-MAP.json is already JSON from /vg:review
 — read directly (KEEP-FLAT; no vg-load needed).
@@ -246,6 +279,15 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## STEP 3.3 — multi-page flow verify (5c_flow) [profile: web-fullstack,web-frontend-only]
 
 HARD-GATE: web-backend-only + mobile-* MUST skip this step.
+
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-backend-only|mobile-*)
+    emit_step_skipped_by_profile "5c_flow" "${PHASE_PROFILE:-${PROFILE:-}}" "5b_runtime_contract_verify"
+    ;;
+esac
+```
 
 ```bash
 vg-orchestrator step-active 5c_flow
@@ -346,6 +388,16 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## STEP 3.4 — mobile flow (5c_mobile_flow) [profile: mobile-*]
 
 HARD-GATE: web-fullstack, web-frontend-only, web-backend-only MUST skip this step.
+
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-fullstack|web-frontend-only|web-backend-only)
+    emit_step_skipped_by_profile "5c_mobile_flow" "${PHASE_PROFILE:-${PROFILE:-}}" ""
+    # no substitute — mobile flow is genuinely N/A for web profiles
+    ;;
+esac
+```
 
 Mobile equivalent of web smoke + goal + flow combined. Each goal → Maestro YAML
 (`assertVisible`/`assertTrue`). Pre-req: 5a_mobile_deploy done; `*.maestro.yaml`

@@ -541,5 +541,47 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 # (OHOK-3 2026-04-22) Legacy `vg_run_complete` bash helper call removed —
 # canonical `python vg-orchestrator run-complete` runs at step 7 below.
 # One path only; no dual lifecycle.
+
+# H7 Batch 8: verify each test step skipped by profile has its substitute event
+EVENTS_FILE="${PHASE_DIR}/.vg/events.jsonl"
+[ -f "$EVENTS_FILE" ] || EVENTS_FILE=".vg/events.jsonl"
+if [ -f "$EVENTS_FILE" ]; then
+  ${PYTHON_BIN:-python3} - <<PYEOF
+import json
+from pathlib import Path
+events_path = Path("${EVENTS_FILE}")
+skip_events = []
+all_events = []
+for line in events_path.read_text(encoding="utf-8").splitlines():
+    try:
+        e = json.loads(line)
+    except Exception:
+        continue
+    all_events.append(e)
+    if e.get("event") == "test.step_skipped_by_profile":
+        skip_events.append(e)
+
+missing_substitutes = []
+for skip in skip_events:
+    substitute = (skip.get("payload") or {}).get("substitute") or ""
+    if not substitute:
+        continue  # truly N/A — no substitute expected
+    # Verify substitute step has a mark-step event in this phase
+    sub_present = any(
+        e.get("payload", {}).get("step") == substitute or
+        e.get("event") == f"test.{substitute}"
+        for e in all_events
+    )
+    if not sub_present:
+        missing_substitutes.append({"skipped": (skip.get("payload") or {}).get("step"), "expected_substitute": substitute})
+
+if missing_substitutes:
+    print("⛔ H7 audit: skipped steps missing substitute evidence:")
+    for m in missing_substitutes:
+        print(f"  - {m['skipped']} skipped but {m['expected_substitute']} not present")
+    import sys; sys.exit(1)
+print(f"✓ H7 audit: {len(skip_events)} skip(s) verified, all substitutes accounted for")
+PYEOF
+fi
 ```
 </step>

@@ -1,5 +1,21 @@
 # test regression + security (STEP 7)
 
+<!-- H7 Batch 8: skip-event emitter helper — shared with runtime.md -->
+```bash
+# H7 Batch 8: HARD-GATE skip emit helper (duplicate-safe: no-op if already defined)
+if ! type emit_step_skipped_by_profile >/dev/null 2>&1; then
+emit_step_skipped_by_profile() {
+  local step="$1"
+  local profile="${2:-${PHASE_PROFILE:-${PROFILE:-unknown}}}"
+  local substitute="${3:-}"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+    "test.step_skipped_by_profile" \
+    --payload "{\"phase\":\"${PHASE_NUMBER:-unknown}\",\"step\":\"${step}\",\"profile\":\"${profile}\",\"substitute\":\"${substitute}\"}" \
+    >/dev/null 2>&1 || true
+}
+fi
+```
+
 <!-- Exception: oversized ref (≈630 lines).
      regression-security.md groups 5 profile-gated sub-steps
      (5e_regression, 5f_security_audit, 5f_mobile_security_audit,
@@ -107,6 +123,15 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## STEP 7.2 — security audit (5f_security_audit) [profile: web-fullstack,web-backend-only,web-frontend-only]
 
 HARD-GATE: mobile-* MUST skip this step (use 5f_mobile_security_audit instead).
+
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  mobile-*)
+    emit_step_skipped_by_profile "5f_security_audit" "${PHASE_PROFILE:-${PROFILE:-}}" "5f_mobile_security_audit"
+    ;;
+esac
+```
 
 Multi-tier security check. Tier 0 runs B8 structured validators (mandatory, 2026-04-23);
 Tier 1-4 run grep heuristics.
@@ -275,6 +300,15 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 
 HARD-GATE: web-* MUST skip this step (use 5f_security_audit instead).
 
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-fullstack|web-backend-only|web-frontend-only)
+    emit_step_skipped_by_profile "5f_mobile_security_audit" "${PHASE_PROFILE:-${PROFILE:-}}" "5f_security_audit"
+    ;;
+esac
+```
+
 Mobile-specific grep-based scans. Complements build-time Gate 8 (privacy manifest
 consistency) by checking ACTUAL source — secrets, cleartext traffic, weak crypto,
 insecure storage. Runs ≤10 seconds. CRITICAL/HIGH → FAIL. MEDIUM → GAPS_FOUND. LOW → logged.
@@ -421,6 +455,16 @@ V2 deferred: no deep semgrep/MobSF, no runtime network sniff (mitmproxy), no Fri
 ## STEP 7.4 — performance check (5g_performance_check) [profile: web-fullstack,web-backend-only]
 
 HARD-GATE: web-frontend-only + mobile-* MUST skip this step.
+
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-frontend-only|mobile-*)
+    emit_step_skipped_by_profile "5g_performance_check" "${PHASE_PROFILE:-${PROFILE:-}}" ""
+    # no substitute — perf budgets require a running server; genuinely N/A for FE-only + mobile
+    ;;
+esac
+```
 
 Read performance budgets from config. Skip entirely if `perf_budgets` section absent.
 
@@ -596,6 +640,16 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ## STEP 7.5 — DAST dynamic security scan (5h_security_dynamic) [profile: web-fullstack,web-backend-only]
 
 HARD-GATE: web-frontend-only + mobile-* + docs + cli-tool MUST skip this step.
+
+```bash
+# H7 Batch 8: emit skip event for accept-time audit
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-frontend-only|mobile-*|docs|cli-tool)
+    emit_step_skipped_by_profile "5h_security_dynamic" "${PHASE_PROFILE:-${PROFILE:-}}" ""
+    # no substitute — DAST needs a live server; genuinely N/A for these profiles
+    ;;
+esac
+```
 
 Dynamic Application Security Testing (v2.5 Phase B.5). Runs after 5a_deploy +
 5b_runtime_contract_verify. Spawns DAST tool (ZAP baseline active scan / Nuclei / fallback)
