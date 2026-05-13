@@ -1,5 +1,46 @@
 # Changelog
 
+## v4.13.0 — Batch 10: auto-chain + marker integrity + LIFECYCLE.md (2026-05-13)
+
+Closes 4 flow-chain audit findings (F1/F2/F3/F10) for 50+ phase project readiness.
+
+### F1 (HIGH): next_command emit on all phase closes
+
+`--auto-chain` CI mode previously stalled at every phase boundary except
+review→build because only `review/close.md` wrote `next_command` to
+`PIPELINE-STATE.json`. All other closes echoed `Next: /vg:X` to stdout only.
+
+Fix: `specs/write-and-commit.md`, `scope/close.md`, `blueprint/close.md`,
+`test-spec.md`, and `test/close.md` now each write `state['next_command']`
+to `PIPELINE-STATE.json`. `test/close.md` is verdict-dependent:
+PASSED/GAPS_FOUND → `/vg:accept`, FAILED → `/vg:review --resume`.
+
+All 6 phase boundaries now wired for `--auto-chain` end-to-end.
+
+### F3 (HIGH): strict marker check on blueprint/build/accept
+
+`verify_all_markers_strict_runid` (Batch 9) was wired to `test/close.md`
+only. Blueprint, build, and accept/cleanup still used bare `-f .done`
+file-existence checks that could be satisfied by stale markers from prior runs.
+
+Fix: strict marker pattern propagated to `blueprint/close.md` (after R7),
+`build/close.md` (before `run-complete`), and `accept/cleanup/overview.md`
+(after Gate B). All 4 closes now reject empty/stale/forged markers.
+
+### F2 (HIGH): LIFECYCLE.md test artifact corrected
+
+`LIFECYCLE.md:60` listed `TEST-RESULTS.json` as Phase 6 output. The actual
+artifact since Batch 1 is `SANDBOX-TEST.md`. Corrected with deprecation note.
+
+### F10 (MEDIUM): LIFECYCLE.md refreshed for Batches 1-12
+
+Added:
+- Pipeline Artifacts Reference table (16 artifacts with phase origin)
+- Strict Marker Gate section (all 4 closes documented)
+- Auto-chain section (all 6 boundaries documented)
+
+---
+
 ## v4.12.0 — H13: AI test introspection (per-failure detail extractor) (2026-05-13)
 
 User feedback (dogfood on PrintwayV3 phase 6 G-08/G-31 tests): `/vg:test`
