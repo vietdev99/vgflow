@@ -539,13 +539,15 @@ if [ -f "$FE_BE_VAL" ]; then
   [ -d "$_BE_ROOT" ] || _BE_ROOT="${REPO_ROOT:-.}/backend"
   [ -d "$_BE_ROOT" ] || _BE_ROOT="${REPO_ROOT:-.}/api"
   [ -d "$_BE_ROOT" ] || _BE_ROOT="${REPO_ROOT:-.}"
+  set +e
   "${PYTHON_BIN:-python3}" "$FE_BE_VAL" \
     --fe-root "$_FE_ROOT" \
     --be-root "$_BE_ROOT" \
     --phase "${PHASE_NUMBER:-${PHASE_ARG:-unknown}}" \
     --evidence-out "${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.json" \
-    > "${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.diag" 2>&1 || true
+    > "${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.diag" 2>&1
   FE_BE_RC=$?
+  set -e
   if [ "$FE_BE_RC" -ne 0 ]; then
     echo "⚠ verify-fe-be-call-graph.py advisory: FE-BE drift detected (see ${PHASE_DIR}/.tmp/fe-be-call-graph-advisory.diag)"
     echo "   NOT a hard block — dynamic routes / generated clients produce false positives. Discovery-only hint."
