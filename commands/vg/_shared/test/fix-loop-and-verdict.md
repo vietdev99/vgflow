@@ -962,18 +962,32 @@ EMIT_MANIFEST="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/emit-evidenc
 [ -f "$EMIT_MANIFEST" ] || EMIT_MANIFEST="${REPO_ROOT}/scripts/emit-evidence-manifest.py"
 if [ -f "$EMIT_MANIFEST" ]; then
   if [ -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
+    set +e
     "${PYTHON_BIN:-python3}" "$EMIT_MANIFEST" \
       --path "${PHASE_DIR}/RUNTIME-MAP.json" \
       --producer "vg:review phase2b3_runtime_map" \
-      --source-inputs "${PHASE_DIR}/nav-discovery.json,${PHASE_DIR}/TEST-GOALS.md" \
-      --quiet || true
+      --source-inputs "${PHASE_DIR}/nav-discovery.json,${PHASE_DIR}/TEST-GOALS.md"
+    EMIT_RC=$?
+    set -e
+    if [ "$EMIT_RC" -ne 0 ]; then
+      echo "⚠ manifest emit failed for RUNTIME-MAP.json (rc=${EMIT_RC})" >&2
+      "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event "review.manifest_emit_failed" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"path\":\"RUNTIME-MAP.json\",\"rc\":${EMIT_RC}}" >/dev/null 2>&1 || true
+    fi
   fi
   if [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ]; then
+    set +e
     "${PYTHON_BIN:-python3}" "$EMIT_MANIFEST" \
       --path "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" \
       --producer "vg:review step7_matrix_verdict" \
-      --source-inputs "${PHASE_DIR}/TEST-GOALS.md,${PHASE_DIR}/RUNTIME-MAP.json,${PHASE_DIR}/.surface-probe-results.json,${PHASE_DIR}/DEEP-TEST-SPECS.md,${PHASE_DIR}/LIFECYCLE-SPECS.json,${PHASE_DIR}/TEST-FIXTURE-DAG.json,${PHASE_DIR}/TEST-EXECUTION-PLAN.json" \
-      --quiet || true
+      --source-inputs "${PHASE_DIR}/TEST-GOALS.md,${PHASE_DIR}/RUNTIME-MAP.json,${PHASE_DIR}/.surface-probe-results.json,${PHASE_DIR}/DEEP-TEST-SPECS.md,${PHASE_DIR}/LIFECYCLE-SPECS.json,${PHASE_DIR}/TEST-FIXTURE-DAG.json,${PHASE_DIR}/TEST-EXECUTION-PLAN.json"
+    EMIT_RC=$?
+    set -e
+    if [ "$EMIT_RC" -ne 0 ]; then
+      echo "⚠ manifest emit failed for GOAL-COVERAGE-MATRIX.md (rc=${EMIT_RC})" >&2
+      "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event "review.manifest_emit_failed" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"path\":\"GOAL-COVERAGE-MATRIX.md\",\"rc\":${EMIT_RC}}" >/dev/null 2>&1 || true
+    fi
   fi
 fi
 
