@@ -1,5 +1,47 @@
 # Changelog
 
+## v4.9.0 — Cleanup quality + subagent strict schema (Batch 4 / G1+G4+G5+G6+H10+C6+C7) (2026-05-13)
+
+Audit Gaps G1, G4, G5, G6 (lifecycle generator quality), H10 (reflector
+visibility), C6+C7 (subagent strict schema).
+
+### G1 — Lifecycle preconditions from goal.dependencies (LOW)
+
+`_preconditions()` now builds precondition list from `goal.dependencies`
+and `infra_deps` fields. Boilerplate 4-bullet is fallback when both empty.
+
+### G4 — Actor inference reads explicit goal.actors metadata (LOW)
+
+`_infer_actors_v2()` reads explicit `actors:` metadata field first.
+Word-match heuristic only used when metadata absent.
+
+### G5 — Root fixture DAG from cross-goal dependency graph (LOW)
+
+`_root_fixture_dag()` iterates all goal `dependencies` fields, extracts
+`G-NN` cross-references, builds nodes+edges DAG at spec root level.
+
+### G6 — artifact_capture reflects goal.artifact_kind (LOW)
+
+`_artifact_capture_v2()` maps `artifact_kind` (csv-download, pdf,
+screenshot, json) to typed capture entries with path slots.
+
+### H10 — vg-reflector output persisted to REFLECTION.md (LOW)
+
+test/close.md now writes reflector subagent output to
+`${PHASE_DIR}/REFLECTION.md` as committed phase artifact.
+`--skip-reflection` flag documented and supported for CI opt-out.
+
+### C6 — goal-verifier post-spawn strict schema (HIGH)
+
+goal-verification/overview.md strict validation: goal_id reconciliation
+vs GOAL-COVERAGE-MATRIX.json, STATUS_ENUM enforcement, evidence_ref
+file existence check.
+
+### C7 — codegen post-spawn strict schema (HIGH)
+
+codegen/overview.md strict validation: spec_files[] is_file check,
+READY goal coverage reconciliation, CODEGEN-BINDING-REPORT.json artifact.
+
 ## v4.8.0 — Cross-lane integration (Batch 8 / H7+H12) (2026-05-13)
 
 Audit Gaps H7 (MEDIUM) and H12 (LOW) — HARD-GATE skip events and
