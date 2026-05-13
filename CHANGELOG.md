@@ -1,5 +1,40 @@
 # Changelog
 
+## v4.8.0 — Cross-lane integration (Batch 8 / H7+H12) (2026-05-13)
+
+Audit Gaps H7 (MEDIUM) and H12 (LOW) — HARD-GATE skip events and
+CrossAI runs consumption.
+
+### H7 — HARD-GATE skip directives emit events + accept audit (MEDIUM)
+
+8+ HARD-GATE skip directives in test/runtime.md and test/regression-security.md
+silently skipped steps by profile with no central skip manifest and no
+/vg:accept verification that a substitute step ran.
+
+Fix:
+- emit_step_skipped_by_profile() helper added to both files; emits
+  test.step_skipped_by_profile event with {phase, step, profile, substitute}
+  whenever a HARD-GATE skip condition matches.
+- Skip directives covered: 5b_runtime_contract_verify, 5c_smoke, 5c_flow,
+  5c_mobile_flow, 5f_security_audit, 5f_mobile_security_audit,
+  5g_performance_check, 5h_security_dynamic.
+- accept/audit.md consumes .vg/events.jsonl, finds skip events with non-empty
+  substitute, verifies substitute event present in same phase. Missing
+  substitute → BLOCK.
+
+### H12 — CrossAI runs/ findings flow into codegen context (LOW)
+
+review/preflight.md drops CrossAI tool scan results into
+.vg/phases/{phase}/review/runs/{tool}/. No consumer in test/test-spec lanes.
+
+Fix:
+- test/preflight.md scans review/runs/ subdirs after preflight steps,
+  collects all tool findings into .tmp/crossai-findings.md, exports
+  VG_CROSSAI_FINDINGS_PATH for downstream consumers.
+- codegen/overview.md documents how codegen subagent prompt includes the
+  findings path so test specs reference CrossAI signals (FE-BE drift, missing
+  endpoints, security concerns).
+
 ## v4.7.0 — Deferred high-priority gaps (Batch 2 / G2+G14+C8+C11) (2026-05-13)
 
 Audit Gaps G2 (HIGH), G14 (HIGH), C8 (HIGH), C11 (MEDIUM) — lifecycle
