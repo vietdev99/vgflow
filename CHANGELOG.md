@@ -1,5 +1,75 @@
 # Changelog
 
+## v4.15.0 — Batch 12 FINAL: scale infrastructure F6+F7+F8+F9 (2026-05-13)
+
+Closes last 4 flow-chain audit findings (F6/F7/F8/F9). Scale verdict
+upgrades from FAIL → **PASS (conditional on zfill migration TODO)**.
+
+### F6 (HIGH): zfill(2) hardcoded across 14+ scripts — breaks at phase 100+
+
+`str(phase).zfill(2)` silently truncated phase numbers >= 100 (e.g., phase 100 → "10").
+Sub-phase notation `07.10.1` was mangled. Blocker for 50+ phase projects.
+
+Fix: `scripts/lib/phase_pad.py` — shared `phase_pad(phase, width=None)` utility.
+Default width=2 (backward compat). `VG_PHASE_PAD_WIDTH` env override.
+Never truncates when phase >= 10^width. Sub-phase notation preserved (top-level
+segment only padded). Migrated 3 heaviest-traffic scripts: `generate-lifecycle-specs.py`,
+`generate-deep-test-specs.py`, `generate-interface-standards.py`.
+
+**Remaining ~11 zfill(2) sites**: deprecation cycle TODO. Tooling tolerates
+`zfill(2)` callers through v5.0; all sites migrate by v5.1.
+
+### F7 (HIGH): no domain/team isolation for parallel multi-team work
+
+ROADMAP.md, CROSS-PHASE-DEPS.md, and event stream had no domain/team partition.
+Parallel teams couldn't safely run concurrent phases.
+
+Fix (minimal — full parallel scheduler deferred to v5.0+):
+- `roadmap.md`: ROADMAP template documents `**Domain:**` + `**Team:**` fields per phase.
+- `specs/preflight.md`: new Step 3 `domain_team_propagation` reads domain/team
+  from ROADMAP.md, exports `VG_PHASE_DOMAIN` + `VG_PHASE_TEAM` env vars,
+  writes into `PIPELINE-STATE.json` for downstream event filtering.
+- `LIFECYCLE.md`: new "Domain/Team Isolation" section documents fields,
+  propagation path, and v5.0+ parallel scheduler roadmap.
+
+### F8 (HIGH): accept/preflight didn't cross-check PIPELINE-STATE.next_command
+
+`test/close.md` (F1 Batch 10) writes `next_command`: PASSED → `/vg:accept`,
+FAILED → `/vg:review --resume`. But `accept/preflight.md` never validated
+the invocation matched. Operator could `/vg:accept` a FAILED phase → ship broken code.
+
+Fix: `accept/preflight.md` new Step `0e_next_command_crosscheck` reads
+`PIPELINE-STATE.next_command`, compares vs `/vg:accept`. Mismatch:
+WARN + BLOCK unless `--force`. Emits `accept.routing_mismatch_block` event.
+
+### F9 (MEDIUM): deploy failure had no chain-back protocol
+
+Deploy failure was silent: PIPELINE-STATE stayed at `build-complete`, no
+`deploy.failed` event, no `--resume` routing.
+
+Fix: `deploy/persist-and-close.md` failure-path block detects `DEPLOY_STATUS=FAILED`,
+updates PIPELINE-STATE (`pipeline_step='deploy-failed'`, `deploy_status`,
+`next_command='/vg:deploy {phase} --resume'`), emits `deploy.failed` event.
+
+---
+
+### FINAL SUMMARY — Flow-chain audit cycle v4.2.0 → v4.15.0
+
+All 12 flow-chain findings + 23 audit gaps closed across 14 releases today.
+
+| Batch | Version | Findings |
+|---|---|---|
+| Batches 2-5 | v4.2.0–v4.5.0 | Audit gaps 1-23 (all closed) |
+| Batches 6-9 | v4.6.0–v4.9.0 | Flow-chain C1-C9 |
+| Batch 10 | v4.13.0 | F1/F2/F3/F10 — auto-chain + markers + LIFECYCLE |
+| Batch 11 | v4.14.0 | F4/F5/F11/F12 — amend cascade + CrossAI + review ledger |
+| Batch 12 | v4.15.0 | F6/F7/F8/F9 — scale infra (FINAL) |
+
+**Scale verdict: FAIL → PASS (conditional)**
+- Condition: remaining ~11 `zfill(2)` sites migrated (v5.1 deadline).
+- All chain routing gates wired end-to-end.
+- Domain/team isolation schema live. Full parallel scheduler in v5.0+.
+
 ## v4.14.0 — Batch 11: amend cascade enforcement + CrossAI accept + review ledger (2026-05-13)
 
 Closes 4 flow-chain audit findings (F4/F5/F11/F12).
