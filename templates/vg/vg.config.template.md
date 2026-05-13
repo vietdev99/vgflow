@@ -1134,3 +1134,9 @@ test:
     # real Bearer token. Cleanup DELETE attempted on each created record.
     # Cleanup failures emit test.idempotency_polluted event — inspect ledger
     # at ${VG_TMP}/idempotency-cleanup.json.
+
+# test execution observability (Batch 5)
+  execution:
+    headed_default: auto       # auto | true | false (auto = headed when TTY+no CI)
+    slow_mo_ms: 250            # 0 = no delay; 250 = comfortable watch speed
+    show_trace_on_failure: true
