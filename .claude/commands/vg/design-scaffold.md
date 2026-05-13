@@ -70,11 +70,12 @@ if [ ! -f "$DESIGN_MD_PATH" ] && [ ! -f "${PHASE_DIR}/DESIGN.md" ]; then
   echo "⚠ Không thấy DESIGN.md (tokens). Mockups sẽ generic hơn — cân nhắc:"
   echo "    /vg:design-system --browse   (chọn brand từ 58 variants)"
   echo "    /vg:design-system --create   (tạo custom)"
-  AskUserQuestion: "Continue scaffold without DESIGN.md? [y/N]"
 fi
 
 mkdir -p "$DESIGN_ASSETS_DIR" "${PHASE_DIR}/.scaffold-evidence"
 ```
+
+AskUserQuestion: "Continue scaffold without DESIGN.md? [y/N]"
 
 If neither ROADMAP nor PLAN exists → BLOCK: "Run /vg:roadmap or /vg:specs first to define page list."
 </step>

@@ -43,9 +43,10 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 if ! npx playwright --version >/dev/null 2>&1; then
   echo "⚠ Playwright npm package missing. Run: npm i -D playwright && npx playwright install chromium"
-  AskUserQuestion: "Install now? [y/N]"
 fi
 ```
+
+AskUserQuestion: "Install now? [y/N]"
 </step>
 
 <step name="1_parse_args">
