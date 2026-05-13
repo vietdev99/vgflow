@@ -1,5 +1,50 @@
 # Changelog
 
+## v4.14.0 — Batch 11: amend cascade enforcement + CrossAI accept + review ledger (2026-05-13)
+
+Closes 4 flow-chain audit findings (F4/F5/F11/F12).
+
+### F5 (HIGH): amend cascade was informational-only
+
+`/vg:amend` cascade analysis warned about downstream impact but never wrote
+an invalidation artifact. LIFECYCLE-SPECS.json not invalidated after D-XX
+change. `/vg:accept` shipped phases with stale behavioral contract — test
+results from pre-amend run were still marked PASSED.
+
+Fix: `amend.md` Phase 4 now writes `${PHASE_DIR}/.amend-invalidation.json`
+with `{amended_at, changed_goals, changed_decisions, amend_session, phase}`.
+
+### F12 (MEDIUM): accept never checked amend timestamp vs test timestamp
+
+`/vg:accept` preflight had no comparison of `amended_at` vs SANDBOX-TEST.md
+`tested` field. A phase amended AFTER its last test run would silently pass.
+
+Fix: `accept/preflight.md` new step `0d_amend_invalidation_check` reads
+`.amend-invalidation.json`, parses SANDBOX-TEST.md frontmatter `tested`
+field. If `amended_at > tested_at` → BLOCK with "Re-run /vg:test".
+Emits `accept.amend_invalidation_block` event.
+
+### F4 (HIGH): CrossAI blueprint findings stranded in accept
+
+CrossAI gap-hunt findings written to `${PHASE_DIR}/crossai/review-check.report.json`
+by review lane were silently discarded by accept. HIGH/CRITICAL severity
+findings shipped unacknowledged.
+
+Fix: `accept/audit.md` new gate `6d_crossai_findings_gate`. Reads
+`crossai/review-check.report.json`, BLOCKs on unacknowledged HIGH/CRITICAL
+findings. Override via `--allow-crossai-findings` (debt logged). Emits
+`accept.crossai_findings_block` event.
+
+### F11 (MEDIUM): review lane had no step-status ledger
+
+C5 Batch 9 wired step-status ledger for test lane only. Review sub-step
+failures (api-and-discovery, matrix-intent) did not propagate to verdict.
+
+Fix: `step-status-ledger.py` new `--ledger PATH` flag (default unchanged
+`.test-step-status.json`). Review preflight + api-and-discovery emit
+entries to `.review-step-status.json`. `review/close.md` reads ledger
+before verdict computation. Symmetric with test/close.md C5 pattern.
+
 ## v4.13.0 — Batch 10: auto-chain + marker integrity + LIFECYCLE.md (2026-05-13)
 
 Closes 4 flow-chain audit findings (F1/F2/F3/F10) for 50+ phase project readiness.
