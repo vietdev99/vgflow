@@ -11,6 +11,7 @@ allowed-tools:
   - Grep
   - AskUserQuestion
   - Task
+  - SlashCommand
 mutates_repo: true
 runtime_contract:
   must_write:
