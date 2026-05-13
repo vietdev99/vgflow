@@ -70,6 +70,53 @@ MULTI_ACTOR_WORD_RE = re.compile(
 
 EMPTY_VALUES = {"", "none", "n/a", "na", "null", "-", "[]", "{}"}
 
+# G13 Batch 3: semantic checks — stage verb ↔ endpoint method, assertion source, actor ↔ goal.actors
+STAGE_VERB_MAP: dict[str, tuple[str, ...]] = {
+    "create": ("POST",),
+    "update": ("PUT", "PATCH"),
+    "delete": ("DELETE",),
+    "read_before": ("GET",),
+    "read_after_create": ("GET",),
+    "read_after_update": ("GET",),
+    "read_after_delete": ("GET",),
+}
+
+
+def _semantic_checks(spec: dict) -> list[str]:
+    """Return list of G13 semantic issues."""
+    issues: list[str] = []
+    for gid, goal in (spec.get("goals") or {}).items():
+        if not isinstance(goal, dict):
+            continue
+        actor_ids = {a.get("id") for a in (goal.get("actors") or []) if isinstance(a, dict)}
+        for step in (goal.get("steps") or []):
+            if not isinstance(step, dict):
+                continue
+            stage = step.get("name") or step.get("stage")
+            # Stage ↔ endpoint method match
+            ep = step.get("endpoint")
+            if ep and isinstance(ep, dict) and stage in STAGE_VERB_MAP:
+                expected = STAGE_VERB_MAP[stage]
+                if ep.get("method") not in expected:
+                    issues.append(
+                        f"G13: goal {gid} stage '{stage}' bound to "
+                        f"{ep.get('method')} {ep.get('path')} — expected method in {expected}"
+                    )
+            # Assertion entries each need source
+            for a in (step.get("assertions") or []):
+                if not isinstance(a, dict) or not a.get("source"):
+                    issues.append(
+                        f"G13: goal {gid} stage '{stage}' has assertion without source: {a}"
+                    )
+            # Actor must exist in goal.actors
+            actor = step.get("actor")
+            if actor and actor_ids and actor not in actor_ids:
+                issues.append(
+                    f"G13: goal {gid} stage '{stage}' references unknown actor '{actor}'; "
+                    f"goal.actors={sorted(actor_ids)}"
+                )
+    return issues
+
 
 def _read(path: Path) -> str:
     try:
@@ -227,6 +274,8 @@ def main() -> None:
     parser.add_argument("--phase", required=True)
     parser.add_argument("--severity", choices=["block", "warn"], default="block")
     parser.add_argument("--lifecycle-path", default=None)
+    parser.add_argument("--strict", action="store_true",
+                        help="G13: escalate semantic issues to BLOCK (default: advisory)")
     args = parser.parse_args()
 
     out = Output(validator="lifecycle-spec-depth")
@@ -384,6 +433,20 @@ def main() -> None:
                     ),
                     args.severity,
                 )
+
+        # G13 Batch 3: semantic checks — advisory mode prints issues; --strict escalates to BLOCK
+        semantic_issues = _semantic_checks(data)
+        if semantic_issues:
+            print("WARN G13 semantic issues:")
+            for issue in semantic_issues:
+                print(f"  - {issue}")
+            if getattr(args, "strict", False):
+                for issue in semantic_issues:
+                    out.add(Evidence(
+                        type="lifecycle_semantic_issue",
+                        message=issue,
+                        file=str(lifecycle_path),
+                    ), escalate=True)
 
     emit_and_exit(out)
 
