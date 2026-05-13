@@ -11,13 +11,22 @@ runtime_contract:
   must_emit_telemetry:
     - event_type: "complete_milestone.started"
     - event_type: "complete_milestone.completed"
+  must_touch_markers:
+    - 0_args
+    - 1_telemetry_started
+    - 2_gate_check
+    - 3_security_audit
+    - 4_milestone_summary
+    - 5_archive_phases
+    - 6_finalize_state
+    - 7_atomic_commit
 ---
 
 <objective>
 Atomic milestone closeout. Orchestrates the existing milestone-level pieces into a single command:
 
 1. **Gate check** — every phase resolved for the milestone has UAT.md (= accepted), no critical OPEN threats, no critical OVERRIDE-DEBT entries unresolved.
-2. **Security audit** — invokes `/vg:security-audit-milestone --milestone-gate` so decay + composite + Strix-advisory steps run with the milestone gate active.
+2. **Security audit** — invokes `generate-strix-advisory.py --milestone-gate` (via `/vg:security-audit-milestone`) so decay + composite + Strix-advisory steps run with the milestone gate active.
 3. **Aggregate summary** — invokes `/vg:milestone-summary` to refresh the cross-phase report.
 4. **Archive phase dirs** — moves `.vg/phases/{N}/` (for phases in this milestone) into `.vg/milestones/{M}/phases/{N}/` via `git mv` to preserve history. Skip with `--no-archive` if you want phases hot-readable for amendments.
 5. **Advance STATE.md** — flips `current_milestone` to `M{N+1}` and appends `milestones_completed[]` entry.
@@ -59,6 +68,11 @@ done
 source "${REPO_ROOT:-.}/.claude/commands/vg/_shared/lib/telemetry.sh" 2>/dev/null || true
 emit_telemetry_v2 "complete_milestone.started" "" "complete-milestone" \
   "milestone_orchestrator" "INFO" "{\"milestone\":\"${MILESTONE}\",\"check_only\":${CHECK_ONLY}}" 2>/dev/null || true
+
+# F2 Batch 14: vg-orchestrator run-start — register active run so Stop hook
+# sees contract and can enforce must_touch_markers (prevents silent early-exit).
+_VG_ORCH="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator"
+"${PYTHON_BIN:-python3}" "$_VG_ORCH" run-start "vg:complete-milestone" "milestone-level" "${MILESTONE}" >/dev/null 2>&1 || true
 ```
 </step>
 
@@ -94,18 +108,26 @@ fi
 echo ""
 echo "━━━ Step 2 — Security audit (milestone gate) ━━━"
 
-if [ -f ".claude/commands/vg/security-audit-milestone.md" ]; then
-  ${PYTHON_BIN:-python3} -c "
-import subprocess, sys
-# Invoke via the standard slash command surface so all hooks/telemetry fire
-# Fall back to direct script call if a runner harness is missing
-print('  (delegating to /vg:security-audit-milestone --milestone-gate)')
-" || true
-  AUDIT_ARGS="--milestone=$MILESTONE --milestone-gate"
-  echo "  Run: /vg:security-audit-milestone $AUDIT_ARGS"
-  echo "  (this command writes audit + Strix advisory if enabled)"
+# F1 Batch 14: actually invoke generate-strix-advisory.py instead of print-only.
+# Probe candidate script locations (VG_SCRIPT_ROOT, VG_HOME, repo-local scripts/).
+STRIX=""
+for _candidate in \
+  "${VG_SCRIPT_ROOT:-}/generate-strix-advisory.py" \
+  "${VG_HOME:-$HOME/.vgflow}/scripts/generate-strix-advisory.py" \
+  "${REPO_ROOT:-.}/scripts/generate-strix-advisory.py" \
+  ".claude/scripts/generate-strix-advisory.py"
+do
+  if [ -f "$_candidate" ]; then
+    STRIX="$_candidate"
+    break
+  fi
+done
+
+if [ -n "$STRIX" ]; then
+  echo "  Invoking $STRIX --milestone-gate ..."
+  "${PYTHON_BIN:-python3}" "$STRIX" --milestone "$MILESTONE" --milestone-gate ${AUDIT_EXTRA_ARGS:-} || true
 else
-  echo "  ⚠ /vg:security-audit-milestone missing — skipping audit (review hand-off recommended)"
+  echo "  ⚠ generate-strix-advisory.py not found — skipping Strix advisory (review hand-off recommended)"
 fi
 ```
 </step>
