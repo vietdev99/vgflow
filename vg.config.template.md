@@ -1140,3 +1140,9 @@ test:
     headed_default: auto       # auto | true | false (auto = headed when TTY+no CI)
     slow_mo_ms: 250            # 0 = no delay; 250 = comfortable watch speed
     show_trace_on_failure: true
+
+# Rule 6 Batch 13: token budget (per tinbeta/AGENTS.md)
+token_budget:
+  per_task: 4000      # Default from AGENTS.md Rule 6
+  per_session: 30000  # Default from AGENTS.md Rule 6
+  enforce: warn       # warn | block | off (block requires --allow-overrun to bypass)
