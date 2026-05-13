@@ -412,3 +412,40 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 ```
 
 After ALL 6 step markers touched, return to entry SKILL.md → STEP 5 (deploy + verify + codegen).
+
+---
+
+## CrossAI findings collector (H12 Batch 8)
+
+After all preflight steps pass, collect any CrossAI tool scan output from the
+review lane so test-spec/codegen can reference it.
+
+```bash
+# H12 Batch 8: surface CrossAI runs/ findings to downstream test-spec/test
+CROSSAI_RUNS_DIR="${PHASE_DIR}/review/runs"
+[ -d "$CROSSAI_RUNS_DIR" ] || CROSSAI_RUNS_DIR="${PHASE_DIR}/crossai/runs"
+if [ -d "$CROSSAI_RUNS_DIR" ]; then
+  # Find any CrossAI tool runs (codex, gemini, claude subdirs)
+  CROSSAI_FINDINGS_OUT="${PHASE_DIR}/.tmp/crossai-findings.md"
+  mkdir -p "$(dirname "$CROSSAI_FINDINGS_OUT")"
+  {
+    echo "# CrossAI findings — collected from review/runs/"
+    echo ""
+    for tool_dir in "$CROSSAI_RUNS_DIR"/*/; do
+      [ -d "$tool_dir" ] || continue
+      tool="$(basename "$tool_dir")"
+      echo "## Tool: ${tool}"
+      for result in "$tool_dir"*.{md,json,xml}; do
+        [ -f "$result" ] || continue
+        echo "### $(basename "$result")"
+        head -50 "$result" 2>/dev/null
+        echo ""
+      done
+    done
+  } > "$CROSSAI_FINDINGS_OUT"
+  export VG_CROSSAI_FINDINGS_PATH="$CROSSAI_FINDINGS_OUT"
+  echo "✓ CrossAI findings collected: ${CROSSAI_FINDINGS_OUT}"
+else
+  echo "ℹ no review/runs/ dir — skipping CrossAI findings collection"
+fi
+```

@@ -288,3 +288,24 @@ to the `vg-test-codegen` subagent. `5d_deep_probe` and `5d_mobile_codegen`
 are marked inside their respective orchestrator-side ref steps.
 
 After marker touched, return to test.md entry skill → STEP 6 (regression).
+
+---
+
+## CrossAI context (H12 Batch 8)
+
+When `$VG_CROSSAI_FINDINGS_PATH` is set (populated by test/preflight.md
+from `.vg/phases/{phase}/review/runs/{tool}/`), the codegen subagent
+prompt template MUST include:
+
+```
+crossai_findings_path: ${VG_CROSSAI_FINDINGS_PATH}
+crossai_findings_note: |
+  Review-time CrossAI scans (codex/gemini/claude) produced findings at the
+  path above. Inspect for FE-BE drift, missing endpoints, security concerns
+  that may affect generated test specs. Reference findings by tool name in
+  generated spec headers when relevant.
+```
+
+This wires up the stranded review/runs/ output as test-spec/codegen context.
+Collectors: test/preflight.md scans `.vg/phases/{phase}/review/runs/{tool}/`
+subdirs, collates into `.tmp/crossai-findings.md`, exports `VG_CROSSAI_FINDINGS_PATH`.
