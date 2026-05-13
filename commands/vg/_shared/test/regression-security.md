@@ -51,6 +51,18 @@ Run generated tests via CLI (not MCP). Config is env-aware: headed when interact
 Trace + video + screenshot retained on failure.
 
 ```bash
+# G11 Batch 3: codegen-lifecycle conformance gate (advisory — runs before 5e_regression)
+G11_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-codegen-lifecycle-conformance.py"
+[ -f "$G11_VAL" ] || G11_VAL="${REPO_ROOT:-.}/scripts/validators/verify-codegen-lifecycle-conformance.py"
+if [ -f "$G11_VAL" ]; then
+  "${PYTHON_BIN:-python3}" "$G11_VAL" \
+    --phase "${PHASE_NUMBER}" \
+    --phase-dir "${PHASE_DIR}" \
+    --spec-dir "${GENERATED_TESTS_DIR}" || true
+fi
+```
+
+```bash
 vg-orchestrator step-active 5e_regression
 
 # 1. Resolve visibility mode
