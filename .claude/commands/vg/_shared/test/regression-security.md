@@ -31,16 +31,47 @@ vg-load: no vg-load injection needed; orchestration-only.
 
 ## STEP 7.1 — regression run (5e_regression) [profile: all]
 
-Run generated tests via CLI (not MCP):
+Run generated tests via CLI (not MCP). Config is env-aware: headed when interactive, headless in CI.
+Trace + video + screenshot retained on failure.
 
 ```bash
 vg-orchestrator step-active 5e_regression
 
-run_on_target "cd ${PROJECT_PATH} && npx playwright test ${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts"
-```
+# 1. Resolve visibility mode
+# Precedence: --headed/--headless flag > config.test.execution.headed_default > TTY+!CI auto-detect
+HEADED_DEFAULT=$(vg_config_get test.execution.headed_default "auto")
+if echo "${ARGUMENTS}" | grep -q -- "--headless"; then
+  VG_HEADED=false
+elif echo "${ARGUMENTS}" | grep -q -- "--headed"; then
+  VG_HEADED=true
+elif echo "${ARGUMENTS}" | grep -q -- "--auto-chain"; then
+  VG_HEADED=false  # auto-chain implies CI semantics
+elif [ "${HEADED_DEFAULT}" = "true" ]; then
+  VG_HEADED=true
+elif [ "${HEADED_DEFAULT}" = "false" ]; then
+  VG_HEADED=false
+else  # auto
+  if [ -t 1 ] && [ -z "${CI:-}" ]; then VG_HEADED=true; else VG_HEADED=false; fi
+fi
+SLOW_MO=$(vg_config_get test.execution.slow_mo_ms "250")
 
-If playwright config for generated tests doesn't exist, create a minimal one at
-`${GENERATED_TESTS_DIR}/playwright.config.generated.ts` with env vars from config.
+# 2. Materialize generated config from template if missing
+# Template: playwright.config.generated.template.ts → playwright.config.generated.ts
+mkdir -p "${GENERATED_TESTS_DIR}"
+if [ ! -f "${GENERATED_TESTS_DIR}/playwright.config.generated.ts" ]; then
+  cp "${VG_COMMAND_ROOT:-${VG_HOME:-$HOME/.vgflow}}/../templates/vg/playwright.config.generated.template.ts" \
+     "${GENERATED_TESTS_DIR}/playwright.config.generated.ts" 2>/dev/null \
+  || cp "templates/vg/playwright.config.generated.template.ts" \
+        "${GENERATED_TESTS_DIR}/playwright.config.generated.ts"
+fi
+
+# 3. Run regression with generated config
+run_on_target "cd ${PROJECT_PATH} && \
+  VG_HEADED=${VG_HEADED} VG_SLOW_MO=${SLOW_MO} \
+  npx playwright test \
+    --config ${GENERATED_TESTS_DIR}/playwright.config.generated.ts \
+    ${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts"
+```
 
 Result:
 - All pass → PASS
