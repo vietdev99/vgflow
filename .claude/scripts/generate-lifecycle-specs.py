@@ -164,6 +164,10 @@ def _parse_goal_block(text: str, source: Path) -> dict[str, Any] | None:
         "persistence_check": _field(text, "Persistence check"),
         "dependencies": _field(text, "Dependencies"),
         "infra_deps": _field(text, "Infra deps"),
+        # G4: explicit actors metadata
+        "actors": _field(text, "actors") or _field(text, "actor"),
+        # G6: artifact_kind field
+        "artifact_kind": _field(text, "artifact_kind"),
         "source": str(source),
     }
 
@@ -280,6 +284,116 @@ def _infer_actors(goal: dict[str, Any]) -> list[dict[str, Any]]:
     elif _is_multi_actor(goal) and len(actors) == 1:
         add("secondary_actor", "secondary_user_or_external_system", "secondary_session")
     return actors
+
+
+# G1 Batch 4: preconditions from goal data
+_PRECOND_BOILERPLATE = [
+    "Use unique test-owned identifiers; never mutate shared production-like fixtures.",
+    "Start from a clean actor/session context.",
+    "Capture request_id/correlation id for every mutation.",
+    "Assert canonical response envelope and error shape.",
+]
+
+
+def _preconditions(goal: dict[str, Any]) -> list[str]:
+    """Build preconditions list from goal.dependencies + infra_deps. Fallback to boilerplate."""
+    deps = goal.get("dependencies") or ""
+    infra = goal.get("infra_deps") or ""
+    items: list[str] = []
+    if deps:
+        for d in (deps if isinstance(deps, list) else [s.strip() for s in str(deps).replace("\n", ",").split(",")]):
+            if d and d.lower() not in ("none", "n/a"):
+                items.append(f"Dependency: {d}")
+    if infra:
+        for d in (infra if isinstance(infra, list) else [s.strip() for s in str(infra).replace("\n", ",").split(",")]):
+            if d:
+                items.append(f"Infrastructure: {d} available")
+    return items or list(_PRECOND_BOILERPLATE)
+
+
+# G4 Batch 4: actor inference reads explicit metadata first
+ACTOR_METADATA_KEYS = ("actors", "actor")
+
+
+def _infer_actors_v2(goal: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read explicit actors metadata first; fall back to word-match heuristic."""
+    explicit = None
+    for k in ACTOR_METADATA_KEYS:
+        v = goal.get(k)
+        if v:
+            explicit = v
+            break
+    if explicit:
+        # parse comma-separated list or list-of-strings
+        if isinstance(explicit, list):
+            items = [str(x).strip() for x in explicit if str(x).strip()]
+        else:
+            items = [s.strip() for s in str(explicit).split(",") if s.strip()]
+        actors = []
+        seen: set[str] = set()
+        for item in items:
+            aid = item.lower().replace(" ", "_")
+            if aid in seen:
+                continue
+            seen.add(aid)
+            actors.append({"id": aid, "role": item, "session": f"{aid}_session",
+                           "permissions": [f"least privilege required for {item} path"]})
+        if actors:
+            return actors
+    # Fallback to existing _infer_actors() word-match
+    return _infer_actors(goal)
+
+
+# G5 Batch 4: root-level fixture DAG from goal.dependencies cross-references
+def _root_fixture_dag(goals_meta: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build fixture DAG from goal.dependencies field referencing other goal IDs."""
+    nodes = []
+    edges = []
+    for g in goals_meta:
+        gid = g.get("id") or g.get("goal_id")
+        if not gid:
+            continue
+        nodes.append({"id": gid, "kind": g.get("goal_type", "mutation")})
+        deps = g.get("dependencies") or ""
+        deps_text = deps if isinstance(deps, str) else " ".join(str(d) for d in deps)
+        for m in re.finditer(r"\b(G-\d+)\b", deps_text):
+            ref = m.group(1)
+            if ref != gid:
+                edges.append({"from": gid, "to": ref})
+    return {"nodes": nodes, "edges": edges}
+
+
+# G6 Batch 4: artifact_capture from goal.artifact_kind
+def _artifact_capture_v2(goal: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build artifact_capture entries reflecting goal.artifact_kind."""
+    kind = (goal.get("artifact_kind") or "").strip().lower()
+    if not kind:
+        # Fallback: use existing logic based on artifact word detection
+        if not _needs_artifact_capture(goal):
+            return []
+        return [
+            {
+                "id": "runtime_artifact",
+                "source": "API/browser response, email inbox, webhook sink, queue event, token store, or notification list named in TEST-GOALS",
+                "identifier": "request id, resource id, message id, token hash, event id, timestamp, or screenshot filename",
+                "consumer_step": "read_after_create/read_after_update/read_after_delete",
+            }
+        ]
+    # Specific captures by kind
+    if "csv" in kind or "download" in kind:
+        return [{"kind": kind, "ref": "${PHASE_DIR}/.captures/${GOAL_ID}.csv",
+                 "artifact_kind": kind}]
+    if "pdf" in kind:
+        return [{"kind": kind, "ref": "${PHASE_DIR}/.captures/${GOAL_ID}.pdf",
+                 "artifact_kind": kind}]
+    if "image" in kind or "screenshot" in kind:
+        return [{"kind": kind, "ref": "${PHASE_DIR}/.captures/${GOAL_ID}.png",
+                 "artifact_kind": kind}]
+    if "json" in kind:
+        return [{"kind": kind, "ref": "${PHASE_DIR}/.captures/${GOAL_ID}.json",
+                 "artifact_kind": kind}]
+    return [{"kind": kind, "ref": f"${{PHASE_DIR}}/.captures/${{GOAL_ID}}.{kind}",
+             "artifact_kind": kind}]
 
 
 def _stage_actor(stage: str, goal: dict[str, Any], actors: list[dict[str, Any]]) -> str:
@@ -511,7 +625,8 @@ def _goal_spec(
     contracts: list[dict[str, str]] | None = None,
     decisions: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    actors = _infer_actors(goal)
+    # G4: use explicit metadata-aware actor inference
+    actors = _infer_actors_v2(goal)
     fixture_dag = _fixture_dag(goal, actors)
     _contracts = contracts or []
     _decisions = decisions or {}
@@ -532,18 +647,15 @@ def _goal_spec(
         },
         "actors": actors,
         "fixture_dag": fixture_dag,
-        "preconditions": [
-            "Use unique test-owned identifiers; never mutate shared production-like fixtures.",
-            "Start from a clean actor/session context.",
-            "Capture request_id/correlation id for every mutation.",
-            "Assert canonical response envelope and error shape.",
-        ],
+        # G1: preconditions derived from goal.dependencies + infra_deps
+        "preconditions": _preconditions(goal),
         "decision_refs": decision_refs,
         "steps": [
             _step(stage, goal, _stage_actor(stage, goal, actors), _contracts, _decisions, decision_refs)
             for stage in _stages_for_goal(goal)
         ],
-        "artifact_capture": _artifact_capture(goal),
+        # G6: artifact_capture reflects goal.artifact_kind
+        "artifact_capture": _artifact_capture_v2(goal),
         "cleanup": [
             {"target": fixture["id"], "action": fixture["cleanup"]}
             for fixture in reversed(fixture_dag)
@@ -601,6 +713,8 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
             "goals_emitted": len(specs),
             "include_readonly": include_readonly,
         },
+        # G5 Batch 4: root-level fixture DAG from cross-goal dependencies
+        "fixture_dag": _root_fixture_dag(selected),
         "goals": specs,
     }
 
