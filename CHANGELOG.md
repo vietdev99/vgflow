@@ -1,5 +1,88 @@
 # Changelog
 
+## v4.17.0 — Batch 14: Holistic audit 3 HIGH + 4 MEDIUM closed (2026-05-13)
+
+Holistic audit (Codex consult failed 401, fallback Grep/Read) found 12 new gaps.
+Batch 14 closes 7 priority findings (3 HIGH + 4 MEDIUM). 5 LOW deferred.
+
+### F1 (HIGH) — complete-milestone security audit was print-only
+
+`commands/vg/complete-milestone.md` step `3_security_audit` contained a Python
+one-liner that printed `'delegating to /vg:security-audit-milestone'` and
+echoed `"Run: /vg:security-audit-milestone"` — never actually invoked the script.
+
+Fix: step now probes candidate paths for `generate-strix-advisory.py` and
+invokes it with `--milestone-gate`. Objective updated to reference the script
+directly.
+
+### F2 (HIGH) — complete-milestone no run-start + no must_touch_markers
+
+`/vg:complete-milestone` had no `vg-orchestrator run-start` call and no
+`must_touch_markers` in frontmatter — Stop hook exited immediately, milestone
+close ran with zero contract enforcement.
+
+Fix: frontmatter `runtime_contract` gains `must_touch_markers` for all 8 steps
+(0_args through 7_atomic_commit). Step `1_telemetry_started` calls
+`vg-orchestrator run-start`.
+
+### F12 (HIGH) — roam reflector event name mismatch
+
+`roam.md` line 253 checks `$EVENT_TYPE = "phase.roam_completed"` before
+spawning vg-reflector subagent, but `roam/_shared/close.md` only emitted
+`roam.session.completed`. Event name mismatch = reflector never spawns =
+meta-memory feedback loop dead.
+
+Fix: `close.md` additionally emits `phase.roam_completed` before the existing
+`roam.session.completed` (which remains the FINAL Stop-hook witness per HARD-GATE).
+
+### F3 (MEDIUM) — PostToolUse hooks orphaned (pre-existing fix confirmed)
+
+`vg-post-tool-use-agent.sh` and `vg-post-tool-use-askuserquestion.sh` were
+already wired in `install-hooks.sh` (lines 107-109). Test added to prevent
+regression.
+
+### F4 (MEDIUM) — AskUserQuestion inside bash block
+
+`design-scaffold.md:73` and `design-reverse.md:46` placed `AskUserQuestion:`
+tool-call directive inside `\`\`\`bash\`\`\`` fences — invalid bash syntax.
+
+Fix: close the bash fence before the directive, place `AskUserQuestion:` in
+plain prose, no fence reopened (no subsequent bash commands needed).
+
+### F6 (MEDIUM) — debug missing SlashCommand in allowed-tools
+
+`debug.md` spec-gap branch auto-triggers `/vg:amend` via `SlashCommand:` but
+`SlashCommand` was absent from `allowed-tools` — permission deny silently
+dropped spec-gap routing.
+
+Fix: `SlashCommand` added to `debug.md` allowed-tools. Codex SKILL.md
+frontmatter updated with `source_allowed_tools` listing.
+
+### F11 (MEDIUM) — scope-review early-exit baseline ts not bumped
+
+Early-exit block had comment "Still refresh baseline timestamp, then exit" but
+exited before writing. Subsequent no-change runs showed stale `last checked` ts.
+
+Fix: Python heredoc inserted before `exit 0` reads existing baseline JSON,
+updates `baseline_ts` to current UTC ISO, writes back (non-fatal on error).
+
+### Tests
+
+7 new test files:
+- `tests/test_f1_f2_complete_milestone_hook.py` — 3 tests
+- `tests/test_f12_roam_reflector_event.py` — 2 tests
+- `tests/test_f3_posttooluse_hooks_wired.py` — 2 tests
+- `tests/test_f4_design_askuser_syntax.py` — 1 test
+- `tests/test_f6_debug_allowed_tools.py` — 1 test
+- `tests/test_f11_scope_review_baseline_bump.py` — 1 test (tightened assertion)
+
+### Baseline
+
+Full sweep: 32 failed, 2280 passed (baseline 33 fail — no new regressions).
+Pre-existing failures: `test_tasklist_depth_enforcement.py` (4 tests, unchanged).
+
+---
+
 ## v4.16.0 — Batch 13: Rule 2 + Rule 6 closed → 12/12 on tinbeta criteria (2026-05-13)
 
 VGFlow scored 10/12 STRONG/BEST_MATCH on tinbeta/AGENTS.md 12-rule criteria pre-Batch-13.
