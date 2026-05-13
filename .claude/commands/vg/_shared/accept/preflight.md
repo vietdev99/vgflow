@@ -262,3 +262,51 @@ touch "${PHASE_DIR}/.step-markers/0c_telemetry_suggestions.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0c_telemetry_suggestions 2>/dev/null || true
 ```
 </step>
+
+<step name="0d_amend_invalidation_check">
+## Step 0d — F12 Amend-invalidation cross-check (Batch 11)
+
+Check if `/vg:amend` ran AFTER last `/vg:test`. If so, test results are stale
+and accept must BLOCK until user re-runs `/vg:test <phase>`.
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 0d_amend_invalidation_check 2>/dev/null || true
+
+# F12 Batch 11: amend-invalidation cross-check — test results MUST be fresher than amend
+AMEND_INVAL="${PHASE_DIR}/.amend-invalidation.json"
+SANDBOX_TEST=$(ls "${PHASE_DIR}"/*SANDBOX-TEST.md 2>/dev/null | head -1)
+if [ -f "$AMEND_INVAL" ] && [ -n "$SANDBOX_TEST" ] && [ -f "$SANDBOX_TEST" ]; then
+  ${PYTHON_BIN:-python3} - <<PYEOF
+import json, re, sys
+from pathlib import Path
+
+inv = json.loads(Path("${AMEND_INVAL}").read_text(encoding="utf-8"))
+amended_at = inv.get("amended_at", "")
+
+# Parse SANDBOX-TEST.md frontmatter for 'tested' field
+sb = Path("${SANDBOX_TEST}").read_text(encoding="utf-8")
+m = re.search(r'^tested:\s*"?([^"\n]+)"?$', sb, flags=re.M)
+tested_at = m.group(1).strip() if m else ""
+
+if amended_at and tested_at and amended_at > tested_at:
+    print(f"⛔ F12 BLOCK: amend ({amended_at}) post-dates last test ({tested_at})")
+    print(f"   Test results stale. Re-run: /vg:test \${PHASE_NUMBER}")
+    print(f"   Changed decisions: {inv.get('changed_decisions', [])}")
+    print(f"   Changed goals: {inv.get('changed_goals', [])}")
+    sys.exit(1)
+print(f"✓ F12: test ({tested_at}) is fresher than amend ({amended_at or 'none'})")
+PYEOF
+  AMEND_FRESHNESS_RC=$?
+  if [ "$AMEND_FRESHNESS_RC" != "0" ]; then
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "accept.amend_invalidation_block" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"amend_invalidation\":\"${AMEND_INVAL}\"}" \
+      >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+touch "${PHASE_DIR}/.step-markers/0d_amend_invalidation_check.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 0d_amend_invalidation_check 2>/dev/null || true
+```
+</step>
