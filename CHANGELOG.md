@@ -1,5 +1,25 @@
 # Changelog
 
+## v4.5.0 — Test execution observability (Batch 5) (2026-05-13)
+
+User feedback after v4.0 review/test split: regression run lost browser visibility because `/vg:test` STEP 5e_regression invokes `npx playwright test` headless by default. Previously `/vg:review` ran e2e HEADED via MCP and user could watch.
+
+Batch 5 ships visibility controls:
+- Generated `playwright.config.generated.ts` from template (templates/vg/)
+- Headed/headless env-driven: interactive=headed, CI=headless
+- `--headed` / `--headless` / `--ui` / `--slow-mo` flags on `/vg:test`
+- `config.test.execution.{headed_default, slow_mo_ms, show_trace_on_failure}` block
+- Trace + video + screenshot retain-on-failure with paths emitted to SANDBOX-TEST.md
+- Reporter split: `list` (interactive per-spec progress) / `dot+json` (CI)
+- Workers=1 when headed (serial watchability)
+
+Also ships audit + Codex gaps:
+- H1 fix: test-results/ deletion now happens AFTER trace/video preservation (not before)
+- C10 fix: GAPS_FOUND verdict keeps traces (same as FAILED) — only PASSED deletes traces
+- Traces copied to ${PHASE_DIR}/debug-artifacts/ before test-results/ is wiped
+
+Closes user-reported gap "test thì mọi thứ bị ẩn, rất khó kiểm soát" (2026-05-13).
+
 ## v4.4.0 — Test safety: idempotency probe default OFF + cleanup (Batch 7 / H4 CRITICAL) (2026-05-13)
 
 Audit (Codex GPT-5.5 + manual) Gap H4: 5b-2 idempotency check inside
