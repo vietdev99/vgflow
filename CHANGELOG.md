@@ -1,5 +1,42 @@
 # Changelog
 
+## v4.11.0 — Global-only install vg-orchestrator path fix (#185) (2026-05-13)
+
+User-reported via vg bug-reporter: global-only installs missing
+`vg-orchestrator` on PATH. Skill bash blocks called
+`python3 .claude/scripts/vg-orchestrator` (project-relative path that does
+not exist in global-only installs) AND hook scripts called
+`command -v vg-orchestrator` (also missing — only `vg` was symlinked).
+Effect: `/vg:test` preflight could not run, the whole pipeline blocked.
+
+### Fix (two-pronged)
+
+1. **`~/.local/bin/vg-orchestrator` CLI wrapper.** New
+   `refresh_global_orchestrator_cli()` in `bin/vg-cli-dispatcher.sh` writes
+   a small bash wrapper that resolves `VG_HOME` at runtime and invokes
+   `python3 $VG_HOME/scripts/vg-orchestrator "$@"`. Makes
+   `command -v vg-orchestrator` succeed and gives hooks a stable entry.
+
+2. **Project `.claude/scripts/vg-orchestrator/` shim.** New
+   `link_project_orchestrator_shim()` symlinks (or `cp -R` fallback for
+   filesystems without dir symlinks) the project path to
+   `~/.vgflow/scripts/vg-orchestrator/`. Lets the ~279 legacy skill bash
+   blocks that use the project-relative path keep working without a mass
+   rewrite. Guarded on `.git` or `.vg/` presence — never litters random
+   dirs.
+
+Both helpers run during `install)` and `sync|update)` cases so existing
+global-only installs heal automatically on next sync.
+
+### Tests
+
+`tests/test_issue_185_orchestrator_global_install.py` — 6 tests covering
+both helpers, install + sync wiring, and the guard on project markers.
+
+### Closes
+
+GitHub issue #185 (bug-auto, signature `bf4978ef`).
+
 ## v4.10.0 — Validator semantics + step content (Batch 3 / G13+C3+G11+H3+G3+G8) (2026-05-13)
 
 FINAL batch closing all 23 audit gaps. Six validator/step-content gaps where
