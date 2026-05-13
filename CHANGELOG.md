@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.6.0 — Review observability bug fixes (Batch 6 / H2+H6+H8) (2026-05-13)
+
+Audit Gaps H2 (HIGH), H6 (MEDIUM), H8 (MEDIUM) — observability bugs in
+review + test fix-loop where failure paths silently swallowed errors.
+
+### H2 — FE-BE drift advisory un-masked
+review/preflight.md:547 chained '|| true' BEFORE FE_BE_RC capture →
+$? always 0 → 'if FE_BE_RC ne 0' warning branch was dead code. Advisory
+shipped in v4.1 but never fired.
+
+Fix: explicit set +e/-e bracket, FE_BE_RC captures real exit.
+
+### H6 — manifest emit failure visible
+test/fix-loop-and-verdict.md:969,976 used '--quiet || true' on manifest
+emit calls → partial failure silent → run-complete blocked downstream
+with no debug trail.
+
+Fix: drop --quiet, capture EMIT_RC per call, emit
+review.manifest_emit_failed event + stderr warning on non-zero.
+
+### H8 — codex-spawn fix-agent failure persists
+test/fix-loop-and-verdict.md:184 codex-spawn failure only echoed to
+stderr. CI runs lost the signal.
+
+Fix: persist failure to ${PHASE_DIR}/CODEX-FIX-FAILURES.json (err_id,
+rc, ts, attempt) + emit test.codex_fix_failed event.
+
+Audit reference: docs/plans/2026-05-13-pipeline-flow-audit.md.
+
 ## v4.5.0 — Test execution observability (Batch 5) (2026-05-13)
 
 User feedback after v4.0 review/test split: regression run lost browser visibility because `/vg:test` STEP 5e_regression invokes `npx playwright test` headless by default. Previously `/vg:review` ran e2e HEADED via MCP and user could watch.
