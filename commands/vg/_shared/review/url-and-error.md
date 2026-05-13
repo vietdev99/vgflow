@@ -222,6 +222,45 @@ if [ "${URL_RUNTIME_RC}" != "0" ]; then
 fi
 ```
 
+```bash
+# C11 Batch 2: emit canonical url-runtime-status.json for downstream consumers
+# Replaces 3 fragmented skip/waive flags with one canonical state enum:
+#   passed | drift | skipped | unexecuted | waived
+URL_EMIT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/emit-url-runtime-status.py"
+[ -f "$URL_EMIT" ] || URL_EMIT="${REPO_ROOT:-.}/scripts/emit-url-runtime-status.py"
+
+# Resolve state — precedence:
+#   --skip-runtime  → state=skipped
+#   --allow-no-url-sync (declaration waiver) → state=waived
+#   --allow-runtime-drift (drift waiver)     → state=drift
+#   no runtime evidence captured → state=unexecuted
+#   default                                  → state=passed
+URL_RUNTIME_STATE="passed"
+URL_RUNTIME_REASON=""
+if echo "${ARGUMENTS:-}" | grep -q -- "--skip-runtime"; then
+  URL_RUNTIME_STATE="skipped"
+  URL_RUNTIME_REASON="--skip-runtime flag set"
+elif echo "${ARGUMENTS:-}" | grep -q -- "--allow-no-url-sync"; then
+  URL_RUNTIME_STATE="waived"
+  URL_RUNTIME_REASON="--allow-no-url-sync (declaration waiver)"
+elif echo "${ARGUMENTS:-}" | grep -q -- "--allow-runtime-drift"; then
+  URL_RUNTIME_STATE="drift"
+  URL_RUNTIME_REASON="--allow-runtime-drift (drift waiver)"
+elif [ ! -f "${PHASE_DIR}/url-runtime-evidence.json" ] && [ ! -f "${PHASE_DIR}/.url-runtime-results.json" ]; then
+  URL_RUNTIME_STATE="unexecuted"
+  URL_RUNTIME_REASON="no runtime evidence captured"
+fi
+
+if [ -f "$URL_EMIT" ]; then
+  "${PYTHON_BIN:-python3}" "$URL_EMIT" \
+    --phase-dir "${PHASE_DIR}" \
+    --phase "${PHASE_NUMBER:-${PHASE_ARG:-unknown}}" \
+    --state "${URL_RUNTIME_STATE}" \
+    --reason "${URL_RUNTIME_REASON}" \
+    --flags-json "{\"args\":\"${ARGUMENTS:-}\"}" || true
+fi
+```
+
 Final action: `(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "phase2_8_url_state_runtime" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/phase2_8_url_state_runtime.done"`
 </step>
 
