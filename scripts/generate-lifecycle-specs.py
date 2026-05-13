@@ -213,6 +213,9 @@ def _needs_lifecycle(goal: dict[str, Any]) -> bool:
     goal_class = str(goal.get("goal_class") or "").lower()
     if goal_type in {"mutation", "multi-actor", "workflow"}:
         return True
+    # G14 Batch 2: read-only goals get lifecycle too (single read_before stage).
+    if goal_type == "read-only":
+        return True
     if goal_class in {"mutation", "crud", "workflow", "multi-actor"}:
         return True
     if _meaningful(goal.get("mutation_evidence")) or _meaningful(goal.get("persistence_check")):
@@ -426,6 +429,15 @@ def _bind_endpoint(stage: str, goal: dict[str, Any], contracts: list[dict[str, s
     return None
 
 
+def _read_before_action(goal: dict[str, Any]) -> str:
+    """Build read_before action description. Special-case read-only goals (G14)."""
+    gtype = (goal.get("goal_type") or "").strip().lower()
+    if gtype == "read-only":
+        pc = goal.get("persistence_check") or ""
+        return f"Execute read endpoint and assert filter/result semantics: {pc}"
+    return "Read baseline via read endpoint or DB query from TEST-GOALS; assert target entity absent or initial state matches precondition."
+
+
 def _step(
     stage: str,
     goal: dict[str, Any],
@@ -439,7 +451,7 @@ def _step(
     persistence = goal.get("persistence_check") or "fresh read must prove persisted state, derived state, permissions, and absence of stale cached data"
     criteria = goal.get("success_criteria") or title
     actions = {
-        "read_before": "Read baseline via read endpoint or DB query from TEST-GOALS; assert target entity absent or initial state matches precondition.",
+        "read_before": _read_before_action(goal),
         "create": f"Execute primary API/UI action from TEST-GOALS; capture mutation evidence: {mutation_evidence}",
         "read_after_create": f"Re-read from a fresh request/session; assert create effect persisted. Persistence check: {persistence}",
         "update": "Mutate the created resource again, exercise status transition, retry/idempotency, role switch, or configured update path.",
