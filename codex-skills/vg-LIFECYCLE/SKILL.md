@@ -213,7 +213,7 @@ flowchart LR
 | **4. Build** | `/vg:build <N>` (wave-based parallel) | `${PHASE_DIR}/SUMMARY.md` (per-wave commits + per-task evidence) | `/vg:test-spec` reads build output and implemented surfaces |
 | **4b. Test Spec** | `/vg:test-spec <N>` (post-build deep spec authoring) | `${PHASE_DIR}/DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/PROMPT.md`, `PLAYWRIGHT-SPEC-PLAN.md`, `TEST-SPEC-GAPS.md` | `/vg:review` verifies runtime against deep lifecycle contract |
 | **5. Verify** | `/vg:review <N>` (code scan + browser discovery + fix loop) | `${PHASE_DIR}/RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md` | `/vg:test` reads goals coverage matrix; pre-test-gate blocks if review BLOCKed |
-| **6. Test** | `/vg:test <N>` (codegen + smoke + regression + security) | `${PHASE_DIR}/TEST-RESULTS.json` + Playwright spec files | `/vg:accept` validates test outcomes |
+| **6. Test** | `/vg:test <N>` (codegen + smoke + regression + security) | `${PHASE_DIR}/SANDBOX-TEST.md` + `.test-step-status.json` + Playwright spec files | `/vg:accept` validates test outcomes |
 | **7. Accept** | `/vg:accept <N>` (UAT checklist + audit + reflector) | `${PHASE_DIR}/UAT.md` (verdict + bootstrap candidates) | Phase considered complete; milestone closer reads accept verdict |
 | **8. Deploy** | `/vg:deploy [<N>]` (multi-env: sandbox/staging/prod) | `.vg/deploy/STATE.json` (project-level v3.0.0+) | Optional — does not block next phase Init |
 
@@ -269,6 +269,103 @@ VG phases are NOT strictly sequential within a milestone. Cycles are explicit:
 - `/vg:debug` re-enters Build/Verify when a bug is found post-acceptance — focused, no full review sweep.
 - `/vg:amend` modifies CONTEXT decisions mid-phase + cascades impact analysis (read-only by `vg-amend-cascade-analyzer` subagent).
 - `/vg:roam` is a Verify-mode sub-pipeline for runtime-only investigations (no plan binding).
+
+---
+
+## Pipeline Artifacts Reference (v4.12.0)
+
+Every file written by the pipeline and consumed by a downstream gate. Phase origin noted.
+
+| Artifact | Phase origin | Written by | Consumed by |
+|---|---|---|---|
+| `PIPELINE-STATE.json` | All | Each phase close | Next phase preflight, `--auto-chain` reader |
+| `.test-step-status.json` | Test (C5 Batch 9) | `test/close.md` step ledger | Verdict engine, test/preflight resume detection |
+| `LIFECYCLE-SPECS.json` | Test Spec (Batch 1) | `test-spec.md` | `test/preflight.md` deep-spec contract gate |
+| `DEEP-TEST-SPECS.md` | Test Spec | `test-spec.md` | Codegen, `test/preflight.md` |
+| `GOAL-COVERAGE-MATRIX.json` | Review | `review/close.md` | `test/preflight.md`, accept gate |
+| `SANDBOX-TEST.md` | Test | `test/close.md` | `accept/preflight.md` (renamed from `TEST-RESULTS.json` — that name is historical/deprecated) |
+| `REVIEW.md` | Review | `review/close.md` | `test/preflight.md` |
+| `.verdict-computed.json` | Test (Batch 9) | Verdict engine | `test/close.md` summary, accept gate |
+| `evidence-manifest.json` | Build (issue #175) | `build/close.md` run-complete | `review/preflight.md` artifact freshness |
+| `TEST-FAILURE-REPORT.md` | Test (H13 v4.12.0) | AI test introspection agent | `accept/preflight.md`, `vg:debug` |
+| `REFLECTION.md` | Blueprint/Build/Test (H10) | Reflector subagent | `vg:roam`, operator review |
+| `MATRIX-INTENT.json` | Blueprint | `blueprint/close.md` | `review/preflight.md` |
+| `url-runtime-status.json` | Review (C11) | Browser discovery | `review/fix-loop.md` |
+| `CODEGEN-BINDING-REPORT.json` | Test (C7) | Codegen binding validator | `test/fix-loop.md` |
+| `CODEX-FIX-FAILURES.json` | Build (H8) | Codex fix agent | `build/crossai-loop.md` |
+| `.amend-invalidation.json` | Amend (planned Batch 11) | `/vg:amend` | Blueprint/build close invalidation gate |
+
+---
+
+## Strict Marker Gate (v4.3.0+)
+
+All 4 phase closes invoke `verify_all_markers_strict_runid` as of v4.13.0 (Batch 10 F3):
+
+| Close file | Gate location | Introduced |
+|---|---|---|
+| `test/close.md` | §8.3.5b | Batch 9 (C9) |
+| `blueprint/close.md` | After R7 block (§6.2.1) | Batch 10 (F3) |
+| `build/close.md` | Before `vg-orchestrator run-complete` | Batch 10 (F3) |
+| `accept/cleanup/overview.md` | After Gate B | Batch 10 (F3) |
+
+The function `verify_all_markers_strict_runid(phase_dir, phase_num, run_id)` (from `lib/marker-schema.sh`) rejects:
+- **Empty markers** — zero-byte `.done` files written without content
+- **Stale markers** — marker `run_id` field differs from current `VG_RUN_ID`
+- **Forged markers** — marker timestamp predates phase start time
+
+Bypass: `VG_MARKER_STRICT=0` (UNSAFE — only for explicit migration of pre-Batch-9 phases).
+
+---
+
+## Auto-chain (v4.13.0+)
+
+`--auto-chain` consumers read `PIPELINE-STATE.json:next_command` emitted by each phase close. As of Batch 10 (F1), all 6 phase boundaries are wired:
+
+| Phase close | Emits `next_command` | Verdict condition |
+|---|---|---|
+| `specs/write-and-commit.md` | `/vg:scope {phase}` | always |
+| `scope/close.md` | `/vg:blueprint {phase}` | always |
+| `blueprint/close.md` | `/vg:build {phase}` | always |
+| `test-spec.md` | `/vg:review {phase}` | always |
+| `review/close.md` | `/vg:test {phase}` | always (existing, pre-Batch-10) |
+| `test/close.md` | `/vg:accept {phase}` | PASSED / GAPS\_FOUND only |
+| `test/close.md` | `/vg:review --resume {phase}` | FAILED |
+
+Downstream consumers check `PIPELINE-STATE.json` for `next_command` and `next_command_emitted_at` fields.
+
+---
+
+## Domain/Team Isolation (v4.15.0+)
+
+F7 Batch 12 introduces domain and team fields for multi-team parallel scheduling.
+
+### ROADMAP.md fields (per phase)
+
+```markdown
+## Phase {NN}: {Name}
+**Domain:** {business domain — e.g. identity, payments, catalog, infra}
+**Team:** {owning team — e.g. auth-team, platform-team, or "unassigned"}
+```
+
+### PIPELINE-STATE.json fields
+
+| Field | Type | Description |
+|---|---|---|
+| `domain` | string | Business domain from ROADMAP.md. Set by `specs/preflight.md`. |
+| `team` | string | Owning team. `"unassigned"` if not set in ROADMAP. |
+
+### Propagation
+
+`specs/preflight.md` (Step 3 — domain_team_propagation) reads `domain` + `team`
+from ROADMAP.md and:
+1. Exports `VG_PHASE_DOMAIN` + `VG_PHASE_TEAM` env vars.
+2. Writes `domain` + `team` into `PIPELINE-STATE.json`.
+
+### Future: Parallel Team Scheduler (v5.0+)
+
+The `domain` field provides the partition key for a future parallel scheduler.
+Teams with non-overlapping domains can run concurrent phases. Cross-domain deps
+are declared in `CROSS-PHASE-DEPS.md`. Full implementation deferred to v5.0+.
 
 ---
 

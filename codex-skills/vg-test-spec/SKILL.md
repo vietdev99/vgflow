@@ -655,6 +655,8 @@ state["steps"]["test-spec"].update({
     "updated_at": datetime.now().isoformat(),
 })
 state["pipeline_step"] = "test-spec-complete"
+state["next_command"] = "/vg:review ${PHASE_NUMBER}"
+state["next_command_emitted_at"] = datetime.now().isoformat() + "Z"
 state["updated_at"] = datetime.now().isoformat()
 p.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 PY

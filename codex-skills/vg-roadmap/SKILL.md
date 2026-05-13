@@ -412,6 +412,8 @@ Total: {N} phases, {M} requirements mapped
 **Requirements:** {REQ-ID list, comma-separated}
 **Depends on:** {phase numbers or "None"}
 **Size:** {S|M|L}
+**Domain:** {business domain — e.g. identity, payments, catalog, infra}
+**Team:** {owning team — e.g. auth-team, platform-team, or "unassigned"}
 **Success criteria:**
 - {criterion derived from REQ acceptance criteria}
 - {criterion derived from REQ acceptance criteria}
@@ -419,6 +421,10 @@ Total: {N} phases, {M} requirements mapped
 **Plans:** 0/0
 **Status:** planned
 ```
+
+<!-- F7 Batch 12: domain + team fields enable multi-team parallel scheduling.
+     Domain partitions phases by business area; team assigns ownership.
+     specs/preflight.md reads these and propagates to PIPELINE-STATE.json. -->
 
 **Success criteria derivation:**
 - For each REQ in the phase, extract its "Acceptance Criteria" from REQUIREMENTS.md

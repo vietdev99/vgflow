@@ -341,6 +341,31 @@ Add amendment reference footer at bottom of CONTEXT.md (append, do not overwrite
 ---
 _Amendment #${NEXT_AMENDMENT} applied ${ISO_DATE} — see AMENDMENT-LOG.md_
 ```
+
+**F5 Batch 11: write amend-invalidation artifact so downstream accept/test phases
+can detect stale results post-amendment.**
+
+```bash
+# F5 Batch 11: write amend-invalidation artifact so downstream phases can
+# detect stale test results post-amendment.
+${PYTHON_BIN:-python3} - <<PYEOF
+import json
+from pathlib import Path
+from datetime import datetime, timezone
+
+invalidation = {
+    "amended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "changed_goals": ${CHANGED_GOALS_JSON:-'[]'},
+    "changed_decisions": ${CHANGED_DECISIONS_JSON:-'[]'},
+    "amend_session": "${VG_RUN_ID:-amend-$(date +%s)}",
+    "phase": "${PHASE_NUMBER}",
+}
+out = Path("${PHASE_DIR}/.amend-invalidation.json")
+out.write_text(json.dumps(invalidation, indent=2), encoding="utf-8")
+print(f"✓ Wrote amend invalidation marker: {out}")
+print(f"  Test/accept phases will BLOCK until /vg:test is re-run for phase {invalidation['phase']}")
+PYEOF
+```
 </step>
 
 <step name="5_cascade_impact">
