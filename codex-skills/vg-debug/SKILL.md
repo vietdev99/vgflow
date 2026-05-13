@@ -3,16 +3,6 @@ name: "vg-debug"
 description: "Targeted bug-fix loop — analyze description, classify, fix, verify with user (no full review sweep)"
 metadata:
   short-description: "Targeted bug-fix loop — analyze description, classify, fix, verify with user (no full review sweep)"
-  source_allowed_tools:
-    - Read
-    - Write
-    - Edit
-    - Bash
-    - Glob
-    - Grep
-    - AskUserQuestion
-    - Task
-    - SlashCommand
 ---
 
 <codex_skill_adapter>

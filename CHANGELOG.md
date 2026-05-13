@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.17.1 — Codex mirror sync after Batch 14 (2026-05-13)
+
+Patch: v4.17.0 release CI failed `verify-codex-mirror-equivalence.py` —
+4 codex-skills mirrors drifted after Batch 14 design-scaffold/reverse
+bash-fence fix + complete-milestone hook + debug allowed-tools edits.
+
+Regenerated via `bash scripts/generate-codex-skills.sh --force`:
+- vg-complete-milestone (F1+F2: run-start + must_touch_markers + real audit)
+- vg-debug (F6: SlashCommand in allowed-tools)
+- vg-design-reverse (F4: AskUserQuestion outside bash fence)
+- vg-design-scaffold (F4: AskUserQuestion outside bash fence)
+
+`verify-codex-mirror-equivalence.py`: drift 4 → 0.
+
 ## v4.17.0 — Batch 14: Holistic audit 3 HIGH + 4 MEDIUM closed (2026-05-13)
 
 Holistic audit (Codex consult failed 401, fallback Grep/Read) found 12 new gaps.
