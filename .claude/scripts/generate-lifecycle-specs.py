@@ -22,6 +22,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# F6 Batch 12: shared phase_pad util (replaces hardcoded zfill(2))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from phase_pad import phase_pad  # noqa: E402
+
 REQUIRED_STAGES = (
     "read_before",
     "create",
@@ -717,7 +721,7 @@ def _find_phase_dir(phase: str, explicit: str | None) -> Path:
     if exact:
         return exact[0]
 
-    prefix = str(phase).zfill(2) if str(phase).isdigit() else str(phase)
+    prefix = phase_pad(phase) if str(phase).isdigit() else str(phase)
     matches = [p for p in candidates if p.name == prefix or p.name.startswith(prefix + "-")]
     if len(matches) == 1:
         return matches[0]

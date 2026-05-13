@@ -16,6 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# F6 Batch 12: shared phase_pad util (replaces hardcoded zfill(2))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from phase_pad import phase_pad  # noqa: E402
+
 
 REPO_ROOT = Path(os.environ.get("VG_REPO_ROOT") or os.getcwd()).resolve()
 
@@ -48,9 +52,9 @@ def _resolve_phase_dir(phase: str | None, phase_dir: str | None) -> Path:
         return candidates[0]
     if "." in phase:
         major, _, rest = phase.partition(".")
-        normalized = f"{major.zfill(2)}.{rest}" if major.isdigit() else phase
+        normalized = phase_pad(f"{major}.{rest}") if major.isdigit() else phase
     else:
-        normalized = phase.zfill(2) if phase.isdigit() else phase
+        normalized = phase_pad(phase) if phase.isdigit() else phase
     candidates = list(phases.glob(f"{normalized}-*"))
     if candidates:
         return candidates[0]
