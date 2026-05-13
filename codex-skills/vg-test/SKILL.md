@@ -309,6 +309,32 @@ Sub-steps:
 - step7_matrix_verdict: 4-state per-goal verdict + flip next_command → /vg:accept
 </objective>
 
+## Observability flags (Batch 5 — v4.5.0)
+
+Control headed/headless mode and Playwright inspector for live browser visibility.
+These flags are forwarded to STEP 5 (5e_regression) via environment variables.
+
+| Flag | Effect |
+|------|--------|
+| `--headed` | Force headed (visible browser) — overrides CI env + vg.config |
+| `--headless` | Force headless — overrides everything (CI-safe) |
+| `--ui` | Launch Playwright inspector UI (`npx playwright test --ui`) — interactive debug |
+| `--slow-mo <ms>` | Set slowMo delay in ms (default 250 when headed, 0 when headless) |
+
+**Default behaviour (no flag):** `vg.config.test.execution.headed_default` → then TTY+!CI auto-detect.
+
+### `--ui` mode
+
+When `--ui` is passed, step 5e_regression spawns Playwright inspector instead of headless run:
+
+```bash
+npx playwright test --ui \
+  --config ${GENERATED_TESTS_DIR}/playwright.config.generated.ts \
+  ${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts
+```
+
+This opens the full Playwright GUI — step-through tests, see locators, replay traces.
+
 <HARD-GATE>
 You MUST follow STEP 1-8 in profile-filtered order. Each step is gated by
 hooks. Skipping ANY step will be blocked by PreToolUse + Stop hooks.
