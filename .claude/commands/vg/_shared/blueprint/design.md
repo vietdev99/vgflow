@@ -511,6 +511,28 @@ mkdir -p "${PHASE_DIR}/UI-SPEC" 2>/dev/null
   done
 } > "${PHASE_DIR}/UI-SPEC.md"
 
+# F7 Batch 17: UI-SPEC existence gate — Agent MUST have written index + per-slug files.
+# Skip gate when --skip-ui-spec was set (handled above via override emit).
+# For FE phases, BLOCK if Agent left UI-SPEC dir empty.
+FE_TASKS_COUNT=$(grep -cE "(\.tsx|\.jsx|\.vue|\.svelte)" "${PHASE_DIR}"/PLAN*.md 2>/dev/null || echo "0")
+if [ "${FE_TASKS_COUNT:-0}" -gt 0 ]; then
+  if [ ! -f "${PHASE_DIR}/UI-SPEC/index.md" ]; then
+    echo "⛔ F7 BLOCK: UI-SPEC/index.md missing — Agent did not write spec output." >&2
+    echo "   FE phase requires UI-SPEC. Re-run blueprint or pass --skip-ui-spec --override-reason=<text>." >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "blueprint.ui_spec_missing" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  # Per-slug coverage check: count <design-ref> slugs in PLAN.md, count files in UI-SPEC/
+  SLUG_COUNT=$(grep -oE '<design-ref[^>]*slug="[^"]+"' "${PHASE_DIR}"/PLAN*.md 2>/dev/null | wc -l | tr -d ' ')
+  SPEC_FILE_COUNT=$(find "${PHASE_DIR}/UI-SPEC" -maxdepth 1 -name "*.md" -not -name "index.md" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${SLUG_COUNT:-0}" -gt 0 ] && [ "${SPEC_FILE_COUNT:-0}" -lt "${SLUG_COUNT}" ]; then
+    echo "⚠ F7: UI-SPEC coverage gap — ${SPEC_FILE_COUNT}/${SLUG_COUNT} slugs have per-slug spec files" >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "blueprint.ui_spec_partial" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"slugs\":${SLUG_COUNT},\"specs\":${SPEC_FILE_COUNT}}" >/dev/null 2>&1 || true
+  fi
+fi
+
 fi  # end --skip-ui-spec else branch
 
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
