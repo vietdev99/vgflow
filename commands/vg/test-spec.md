@@ -468,6 +468,36 @@ Agent(
 - `tests/e2e/lifecycle/G-XX.{lens}.spec.ts` — one file per goal × lens
 - `${PHASE_DIR}/CODEGEN-MANIFEST.json` — list of generated files + their L1/L2 binding state
 
+**Post-spawn gate (F1 Batch 19):**
+
+```bash
+# F1 Batch 19: vg-test-codegen MUST write CODEGEN-MANIFEST.json + playwright
+# spec files. Marker gates on those outputs (mirrors Batch 15 F3/F4 pattern).
+CODEGEN_MANIFEST="${PHASE_DIR}/CODEGEN-MANIFEST.json"
+if [ ! -f "$CODEGEN_MANIFEST" ]; then
+  echo "⛔ F1 BLOCK: vg-test-codegen did not write CODEGEN-MANIFEST.json" >&2
+  echo "   Codegen Agent spawn produced no output. Re-run /vg:test-spec ${PHASE_NUMBER}." >&2
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test_spec.codegen_missing_manifest" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  exit 1
+fi
+# Spec count check — manifest must list playwright specs
+SPEC_COUNT=$("${PYTHON_BIN:-python3}" -c "
+import json
+m = json.loads(open('${CODEGEN_MANIFEST}', encoding='utf-8').read())
+specs = m.get('playwright_specs', m.get('specs', []))
+print(len(specs))
+" 2>/dev/null || echo "0")
+if [ "${SPEC_COUNT:-0}" -lt 1 ]; then
+  echo "⛔ F1 BLOCK: CODEGEN-MANIFEST.json contains 0 playwright specs" >&2
+  echo "   vg-test-codegen claims to have run but produced no spec files." >&2
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test_spec.codegen_zero_specs" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  exit 1
+fi
+echo "✓ F1: codegen wrote ${SPEC_COUNT} playwright specs"
+```
+
 **Mark step:**
 ```bash
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_codegen 2>/dev/null || true
