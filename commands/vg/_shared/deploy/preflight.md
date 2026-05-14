@@ -36,6 +36,23 @@ if [ -z "$VG_CONFIG_PATH" ]; then
 fi
 export VG_CONFIG_PATH
 
+# Batch 20: DEPLOY-CONTRACT.json bootstrap check
+# Ensures project has a locked deploy method before any deploy runs.
+CONTRACT_PATH="${PROJECT_VG_DIR:-.vg}/DEPLOY-CONTRACT.json"
+if [ ! -f "$CONTRACT_PATH" ]; then
+  if [[ "${ARGUMENTS:-}" =~ --init ]]; then
+    echo "▸ /vg:deploy --init mode: bootstrapping DEPLOY-CONTRACT.json"
+    echo "   AI controller must call AskUserQuestion to gather method + commands,"
+    echo "   then run: python scripts/deploy-contract-init.py --method <X> --build '...' --restart '...' --health '...' --phase '${PHASE_NUMBER}' --run-id '${VG_RUN_ID:-}'"
+    # AI handles interactive bootstrap; script exits here to allow contract creation
+  else
+    echo "⛔ .vg/DEPLOY-CONTRACT.json missing — deploy locked-method contract required" >&2
+    echo "   Bootstrap interactively: /vg:deploy --init" >&2
+    echo "   OR explicit: python scripts/deploy-contract-init.py --method <ansible|pm2|docker|...> --build '...' --restart '...' --health '...'" >&2
+    exit 1
+  fi
+fi
+
 # Build-complete check (override: --allow-build-incomplete)
 BUILD_STATUS=$(${PYTHON_BIN:-python3} -c "
 import json

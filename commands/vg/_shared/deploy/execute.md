@@ -11,6 +11,15 @@ validation), `_shared/deploy/overview.md` (flow). Initialize accumulator
 DRY_RUN="false"
 [[ "$ARGUMENTS" =~ --dry-run ]] && DRY_RUN="true"
 
+# Batch 20: source deploy contract so vg-deploy-executor uses project's locked method
+# This exports DEPLOY_METHOD, DEPLOY_BUILD, DEPLOY_RESTART, DEPLOY_HEALTH, etc.
+# Contract file: .vg/DEPLOY-CONTRACT.json (bootstrapped via /vg:deploy --init)
+LOAD_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/deploy-contract-load.py"
+[ -f "$LOAD_SCRIPT" ] || LOAD_SCRIPT="${REPO_ROOT:-.}/scripts/deploy-contract-load.py"
+if [ -f "$LOAD_SCRIPT" ] && [ -f "${PROJECT_VG_DIR:-.vg}/DEPLOY-CONTRACT.json" ]; then
+  eval "$(${PYTHON_BIN:-python3} "$LOAD_SCRIPT" --vg-dir "${PROJECT_VG_DIR:-.vg}" --env "${SELECTED_ENV:-sandbox}" 2>/dev/null)" || true
+fi
+
 LOCAL_SHA=$(git rev-parse --short HEAD)
 DEPLOY_RESULTS_JSON="${PHASE_DIR}/.tmp/deploy-results.json"
 mkdir -p "${PHASE_DIR}/.tmp"

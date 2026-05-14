@@ -36,11 +36,44 @@ Read `.claude/commands/vg/_shared/env-commands.md` — deploy(env) + preflight(e
 ```bash
 vg-orchestrator step-active 5a_deploy
 
+# Batch 20: source deploy contract — guarantees AI uses project's locked deploy method
+LOAD_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/deploy-contract-load.py"
+[ -f "$LOAD_SCRIPT" ] || LOAD_SCRIPT="${REPO_ROOT:-.}/scripts/deploy-contract-load.py"
+if [ ! -f "$LOAD_SCRIPT" ]; then
+  echo "deploy-contract-load.py missing — required by Batch 20 hard gate" >&2
+  exit 1
+fi
+eval "$(${PYTHON_BIN:-python3} "$LOAD_SCRIPT" --vg-dir "${PROJECT_VG_DIR:-.vg}" --env "${ENV:-sandbox}" 2>&1)" || {
+  echo "deploy-contract-load failed — DEPLOY-CONTRACT.json missing or malformed" >&2
+  echo "   Bootstrap: /vg:deploy --init  OR  python scripts/deploy-contract-init.py --method <X> ..." >&2
+  exit 1
+}
+
 # 1. Record SHAs (local + target)
-# 2. Pre-deploy command (if configured in config)
-# 3. Build + restart on target
+LOCAL_SHA=$(git rev-parse --short HEAD)
+echo "Local SHA: $LOCAL_SHA"
+
+# 2. Pre-deploy command (if configured via DEPLOY_PRE from contract)
+[ -n "$DEPLOY_PRE" ] && eval "$DEPLOY_PRE"
+
+# 3. Build + restart on target — uses contracted commands from .vg/DEPLOY-CONTRACT.json
+run_on_target "${DEPLOY_BUILD} && ${DEPLOY_RESTART}" || {
+  echo "Build/restart failed via ${DEPLOY_METHOD}" >&2
+  [ -n "$DEPLOY_ROLLBACK" ] && run_on_target "$DEPLOY_ROLLBACK"
+  exit 1
+}
+
 # 4. Wait for startup
-# 5. Health check → if fail → rollback
+sleep 5
+
+# 5. Health check via contracted command → if fail → rollback
+run_on_target "$DEPLOY_HEALTH" || {
+  echo "Health failed via ${DEPLOY_METHOD}" >&2
+  [ -n "$DEPLOY_ROLLBACK" ] && run_on_target "$DEPLOY_ROLLBACK"
+  exit 1
+}
+echo "Deploy (${DEPLOY_METHOD}) PASS on env=${ENV:-sandbox}"
+
 # 6. Preflight all services → required service FAIL → BLOCK
 # 7. Typecheck (if configured): run typecheck(env) from env-commands.md
 # 8. Re-seed DB (if configured): run seed_smoke(env) from env-commands.md
