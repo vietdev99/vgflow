@@ -199,6 +199,36 @@ if [ -f "$POSTFAIL_EXTRACT" ] && [ -f "$RESULTS_JSON" ]; then
     --results-json "$RESULTS_JSON" \
     --test-results-dir "${PROJECT_PATH}/test-results" || true
 fi
+
+# Batch 21 Task 4: post-run orphan spec detection.
+# playwright-results.json lists specs that ran. Compare to CODEGEN-MANIFEST list.
+# Orphan = ran but not in manifest. May indicate stale specs from prior phase.
+if [ -f "$CODEGEN_MANIFEST" ] && [ -f "$RESULTS_JSON" ]; then
+  ORPHANS=$(${PYTHON_BIN:-python3} -c "
+import json
+m = json.loads(open('${CODEGEN_MANIFEST}', encoding='utf-8').read())
+manifest_paths = set()
+for s in m.get('playwright_specs', m.get('specs', [])):
+    manifest_paths.add(s['path'] if isinstance(s, dict) else s)
+results = json.loads(open('${RESULTS_JSON}', encoding='utf-8').read())
+ran_paths = set()
+for suite in results.get('suites', []):
+    for spec in suite.get('specs', []):
+        ran_paths.add(spec.get('file', ''))
+    # Recurse if nested
+    for nested in suite.get('suites', []):
+        for spec in nested.get('specs', []):
+            ran_paths.add(spec.get('file', ''))
+orphans = ran_paths - manifest_paths
+print(','.join(sorted(orphans)) if orphans else '')
+" 2>/dev/null)
+  if [ -n "$ORPHANS" ]; then
+    echo "⚠ Batch 21: orphan specs executed (not in CODEGEN-MANIFEST.json): ${ORPHANS}" >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.orphan_spec_executed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"orphans\":\"${ORPHANS}\"}" >/dev/null 2>&1 || true
+    echo "   These specs may be stale from prior runs. Clean ${GENERATED_TESTS_DIR}/ or regenerate." >&2
+  fi
+fi
 ```
 
 Result:
