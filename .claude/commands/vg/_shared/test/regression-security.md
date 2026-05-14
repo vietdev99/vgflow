@@ -93,12 +93,38 @@ if [ ! -f "${GENERATED_TESTS_DIR}/playwright.config.generated.ts" ]; then
         "${GENERATED_TESTS_DIR}/playwright.config.generated.ts"
 fi
 
-# 3. Run regression with generated config
+# 3. Batch 21: read CODEGEN-MANIFEST.json for authoritative spec list.
+# Glob is fallback only when manifest missing (legacy phase).
+CODEGEN_MANIFEST="${PHASE_DIR}/CODEGEN-MANIFEST.json"
+if [ -f "$CODEGEN_MANIFEST" ]; then
+  SPEC_LIST=$(${PYTHON_BIN:-python3} -c "
+import json
+m = json.loads(open('${CODEGEN_MANIFEST}', encoding='utf-8').read())
+specs = m.get('playwright_specs', m.get('specs', []))
+# Each entry: {'path': '...', 'goal_id': '...', 'family': '...'}
+print(' '.join(s['path'] if isinstance(s, dict) else s for s in specs))
+" 2>/dev/null)
+  if [ -z "$SPEC_LIST" ]; then
+    echo "⛔ Batch 21 BLOCK: CODEGEN-MANIFEST.json exists but contains 0 specs" >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.manifest_empty" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  echo "▸ Batch 21: running ${SPEC_LIST} from CODEGEN-MANIFEST.json"
+  PLAYWRIGHT_TARGETS="$SPEC_LIST"
+else
+  echo "⚠ Batch 21: CODEGEN-MANIFEST.json missing — falling back to glob (legacy phase)" >&2
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.manifest_missing_glob_fallback" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  PLAYWRIGHT_TARGETS="${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts"
+fi
+
+# Run regression with generated config
 run_on_target "cd ${PROJECT_PATH} && \
   VG_HEADED=${VG_HEADED} VG_SLOW_MO=${SLOW_MO} \
   npx playwright test \
     --config ${GENERATED_TESTS_DIR}/playwright.config.generated.ts \
-    ${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts"
+    ${PLAYWRIGHT_TARGETS}"
 
 # 4. H13 (v4.12.0): extract per-failure detail for AI introspection.
 # Playwright JSON reporter writes playwright-results.json; extractor walks it,
