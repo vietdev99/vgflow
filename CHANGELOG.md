@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.27.0 — Scaffold-pattern detector + audit CI (Batch 24) (2026-05-15)
+
+Codifies 8 scaffold/drift anti-patterns gặp trong Batches 9/14/15/18/19/22
+thành automated grep audit. Detector runs mỗi release via CI gate.
+
+### scripts/audit/scaffold-detector.py (new)
+Scans `commands/vg/**/*.md` for 5 anti-patterns at first ship (A/C/F/G/H).
+B/D/E require cross-file analysis — deferred.
+
+- **A** (high): `Agent(subagent_type=...)` in bash fence with no file gate after
+- **C** (high): `|| true` on `run-complete`/`validate`/`verify` lines
+- **F** (high): Tool directive (`Agent(`/`SlashCommand:`/`AskUserQuestion:`) in bash fence
+- **G** (medium): `touch *.done` in else branch without validation
+- **H** (low): `*.spec.ts` glob where canonical manifest exists
+
+`--threshold N`: exit 1 if findings > N (CI gate). Default -1 = advisory only.
+`--json`: structured output for telemetry.
+
+### CI wiring
+`.github/workflows/release.yml`: "Scaffold pattern audit" step added pre-tarball
+with `--threshold 50` (baseline 23 findings at ship time, A:4 C:2 F:5 G:1 H:11).
+
+### /vg:audit-scaffold (new slash command)
+`commands/vg/audit-scaffold.md`: operator-facing ad-hoc audit invocation.
+`allowed-tools: [Bash, Read]`. Advisory mode default; `--threshold 0` for strict.
+
+### Tests
+`tests/test_batch24_scaffold_detector.py` (6 tests) + `tests/test_batch24_audit_wiring.py` (2 tests).
+
 ## v4.26.0 — Spec stage coverage validator (Batch 23) (2026-05-15)
 
 Closes user dogfood bug: "test bật form modal, bật xong là xong, không hề test

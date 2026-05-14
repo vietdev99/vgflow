@@ -1,5 +1,157 @@
 # Changelog
 
+## v4.27.0 — Scaffold-pattern detector + audit CI (Batch 24) (2026-05-15)
+
+Codifies 8 scaffold/drift anti-patterns gặp trong Batches 9/14/15/18/19/22
+thành automated grep audit. Detector runs mỗi release via CI gate.
+
+### scripts/audit/scaffold-detector.py (new)
+Scans `commands/vg/**/*.md` for 5 anti-patterns at first ship (A/C/F/G/H).
+B/D/E require cross-file analysis — deferred.
+
+- **A** (high): `Agent(subagent_type=...)` in bash fence with no file gate after
+- **C** (high): `|| true` on `run-complete`/`validate`/`verify` lines
+- **F** (high): Tool directive (`Agent(`/`SlashCommand:`/`AskUserQuestion:`) in bash fence
+- **G** (medium): `touch *.done` in else branch without validation
+- **H** (low): `*.spec.ts` glob where canonical manifest exists
+
+`--threshold N`: exit 1 if findings > N (CI gate). Default -1 = advisory only.
+`--json`: structured output for telemetry.
+
+### CI wiring
+`.github/workflows/release.yml`: "Scaffold pattern audit" step added pre-tarball
+with `--threshold 50` (baseline 23 findings at ship time, A:4 C:2 F:5 G:1 H:11).
+
+### /vg:audit-scaffold (new slash command)
+`commands/vg/audit-scaffold.md`: operator-facing ad-hoc audit invocation.
+`allowed-tools: [Bash, Read]`. Advisory mode default; `--threshold 0` for strict.
+
+### Tests
+`tests/test_batch24_scaffold_detector.py` (6 tests) + `tests/test_batch24_audit_wiring.py` (2 tests).
+
+## v4.25.0 — Review scaffold + classification gaps (Batch 22) (2026-05-14)
+
+Closes all 10 Codex review+test-spec audit findings across Batch 19 (v4.24.0)
++ Batch 22 (v4.25.0). 4 HIGH + 1 MED resolved with TDD-verified fixes.
+
+### F7 (HIGH): MATRIX-INTENT.json deterministic generator
+`commands/vg/_shared/review/matrix-intent.md:47` — matrix-intent.md only ran
+`mark-step`. No script wrote `MATRIX-INTENT.json`. Receipt counts (READY 11 /
+BLOCKED 0 / NOT_SCANNED 4) came from elsewhere — file missing or stale.
+
+Fix: New `scripts/generate-matrix-intent.py` reads `GOAL-COVERAGE-MATRIX.json`,
+computes per-goal verdict (READY_BEHAVIORAL / READY_STRUCTURAL / BLOCKED /
+NOT_SCANNED) + writes `MATRIX-INTENT.json` with summary counts.
+`matrix-intent.md` invokes generator before mark-step. Failure = BLOCK.
+`review.md` must_write contract adds `MATRIX-INTENT.json` (content_min_bytes: 200).
+
+### F3 (HIGH): Deep test-spec goal parity check
+`scripts/validators/verify-deep-test-specs.py:198` — validator checked files +
+emitted goal shape only. Did NOT compare against full `TEST-GOALS.md` list.
+Automatable goals could be silently dropped from `LIFECYCLE-SPECS.json`.
+
+Fix: `--check-goal-parity` flag computes set diff:
+  automatable_goals (from TEST-GOALS.md) - emitted_goals - goals_with_skip_reason.
+Non-empty diff → exit 1, names omitted goals. Also adds `--phase-dir` flag.
+
+### F8 (HIGH): Lens probe skip override-debt + coverage hard-block
+`lens-and-findings.md:23,151,196` — lens probe eligibility fail wrote
+`.recursive-probe-skipped.yaml` + bypassed coverage. Coverage failure emitted
+prompt only (didn't exit). '12 lens probes' could reduce to zero probes plus
+skip marker, review still PASS.
+
+Fix: Skip path emits `vg-orchestrator override` + `review.lens_skipped` event
+with reason (logs override-debt). Coverage failure exits 1 unless
+`--allow-lens-coverage-gap` set.
+
+### F9 (HIGH): CRUD lane SKIPPED/NO_SURFACE/FAILED/PASS classification
+`lens-and-findings.md:666,723,757` — CRUD findings lane skipped on missing
+CRUD-SURFACES, missing kit, auth fail, or no run artifacts — all silently
+continued with markers written. 'Few findings' could mean 'few probes ran'.
+
+Fix: Explicit CRUD_STATE classification:
+- NO_SURFACE: CRUD-SURFACES.md missing → review.crud_no_surface event
+- SKIPPED: kit missing or auth fail → review.crud_skipped event
+- FAILED: probe ran but matrix returned errors
+- PASS: all probes returned clean
+
+### F10 (MED): Separate static inventory from runtime visited counts
+`code-scan.md:300,315` + `api-and-discovery.md:711` — counts labelled as depth
+proof mixed static grep counts (routes/models/services) with runtime browser tour
+evidence. User saw 65 routes registered, assumed deep coverage.
+
+Fix: `review/close.md` recap template now has two sections:
+- **Static inventory** (grep — routes/models/services counts from code-scan)
+- **Runtime visited** (browser tour — views toured / scan files / EXPECTED)
+
+---
+
+## v4.24.1 — Hotfix Batch 19 CI fails (2026-05-14)
+
+v4.24.0 release CI broke 3 tests:
+1. `test_blocking_gate_prompt::test_leg1_emits_json_with_4_options` — F6
+   changed `blocking_gate_prompt_emit` return code from 0 to 2 for
+   `severity=error`. Test still expected 0. Updated assertion to match
+   new F6 contract.
+2. `test_codex_test_accept_step_parity` — `codex-skills/vg-test-spec/
+   SKILL.md` drifted after F1/F2 changes. Curated-guard blocked auto
+   regen — manual sync of CODEGEN-MANIFEST gate + run-complete strict
+   block.
+3. `test_review_global_paths` — F4 + F5 patches hardcoded `.claude/
+   scripts/...` paths. Test enforces `${VG_SCRIPT_ROOT:-${VG_HOME:-...}/
+   scripts}` pattern for review files. Updated:
+   - `review/api-and-discovery.md:1215,1229` (F4 emit-events)
+   - `review/lens-and-findings.md:476` (F5 merge-runtime-map path)
+
+## v4.24.0 — Review + Test-Spec CRITICAL fixes (Batch 19) (2026-05-14)
+
+Codex audit found 5 CRITICAL execution path gaps across review and test-spec lanes.
+All 5 findings resolved with TDD-verified fixes.
+
+### F1 (CRITICAL): test-spec codegen CODEGEN-MANIFEST verdict gate
+`test-spec.md:432,451` — vg-test-codegen Agent spawn was comment-only. Marker
+`4_codegen.done` fired unconditionally. Codegen complete claimed without actual codegen.
+
+Fix: Post-Agent gate requires `${PHASE_DIR}/CODEGEN-MANIFEST.json` on disk + 
+`playwright_specs` array length >= 1. Missing file or zero specs exits 1 with
+`test_spec.codegen_missing_manifest` / `test_spec.codegen_zero_specs` events.
+
+### F2 (CRITICAL): test-spec run-complete swallowed failure removed
+`test-spec.md:538` — `run-complete --outcome PASS 2>/dev/null || true` swallowed
+contract-validator failures. `verdict=PASS` was written to PIPELINE-STATE 17 lines
+earlier (line 523), but contract failures were hidden.
+
+Fix: Drop `2>/dev/null || true`. Capture rc via `PIPESTATUS`, exit 1 on non-zero,
+surface stderr to user. PASS verdict sequencing concern noted for future batch.
+
+### F4 (CRITICAL): review browser tour per-view evidence gate
+`review/api-and-discovery.md:1128` — browser tour Agent spawn was prose. Contract
+required only `scan-*.json glob >= 1`. No per-view evidence enforced.
+
+Fix: Post-spawn gate reads `.review/nav-discovery.json` views array, counts
+`.scan/scan-*.json` files, requires `ASSIGNED_VIEWS == SCAN_COUNT`. Provenance
+check via `CURRENT_RUN_ID`. Emits `review.browser_tour_evidence_gap` on mismatch.
+
+### F5 (CRITICAL): RUNTIME-MAP deterministic merge script
+`review/lens-and-findings.md:260,373` + `review/close.md:93` — RUNTIME-MAP.json
+merged via prose instruction. No minimum size gate (80 bytes). Fabricated 80-byte
+stub JSON could satisfy artifact contract.
+
+Fix: New `scripts/merge-runtime-map.py` — reads each `scan-*.json`, builds
+`views[]` array with `elements/actions/goal_sequences/source_scan/scan_run_id`.
+Refuses to write stub when scan dir empty. `lens-and-findings.md` invokes script.
+`close.md` adds size gate: RUNTIME-MAP.json must be >= 500 bytes.
+
+### F6 (CRITICAL): blocking gates enforced resolve
+`scripts/lib/blocking-gate-prompt.sh:16` — `blocking_gate_prompt_emit()` always
+returned 0. 7 callers in `review/close.md` didn't branch on return code. Failed
+gates fell through to `run-complete` with `verdict=PASS`.
+
+Fix: `blocking_gate_prompt_emit` returns 2 on critical/error severity, 0 on warn.
+All 7 callers (`matrix_evidence_link`, `rcrurd_post_state`, `matrix_staleness`,
+`evidence_provenance`, `mutation_submit`, `rcrurd_depth`, `asserted_drift`) now
+capture `EMIT_RC` and exit 1 unless `--gate-resolved=<gate_id>` set by Leg 2.
+
 ## v4.23.0 — Test execution plan enforcement (Batch 21) (2026-05-14)
 
 User dogfood: "test không chạy theo lộ trình của test-specs đề ra".
