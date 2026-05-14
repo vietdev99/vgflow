@@ -1,5 +1,54 @@
 # Changelog
 
+## v4.24.0 — Review + Test-Spec CRITICAL fixes (Batch 19) (2026-05-14)
+
+Codex audit found 5 CRITICAL execution path gaps across review and test-spec lanes.
+All 5 findings resolved with TDD-verified fixes.
+
+### F1 (CRITICAL): test-spec codegen CODEGEN-MANIFEST verdict gate
+`test-spec.md:432,451` — vg-test-codegen Agent spawn was comment-only. Marker
+`4_codegen.done` fired unconditionally. Codegen complete claimed without actual codegen.
+
+Fix: Post-Agent gate requires `${PHASE_DIR}/CODEGEN-MANIFEST.json` on disk + 
+`playwright_specs` array length >= 1. Missing file or zero specs exits 1 with
+`test_spec.codegen_missing_manifest` / `test_spec.codegen_zero_specs` events.
+
+### F2 (CRITICAL): test-spec run-complete swallowed failure removed
+`test-spec.md:538` — `run-complete --outcome PASS 2>/dev/null || true` swallowed
+contract-validator failures. `verdict=PASS` was written to PIPELINE-STATE 17 lines
+earlier (line 523), but contract failures were hidden.
+
+Fix: Drop `2>/dev/null || true`. Capture rc via `PIPESTATUS`, exit 1 on non-zero,
+surface stderr to user. PASS verdict sequencing concern noted for future batch.
+
+### F4 (CRITICAL): review browser tour per-view evidence gate
+`review/api-and-discovery.md:1128` — browser tour Agent spawn was prose. Contract
+required only `scan-*.json glob >= 1`. No per-view evidence enforced.
+
+Fix: Post-spawn gate reads `.review/nav-discovery.json` views array, counts
+`.scan/scan-*.json` files, requires `ASSIGNED_VIEWS == SCAN_COUNT`. Provenance
+check via `CURRENT_RUN_ID`. Emits `review.browser_tour_evidence_gap` on mismatch.
+
+### F5 (CRITICAL): RUNTIME-MAP deterministic merge script
+`review/lens-and-findings.md:260,373` + `review/close.md:93` — RUNTIME-MAP.json
+merged via prose instruction. No minimum size gate (80 bytes). Fabricated 80-byte
+stub JSON could satisfy artifact contract.
+
+Fix: New `scripts/merge-runtime-map.py` — reads each `scan-*.json`, builds
+`views[]` array with `elements/actions/goal_sequences/source_scan/scan_run_id`.
+Refuses to write stub when scan dir empty. `lens-and-findings.md` invokes script.
+`close.md` adds size gate: RUNTIME-MAP.json must be >= 500 bytes.
+
+### F6 (CRITICAL): blocking gates enforced resolve
+`scripts/lib/blocking-gate-prompt.sh:16` — `blocking_gate_prompt_emit()` always
+returned 0. 7 callers in `review/close.md` didn't branch on return code. Failed
+gates fell through to `run-complete` with `verdict=PASS`.
+
+Fix: `blocking_gate_prompt_emit` returns 2 on critical/error severity, 0 on warn.
+All 7 callers (`matrix_evidence_link`, `rcrurd_post_state`, `matrix_staleness`,
+`evidence_provenance`, `mutation_submit`, `rcrurd_depth`, `asserted_drift`) now
+capture `EMIT_RC` and exit 1 unless `--gate-resolved=<gate_id>` set by Leg 2.
+
 ## v4.23.0 — Test execution plan enforcement (Batch 21) (2026-05-14)
 
 User dogfood: "test không chạy theo lộ trình của test-specs đề ra".
