@@ -92,6 +92,19 @@ Required files — BLOCK commit if ANY missing:
 
 Use Glob to confirm each file exists. If RUNTIME-MAP.json is missing,
 you MUST create it before proceeding. The .md alone is NOT sufficient.
+
+F5 Batch 19 — RUNTIME-MAP.json minimum size gate (content_min_bytes: 500):
+```bash
+# F5: fabricated 80-byte stub JSON must not satisfy artifact contract.
+# Schema-compliant output with 1+ views exceeds 500 bytes.
+RUNTIME_MAP_SIZE=$(python3 -c "import os; print(os.path.getsize('${PHASE_DIR}/RUNTIME-MAP.json'))" 2>/dev/null || echo "0")
+if [ "${RUNTIME_MAP_SIZE:-0}" -lt 500 ]; then
+  echo "⛔ F5 BLOCK: RUNTIME-MAP.json too small (${RUNTIME_MAP_SIZE} bytes < 500 minimum)" >&2
+  echo "   Schema-compliant output requires at least 1 view with elements[] array." >&2
+  echo "   Run merge-runtime-map.py --scan-dir ${PHASE_DIR}/.scan to regenerate." >&2
+  exit 1
+fi
+```
 ```
 
 Commit:

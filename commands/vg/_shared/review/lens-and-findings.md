@@ -465,6 +465,30 @@ Elements: {N} interactive ({visited}/{total} visited)
 
 **JSON is the source of truth.** Markdown is derived. Downstream steps (test, codegen) read JSON.
 
+**F5 Batch 19 — deterministic RUNTIME-MAP merge (replaces prose Glob merge):**
+
+```bash
+# F5 Batch 19: deterministic RUNTIME-MAP merge (replaces prose Glob merge).
+# merge-runtime-map.py reads each scan-*.json, builds views[] array with
+# elements/actions/goal_sequences/source_scan/scan_run_id. Refuses to
+# write stub when scan dir empty. Prevents fabricated 80-byte JSON stubs
+# satisfying the contract.
+MERGE_SCRIPT="${REPO_ROOT:-.}/.claude/scripts/merge-runtime-map.py"
+[ -f "$MERGE_SCRIPT" ] || MERGE_SCRIPT="${REPO_ROOT:-.}/scripts/merge-runtime-map.py"
+if [ ! -f "$MERGE_SCRIPT" ]; then
+  echo "⛔ F5 BLOCK: merge-runtime-map.py missing — review cannot build RUNTIME-MAP.json deterministically" >&2
+  exit 1
+fi
+"${PYTHON_BIN:-python3}" "$MERGE_SCRIPT" \
+  --scan-dir "${PHASE_DIR}/.scan" \
+  --out "${PHASE_DIR}/RUNTIME-MAP.json" \
+  --phase-number "${PHASE_NUMBER}" \
+  --run-id "${VG_RUN_ID:-}" || {
+  echo "⛔ F5 BLOCK: RUNTIME-MAP merge failed — see stderr" >&2
+  exit 1
+}
+```
+
 **Phase 15 D-17 — phantom-aware Haiku spawn audit (NEW, 2026-04-27):**
 
 Confirm the `review.haiku_scanner_spawned` event emitted by step 2b-2 is
