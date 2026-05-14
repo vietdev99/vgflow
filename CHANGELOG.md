@@ -1,5 +1,55 @@
 # Changelog
 
+## v4.32.0 — Batch 28 filter/paging rigor pack validator wired (F14 CRITICAL) (2026-05-15)
+
+User dogfood PrintwayV3: "test-specs khá nghiêm trọng, không gen đủ
+các test specs về filter, paging".
+
+### Root cause (F14)
+
+`scripts/validators/verify-filter-test-coverage.py` exists with full D-16
+matrix logic (14 filter + 18 paging cases per control) but is NEVER
+bash-invoked. Only mentioned at `commands/vg/_shared/test/codegen/delegation.md:216`
+and `agents/vg-test-codegen/SKILL.md:147` as prose ("Validate with...").
+Codegen subagent receives instruction "render rigor pack via matrix
+module" but no validator catches incomplete rendering. D-16 rigor pack
+is dead code.
+
+### Fix
+
+`commands/vg/_shared/test/codegen/overview.md` STEP 5.3 (after C7
+telemetry) now bash-invokes validator with rc capture. On non-zero rc:
+
+- `FILTER_COVERAGE_STATUS=FAIL`
+- Parse first 3 evidence messages for human-readable reason
+- Emit `test.filter_coverage_failed` event (phase, rc, reason)
+- `exit 1` unless `--allow-filter-shortfall` arg passed (legacy escape)
+
+Test count shortfall now blocks `/vg:test` progression. Downstream
+verdict computation sees real FAIL not silent pass. Filter/paging rigor
+pack enforced at the gate, not just suggested in prose to subagent.
+
+### Deferred (separate batches)
+
+- **F13** `enrich-test-goals.py` auto-detect filters: scan-*.json schema
+  doesn't emit `filters[]` (only `forms`/`tables`/`tabs` per
+  `skills/vg-haiku-scanner/SKILL.md:343-404`). Needs scanner schema
+  update first → Batch 29.
+- **F15** `codegen-auto-goals.py` spec_kind tag: nice-to-have, doesn't
+  block dogfood → Batch 29.
+
+### Tests
+
+- `tests/test_batch28_filter_validator_wired.py`: 4 cases
+  - `test_overview_invokes_filter_coverage_validator` (validator + rc capture present)
+  - `test_filter_validator_exit_on_fail_or_block_emit` (FAIL status or event emit)
+  - `test_filter_validator_legacy_escape_hatch` (--allow-filter-shortfall preserved)
+  - `test_mirror_in_sync` (commands/ ↔ .claude/commands/ byte-identical)
+
+### Plan
+
+`docs/plans/2026-05-15-batch-28-filter-paging-rigor.md`
+
 ## v4.31.2 — Hook scripts missing +x after install/update (macOS/Linux) hotfix (2026-05-15)
 
 User dogfood (macOS): `Failed with non-blocking status code: /bin/sh:

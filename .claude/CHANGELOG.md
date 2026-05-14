@@ -1,5 +1,125 @@
 # Changelog
 
+## v4.32.0 — Batch 28 filter/paging rigor pack validator wired (F14 CRITICAL) (2026-05-15)
+
+User dogfood PrintwayV3: "test-specs khá nghiêm trọng, không gen đủ
+các test specs về filter, paging".
+
+### Root cause (F14)
+
+`scripts/validators/verify-filter-test-coverage.py` exists with full D-16
+matrix logic (14 filter + 18 paging cases per control) but is NEVER
+bash-invoked. Only mentioned at `commands/vg/_shared/test/codegen/delegation.md:216`
+and `agents/vg-test-codegen/SKILL.md:147` as prose ("Validate with...").
+Codegen subagent receives instruction "render rigor pack via matrix
+module" but no validator catches incomplete rendering. D-16 rigor pack
+is dead code.
+
+### Fix
+
+`commands/vg/_shared/test/codegen/overview.md` STEP 5.3 (after C7
+telemetry) now bash-invokes validator with rc capture. On non-zero rc:
+
+- `FILTER_COVERAGE_STATUS=FAIL`
+- Parse first 3 evidence messages for human-readable reason
+- Emit `test.filter_coverage_failed` event (phase, rc, reason)
+- `exit 1` unless `--allow-filter-shortfall` arg passed (legacy escape)
+
+Test count shortfall now blocks `/vg:test` progression. Downstream
+verdict computation sees real FAIL not silent pass. Filter/paging rigor
+pack enforced at the gate, not just suggested in prose to subagent.
+
+### Deferred (separate batches)
+
+- **F13** `enrich-test-goals.py` auto-detect filters: scan-*.json schema
+  doesn't emit `filters[]` (only `forms`/`tables`/`tabs` per
+  `skills/vg-haiku-scanner/SKILL.md:343-404`). Needs scanner schema
+  update first → Batch 29.
+- **F15** `codegen-auto-goals.py` spec_kind tag: nice-to-have, doesn't
+  block dogfood → Batch 29.
+
+### Tests
+
+- `tests/test_batch28_filter_validator_wired.py`: 4 cases
+  - `test_overview_invokes_filter_coverage_validator` (validator + rc capture present)
+  - `test_filter_validator_exit_on_fail_or_block_emit` (FAIL status or event emit)
+  - `test_filter_validator_legacy_escape_hatch` (--allow-filter-shortfall preserved)
+  - `test_mirror_in_sync` (commands/ ↔ .claude/commands/ byte-identical)
+
+### Plan
+
+`docs/plans/2026-05-15-batch-28-filter-paging-rigor.md`
+
+## v4.31.2 — Hook scripts missing +x after install/update (macOS/Linux) hotfix (2026-05-15)
+
+User dogfood (macOS): `Failed with non-blocking status code: /bin/sh:
+/Users/dzungnguyen/.vgflow/scripts/hooks/vg-deploy-contract-guard.sh:
+Permission denied`.
+
+### Root cause
+
+1. **Git tree had files committed with mode 100644 (non-exec)** for 8 hook
+   scripts including `vg-deploy-contract-guard.sh` (Batch 20),
+   `vg-post-tool-use-agent.sh`, `vg-post-tool-use-askuserquestion.sh`,
+   `_lib.sh`, `install-pre-commit-harness-guard.sh` (both
+   `scripts/hooks/` + `.claude/scripts/hooks/` mirrors).
+2. **`ensure_home_vgflow` cp -R fallback** (Windows w/o symlink support)
+   doesn't chmod after copy. macOS/Linux NPM tarball + zip install paths
+   also lose +x bit.
+3. **`/vg:update` sync branch** had no defensive chmod restore.
+
+### Fix
+
+- `git update-index --chmod=+x` on 8 affected files (mode now 100755).
+- `bin/vg-cli-dispatcher.sh`: new `_vg_restore_exec_bits()` helper
+  invoked after `ensure_home_vgflow` cp-fallback AND in install/sync
+  branches. Restores +x on `scripts/hooks/*.sh`, `scripts/*.sh`,
+  `scripts/*.py`, `scripts/validators/*.py`, `scripts/vg-orchestrator/`,
+  `scripts/lib/`, `bin/*`, `commands/vg/_shared/lib/*.sh`.
+
+After this fix:
+- Fresh install/clone: hook files have +x in git tree.
+- npm tarball / zip extract: cp-fallback restores +x.
+- `/vg:update` from any source: chmod always re-applied.
+
+## v4.31.1 — MCP Playwright loss after /vg:update (Windows) hotfix (2026-05-15)
+
+User dogfood bug: "sau mỗi lần /vg:update là claude lại mất MCP Playwright,
+graphify". 3 root causes in `scripts/validators/verify-playwright-mcp-config.py`:
+
+1. **Wrong file**: read `~/.claude/settings.json` but Claude Code reads
+   `~/.claude.json` (top-level). Validator's repair patched wrong file →
+   real config drifted.
+2. **Windows cmd-wrapper rejected**: `_valid_entry` accepted only
+   `command='npx'`. User's Windows config uses `command='cmd',
+   args=['/c', 'npx', ...]` (required on Windows for npx). Validator
+   marked Windows entries as "invalid" → `--repair` OVERWROTE with bare
+   `npx` → Windows can't spawn `npx` directly → MCP fails to start →
+   user sees "mất MCP".
+3. **Custom profile dir clobbered**: `_valid_profile_entry` required
+   user-data-dir to match `~/.claude/playwright-profile-N`. User's
+   working Windows config used custom path (temp dir, etc) → repair
+   forced overwrite to standard path.
+
+### Fix
+
+- Read `~/.claude.json` first, fall back to `~/.claude/settings.json`.
+- `_valid_entry` accepts both Unix (`command=npx`) AND Windows
+  (`command=cmd, args=['/c', 'npx', ...]`) forms.
+- `_valid_profile_entry` treats any Windows-cmd entry as implicit
+  `allow_custom=True` — don't force overwrite working Windows config.
+
+### Regression tests
+
+`tests/test_mcp_validator_windows_cmd.py` — 6 tests covering Windows-cmd
+accept, Unix-npx still accepted, custom profile preserved, invalid entries
+still rejected.
+
+User must restart Claude Code session after `/vg:update` for MCP workers
+to reconnect — file fix means future updates won't clobber config, but
+current-session connection state survives only if subprocess workers
+remain alive.
+
 ## v4.31.0 — Batch 27: test scaffold CRITICAL fixes (write_report + regression rc + security FAIL) (2026-05-15)
 
 3 CRITICAL gaps from Codex test flow audit fixed:
