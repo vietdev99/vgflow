@@ -1,5 +1,37 @@
 # Changelog
 
+## v4.31.2 — Hook scripts missing +x after install/update (macOS/Linux) hotfix (2026-05-15)
+
+User dogfood (macOS): `Failed with non-blocking status code: /bin/sh:
+/Users/dzungnguyen/.vgflow/scripts/hooks/vg-deploy-contract-guard.sh:
+Permission denied`.
+
+### Root cause
+
+1. **Git tree had files committed with mode 100644 (non-exec)** for 8 hook
+   scripts including `vg-deploy-contract-guard.sh` (Batch 20),
+   `vg-post-tool-use-agent.sh`, `vg-post-tool-use-askuserquestion.sh`,
+   `_lib.sh`, `install-pre-commit-harness-guard.sh` (both
+   `scripts/hooks/` + `.claude/scripts/hooks/` mirrors).
+2. **`ensure_home_vgflow` cp -R fallback** (Windows w/o symlink support)
+   doesn't chmod after copy. macOS/Linux NPM tarball + zip install paths
+   also lose +x bit.
+3. **`/vg:update` sync branch** had no defensive chmod restore.
+
+### Fix
+
+- `git update-index --chmod=+x` on 8 affected files (mode now 100755).
+- `bin/vg-cli-dispatcher.sh`: new `_vg_restore_exec_bits()` helper
+  invoked after `ensure_home_vgflow` cp-fallback AND in install/sync
+  branches. Restores +x on `scripts/hooks/*.sh`, `scripts/*.sh`,
+  `scripts/*.py`, `scripts/validators/*.py`, `scripts/vg-orchestrator/`,
+  `scripts/lib/`, `bin/*`, `commands/vg/_shared/lib/*.sh`.
+
+After this fix:
+- Fresh install/clone: hook files have +x in git tree.
+- npm tarball / zip extract: cp-fallback restores +x.
+- `/vg:update` from any source: chmod always re-applied.
+
 ## v4.31.1 — MCP Playwright loss after /vg:update (Windows) hotfix (2026-05-15)
 
 User dogfood bug: "sau mỗi lần /vg:update là claude lại mất MCP Playwright,

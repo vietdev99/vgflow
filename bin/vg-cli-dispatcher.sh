@@ -79,6 +79,27 @@ ensure_home_vgflow() {
   cp -R "$vg_real"/. "$home_vgflow"/
   export VG_HOME="$home_vgflow"
   echo "vgflow: copied active install into ~/.vgflow"
+  # v4.31.2 hotfix: restore +x on hook scripts. cp -R from npm/tar/zip sources
+  # may lose POSIX execute bit. User dogfood (macOS):
+  # "/Users/.../vgflow/scripts/hooks/vg-deploy-contract-guard.sh: Permission denied"
+  _vg_restore_exec_bits "$home_vgflow"
+}
+
+# v4.31.2: defensive chmod set. Run after any ~/.vgflow copy/sync to ensure
+# hook scripts + validators are executable. Idempotent + silent on Windows.
+_vg_restore_exec_bits() {
+  local root="$1"
+  [ -d "$root" ] || return 0
+  chmod +x "$root/scripts/hooks/"*.sh 2>/dev/null || true
+  chmod +x "$root/scripts/hooks/"*.py 2>/dev/null || true
+  chmod +x "$root/scripts/"*.sh 2>/dev/null || true
+  chmod +x "$root/scripts/"*.py 2>/dev/null || true
+  chmod +x "$root/scripts/validators/"*.py 2>/dev/null || true
+  chmod +x "$root/scripts/vg-orchestrator/"*.py 2>/dev/null || true
+  chmod +x "$root/scripts/lib/"*.py 2>/dev/null || true
+  chmod +x "$root/bin/"* 2>/dev/null || true
+  chmod +x "$root/commands/vg/_shared/lib/"*.sh 2>/dev/null || true
+  chmod +x "$root/commands/vg/_shared/lib/test-runners/"*.sh 2>/dev/null || true
 }
 
 run_project_uninstall_helper() {
@@ -378,6 +399,8 @@ case "$cmd" in
     done
     project_root="$(pwd)"
     ensure_home_vgflow
+    # v4.31.2: idempotent +x restore for hook scripts post-install
+    _vg_restore_exec_bits "$VG_HOME"
     run_project_uninstall_helper "$project_root"
     refresh_global_cli_link
     refresh_global_orchestrator_cli
@@ -418,6 +441,9 @@ case "$cmd" in
       exit 1
     fi
     ensure_home_vgflow
+    # v4.31.2: re-apply exec bits even when VG_HOME is symlinked (git pull on
+    # source repo may have introduced new files without +x in tree). Idempotent.
+    _vg_restore_exec_bits "$VG_HOME"
     refresh_global_cli_link
     refresh_global_orchestrator_cli
     refresh_global_claude_commands
