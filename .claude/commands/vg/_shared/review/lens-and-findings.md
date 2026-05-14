@@ -697,11 +697,23 @@ echo ""
 echo "━━━ Phase 2d — CRUD round-trip lens dispatch ━━━"
 "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator step-active phase2d_crud_roundtrip_dispatch >/dev/null 2>&1 || true
 
+# F9 Batch 22: CRUD lane classification — explicit state, not silent skip.
+# States: NO_SURFACE / SKIPPED / FAILED / PASS
+CRUD_STATE="PASS"
+
 # Skip if no CRUD-SURFACES or no resources declare this kit
 if [ ! -f "${PHASE_DIR}/CRUD-SURFACES.md" ]; then
-  echo "  (no CRUD-SURFACES.md — skipping Phase 2d)"
+  CRUD_STATE="NO_SURFACE"
+  echo "  (no CRUD-SURFACES.md — CRUD lane state: NO_SURFACE)"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+    "review.crud_no_surface" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" 2>/dev/null || true
 elif ! grep -q '"kit"\s*:\s*"crud-roundtrip"' "${PHASE_DIR}/CRUD-SURFACES.md"; then
-  echo "  (no resources with kit: crud-roundtrip — skipping Phase 2d)"
+  CRUD_STATE="SKIPPED"
+  echo "  (no resources with kit: crud-roundtrip — CRUD lane state: SKIPPED)"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+    "review.crud_skipped" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"no kit: crud-roundtrip resources\"}" 2>/dev/null || true
 else
   # Bootstrap auth tokens if missing
   TOKENS_PATH="${PHASE_DIR}/.review-fixtures/tokens.local.yaml"
@@ -710,7 +722,11 @@ else
     echo "  Bootstrapping auth tokens..."
     ${PYTHON_BIN:-python3} ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-fixture-bootstrap.py \
       --phase-dir "$PHASE_DIR" || {
-        echo "  ⚠ Auth fixture bootstrap failed — Phase 2d skipped (workers cannot authenticate)"
+        CRUD_STATE="SKIPPED"
+        echo "  ⚠ Auth fixture bootstrap failed — CRUD lane state: SKIPPED (workers cannot authenticate)"
+        "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+          "review.crud_skipped" \
+          --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"auth fixture bootstrap failed\"}" 2>/dev/null || true
       }
   fi
 
@@ -725,19 +741,22 @@ else
     DISPATCH_RC=$?
 
     if [ "$DISPATCH_RC" -eq 0 ]; then
+      CRUD_STATE="PASS"
       ARTIFACTS=$(${PYTHON_BIN:-python3} -c "import json; d=json.load(open('${PHASE_DIR}/runs/INDEX.json')); print(d.get('artifacts_present', 0))" 2>/dev/null || echo "0")
-      echo "  ✓ CRUD round-trip dispatch complete: ${ARTIFACTS} run artifact(s)"
+      echo "  ✓ CRUD round-trip dispatch complete: ${ARTIFACTS} run artifact(s) — CRUD lane state: PASS"
       emit_telemetry_v2 "review_phase2d_dispatched" "${PHASE_NUMBER}" \
         "review.2d-crud-dispatch" "crud_roundtrip" "PASS" \
         "{\"artifacts\":${ARTIFACTS}}" 2>/dev/null || true
     else
-      echo "  ⚠ CRUD round-trip dispatch failed (rc=${DISPATCH_RC})"
+      CRUD_STATE="FAILED"
+      echo "  ⚠ CRUD round-trip dispatch failed (rc=${DISPATCH_RC}) — CRUD lane state: FAILED"
       emit_telemetry_v2 "review_phase2d_failed" "${PHASE_NUMBER}" \
         "review.2d-crud-dispatch" "crud_roundtrip" "FAIL" \
         "{\"rc\":${DISPATCH_RC}}" 2>/dev/null || true
     fi
   fi
 fi
+echo "▸ CRUD lane state: ${CRUD_STATE}"
 "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2d_crud_roundtrip_dispatch 2>/dev/null || true
 ```
 </step>
