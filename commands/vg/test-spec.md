@@ -535,7 +535,17 @@ touch "${PHASE_DIR}/.step-markers/test-spec/5_complete.done"
 "${PYTHON_BIN:-python3}" "$ORCH" emit-event \
   "test_spec.completed" --step "5_complete" --actor "llm-claimed" \
   --outcome "PASS" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
-"${PYTHON_BIN:-python3}" "$ORCH" run-complete --outcome PASS 2>/dev/null || true
+# F2 Batch 19: run-complete failure must NOT be swallowed. PASS verdict
+# was written above (lines 521-525), but if run-complete fails the
+# orchestrator contract validator caught a problem — surface it loudly.
+if ! "${PYTHON_BIN:-python3}" "$ORCH" run-complete --outcome PASS 2>&1 | tee /tmp/run-complete-err.$$; then
+  RC=${PIPESTATUS[0]:-1}
+  echo "⛔ F2 BLOCK: test-spec run-complete failed (rc=$RC) — contract validator caught issue" >&2
+  echo "   PASS verdict was written prematurely. Re-verify artifacts before retry." >&2
+  rm -f /tmp/run-complete-err.$$
+  exit 1
+fi
+rm -f /tmp/run-complete-err.$$
 
 echo "✓ /vg:test-spec complete"
 echo "  Wrote: ${PHASE_DIR}/DEEP-TEST-SPECS.md"
