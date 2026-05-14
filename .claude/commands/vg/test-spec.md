@@ -1,6 +1,6 @@
 ---
 name: vg:test-spec
-description: Post-build deep test-spec authoring — derive lifecycle specs, fixture DAG, localizer prompt, and execution plan before review
+description: Post-review deep test-spec authoring — derive lifecycle specs, fixture DAG, localizer prompt, and execution plan consuming RUNTIME-MAP from review
 argument-hint: "<phase> [--regen] [--max-files=N] [--ai-response=path] [--crossai-review] [--no-crossai-review]"
 allowed-tools:
   - Read
@@ -71,7 +71,7 @@ Why this exists:
   discover test depth late and route it ambiguously.
 
 Pipeline:
-`specs → scope → blueprint → build → test-spec → review → test → accept`
+`specs → scope → blueprint → build → review → test-spec → test → accept`
 </objective>
 
 <rules>
