@@ -418,11 +418,44 @@ blocks test completion.
 
 ```bash
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+
+# Batch 31 gap #10: reflection status gate. Cannot mark unconditionally.
+# Status decided by:
+# - --skip-reflection or absent bootstrap dir → SKIPPED
+# - REFLECTION.md exists → PASS
+# - else → FAIL (reflector spawned but never wrote output)
+REFLECTION_STATUS="UNKNOWN"
+REFLECTION_REASON=""
+if echo "${ARGUMENTS:-}" | grep -q -- "--skip-reflection"; then
+  REFLECTION_STATUS="SKIPPED"
+  REFLECTION_REASON="--skip-reflection flag"
+elif [ ! -d ".vg/bootstrap" ]; then
+  REFLECTION_STATUS="SKIPPED"
+  REFLECTION_REASON="bootstrap not opted in"
+elif [ -f "${PHASE_DIR}/REFLECTION.md" ]; then
+  REFLECTION_STATUS="PASS"
+  REFLECTION_REASON="REFLECTION.md persisted"
+else
+  REFLECTION_STATUS="FAIL"
+  REFLECTION_REASON="reflector ran but REFLECTION.md absent"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+    emit-event "test.reflection_artifact_missing" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" \
+    >/dev/null 2>&1 || true
+fi
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/step-status-ledger.py" \
+  --phase-dir "${PHASE_DIR}" --step "bootstrap_reflection" --status "${REFLECTION_STATUS}" \
+  --reason "${REFLECTION_REASON}" 2>/dev/null || true
+
 (type -t mark_step >/dev/null 2>&1 && \
   mark_step "${PHASE_NUMBER:-unknown}" "bootstrap_reflection" "${PHASE_DIR}") || \
   touch "${PHASE_DIR}/.step-markers/bootstrap_reflection.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator \
   mark-step test bootstrap_reflection 2>/dev/null || true
+
+# Non-blocking: reflection FAIL doesn't exit (advisory only) — but ledger
+# captures status so accept-time audit can flag persistent reflection misses.
 ```
 
 ---

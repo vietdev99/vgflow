@@ -130,16 +130,26 @@ Helper functions live in `.claude/commands/vg/_shared/mobile-deploy.md`.
 ```bash
 vg-orchestrator step-active 5a_mobile_deploy
 
-# Source helper reference (re-exports mobile_deploy_* functions)
+# Batch 31 gap #14: source helper bash. Previously functions like
+# mobile_deploy_effective_provider were referenced but never defined in
+# shell scope — helper bash blocks live inside markdown fences and weren't
+# extracted/eval'd. Causes "command not found" at runtime.
 HELPER="${REPO_ROOT}/.claude/commands/vg/_shared/mobile-deploy.md"
 [ -f "$HELPER" ] || { echo "⛔ missing mobile-deploy helper at $HELPER"; exit 1; }
 
-# The helper is markdown — its bash blocks are meant to be copied into the
-# caller's invocation context. The orchestrator reads the helper then exec's
-# the fenced ```bash``` regions. In practice /vg:test extracts the seven
-# primitives (mobile_deploy_provider_detect, _effective_provider,
-# _check_provider, _stage, _invoke, _health, _pipeline, _rollback) and runs
-# mobile_deploy_pipeline.
+# Extract bash blocks from markdown helper and source them. awk pulls every
+# ```bash ... ``` fence into a single eval-able script.
+HELPER_BASH="${VG_TMP:-${PHASE_DIR}/.vg-tmp}/mobile-deploy-helpers.sh"
+mkdir -p "$(dirname "$HELPER_BASH")" 2>/dev/null
+awk '/^```bash$/{f=1; next} /^```$/{f=0; next} f' "$HELPER" > "$HELPER_BASH"
+if [ ! -s "$HELPER_BASH" ]; then
+  echo "⛔ Batch 31 gap #14: extract_bash from $HELPER yielded empty script" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$HELPER_BASH"
+MOBILE_HELPERS_SOURCED=1
+echo "✓ Batch 31: sourced $(grep -c '^[a-z_]*_deploy_.*()' "$HELPER_BASH" 2>/dev/null || echo "?") mobile_deploy_* functions from helper"
 
 # 1. SHAs (identical to web)
 LOCAL_SHA=$(git rev-parse HEAD)

@@ -69,6 +69,91 @@ for ep in idx.get('endpoints', []):
 " 2>/dev/null)
 TOTAL=$(echo "$ENDPOINTS" | grep -c . || echo 0)
 echo "Contract verify: ${TOTAL} endpoints from vg-load index"
+
+# Batch 31 gap #3: per-endpoint curl/jq compare (real bash, not prose).
+# Previously the "For each endpoint:" instruction was prose only — bash
+# stopped at enumeration. Now: for each GET endpoint, fetch BASE_URL +
+# path, parse response with jq, compare top-level keys vs contract's
+# expected fields. POST/PUT/DELETE covered by idempotency block below.
+CONTRACT_MISMATCHES=0
+CONTRACT_CHECKED=0
+CONTRACT_VERIFY_STATUS="PASS"
+CONTRACT_VERIFY_REASON=""
+
+if [ -z "${BASE_URL:-}" ]; then
+  echo "⚠ Batch 31 gap #3: BASE_URL unset — per-endpoint contract check skipped (deploy contract should export it)"
+  CONTRACT_VERIFY_STATUS="SKIPPED"
+  CONTRACT_VERIFY_REASON="BASE_URL unset"
+else
+  echo "$CONTRACTS_INDEX" | "${PYTHON_BIN:-python3}" -c "
+import json, sys
+idx = json.load(sys.stdin)
+for ep in idx.get('endpoints', []):
+    m = ep.get('method','').upper()
+    p = ep.get('path','')
+    if m == 'GET' and p:
+        fields = ep.get('response_fields') or ep.get('expected_keys') or []
+        if isinstance(fields, list):
+            print(f'{p}\t{\",\".join(fields)}')
+" 2>/dev/null > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/contract-get-endpoints.txt"
+  mkdir -p "${VG_TMP:-${PHASE_DIR}/.vg-tmp}" 2>/dev/null
+
+  while IFS=$'\t' read -r EP_PATH EP_FIELDS; do
+    [ -z "$EP_PATH" ] && continue
+    # Skip parameterized paths (need fixture id which is goal-specific)
+    if echo "$EP_PATH" | grep -qE '\{|:[a-zA-Z]'; then
+      continue
+    fi
+    CONTRACT_CHECKED=$((CONTRACT_CHECKED + 1))
+    AUTH_HDR=""
+    [ -n "${AUTH_TOKEN:-}" ] && AUTH_HDR="-H \"Authorization: Bearer ${AUTH_TOKEN}\""
+    RESP=$(eval "curl -sf -X GET \"${BASE_URL}${EP_PATH}\" ${AUTH_HDR} -H \"Accept: application/json\" -w \"\\n%{http_code}\"" 2>/dev/null || echo "$'\n'000")
+    STATUS=$(echo "$RESP" | tail -1)
+    BODY=$(echo "$RESP" | sed '$d')
+
+    if [ "$STATUS" != "200" ] && [ "$STATUS" != "204" ]; then
+      CONTRACT_MISMATCHES=$((CONTRACT_MISMATCHES + 1))
+      echo "  ⛔ contract: GET ${EP_PATH} → ${STATUS} (expected 200)"
+      continue
+    fi
+
+    # Verify expected fields present in response (if specified)
+    if [ -n "$EP_FIELDS" ] && [ -n "$BODY" ]; then
+      MISSING=$("${PYTHON_BIN:-python3}" -c "
+import json, sys
+expected = '${EP_FIELDS}'.split(',')
+try:
+    body = json.loads('''${BODY//\'/\\\'}''')
+    # Top-level dict or wrapped {data: ...}
+    target = body.get('data', body) if isinstance(body, dict) else {}
+    if isinstance(target, list) and target:
+        target = target[0]
+    if not isinstance(target, dict):
+        print('|'.join(expected))
+    else:
+        miss = [f for f in expected if f and f not in target]
+        print('|'.join(miss))
+except Exception:
+    print('|'.join(expected))
+" 2>/dev/null || echo "")
+      if [ -n "$MISSING" ]; then
+        CONTRACT_MISMATCHES=$((CONTRACT_MISMATCHES + 1))
+        echo "  ⛔ contract: GET ${EP_PATH} missing fields: ${MISSING}"
+      fi
+    fi
+  done < "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/contract-get-endpoints.txt"
+
+  if [ "$CONTRACT_MISMATCHES" -gt 0 ]; then
+    CONTRACT_VERIFY_STATUS="FAIL"
+    CONTRACT_VERIFY_REASON="${CONTRACT_MISMATCHES}/${CONTRACT_CHECKED} GET endpoints failed contract compare"
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+      emit-event "test.contract_verify_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mismatches\":${CONTRACT_MISMATCHES},\"checked\":${CONTRACT_CHECKED}}" \
+      >/dev/null 2>&1 || true
+  else
+    echo "✓ Batch 31 gap #3: ${CONTRACT_CHECKED} GET endpoints passed contract compare"
+  fi
+fi
 ```
 
 For each endpoint: `curl` → `jq` response keys → compare vs contract.
