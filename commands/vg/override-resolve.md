@@ -135,6 +135,53 @@ fi
 | AskUserQuestion → Cancel (wont-fix) | exit 0 không ghi gì, telemetry không emit |
 | Concurrent edit của register | Python rewrite là atomic trên single row; nhiều DEBT-IDs khác nhau safe song song |
 
+## --deploy-method Extension (Batch 20)
+
+Use `--deploy-method=<new_method> --reason='<text>'` to change the locked deploy method
+in `.vg/DEPLOY-CONTRACT.json`. Required when project genuinely migrates deploy
+infrastructure (e.g. ansible → kubectl, pm2 → docker compose).
+
+This is a **separate flow** from DEBT-ID resolution — no DEBT-ID needed, but `--reason` is mandatory.
+
+```bash
+if [[ "${ARGUMENTS}" =~ --deploy-method=([a-zA-Z0-9_-]+) ]]; then
+  NEW_METHOD="${BASH_REMATCH[1]}"
+  REASON_DEPLOY=$(echo "${ARGUMENTS}" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
+  if [ -z "$REASON_DEPLOY" ]; then
+    echo "⛔ --deploy-method requires --reason='<why changing deploy method>'" >&2
+    exit 1
+  fi
+
+  CONTRACT_PATH="${PROJECT_VG_DIR:-.vg}/DEPLOY-CONTRACT.json"
+  echo "▸ Changing locked deploy method to: ${NEW_METHOD}"
+  echo "  Current contract: ${CONTRACT_PATH}"
+  echo "  Reason: ${REASON_DEPLOY}"
+  echo ""
+  echo "  AI controller: gather new build/restart/health commands via AskUserQuestion,"
+  echo "  then run:"
+  echo "    python scripts/deploy-contract-init.py \\"
+  echo "      --method ${NEW_METHOD} --build '...' --restart '...' --health '...' \\"
+  echo "      --force --phase ${PHASE_NUMBER:-?} --run-id ${VG_RUN_ID:-?}"
+
+  # Emit telemetry event
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "deploy.contract_override" \
+    --actor "orchestrator" --outcome "INFO" \
+    --payload "{\"new_method\":\"${NEW_METHOD}\",\"reason\":\"${REASON_DEPLOY}\"}" \
+    2>/dev/null || true
+
+  # Log override-debt entry for audit trail
+  source .claude/commands/vg/_shared/override-debt.md 2>/dev/null || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "deploy-method-change" "${PHASE_NUMBER:-global}" \
+      "${NEW_METHOD}: ${REASON_DEPLOY}" "${PHASE_DIR:-.}" || true
+
+  exit 0
+fi
+```
+
+After AI gathers new commands and runs `deploy-contract-init.py --force`, the
+PreToolUse hook will be updated to the new fingerprint_pattern on next deploy.
+
 ## Success criteria
 
 - Một lệnh duy nhất xử lý một DEBT-ID → register update + telemetry event.
