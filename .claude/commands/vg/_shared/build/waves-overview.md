@@ -711,8 +711,12 @@ for task_num in "${WAVE_TASKS[@]}"; do
   fi
 done
 
-if [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ]; then
-  echo "⛔ COMMIT MISMATCH: wave ${N} expected ${EXPECTED_COMMITS} commits, got ${ACTUAL_COMMITS}"
+if [ "$ACTUAL_COMMITS" -ne "$EXPECTED_COMMITS" ]; then
+  if [ "$ACTUAL_COMMITS" -lt "$EXPECTED_COMMITS" ]; then
+    echo "⛔ F10 COMMIT MISMATCH: wave ${N} expected ${EXPECTED_COMMITS}, got ${ACTUAL_COMMITS} (missing commits — check for silent agent failure)"
+  else
+    echo "⛔ F10 COMMIT MISMATCH: wave ${N} expected ${EXPECTED_COMMITS}, got ${ACTUAL_COMMITS} (extra commits — task over-committed; check attribution audit)"
+  fi
   MISSING_TASKS=""
   for task_num in "${WAVE_TASKS[@]}"; do
     if ! git log --oneline "${WAVE_TAG}..HEAD" | grep -q "${PHASE_NUMBER}-$(printf '%02d' $task_num)"; then
