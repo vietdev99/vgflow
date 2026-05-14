@@ -1,5 +1,125 @@
 # Changelog
 
+## v4.33.0 — Batches 29–35: test+blueprint+testspec gate hardening (2026-05-15)
+
+7-batch shipment closing remaining SCAFFOLD/PARTIAL markers from
+2026-05-15 codex audits + cross-pipeline gate fixes.
+
+### Batch 29 — test flow critical (5c_smoke + 5c_flow + step5_fix_loop)
+
+Artifact gates added per audit gaps #5/#8/#9 (codex-test-flow-audit.md):
+- **5c_smoke**: read `smoke-results.json {mismatches, views_checked}`,
+  set `SMOKE_STATUS` (FAIL on ≥2 mismatches OR file absent unless
+  `--allow-smoke-skip`), emit `test.smoke_check_failed` event, exit 1 on
+  FAIL unless `--allow-smoke-fail`.
+- **5c_flow**: `FLOW_STATUS` gate. If FLOW-SPEC.md present but
+  `flow-results.json` absent → FAIL (runner never invoked). Emit
+  `test.flow_check_failed`, exit 1 unless `--allow-flow-fail`.
+- **step5_fix_loop**: `FIX_LOOP_STATUS` from outcome artifacts —
+  `.verdict-computed.json` failing_goals==0 → PASS; FIX-LOOP-BLOCKED.md
+  → BLOCKED; `.override-debt-skip-fix-loop` → SKIPPED; else → FAIL.
+
+### Batch 30 — 5c_goal_verification default flipped
+
+Per audit gap #4: `SKIP_REVERIFY` default in
+`commands/vg/_shared/test/goal-verification/overview.md` changed from
+`'true'` → `'false'`. Per-goal Playwright replay is now default; trust-
+review is opt-in via `--trust-review` arg or `skip_ready_reverify:true`
+config. Narration updated.
+
+### Batch 31 — bootstrap_reflection + 5a_mobile_deploy + 5b_runtime_contract
+
+Per audit gaps #3/#10/#14:
+- **bootstrap_reflection** (close.md): `REFLECTION_STATUS` gate —
+  `--skip-reflection`/no bootstrap → SKIPPED; REFLECTION.md exists →
+  PASS; else → FAIL + emit `test.reflection_artifact_missing`.
+- **5a_mobile_deploy** (deploy.md): awk-extract bash fences from
+  `mobile-deploy.md` markdown helper into `$HELPER_BASH` and `source`
+  it. `MOBILE_HELPERS_SOURCED=1` confirms; empty extract → exit 1.
+- **5b_runtime_contract_verify** (runtime.md): per-GET-endpoint curl
+  loop. `CONTRACT_MISMATCHES` counter from response status + expected
+  fields compare. `CONTRACT_VERIFY_STATUS=FAIL` on >0 mismatches +
+  emit `test.contract_verify_failed`.
+
+### Batch 32 — Blueprint 4 SCAFFOLD markers gated
+
+Per codex-blueprint-scaffold-audit.md:
+- **2b5e_a_lens_walk**: source drift fixed — `lens-walk.md` was missing
+  in `commands/`, existed only in `.claude/` mirror. Copied to source.
+- **2b6d_fe_contracts** (fe-contracts-overview.md): bash gate with
+  step-active + `verify-fe-contract-block5.py` invoke + mark-step.
+- **2b8_rcrurdr_invariants**: created owner file
+  `commands/vg/_shared/blueprint/rcrurdr-invariants.md` invoking
+  `rcrurd-preflight.py` + `verify-rcrurd-depth.py`.
+- **2b9_workflows** (workflows-overview.md): bash gate with profile gate
+  + `verify-workflow-specs.py` invoke + mark-step.
+
+### Batch 33 — Blueprint 3 worst PARTIAL hardened
+
+Per audit gaps #9/#10/#11:
+- **2d_validation_gate** (verify.md 5.5.5): pseudocode `if
+  decisions_miss_pct ≤ T:` converted to real bash setting
+  `GATE_VERDICT={PASS|AUTO_FIX|EXHAUSTED}`. Auto-fix block now wrapped
+  in `if [ "$GATE_VERDICT" = "AUTO_FIX" ]`.
+- **2d_crossai_review** (verify.md 5.5.6): `CROSSAI_XML_FOUND` check
+  before mark. Non-zero result-*.xml count + no skip-cause + no
+  `--allow-crossai-no-xml` → exit 1.
+- **3_complete** (close.md): 6.2.4 marker write deferred to new 6.2.5e
+  section AFTER all 6.2.5+ gates (traceability/BLOCK5/workflow/slice).
+  Previously fired before gates.
+
+### Batch 34 — Codex F1+F2+F8 review→test-spec gating (CRITICAL)
+
+Per codex-review-testspec-test-flow-audit.md:
+- **F1**: `commands/vg/test-spec.md` 1_build_artifact_gate now requires
+  `RUNTIME-MAP.json` + `GOAL-COVERAGE-MATRIX` from review. Stale-matrix
+  detection compares `build_sha` vs git HEAD. Escape:
+  `--allow-no-review-artifacts`.
+- **F2**: `commands/vg/_shared/review/close.md` writes canonical
+  `GOAL-COVERAGE-MATRIX.json` (regex-parses .md goal rows, captures
+  verdict, persists with build_sha + ts). MD remains for humans.
+- **F8**: codegen `delegation.md` status table now lists
+  READY/READY_BEHAVIORAL/READY_STRUCTURAL uniformly. Status
+  normalization step: `NORMALIZE = {"READY_STRUCTURAL": "READY",
+  "READY_BEHAVIORAL": "READY"}`. NOT_SCANNED moved to BLOCK row.
+
+### Batch 35 — Codex F11 manifest spec_kind validator
+
+Per audit F11: CODEGEN-MANIFEST.json only required at-least-one-spec.
+No per-goal coverage requirement. Phases could ship happy-path only.
+
+New `scripts/validators/verify-manifest-spec-kinds.py`:
+- Asserts each manifest entry has `spec_kind ∈ {happy,edge,negative,failure}`.
+- Tallies counts per goal_id.
+- FAILs on untagged entries, invalid kinds, or goals lacking happy spec.
+- `--strict` mode requires all 4 kinds per goal.
+- `--allow-happy-only` legacy escape.
+
+Wired in `commands/vg/_shared/test/regression-security.md` before
+spec_list parse. Exit 1 unless `--allow-manifest-happy-only`.
+
+F3+F4 (LIFECYCLE-SPECS.json edge_cases[]/negative_specs[] first-class)
+deferred — requires codegen subagent prompt changes. F11 validator gives
+forcing function.
+
+### Tests
+
+37 new GREEN tests across:
+- tests/test_batch29_smoke_flow_fixloop_gates.py (4)
+- tests/test_batch30_goal_verification_default.py (4)
+- tests/test_batch31_reflect_mobile_contract.py (4)
+- tests/test_batch32_blueprint_scaffold_gates.py (5)
+- tests/test_batch33_blueprint_partial_hardening.py (4)
+- tests/test_batch34_codex_review_testspec_gate.py (4)
+- tests/test_batch35_edge_negative_manifest.py (6)
++ Batch 28's 4 from v4.32.0 ship.
+
+### Plan docs
+
+- `docs/plans/2026-05-15-codex-test-flow-audit.md`
+- `docs/plans/2026-05-15-codex-blueprint-scaffold-audit.md`
+- `docs/plans/2026-05-15-codex-review-testspec-test-flow-audit.md`
+
 ## v4.32.0 — Batch 28 filter/paging rigor pack validator wired (F14 CRITICAL) (2026-05-15)
 
 User dogfood PrintwayV3: "test-specs khá nghiêm trọng, không gen đủ
