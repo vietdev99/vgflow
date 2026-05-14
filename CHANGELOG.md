@@ -1,5 +1,44 @@
 # Changelog
 
+## v4.20.0 — Batch 17: F6+F7+F8 UI artifact enforcement gates (2026-05-14)
+
+Closes 3 HIGH audit findings — blueprint UI artifacts (UI-RUNTIME-CONTRACT,
+UI-SPEC, UI-MAP) were generated via comment-only Agent spawns with markers
+firing unconditionally, allowing empty/missing artifacts to pass the contract.
+
+**F7 (UI-SPEC gate — design.md):**
+Agent spawn for UI-SPEC was comment-only (`design.md:488`). Concat loop ran
+over empty `${PHASE_DIR}/UI-SPEC/` dir, producing an empty `UI-SPEC.md`.
+Marker `2b6_ui_spec.done` fired unconditionally. Fix: FE-phase-aware gate
+between concat loop and marker — `${PHASE_DIR}/UI-SPEC/index.md` MUST exist
+for phases with TSX/JSX/Vue/Svelte tasks (FE_TASKS_COUNT > 0). Missing →
+exit 1 + `blueprint.ui_spec_missing` event. Per-slug coverage check emits
+`blueprint.ui_spec_partial` advisory when PLAN `<design-ref>` slugs outnumber
+spec files. Backend-only phases unaffected.
+
+**F8 (UI-MAP gate — design.md):**
+UI-MAP planner spawn was `echo` only — no enforcement. Marker
+`2b6b_ui_map.done` touched unconditionally. Fix: inside the FE_TASKS > 0
+else branch, after planner spawn and before marker, gate on `UI-MAP.md`
+existence. Missing → exit 1 + `blueprint.ui_map_missing` event. Plus schema
+validator advisory (`verify-uimap-schema.py`) emits `blueprint.ui_map_schema_invalid`
+on non-zero (will flip to BLOCK in v4.21+ after telemetry).
+
+**F6 (UI-RUNTIME-CONTRACT enforcement — design.md + blueprint.md):**
+`UI-RUNTIME-CONTRACT.json` was absent from blueprint.md `must_write` contract.
+`emit-ui-runtime-contract.py` failures continued silently ("informational at
+Stage 2"). Fix:
+- `blueprint.md` must_write adds `UI-RUNTIME-CONTRACT.json` with
+  `required_unless_flag: --skip-ui-runtime-contract`, `profile_filter:
+  web-fullstack,web-frontend-only`.
+- `design.md` emitter RC check is now FE-aware: backend-only continues with
+  WARN; FE-fullstack/FE-only exits 1 + `blueprint.ui_runtime_contract_emit_failed`
+  event. Legacy PASS-on-missing path still works for phases with no FE tasks.
+
+Tests: `tests/test_f7_ui_spec_gate.py` (2 tests),
+`tests/test_f8_ui_map_gate.py` (2 tests),
+`tests/test_f6_ui_runtime_contract_gate.py` (2 tests).
+
 ## v4.19.0 — Batch 16: F1+F2+F9 allowlist + override CLI fixes (2026-05-14)
 
 Closes 3 HIGH audit findings from Codex blueprint+build audit. All 3
