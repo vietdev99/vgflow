@@ -293,6 +293,22 @@ if [ -f "$LIFECYCLE_DEPTH_VAL" ]; then
   fi
 fi
 
+# Batch 23: spec body coverage gate — defense-in-depth before playwright runtime.
+# Catches shallow specs from prior codegen runs that slipped through test-spec gate.
+STAGE_COV_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-spec-stage-coverage.py"
+[ -f "$STAGE_COV_VAL" ] || STAGE_COV_VAL="${REPO_ROOT:-.}/scripts/validators/verify-spec-stage-coverage.py"
+if [ -f "$STAGE_COV_VAL" ] && [ -f "${PHASE_DIR}/CODEGEN-MANIFEST.json" ] && [ -f "${PHASE_DIR}/LIFECYCLE-SPECS.json" ]; then
+  if ! "${PYTHON_BIN:-python3}" "$STAGE_COV_VAL" \
+       --phase-dir "${PHASE_DIR}" \
+       --repo-root "${REPO_ROOT:-.}"; then
+    echo "⛔ Batch 23 BLOCK: shallow spec(s) detected before playwright runtime — specs missing stage coverage" >&2
+    echo "   Re-run /vg:test-spec ${PHASE_NUMBER} to regenerate specs with full RCRURDR coverage." >&2
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+      "test_spec.spec_body_shallow" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "0_parse_and_validate" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/0_parse_and_validate.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 0_parse_and_validate 2>/dev/null || true

@@ -498,6 +498,24 @@ fi
 echo "✓ F1: codegen wrote ${SPEC_COUNT} playwright specs"
 ```
 
+**Batch 23: spec body coverage gate (post-F1, pre-run-complete):**
+
+```bash
+# Batch 23: spec body coverage gate — catch shallow specs.
+STAGE_COV_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-spec-stage-coverage.py"
+[ -f "$STAGE_COV_VAL" ] || STAGE_COV_VAL="${REPO_ROOT:-.}/scripts/validators/verify-spec-stage-coverage.py"
+if [ -f "$STAGE_COV_VAL" ]; then
+  if ! "${PYTHON_BIN:-python3}" "$STAGE_COV_VAL" \
+       --phase-dir "${PHASE_DIR}" \
+       --repo-root "${REPO_ROOT:-.}"; then
+    echo "⛔ Batch 23 BLOCK: shallow spec(s) detected — codegen produced specs missing stage coverage" >&2
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+      "test_spec.spec_body_shallow" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+```
+
 **Mark step:**
 ```bash
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_codegen 2>/dev/null || true
