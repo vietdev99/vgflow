@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.17.2 — Stop hook --check-contract guard (PR #187, 2026-05-14)
+
+External PR from @vietnhprintway: Stop hook called legacy
+`vg-orchestrator run-status --check-contract <run_id>` flag that was
+removed in v4.x. Every Stop with active-run row produced spurious
+`Stop-runtime-contract: 1 failure(s) ... unrecognized arguments:
+--check-contract` block.
+
+Fix: probe `run-status --help` for `--check-contract` BEFORE invoking.
+No-op while flag absent. Auto-reactivates if flag reintroduced. Patches
+both canonical + `.claude/` mirror.
+
 ## v4.17.1 — Codex mirror sync after Batch 14 (2026-05-13)
 
 Patch: v4.17.0 release CI failed `verify-codex-mirror-equivalence.py` —
