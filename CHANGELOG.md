@@ -1,5 +1,41 @@
 # Changelog
 
+## v4.26.0 — Spec stage coverage validator (Batch 23) (2026-05-15)
+
+Closes user dogfood bug: "test bật form modal, bật xong là xong, không hề test
+nhập form, save form". F1 CODEGEN-MANIFEST gate (Batch 19) only checked spec
+COUNT. Codegen subagent silently produced shallow `.spec.ts` missing fill/submit/
+waitForResponse/persistence assertions.
+
+### New validator: verify-spec-stage-coverage.py
+
+`scripts/validators/verify-spec-stage-coverage.py` — opens each spec file listed
+in `CODEGEN-MANIFEST.json`, regex-checks body covers per-stage required patterns
+from `LIFECYCLE-SPECS.json` declared stages per goal.
+
+STAGE_PATTERNS dict (IGNORECASE):
+- `read_before`: `page.goto(`
+- `create`: `page.fill(` + `page.click(button|submit)` + `waitForResponse(`
+- `read_after_create`: `toBeVisible()` / `toContainText(`
+- `update`: fill + click + waitForResponse
+- `read_after_update`: reload/goto + assertion
+- `delete`: click + waitForResponse
+- `read_after_delete`: `not.toBeVisible()` / `toBeHidden()` / `toHaveCount(0)`
+
+Missing pattern per declared stage → exit 1 with goal_id + stage context.
+`--json` flag emits structured `{ shallow_specs, failures }` for telemetry.
+
+### Two enforcement points
+
+1. `/vg:test-spec` — post-codegen, after F1 CODEGEN-MANIFEST gate, before
+   run-complete. Catches shallow specs at codegen time. Emits
+   `test_spec.spec_body_shallow` event on BLOCK.
+2. `/vg:test` preflight — early gate before playwright runtime. Defense-in-depth
+   for specs from prior codegen runs. Same event + exit 1.
+
+Tests: `tests/test_batch23_spec_stage_coverage.py` (4 tests) +
+`tests/test_batch23_validator_wired.py` (2 tests).
+
 ## v4.25.0 — Review scaffold + classification gaps (Batch 22) (2026-05-14)
 
 Closes all 10 Codex review+test-spec audit findings across Batch 19 (v4.24.0)
