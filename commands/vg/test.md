@@ -183,7 +183,7 @@ không cần đọc Bash output. Hook không reject append vì tolerant match (B
 Step 7 of V4.0 pipeline. Execute pre-built Playwright suite (from `/vg:test-spec`)
 against deployed phase, run user-confirm fix-loop on failures, compute matrix verdict.
 
-Pipeline: specs → scope → blueprint → build → test-spec → review → **test** → accept
+Pipeline: specs → scope → blueprint → build → review → test-spec → **test** → accept
 
 v4.0 split:
 - `/vg:test-spec` Step 4_codegen owns `.spec.ts` generation (L1/L2 binding gate,
