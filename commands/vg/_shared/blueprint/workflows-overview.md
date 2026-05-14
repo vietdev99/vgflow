@@ -28,3 +28,61 @@ real goal_ids, real endpoint paths, real component names from FE artifacts.
 
 - Phases without multi-actor workflows: subagent returns `no_workflows_detected: true`. Orchestrator writes empty `index.md` with `flows: []`. Validator passes.
 - `--skip-workflows --override-reason="..."` available for legacy phases.
+
+## Bash gate (Batch 32 — was SCAFFOLD)
+
+Audit found this step was prose only. Required: step-active, real validator
+invoke, mark-step with exit-on-fail gate.
+
+```bash
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" step-active 2b9_workflows >/dev/null 2>&1 || true
+
+# Profile gate: profiles not declared in blueprint.md must_mark skip
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-fullstack|web-frontend-only|backend-multi-actor)
+    : ;;
+  *)
+    echo "ℹ 2b9_workflows SKIPPED (profile=${PHASE_PROFILE} not multi-actor)"
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step blueprint 2b9_workflows 2>/dev/null || true
+    return 0 2>/dev/null || exit 0
+    ;;
+esac
+
+# Skip flag escape
+if [[ "${ARGUMENTS:-}" =~ --skip-workflows ]]; then
+  echo "⚠ 2b9_workflows skipped (--skip-workflows debt logged)"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step blueprint 2b9_workflows 2>/dev/null || true
+  return 0 2>/dev/null || exit 0
+fi
+
+WF_RC=0
+if [ -d "${PHASE_DIR}/WORKFLOW-SPECS" ]; then
+  set +e
+  "${PYTHON_BIN:-python3}" scripts/validators/verify-workflow-specs.py \
+    --workflows-dir "${PHASE_DIR}/WORKFLOW-SPECS" \
+    > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/workflows-validator.out" \
+    2> "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/workflows-validator.err"
+  WF_RC=$?
+  set -e
+else
+  # No WORKFLOW-SPECS dir produced — subagent must explicitly mark no_workflows_detected.
+  # If subagent ran and returned that, an empty index.md should exist; without it: FAIL.
+  WF_RC=1
+fi
+
+if [ "$WF_RC" -ne 0 ]; then
+  echo "⛔ Batch 32 2b9: verify-workflow-specs.py rc=${WF_RC}" >&2
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+    emit-event "blueprint.workflows_pass_blocked" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${WF_RC}}" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+  emit-event "blueprint.workflows_pass_completed" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+  mark-step blueprint 2b9_workflows 2>/dev/null || true
+echo "✓ Batch 32: 2b9_workflows marked"
+```

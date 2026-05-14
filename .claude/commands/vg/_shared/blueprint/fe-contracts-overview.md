@@ -31,3 +31,53 @@ FE structure rather than guessing.
 - Phases predating this step (e.g., PV3 4.1) lack BLOCK 5. Validator BLOCKs unless
   `--allow-block5-missing --override-reason="<text>"` is passed.
 - Backfill via `/vg:blueprint <phase> --only=fe-contracts`.
+
+## Bash gate (Batch 32 — was SCAFFOLD)
+
+Audit found this step was prose only. Required: step-active, real validator
+invoke, mark-step with exit-on-fail gate.
+
+```bash
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" step-active 2b6d_fe_contracts >/dev/null 2>&1 || true
+
+# Profile gate: web-backend-only skips this step
+case "${PHASE_PROFILE:-${PROFILE:-}}" in
+  web-backend-only)
+    echo "ℹ 2b6d_fe_contracts SKIPPED (profile=${PHASE_PROFILE} — backend-only)"
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" mark-step blueprint 2b6d_fe_contracts 2>/dev/null || true
+    return 0 2>/dev/null || exit 0
+    ;;
+esac
+
+# Validator: per-endpoint BLOCK 5 FE consumer contract present in API-CONTRACTS/<slug>.md
+FE_CONTRACTS_RC=0
+if [ -d "${PHASE_DIR}/API-CONTRACTS" ]; then
+  set +e
+  "${PYTHON_BIN:-python3}" scripts/validators/verify-fe-contract-block5.py \
+    --contracts-dir "${PHASE_DIR}/API-CONTRACTS" \
+    > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/fe-contracts-validator.out" \
+    2> "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/fe-contracts-validator.err"
+  FE_CONTRACTS_RC=$?
+  set -e
+fi
+
+if [ "$FE_CONTRACTS_RC" -ne 0 ]; then
+  if [[ "${ARGUMENTS:-}" =~ --allow-block5-missing ]]; then
+    echo "⚠ Batch 32 2b6d: --allow-block5-missing — BLOCK 5 absent (debt logged)"
+  else
+    echo "⛔ Batch 32 2b6d: verify-fe-contract-block5.py rc=${FE_CONTRACTS_RC}" >&2
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+      emit-event "blueprint.fe_contract_block5_blocked" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${FE_CONTRACTS_RC}}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+  emit-event "blueprint.fe_contracts_pass_completed" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+  mark-step blueprint 2b6d_fe_contracts 2>/dev/null || true
+echo "✓ Batch 32: 2b6d_fe_contracts marked"
+```
