@@ -103,6 +103,15 @@ runtime_contract:
       profile_aware: true
       required_unless_flag: "--skip-ui-spec"
       severity: "warn"
+    # UI-RUNTIME-CONTRACT (F6 Batch 17 / #173 Stage 2): captures runtime invariants
+    # (Tailwind tokens, route inventory, min Playwright spec count). Required for FE
+    # profiles. --skip-ui-runtime-contract allowed with --override-reason.
+    # severity=warn to maintain legacy phase compat; emit gate in design.md blocks
+    # FE phases on emitter failure (exit 1) which prevents silent masking.
+    - path: "${PHASE_DIR}/UI-RUNTIME-CONTRACT.json"
+      required_unless_flag: "--skip-ui-runtime-contract"
+      profile_filter: "web-fullstack,web-frontend-only"
+      severity: "warn"
   must_touch_markers:
     - "0_design_discovery"
     - "0_amendment_preflight"

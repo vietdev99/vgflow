@@ -685,7 +685,16 @@ else
   "${PYTHON_BIN:-python3}" "$EMITTER" --phase-dir "${PHASE_DIR}" 2>&1 | sed 's/^/▸ /'
   RC=$?
   if [ "$RC" -ne 0 ]; then
-    echo "⚠ emit-ui-runtime-contract.py exit=${RC} — continuing (contract is informational at Stage 2; Stages 3-4 will harden gates)"
+    # F6 Batch 17: FE phases must NOT continue silently on emitter failure
+    FE_TASKS_RT=$(grep -cE "(\.tsx|\.jsx|\.vue|\.svelte)" "${PHASE_DIR}"/PLAN*.md 2>/dev/null || echo "0")
+    if [ "${FE_TASKS_RT:-0}" -gt 0 ]; then
+      echo "⛔ F6 BLOCK: emit-ui-runtime-contract.py exit=${RC} on FE phase — fail loud" >&2
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "blueprint.ui_runtime_contract_emit_failed" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${RC}}" >/dev/null 2>&1 || true
+      exit 1
+    else
+      echo "⚠ emit-ui-runtime-contract.py exit=${RC} — backend-only phase, continuing"
+    fi
   fi
   if [ -f "${PHASE_DIR}/UI-RUNTIME-CONTRACT.json" ]; then
     TOKEN_COUNT=$("${PYTHON_BIN:-python3}" -c "
