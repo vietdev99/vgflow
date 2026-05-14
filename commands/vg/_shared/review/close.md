@@ -78,8 +78,53 @@ the gating logic.
 
 **1. `${PHASE_DIR}/RUNTIME-MAP.json`** — canonical JSON (source of truth). MUST be written FIRST.
 **2. `${PHASE_DIR}/RUNTIME-MAP.md`** — derived from JSON (human-readable). Written AFTER JSON.
-**3. `${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md`** — from Phase 4
-**4. `${PHASE_DIR}/element-counts.json`** — from Phase 1b
+**3. `${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json`** — canonical JSON (Batch 34 F2). MUST be written.
+**4. `${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md`** — derived from JSON (human-readable).
+**5. `${PHASE_DIR}/element-counts.json`** — from Phase 1b
+
+### Batch 34 F2: canonical GOAL-COVERAGE-MATRIX.json
+
+Audit (codex F2 CRITICAL): previously review wrote only `.md`; test-spec
++ matrix-intent generator expected `.json` → silent fallback or fail.
+Now: JSON is canonical, MD derived.
+
+```bash
+# Generate canonical JSON from goal rows + verdicts. Fields:
+#   - phase, build_sha, ts
+#   - goals[gid]: {verdict, evidence_path, reason}
+MATRIX_JSON="${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json"
+MATRIX_MD="${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md"
+if [ ! -f "$MATRIX_JSON" ] && [ -f "$MATRIX_MD" ]; then
+  "${PYTHON_BIN:-python3}" - <<PY
+import json, re, subprocess
+from pathlib import Path
+from datetime import datetime, timezone
+
+md = Path("${MATRIX_MD}").read_text(encoding="utf-8")
+goals = {}
+# Match rows: | G-NN | view | status_or_verdict | reason |
+for line in md.splitlines():
+    m = re.match(r'^\s*\|\s*(G-[\w.-]+)\s*\|[^|]*\|[^|]*\|\s*(\w+)\s*\|', line)
+    if m:
+        goals[m.group(1)] = {"verdict": m.group(2)}
+
+try:
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+except Exception:
+    head = ""
+
+payload = {
+    "phase": "${PHASE_NUMBER}",
+    "build_sha": head,
+    "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "goals": goals,
+    "_source": "MD derived → JSON canonical (Batch 34 F2)",
+}
+Path("${MATRIX_JSON}").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+print(f"✓ Batch 34 F2: wrote {len(goals)} goal verdicts to GOAL-COVERAGE-MATRIX.json")
+PY
+fi
+```
 
 ### MANDATORY ARTIFACT VALIDATION (do NOT skip)
 
@@ -88,6 +133,7 @@ After writing all files, verify they exist before committing:
 Required files — BLOCK commit if ANY missing:
   ✓ ${PHASE_DIR}/RUNTIME-MAP.json     ← downstream /vg:test-spec reads this, NOT .md
   ✓ ${PHASE_DIR}/RUNTIME-MAP.md
+  ✓ ${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json  ← Batch 34 F2 canonical
   ✓ ${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md
 
 Use Glob to confirm each file exists. If RUNTIME-MAP.json is missing,

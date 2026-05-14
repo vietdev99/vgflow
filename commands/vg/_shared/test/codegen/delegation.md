@@ -194,12 +194,30 @@ For each goal in status_map, branch by status:
 
 | Status | Action |
 |---|---|
-| `READY` (+ non-empty `goal_sequences[G-XX]`) | Generate full spec (Step C.1). |
-| `READY` + missing `goal_sequences[G-XX]` | **BLOCK** — emit error: "Goal G-XX READY in matrix but RUNTIME-MAP has no sequence. Re-run /vg:review --retry-failed." |
+| `READY` / `READY_BEHAVIORAL` / `READY_STRUCTURAL` (+ non-empty `goal_sequences[G-XX]`) | Generate full spec (Step C.1). |
+| `READY*` + missing `goal_sequences[G-XX]` | **BLOCK** — emit error: "Goal G-XX READY in matrix but RUNTIME-MAP has no sequence. Re-run /vg:review --retry-failed." |
 | `MANUAL` | Emit skeleton with `test.skip()` (Step C.2). |
 | `DEFERRED` | Skip entirely — log `[skip-deferred] {gid}`. |
 | `INFRA_PENDING` | Emit skeleton `.skip()` with infra comment (Step C.2). |
 | `BLOCKED` / `UNREACHABLE` | Skip — review gate should have caught these. Log error. |
+| `NOT_SCANNED` | **BLOCK** — review gate let this through. Emit error: "Goal G-XX NOT_SCANNED. Re-run /vg:review." |
+
+**Batch 34 F8: status normalization (CRITICAL).** Before routing, normalize
+`READY_STRUCTURAL` and `READY_BEHAVIORAL` to `READY` so the existing READY
+branch logic applies uniformly. Audit found bare `READY` was the only
+handled case; structural/behavioral READY goals (emitted by review verdict
+matrix) silently dropped through. Status normalization happens once after
+loading `goal-status.json`:
+
+```python
+# Batch 34 F8: normalize READY variants before branch
+NORMALIZE = {"READY_STRUCTURAL": "READY", "READY_BEHAVIORAL": "READY"}
+for gid, status in list(status_map.items()):
+    status_map[gid] = NORMALIZE.get(status, status)
+```
+
+Also: `NOT_SCANNED` is now BLOCKed in test-spec/codegen (was only blocked
+in /vg:test preflight per F9 — moved upstream).
 
 ### Step C.1 — READY goal codegen
 

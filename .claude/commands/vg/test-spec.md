@@ -167,6 +167,46 @@ if [ ! -f "${PHASE_DIR}/TEST-GOALS.md" ] && [ ! -d "${PHASE_DIR}/TEST-GOALS" ]; 
   exit 1
 fi
 
+# Batch 34 F1: enforce review artifact consumption. Previously test-spec
+# generation built from phase docs + static scan only — review outputs
+# (RUNTIME-MAP, GOAL-COVERAGE-MATRIX, scan-*) silently dropped. Audit
+# severity: CRITICAL.
+if [ ! -f "${PHASE_DIR}/RUNTIME-MAP.json" ]; then
+  echo "⛔ Batch 34 F1: /vg:test-spec requires RUNTIME-MAP.json from /vg:review."
+  echo "   Run: /vg:review ${PHASE_NUMBER}"
+  echo "   Escape: --allow-no-review-artifacts (legacy phases, debt logged)"
+  if [[ ! "${ARGUMENTS:-}" =~ --allow-no-review-artifacts ]]; then
+    exit 1
+  fi
+  echo "⚠ Batch 34 F1: --allow-no-review-artifacts set, RUNTIME-MAP.json absent (debt logged)"
+fi
+
+if [ ! -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md" ] && [ ! -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json" ]; then
+  echo "⛔ Batch 34 F1: /vg:test-spec requires GOAL-COVERAGE-MATRIX (md or json) from /vg:review."
+  echo "   Run: /vg:review ${PHASE_NUMBER}"
+  if [[ ! "${ARGUMENTS:-}" =~ --allow-no-review-artifacts ]]; then
+    exit 1
+  fi
+fi
+
+# Stale-matrix check: review SHA in matrix vs current HEAD. If matrix written
+# before latest build commits, re-review recommended.
+if [ -f "${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json" ] && [ -d "${PHASE_DIR}/.review-state" ]; then
+  REVIEW_SHA=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json', encoding='utf-8'))
+    print(d.get('build_sha', ''))
+except Exception:
+    print('')
+" 2>/dev/null)
+  HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
+  if [ -n "$REVIEW_SHA" ] && [ -n "$HEAD_SHA" ] && [ "$REVIEW_SHA" != "$HEAD_SHA" ]; then
+    echo "⚠ Batch 34 F1: GOAL-COVERAGE-MATRIX.json stale (review_sha=${REVIEW_SHA:0:8}, head=${HEAD_SHA:0:8})"
+    echo "   Recommend: /vg:review ${PHASE_NUMBER} --retry-failed"
+  fi
+fi
+
 touch "${PHASE_DIR}/.step-markers/test-spec/1_build_artifact_gate.done"
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 1_build_artifact_gate 2>/dev/null || true
 ```
