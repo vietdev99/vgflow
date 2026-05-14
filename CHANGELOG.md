@@ -1,5 +1,40 @@
 # Changelog
 
+## v4.19.0 — Batch 16: F1+F2+F9 allowlist + override CLI fixes (2026-05-14)
+
+Closes 3 HIGH audit findings from Codex blueprint+build audit. All 3
+findings were silent failures: flags documented but never reachable, or
+CLI calls using non-existent subcommands.
+
+**F1 (preflight allowlist — build/preflight.md VALID_FLAGS_PATTERN):**
+`--skip-pre-test` and `--skip-contract-runtime` were documented in
+`build.md:4` and declared under `forbidden_without_override` in the
+frontmatter contract, but omitted from `VALID_FLAGS_PATTERN` (line 151).
+Preflight rejected them as "unknown flag" before the override logic could
+engage. Fix: added both to alternation + help text so typo-error message
+lists them.
+
+**F2 (override CLI invocation — build/pre-test-gate.md):**
+`pre-test-gate.md` called `vg-orchestrator override-use` (unregistered
+subcommand) instead of `vg-orchestrator override`. The `${OVERRIDE_REASON}`
+env var was also undefined — no reason captured even if the call had worked.
+Fix: parse `--override-reason=<text>` from `$ARGUMENTS` via sed; BLOCK if
+empty; call `override` (canonical subcommand); drop `2>/dev/null` so
+failures surface. Same fix applied to `--skip-ui-runtime-contract` branch.
+
+**F9 (blueprint skip flags — blueprint/design.md):**
+`blueprint.md` frontmatter declared `required_unless_flag` for
+`--skip-form-api-map` and `--skip-ui-spec` but no blueprint sub-step
+shell ever emitted `vg-orchestrator override --flag=... --reason=...`.
+`forbidden_without_override` contract validator saw no event → false
+negatives on run-complete. Fix: `design.md` step `2b6_ui_spec` now
+handles both flags: requires `--override-reason=<text>`, parses it from
+`ARGUMENTS` via sed, emits canonical override event, logs debt.
+
+Tests: `tests/test_f1_build_allowlist.py` (3 tests),
+`tests/test_f2_override_cli_fix.py` (2 tests),
+`tests/test_f9_blueprint_override_emit.py` (3 tests).
+
 ## v4.18.0 — Batch 15: F3+F4 CRITICAL reviewer verdict gates (2026-05-14)
 
 Closes 2 CRITICAL audit findings from Codex blueprint+build audit. Both
