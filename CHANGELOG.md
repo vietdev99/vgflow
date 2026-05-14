@@ -1,5 +1,31 @@
 # Changelog
 
+## v4.29.0 — Batch 26: FE route wiring runtime probe + BE-FE consumer parity (2026-05-15)
+
+User dogfood gap: tests didn't probe FE consumer routes declared in API-CONTRACTS
+BLOCK 5 consumers[].route. Un-wired React Router entries render 404 fallback at
+HTTP 200 — silent failure. Also no BE-FE consumer parity check (orphan endpoints).
+
+**New scripts:**
+- `scripts/probe-fe-routes.py` — curl-based navigation probe per BLOCK 5 route.
+  Detects 404 fallback page patterns (data-testid, h1, class patterns). --dry-run
+  mode for CI. --json structured output. Exit 1 on any failed route.
+- `scripts/validators/verify-be-fe-consumer-parity.py` — set diff BE endpoints
+  (API-CONTRACTS.md headers) vs FE consumers (BLOCK 5 url field). Orphan FE
+  consumer (FE references non-existent BE endpoint) -> BLOCK exit 1. Orphan BE
+  endpoint (no FE consumer) -> WARN exit 0.
+
+**Wired:**
+- `commands/vg/_shared/test/deploy.md`: post-deploy FE route probe. WARN-only at
+  v4.29.0, emits test.fe_route_unwired event. Writes .route-probe.json artifact.
+- `commands/vg/_shared/review/api-and-discovery.md`: BE-FE parity check alongside
+  existing BE probe. Orphan FE consumer -> BLOCK + emit contract.orphan_fe_consumer.
+
+Global paths pattern enforced (${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}).
+
+Tests: 6 new (test_batch26_probe_fe_routes x3, test_batch26_be_fe_parity x3,
+test_batch26_route_probe_wired x2 minus 2 = actually 8 total).
+
 ## v4.28.1 — Codex mirror sync for Batch 25 pipeline order (2026-05-15)
 
 v4.28.0 release CI failed `verify-codex-mirror-equivalence.py` — 10
