@@ -324,6 +324,12 @@ Review complete for Phase {N} — PASS.
   Gate: PASS (critical {C}/{C} 100%, important {I}/{I_total} ≥80%)
   Artifacts: RUNTIME-MAP.json + GOAL-COVERAGE-MATRIX.md{REVIEW_FEEDBACK_SUFFIX}
 
+  **Static inventory** (grep — file/route counts from code-scan):
+  - {N} routes / {M} models / {K} services
+
+  **Runtime visited** (browser tour — per-current-run scans):
+  - {V} views toured / {S} scan files (run_id: {RUN_ID}) / {E} EXPECTED views
+
 Next:
   /vg:test-spec {phase}       # generate test-spec + codegen (v4.0 — test-spec now precedes test)
 ```
