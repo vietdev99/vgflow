@@ -21,6 +21,7 @@ Phase 2b-2.5 now runs a 5-step chain:
 6. `ENV-CONTRACT.md` present, `disposable_seed_data: true`, all `third_party_stubs` stubbed
 
 If eligibility fails → write `.recursive-probe-skipped.yaml` and continue to 2b-3 (no error).
+F8 Batch 22: skip path MUST also emit `vg-orchestrator override` + `review.lens_skipped` event to log override-debt. Coverage failure exits 1 unless `--allow-lens-coverage-gap` is set.
 
 <MANDATORY_GATE>
 **You MUST run the provider-native user prompt below BEFORE invoking the bash block** — unless `--non-interactive` / `VG_NON_INTERACTIVE=1` is set, OR all three axes (`--recursion`, `--probe-mode`, `--target-env`) were already passed on the `/vg:review` command line.
@@ -151,6 +152,15 @@ emit_telemetry_v2 "review.recursive_probe.preflight_asked" "${PHASE_NUMBER}" \
 # Skip-mode escape (existing user decision — skip probe means skip coverage gate too)
 if [ -f "${PHASE_DIR}/.recursive-probe-skipped.yaml" ]; then
   echo "▸ Phase 2b-2.5 skipped per .recursive-probe-skipped.yaml — coverage gate bypassed"
+  # F8 Batch 22: skip writes override-debt so audit can track bypasses.
+  OVERRIDE_REASON_LENS=$(grep -m1 "reason:" "${PHASE_DIR}/.recursive-probe-skipped.yaml" 2>/dev/null | sed 's/.*reason: *//' | head -1)
+  [ -z "$OVERRIDE_REASON_LENS" ] && OVERRIDE_REASON_LENS="auto-detected eligibility fail (no probe surfaces)"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" override \
+    --flag "--skip-recursive-probe" \
+    --reason "${OVERRIDE_REASON_LENS}" 2>/dev/null || true
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+    "review.lens_skipped" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"${OVERRIDE_REASON_LENS}\"}" 2>/dev/null || true
 else
 
   # 1. Emit dispatch plan FIRST (trust anchor — declares all APPLICABLE dispatches)
