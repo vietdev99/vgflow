@@ -176,13 +176,29 @@ if [ -f "$CODEGEN_MANIFEST" ] && [ -n "${PLAYWRIGHT_TARGETS:-}" ]; then
   fi
 fi
 
-# Run regression with generated config
+# G2 Batch 27: capture playwright exit code. Default REGRESSION_STATUS=PASS
+# (line 258) → marks PASS even on test failure. Fix: capture rc, set
+# REGRESSION_STATUS=FAIL on non-zero, emit event.
+set +e
 run_on_target "cd ${PROJECT_PATH} && \
   VG_HEADED=${VG_HEADED} VG_SLOW_MO=${SLOW_MO} \
   npx playwright test \
     --config ${GENERATED_TESTS_DIR}/playwright.config.generated.ts \
     ${PROJECT_FLAG} \
     ${PLAYWRIGHT_TARGETS}"
+PLAYWRIGHT_RC=$?
+set -e
+
+if [ "$PLAYWRIGHT_RC" -ne 0 ]; then
+  REGRESSION_STATUS="FAIL"
+  REGRESSION_REASON="playwright exit code ${PLAYWRIGHT_RC}"
+  echo "⛔ G2: regression FAIL — playwright rc=${PLAYWRIGHT_RC}" >&2
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+    "test.regression_failed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${PLAYWRIGHT_RC}}" >/dev/null 2>&1 || true
+else
+  REGRESSION_STATUS="PASS"
+fi
 
 # 4. H13 (v4.12.0): extract per-failure detail for AI introspection.
 # Playwright JSON reporter writes playwright-results.json; extractor walks it,
