@@ -1089,6 +1089,9 @@ if [ "${SKIP_SPEC_REVIEW:-0}" = "1" ]; then
 else
   # WAVE_TASKS holds task IDs that produced commits in the current wave.
   # When using vg-load list output, derive task_id from the basename.
+  SPEC_REVIEW_DIR="${PHASE_DIR}/.spec-review"
+  mkdir -p "$SPEC_REVIEW_DIR"
+  SPEC_REVIEW_FAILS=0
   for task_id in "${WAVE_TASKS[@]}"; do
     COMMIT_SHA=$(git log --grep="task-${task_id}\\|${task_id}:" -n1 --format=%H)
     if [ -z "$COMMIT_SHA" ]; then
@@ -1096,11 +1099,40 @@ else
       continue
     fi
     bash scripts/vg-narrate-spawn.sh vg-build-spec-reviewer spawning "spec-review task-${task_id}"
-    # Then call (single Agent tool call per task — sequential, not parallel):
+    # AI orchestrator MUST call:
     #   Agent(subagent_type="vg-build-spec-reviewer",
     #         prompt=<rendered with task_id, commit_sha, phase_dir>)
+    # The agent MUST write verdict to $SPEC_REVIEW_DIR/${task_id}.md with format:
+    #   ---
+    #   task_id: T-XX
+    #   verdict: PASS | FAIL
+    #   gaps: <markdown list>
+    #   ---
     bash scripts/vg-narrate-spawn.sh vg-build-spec-reviewer returned "task-${task_id}: <verdict>"
+
+    # F3 Batch 15: verdict-file existence + content gate
+    VERDICT_FILE="$SPEC_REVIEW_DIR/${task_id}.md"
+    if [ ! -f "$VERDICT_FILE" ]; then
+      echo "⛔ STEP 5.1 F3: vg-build-spec-reviewer did not write $VERDICT_FILE for task ${task_id}" >&2
+      echo "   The subagent MUST persist verdict to disk so marker is evidence-backed." >&2
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.spec_review_missing_verdict" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"task\":\"${task_id}\"}" >/dev/null 2>&1 || true
+      SPEC_REVIEW_FAILS=$((SPEC_REVIEW_FAILS + 1))
+      continue
+    fi
+    if grep -qE "^verdict:\s*FAIL" "$VERDICT_FILE"; then
+      echo "⛔ STEP 5.1 F3: spec-review FAIL for task ${task_id}" >&2
+      head -20 "$VERDICT_FILE" >&2
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.spec_review_failed" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"task\":\"${task_id}\"}" >/dev/null 2>&1 || true
+      SPEC_REVIEW_FAILS=$((SPEC_REVIEW_FAILS + 1))
+    fi
   done
+
+  if [ "$SPEC_REVIEW_FAILS" -gt 0 ]; then
+    echo "⛔ STEP 5.1 F3: ${SPEC_REVIEW_FAILS} spec-review failure(s). Re-run /vg:build --skip-spec-review --override-reason=<text> to bypass (debt logged)." >&2
+    exit 1
+  fi
 fi
 ```
 
@@ -1111,7 +1143,8 @@ the existing fix protocol (STEP 5.5) before marking the step complete.
 
 Marker: `5_1_spec_compliance_review` (v2.69.0:
 `required_unless_flag: --skip-spec-review` — hard-block flipped from
-v2.66.0 advisory severity=warn).
+v2.66.0 advisory severity=warn). Marker only touched after all verdict
+files verified (F3 Batch 15 gate — missing or FAIL blocks).
 
 ```bash
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
