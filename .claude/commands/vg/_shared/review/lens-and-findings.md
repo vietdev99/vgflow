@@ -473,7 +473,7 @@ Elements: {N} interactive ({visited}/{total} visited)
 # elements/actions/goal_sequences/source_scan/scan_run_id. Refuses to
 # write stub when scan dir empty. Prevents fabricated 80-byte JSON stubs
 # satisfying the contract.
-MERGE_SCRIPT="${REPO_ROOT:-.}/.claude/scripts/merge-runtime-map.py"
+MERGE_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/merge-runtime-map.py"
 [ -f "$MERGE_SCRIPT" ] || MERGE_SCRIPT="${REPO_ROOT:-.}/scripts/merge-runtime-map.py"
 if [ ! -f "$MERGE_SCRIPT" ]; then
   echo "⛔ F5 BLOCK: merge-runtime-map.py missing — review cannot build RUNTIME-MAP.json deterministically" >&2

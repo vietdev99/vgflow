@@ -28,7 +28,12 @@ def test_leg1_emits_json_with_4_options(tmp_path: Path) -> None:
     evidence.write_text('{"category":"api_precheck","summary":"missing endpoint"}', encoding="utf-8")
     result = _bash(f'source "{WRAPPER}"; blocking_gate_prompt_emit '
                    f'"api_precheck" "{evidence}" "error"', cwd=tmp_path)
-    assert result.returncode == 0, result.stderr
+    # Batch 19 F6: emit returns 2 for critical/error severity so callers
+    # cannot fall through to run-complete without explicit Leg 2 resolve.
+    assert result.returncode == 2, (
+        f"F6 contract: blocking_gate_prompt_emit must return 2 for error severity, "
+        f"got rc={result.returncode}, stderr={result.stderr}"
+    )
     payload = json.loads(result.stdout)
     assert payload["gate_id"] == "api_precheck"
     assert payload["severity"] == "error"

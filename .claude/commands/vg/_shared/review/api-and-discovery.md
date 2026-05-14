@@ -1212,7 +1212,7 @@ print(len(d.get('views', d.get('assigned_views', []))))
   if [ "${ASSIGNED_VIEWS:-0}" -ne "${SCAN_COUNT:-0}" ]; then
     echo "⛔ F4 BLOCK: nav-discovery assigned ${ASSIGNED_VIEWS} views but only ${SCAN_COUNT} scan-*.json files found" >&2
     echo "   Agent claims '${ASSIGNED_VIEWS} views toured' — evidence does not match." >&2
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.browser_tour_evidence_gap" \
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event "review.browser_tour_evidence_gap" \
       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"assigned\":${ASSIGNED_VIEWS},\"scans\":${SCAN_COUNT}}" >/dev/null 2>&1 || true
     exit 1
   fi
@@ -1226,7 +1226,7 @@ print(len(d.get('views', d.get('assigned_views', []))))
     done | wc -l | tr -d ' ')
     if [ "${STALE_SCANS:-0}" -gt 0 ]; then
       echo "⚠ F4: ${STALE_SCANS} scan(s) from prior runs detected (not current run_id ${CURRENT_RUN_ID})" >&2
-      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "review.browser_tour_stale_scans" \
+      "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event "review.browser_tour_stale_scans" \
         --payload "{\"phase\":\"${PHASE_NUMBER}\",\"stale\":${STALE_SCANS}}" >/dev/null 2>&1 || true
     fi
   fi

@@ -1,5 +1,22 @@
 # Changelog
 
+## v4.24.1 — Hotfix Batch 19 CI fails (2026-05-14)
+
+v4.24.0 release CI broke 3 tests:
+1. `test_blocking_gate_prompt::test_leg1_emits_json_with_4_options` — F6
+   changed `blocking_gate_prompt_emit` return code from 0 to 2 for
+   `severity=error`. Test still expected 0. Updated assertion to match
+   new F6 contract.
+2. `test_codex_test_accept_step_parity` — `codex-skills/vg-test-spec/
+   SKILL.md` drifted after F1/F2 changes. Curated-guard blocked auto
+   regen — manual sync of CODEGEN-MANIFEST gate + run-complete strict
+   block.
+3. `test_review_global_paths` — F4 + F5 patches hardcoded `.claude/
+   scripts/...` paths. Test enforces `${VG_SCRIPT_ROOT:-${VG_HOME:-...}/
+   scripts}` pattern for review files. Updated:
+   - `review/api-and-discovery.md:1215,1229` (F4 emit-events)
+   - `review/lens-and-findings.md:476` (F5 merge-runtime-map path)
+
 ## v4.24.0 — Review + Test-Spec CRITICAL fixes (Batch 19) (2026-05-14)
 
 Codex audit found 5 CRITICAL execution path gaps across review and test-spec lanes.
