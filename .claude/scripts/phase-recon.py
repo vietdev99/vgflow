@@ -42,7 +42,7 @@ VALID_PROFILES = {
     "library",
 }
 
-PIPELINE_STEPS = ["specs", "scope", "blueprint", "build", "test-spec", "review", "test", "accept"]
+PIPELINE_STEPS = ["specs", "scope", "blueprint", "build", "review", "test-spec", "test", "accept"]
 
 # ---- Classification tables -------------------------------------------------
 
