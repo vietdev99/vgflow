@@ -1,5 +1,35 @@
 # Changelog
 
+## v4.30.0 — F10 CRITICAL fix: spec-stage-coverage validator broken (2026-05-15)
+
+Codex audit Finding F10 (CRITICAL): `verify-spec-stage-coverage.py`
+(Batch 23, v4.26.0) read field `goals[].stages[]` but
+`generate-lifecycle-specs.py:693` emits `goals[].steps[]`. Each step
+dict has both `name` AND `stage` keys.
+
+Validator's `gdata.get("stages", [])` returned `[]` → no stages required
+→ **shallow specs PASSED for ENTIRE existence of Batch 23 (4 releases:
+v4.26.0, v4.27.x, v4.28.x, v4.29.0).** User dogfood bug (test mở modal
+xong dừng) NEVER caught because validator read wrong field.
+
+### Fix
+
+`scripts/validators/verify-spec-stage-coverage.py` lines 115-127:
+- Try `gdata.get("steps", gdata.get("stages", []))` for compat
+- Per-step prefer `s.get("stage", s.get("name", ""))` extraction
+
+Regression test: `tests/test_f10_stage_coverage_steps_field.py` (2 tests)
+reproduces canonical LIFECYCLE-SPECS.json shape from generator + asserts
+shallow spec fails validation.
+
+### Context
+
+Codex audit `docs/plans/2026-05-15-codex-review-testspec-test-flow-audit.md`
+found 12 gaps total (7 CRITICAL). F10 was the most insidious — validator
+silently no-op. Remaining 11 findings → upcoming Batch 27+ (review→test-spec
+artifact gating, GOAL-COVERAGE-MATRIX JSON drift, READY status routing,
+edge/negative specs not first-class, manifest schema, etc).
+
 ## v4.29.0 — Batch 26: FE route wiring runtime probe + BE-FE consumer parity (2026-05-15)
 
 User dogfood gap: tests didn't probe FE consumer routes declared in API-CONTRACTS

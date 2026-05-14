@@ -113,11 +113,20 @@ def main() -> int:
         return 2
 
     # Map goal_id → list of stage names
+    # F10 Batch 27 fix: generate-lifecycle-specs.py emits goals[].steps[]
+    # (each step dict has both "name" and "stage" fields), NOT "stages".
+    # Fall back to "stages" for legacy/alternate format compat.
     goal_stages: dict[str, list[str]] = {}
     for gid, gdata in ls.get("goals", {}).items():
-        stages = gdata.get("stages", [])
-        names = [s.get("name", s) if isinstance(s, dict) else s for s in stages]
-        goal_stages[gid] = names
+        stage_items = gdata.get("steps", gdata.get("stages", []))
+        names = []
+        for s in stage_items:
+            if isinstance(s, dict):
+                # Prefer "stage" (canonical from generator), fall back to "name"
+                names.append(s.get("stage", s.get("name", "")))
+            else:
+                names.append(s)
+        goal_stages[gid] = [n for n in names if n]
 
     # Map goal_id → spec path
     goal_spec: dict[str, str] = {}
