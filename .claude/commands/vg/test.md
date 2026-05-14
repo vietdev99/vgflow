@@ -340,7 +340,65 @@ Behaviour by answer:
 Mark step at completion:
 
 ```bash
+# Batch 29 F-29.3: outcome gate before mark. Cannot mark unconditionally.
+# Status decided from artifacts:
+# - .verdict-computed.json failing_goals==0 → PASS
+# - FIX-LOOP-BLOCKED.md exists → BLOCKED (option B, manual fix path)
+# - .override-debt-skip-fix-loop entry → SKIPPED (option C)
+# - else → FAIL
+FIX_LOOP_STATUS="UNKNOWN"
+FIX_LOOP_REASON=""
+VERDICT_JSON="${PHASE_DIR}/.verdict-computed.json"
+FIX_LOOP_BLOCKED="${PHASE_DIR}/FIX-LOOP-BLOCKED.md"
+SKIP_DEBT="${PHASE_DIR}/.override-debt-skip-fix-loop"
+
+if [ -f "$FIX_LOOP_BLOCKED" ]; then
+  FIX_LOOP_STATUS="BLOCKED"
+  FIX_LOOP_REASON="user chose manual fix (option B)"
+elif [ -f "$SKIP_DEBT" ]; then
+  FIX_LOOP_STATUS="SKIPPED"
+  FIX_LOOP_REASON="--skip-fix-loop debt logged (option C)"
+elif [ -f "$VERDICT_JSON" ]; then
+  FAILING=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${PHASE_DIR}/.verdict-computed.json', encoding='utf-8'))
+    print(int(d.get('failing_goals', d.get('failed_count', -1))))
+except Exception:
+    print(-1)
+" 2>/dev/null || echo "-1")
+  if [ "${FAILING:-0}" -eq 0 ]; then
+    FIX_LOOP_STATUS="PASS"
+    FIX_LOOP_REASON="all goals passing"
+  elif [ "${FAILING:-0}" -gt 0 ]; then
+    FIX_LOOP_STATUS="FAIL"
+    FIX_LOOP_REASON="${FAILING} goals still failing after fix loop"
+  else
+    FIX_LOOP_STATUS="FAIL"
+    FIX_LOOP_REASON="verdict-computed.json malformed"
+  fi
+else
+  FIX_LOOP_STATUS="FAIL"
+  FIX_LOOP_REASON=".verdict-computed.json absent — goal-verifier never ran"
+fi
+
+if [ "$FIX_LOOP_STATUS" = "FAIL" ]; then
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+    emit-event "test.fix_loop_failed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"${FIX_LOOP_REASON}\"}" \
+    >/dev/null 2>&1 || true
+fi
+
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/step-status-ledger.py" \
+  --phase-dir "${PHASE_DIR}" --step "step5_fix_loop" --status "${FIX_LOOP_STATUS}" \
+  --reason "${FIX_LOOP_REASON}" 2>/dev/null || true
+
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test step5_fix_loop 2>/dev/null || true
+
+if [ "$FIX_LOOP_STATUS" = "FAIL" ] && ! [[ "${ARGUMENTS:-}" =~ --allow-fix-loop-fail ]]; then
+  echo "⛔ Batch 29 F-29.3: step5_fix_loop FAIL — ${FIX_LOOP_REASON}" >&2
+  exit 1
+fi
 ```
 
 **MANDATORY POST-WAVE CONTINUATION:** After the goal-verifier Agent call

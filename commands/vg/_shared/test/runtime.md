@@ -267,11 +267,77 @@ Display:
 ```bash
 vg-orchestrator step-active 5c_smoke
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+
+# Batch 29 F-29.1: artifact gate. AI runner writes smoke-results.json
+# {views_checked: int, mismatches: int, fingerprints: [...]} from browser
+# cross-check. Bash validates count, sets SMOKE_STATUS:
+# - file absent → SKIPPED (no runner ran — debt logged)
+# - mismatches >= 2 → FAIL (RUNTIME-MAP drift, suggest /vg:review --resume)
+# - mismatches == 1 → WARN (drift note, still PASS)
+# - mismatches == 0 → PASS
+# Previously SMOKE_STATUS defaulted PASS regardless of outcome (scaffold).
+SMOKE_RESULTS="${PHASE_DIR}/smoke-results.json"
+if [ -f "$SMOKE_RESULTS" ]; then
+  SMOKE_MISMATCH=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${PHASE_DIR}/smoke-results.json', encoding='utf-8'))
+    print(int(d.get('mismatches', 0)))
+except Exception:
+    print(-1)
+" 2>/dev/null || echo "-1")
+  SMOKE_VIEWS=$("${PYTHON_BIN:-python3}" -c "
+import json
+try:
+    d = json.load(open('${PHASE_DIR}/smoke-results.json', encoding='utf-8'))
+    print(int(d.get('views_checked', 0)))
+except Exception:
+    print(0)
+" 2>/dev/null || echo "0")
+
+  if [ "$SMOKE_MISMATCH" -lt 0 ]; then
+    SMOKE_STATUS="FAIL"
+    SMOKE_REASON="smoke-results.json malformed"
+  elif [ "$SMOKE_MISMATCH" -ge 2 ]; then
+    SMOKE_STATUS="FAIL"
+    SMOKE_REASON="${SMOKE_MISMATCH} view mismatches (>=2 → RUNTIME-MAP drift)"
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+      emit-event "test.smoke_check_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"mismatches\":${SMOKE_MISMATCH},\"views\":${SMOKE_VIEWS}}" \
+      >/dev/null 2>&1 || true
+  elif [ "$SMOKE_MISMATCH" -eq 1 ]; then
+    SMOKE_STATUS="PASS"
+    SMOKE_REASON="1 mismatch — drift noted, non-blocking"
+  else
+    SMOKE_STATUS="PASS"
+    SMOKE_REASON="${SMOKE_VIEWS} views, 0 mismatches"
+  fi
+else
+  # No runner output. Either AI never executed METHOD prose or step skipped.
+  # Default SKIPPED with --allow-smoke-skip escape, else FAIL.
+  if [[ "${ARGUMENTS:-}" =~ --allow-smoke-skip ]]; then
+    SMOKE_STATUS="SKIPPED"
+    SMOKE_REASON="--allow-smoke-skip (debt logged)"
+  else
+    SMOKE_STATUS="FAIL"
+    SMOKE_REASON="smoke-results.json absent — AI runner never wrote artifact"
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+      emit-event "test.smoke_check_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"artifact_absent\"}" \
+      >/dev/null 2>&1 || true
+  fi
+fi
+
 "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/step-status-ledger.py" \
   --phase-dir "${PHASE_DIR}" --step "5c_smoke" --status "${SMOKE_STATUS:-PASS}" \
   --reason "${SMOKE_REASON:-}" || true
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_smoke" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_smoke.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_smoke 2>/dev/null || true
+
+if [ "$SMOKE_STATUS" = "FAIL" ] && ! [[ "${ARGUMENTS:-}" =~ --allow-smoke-fail ]]; then
+  echo "⛔ Batch 29 F-29.1: 5c_smoke FAIL — ${SMOKE_REASON}" >&2
+  exit 1
+fi
 ```
 
 ---
@@ -360,15 +426,39 @@ Flow-runner: reads FLOW-SPEC, claims Playwright MCP, executes end-to-end
 (condition waits, resume-safe checkpoints), 4-rule deviation + 3-strike
 escalation → `flow-results.json` (PASS/FAIL + evidence per flow).
 
-**Result merging:**
+**Result merging + Batch 29 F-29.2 artifact gate:**
 ```bash
 FLOW_RESULTS="${PHASE_DIR}/flow-results.json"
+FLOW_SPEC_EXISTS="false"
+[ -f "${PHASE_DIR}/FLOW-SPEC.md" ] && FLOW_SPEC_EXISTS="true"
+FLOW_STATUS="PASS"
+FLOW_REASON=""
+FLOWS_PASSED=0
+FLOWS_FAILED=0
+FLOWS_TOTAL=0
+
 if [ -f "$FLOW_RESULTS" ]; then
-  FLOWS_PASSED=$(jq '.flows | map(select(.status=="passed")) | length' "$FLOW_RESULTS")
-  FLOWS_FAILED=$(jq '.flows | map(select(.status=="failed")) | length' "$FLOW_RESULTS")
-  FLOWS_TOTAL=$(jq '.flows | length' "$FLOW_RESULTS")
+  FLOWS_PASSED=$(jq '.flows | map(select(.status=="passed")) | length' "$FLOW_RESULTS" 2>/dev/null || echo 0)
+  FLOWS_FAILED=$(jq '.flows | map(select(.status=="failed")) | length' "$FLOW_RESULTS" 2>/dev/null || echo 0)
+  FLOWS_TOTAL=$(jq '.flows | length' "$FLOW_RESULTS" 2>/dev/null || echo 0)
+  if [ "${FLOWS_FAILED:-0}" -gt 0 ]; then
+    FLOW_STATUS="FAIL"
+    FLOW_REASON="${FLOWS_FAILED}/${FLOWS_TOTAL} flows failed"
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+      emit-event "test.flow_check_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"failed\":${FLOWS_FAILED},\"total\":${FLOWS_TOTAL}}" \
+      >/dev/null 2>&1 || true
+  fi
   # Flow failures default MAJOR: multi-page state-machine break = feature inoperable.
   # flow-runner may downgrade to MINOR only if cosmetic + no downstream step affected.
+elif [ "$FLOW_SPEC_EXISTS" = "true" ]; then
+  # FLOW-SPEC.md exists but flow-runner was never invoked → AI runner skipped step.
+  FLOW_STATUS="FAIL"
+  FLOW_REASON="FLOW-SPEC.md present but flow-results.json absent (runner never invoked)"
+  "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+    emit-event "test.flow_check_failed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"runner_not_invoked\"}" \
+    >/dev/null 2>&1 || true
 fi
 ```
 
@@ -379,8 +469,16 @@ Display: `5c Multi-page Flow Verify: FLOW-SPEC {present|absent} | Flows {FLOWS_T
 
 ```bash
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/step-status-ledger.py" \
+  --phase-dir "${PHASE_DIR}" --step "5c_flow" --status "${FLOW_STATUS:-PASS}" \
+  --reason "${FLOW_REASON:-}" 2>/dev/null || true
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "5c_flow" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/5c_flow.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step test 5c_flow 2>/dev/null || true
+
+if [ "${FLOW_STATUS:-PASS}" = "FAIL" ] && ! [[ "${ARGUMENTS:-}" =~ --allow-flow-fail ]]; then
+  echo "⛔ Batch 29 F-29.2: 5c_flow FAIL — ${FLOW_REASON}" >&2
+  exit 1
+fi
 ```
 
 ---
