@@ -64,27 +64,45 @@ vg-orchestrator step-active 5c_goal_verification
   exit 1
 }
 
-# Determine trust-review mode (v1.14.0+ B.1)
+# Determine trust-review mode (Batch 30 — default flipped to per-goal replay).
+#
+# Audit gap #4 (docs/plans/2026-05-15-codex-test-flow-audit.md):
+# default trust-review skipped READY replay → READY goals trusted from
+# review evidence with Agent prose enforcing behavior. Real Playwright
+# replay was opt-in.
+#
+# Batch 30: flip default to false (per-goal replay). Trust-review now
+# opt-in via --trust-review arg OR config skip_ready_reverify:true.
 SKIP_REVERIFY=$(${PYTHON_BIN:-python3} -c "
 import re
 try:
     with open('.claude/vg.config.md', encoding='utf-8') as f:
         c = f.read()
     m = re.search(r'skip_ready_reverify\s*:\s*(true|false)', c)
-    print(m.group(1) if m else 'true')  # default true for v1.14.0+
+    print(m.group(1) if m else 'false')  # Batch 30: per-goal replay default
 except Exception:
-    print('true')
+    print('false')
 ")
+
+# --trust-review arg override (legacy projects preserve v1.14 behavior)
+if [[ "${ARGUMENTS:-}" =~ --trust-review ]]; then
+  SKIP_REVERIFY="true"
+fi
 export TRUST_REVIEW="${SKIP_REVERIFY}"
 
 if [ "$TRUST_REVIEW" = "true" ]; then
   echo ""
-  echo "━━━ v1.14.0+ B.1: TRUST REVIEW mode ━━━"
+  echo "━━━ TRUST REVIEW mode (opt-in via --trust-review or config) ━━━"
   echo "Review 100% gate verified goals — vg-test-goal-verifier runs baseline"
   echo "console check + spot-check non-READY goals only."
   echo ""
 else
-  echo "ℹ skip_ready_reverify=false — legacy replay loop (pre-v1.14 behavior)."
+  echo ""
+  echo "━━━ Batch 30: per-goal replay mode (default) ━━━"
+  echo "vg-test-goal-verifier replays each goal in topological order with"
+  echo "per-step console/network checks. Opt into trust-review via"
+  echo "--trust-review arg or .claude/vg.config.md skip_ready_reverify:true."
+  echo ""
 fi
 
 # Discover goal IDs via vg-load --list (cheap index), then slice ONE goal at a
