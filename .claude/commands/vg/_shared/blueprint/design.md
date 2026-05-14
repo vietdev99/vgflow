@@ -446,6 +446,45 @@ Write per-slug files to `${PHASE_DIR}/UI-SPEC/<slug>.md` and index to
 ```bash
 vg-orchestrator step-active 2b6_ui_spec
 
+# ─── F9 Batch 16: --skip-ui-spec escape hatch ──────────────────────────────
+# blueprint.md runtime_contract declares UI-SPEC as required_unless_flag:
+# --skip-ui-spec. When skipped, must emit vg-orchestrator override so the
+# forbidden_without_override contract validator can detect the intentional skip.
+if [[ "${ARGUMENTS:-}" =~ --skip-ui-spec ]]; then
+  OVERRIDE_REASON=$(echo "${ARGUMENTS}" | sed -nE 's/.*--override-reason=([^ ]+).*/\1/p' | head -1)
+  if [ -z "$OVERRIDE_REASON" ]; then
+    echo "⛔ F9: --skip-ui-spec requires --override-reason=<text> on the command line" >&2
+    exit 1
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--skip-ui-spec" \
+    --reason "${OVERRIDE_REASON}" || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "blueprint-skip-ui-spec" "${PHASE_NUMBER}" "UI-SPEC generation skipped" "${PHASE_DIR}"
+  echo "⚠ --skip-ui-spec set (override logged) — skipping UI-SPEC generation"
+  mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+  (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6_ui_spec" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6_ui_spec.done"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b6_ui_spec 2>/dev/null || true
+else
+
+# ─── F9 Batch 16: --skip-form-api-map escape hatch ─────────────────────────
+# blueprint.md runtime_contract declares FORM-API-MAP.md as required_unless_flag:
+# --skip-form-api-map. When skipped, must emit vg-orchestrator override so the
+# forbidden_without_override contract validator can detect the intentional skip.
+if [[ "${ARGUMENTS:-}" =~ --skip-form-api-map ]]; then
+  OVERRIDE_REASON_FORM=$(echo "${ARGUMENTS}" | sed -nE 's/.*--override-reason=([^ ]+).*/\1/p' | head -1)
+  if [ -z "$OVERRIDE_REASON_FORM" ]; then
+    echo "⛔ F9: --skip-form-api-map requires --override-reason=<text> on the command line" >&2
+    exit 1
+  fi
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
+    --flag "--skip-form-api-map" \
+    --reason "${OVERRIDE_REASON_FORM}" || true
+  type -t log_override_debt >/dev/null 2>&1 && \
+    log_override_debt "blueprint-skip-form-api-map" "${PHASE_NUMBER}" "FORM-API-MAP generation skipped" "${PHASE_DIR}"
+  echo "⚠ --skip-form-api-map set (override logged) — FORM-API-MAP.md will not be generated"
+fi
+
 # (Agent spawn happens here — orchestrator dispatches per agent prompt above.
 #  Agent writes ${PHASE_DIR}/UI-SPEC/<slug>.md per slug + UI-SPEC/index.md.)
 
@@ -471,6 +510,8 @@ mkdir -p "${PHASE_DIR}/UI-SPEC" 2>/dev/null
     echo ""
   done
 } > "${PHASE_DIR}/UI-SPEC.md"
+
+fi  # end --skip-ui-spec else branch
 
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6_ui_spec" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6_ui_spec.done"
