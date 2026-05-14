@@ -1,5 +1,54 @@
 # Changelog
 
+## v4.23.0 — Test execution plan enforcement (Batch 21) (2026-05-14)
+
+User dogfood: "test không chạy theo lộ trình của test-specs đề ra".
+`regression-security.md` used `{phase}-goal-*.spec.ts` glob, ignoring
+test-spec lifecycle artifacts entirely.
+
+### Fix: 4 enforcement layers in `commands/vg/_shared/test/regression-security.md`
+
+**Task 1 — CODEGEN-MANIFEST spec list:**
+CODEGEN-MANIFEST.json is now the primary spec source. Python extracts
+`playwright_specs[].path` list (supports both string and dict entries,
+both `playwright_specs` and legacy `specs` field names). Glob becomes
+fallback-only when manifest is missing (emits
+`test.manifest_missing_glob_fallback`). Empty manifest → BLOCK with
+`test.manifest_empty`.
+
+**Task 2 — TEST-EXECUTION-PLAN order + family routing:**
+Reads `TEST-EXECUTION-PLAN.json` `execution_order` array and reorders
+spec list to match. Specs not in execution_order appended defensively
+(no orphan drop). `family` field (mobile, backend, cli, library) adds
+`--project=<family>` to playwright invocation.
+
+**Task 3 — Pre-run existence gate:**
+Before playwright runs, validates each manifest spec file exists on
+disk. Missing spec → exit 1 + emit `test.manifest_spec_missing`.
+Closes "codegen claims spec X exists but file deleted/never written"
+drift.
+
+**Task 4 — Post-run orphan spec detection (advisory):**
+After playwright finishes, parses `playwright-results.json`
+`suites[].specs[].file`. Set diff vs manifest paths. Orphan specs
+emit `test.orphan_spec_executed` event (WARN only at v4.23.0 —
+will flip to BLOCK in v4.24+ after telemetry data collected).
+
+### Tests added
+- `tests/test_batch21_codegen_manifest_consume.py`
+- `tests/test_batch21_execution_plan_order.py`
+- `tests/test_batch21_prerun_existence_gate.py`
+- `tests/test_batch21_orphan_spec_detection.py`
+
+## v4.22.1 — Codex mirror sync after Batch 20 (2026-05-14)
+
+v4.22.0 release CI failed `verify-codex-mirror-equivalence.py` —
+`codex-skills/vg-override-resolve/SKILL.md` drifted from source after
+Batch 20 Task 4 added `--deploy-method` extension.
+
+Regenerated via `bash scripts/generate-codex-skills.sh --force`.
+verify-codex-mirror-equivalence.py: drift 1 → 0.
+
 ## v4.22.0 — Deploy contract lock + PreToolUse hook (Batch 20) (2026-05-14)
 
 Real-world dogfood feedback from PrintwayV3: different phases invented
