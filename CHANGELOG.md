@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.27.1 — Codex mirror sync after Batches 23+24 merge (2026-05-15)
+
+v4.26.0 + v4.27.0 release CI failed `verify-codex-mirror-equivalence.py`
+— `codex-skills/vg-test-spec/SKILL.md` drifted after Batch 23 added
+spec-stage-coverage gate to `commands/vg/test-spec.md`. Curated-guard
+blocked auto-regen.
+
+Manual sync: added Batch 23 gate block to codex mirror matching canonical
+source. `verify-codex-mirror-equivalence.py` drift 1 → 0.
+
 ## v4.27.0 — Scaffold-pattern detector + audit CI (Batch 24) (2026-05-15)
 
 Codifies 8 scaffold/drift anti-patterns gặp trong Batches 9/14/15/18/19/22
