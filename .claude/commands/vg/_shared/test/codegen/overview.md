@@ -250,6 +250,63 @@ type -t emit_telemetry_v2 >/dev/null 2>&1 && \
   2>/dev/null || true
 ```
 
+### F14 Batch 28: D-16 filter/paging rigor pack gate (HARD)
+
+```bash
+# F14 Batch 28: wire verify-filter-test-coverage.py bash invoke.
+# Previously only prose at delegation.md:216 — codegen subagent received
+# instruction "render rigor pack via matrix module" but no validator
+# enforced it. User PrintwayV3 dogfood: "filter gần như không được tạo,
+# không được test". D-16 matrix is 14 filter cases + 18 paging cases per
+# control; verify-filter-test-coverage.py counts test() blocks per slug.
+mkdir -p "${VG_TMP:-${PHASE_DIR}/.vg-tmp}" 2>/dev/null
+
+set +e
+"${PYTHON_BIN:-python3}" \
+  "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-filter-test-coverage.py" \
+  --phase "${PHASE_NUMBER}" \
+  --tests-glob "${GENERATED_TESTS_DIR#./}/**/*.{spec,test}.{ts,tsx,js,jsx,mjs}" \
+  > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/filter-coverage.json" \
+  2> "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/filter-coverage.err"
+FILTER_RC=$?
+set -e
+
+if [ "$FILTER_RC" -ne 0 ]; then
+  FILTER_COVERAGE_STATUS="FAIL"
+  FILTER_COVERAGE_REASON=$("${PYTHON_BIN:-python3}" -c "
+import json, sys
+try:
+    d = json.load(open('${VG_TMP:-${PHASE_DIR}/.vg-tmp}/filter-coverage.json', encoding='utf-8'))
+    msgs = [e.get('message','') for e in d.get('evidence', [])[:3]]
+    print('; '.join(m for m in msgs if m))
+except Exception as exc:
+    print(f'validator parse failed: {exc}')
+" 2>/dev/null || echo "validator rc=${FILTER_RC}")
+
+  echo "⛔ F14: D-16 filter/paging rigor pack shortfall — ${FILTER_COVERAGE_REASON}" >&2
+  echo "    Hint: codegen subagent should render rigor pack via" >&2
+  echo "    skills/vg-codegen-interactive/filter-test-matrix.mjs per declared" >&2
+  echo "    interactive_controls.filters[] / pagination. See D-16 matrix lock." >&2
+
+  "${PYTHON_BIN:-python3}" \
+    "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" \
+    emit-event "test.filter_coverage_failed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${FILTER_RC},\"reason\":\"$(printf '%s' "$FILTER_COVERAGE_REASON" | sed 's/"/\\"/g')\"}" \
+    >/dev/null 2>&1 || true
+
+  # Legacy phases without interactive_controls frontmatter — allow escape
+  # via --allow-filter-shortfall arg. New phases should fail loud.
+  if [[ "${ARGUMENTS:-}" =~ --allow-filter-shortfall ]]; then
+    echo "⚠ --allow-filter-shortfall set — proceeding past D-16 shortfall (legacy phase)" >&2
+  else
+    exit 1
+  fi
+else
+  FILTER_COVERAGE_STATUS="PASS"
+  echo "✓ F14: D-16 filter/paging rigor pack coverage OK"
+fi
+```
+
 ---
 
 ## STEP 5.4 — L2 escalation handler
