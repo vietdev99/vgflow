@@ -81,12 +81,26 @@ def _user_data_dir(args: Any) -> str | None:
 
 
 def _valid_entry(entry: Any) -> bool:
+    # v4.31.1 hotfix: accept both Unix (command=npx) and Windows
+    # (command=cmd, args=['/c', 'npx', ...]) forms. Previously rejected
+    # Windows-wrapped config as "invalid" → --repair overwrote it with
+    # bare 'npx' which doesn't spawn on Windows → user reported
+    # "mất MCP Playwright sau /vg:update".
     if not isinstance(entry, dict):
         return False
-    if entry.get("command") != "npx":
-        return False
+    cmd = entry.get("command")
     args = entry.get("args")
-    if not isinstance(args, list) or MCP_PACKAGE not in args:
+    if not isinstance(args, list):
+        return False
+    if cmd == "npx":
+        # Unix-style: command=npx, args=[MCP_PACKAGE, ...]
+        if MCP_PACKAGE not in args:
+            return False
+    elif cmd == "cmd" and len(args) >= 3 and args[0] in ("/c", "/C") and args[1] == "npx":
+        # Windows-style: command=cmd, args=['/c', 'npx', MCP_PACKAGE, ...]
+        if MCP_PACKAGE not in args:
+            return False
+    else:
         return False
     return _user_data_dir(args) is not None
 
@@ -95,6 +109,13 @@ def _valid_profile_entry(entry: Any, expected_profile: Path, allow_custom: bool)
     if not _valid_entry(entry):
         return False
     if allow_custom:
+        return True
+    # v4.31.1 hotfix: Windows-cmd entries with custom profile dirs are
+    # working configs (user-set via `claude mcp add` or similar). Don't
+    # force overwrite — that would replace `cmd /c npx ...` with bare `npx`
+    # which doesn't spawn on Windows. Treat any Windows-cmd entry as
+    # "allow_custom" implicitly.
+    if isinstance(entry, dict) and entry.get("command") == "cmd":
         return True
     return _same_path(_user_data_dir(entry.get("args")), expected_profile)
 
@@ -123,7 +144,13 @@ def _load_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
 
 
 def check_claude(home: Path, repair: bool, allow_custom_profiles: bool) -> dict[str, Any]:
-    path = home / ".claude" / "settings.json"
+    # v4.31.1 hotfix: Claude Code reads user-level mcpServers from ~/.claude.json
+    # (TOP-LEVEL file), NOT ~/.claude/settings.json. Validator was writing to
+    # wrong file → /vg:update --repair never patched real config. User reported
+    # "mất MCP Playwright sau /vg:update".
+    canonical = home / ".claude.json"
+    legacy = home / ".claude" / "settings.json"
+    path = canonical if canonical.is_file() else legacy
     data, error = _load_json(path)
     changed = False
     issues: list[str] = []

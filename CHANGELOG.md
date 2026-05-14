@@ -1,5 +1,43 @@
 # Changelog
 
+## v4.31.1 — MCP Playwright loss after /vg:update (Windows) hotfix (2026-05-15)
+
+User dogfood bug: "sau mỗi lần /vg:update là claude lại mất MCP Playwright,
+graphify". 3 root causes in `scripts/validators/verify-playwright-mcp-config.py`:
+
+1. **Wrong file**: read `~/.claude/settings.json` but Claude Code reads
+   `~/.claude.json` (top-level). Validator's repair patched wrong file →
+   real config drifted.
+2. **Windows cmd-wrapper rejected**: `_valid_entry` accepted only
+   `command='npx'`. User's Windows config uses `command='cmd',
+   args=['/c', 'npx', ...]` (required on Windows for npx). Validator
+   marked Windows entries as "invalid" → `--repair` OVERWROTE with bare
+   `npx` → Windows can't spawn `npx` directly → MCP fails to start →
+   user sees "mất MCP".
+3. **Custom profile dir clobbered**: `_valid_profile_entry` required
+   user-data-dir to match `~/.claude/playwright-profile-N`. User's
+   working Windows config used custom path (temp dir, etc) → repair
+   forced overwrite to standard path.
+
+### Fix
+
+- Read `~/.claude.json` first, fall back to `~/.claude/settings.json`.
+- `_valid_entry` accepts both Unix (`command=npx`) AND Windows
+  (`command=cmd, args=['/c', 'npx', ...]`) forms.
+- `_valid_profile_entry` treats any Windows-cmd entry as implicit
+  `allow_custom=True` — don't force overwrite working Windows config.
+
+### Regression tests
+
+`tests/test_mcp_validator_windows_cmd.py` — 6 tests covering Windows-cmd
+accept, Unix-npx still accepted, custom profile preserved, invalid entries
+still rejected.
+
+User must restart Claude Code session after `/vg:update` for MCP workers
+to reconnect — file fix means future updates won't clobber config, but
+current-session connection state survives only if subprocess workers
+remain alive.
+
 ## v4.31.0 — Batch 27: test scaffold CRITICAL fixes (write_report + regression rc + security FAIL) (2026-05-15)
 
 3 CRITICAL gaps from Codex test flow audit fixed:
