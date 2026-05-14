@@ -82,6 +82,17 @@ jobs:
             exit 1
           fi
 
+      - name: Scaffold pattern audit (Batch 24)
+        # Advisory threshold 50 — baseline scan of commands/vg/ at Batch 24 release
+        # found 23 findings (A:4, C:2, F:5, G:1, H:11). Threshold 50 gives headroom
+        # for legitimate scaffold-like patterns while blocking runaway new drift.
+        # Tune via telemetry: raise threshold if baseline exceeds 50 after future
+        # batch work; lower to tighten the gate.
+        run: |
+          python scripts/audit/scaffold-detector.py \
+            --scan-dir commands/vg \
+            --threshold 50
+
       - name: Build tarball
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
