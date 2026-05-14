@@ -119,11 +119,52 @@ else
   PLAYWRIGHT_TARGETS="${GENERATED_TESTS_DIR}/{phase}-goal-*.spec.ts"
 fi
 
+# Batch 21 Task 2: TEST-EXECUTION-PLAN.json for order + family routing
+EXEC_PLAN="${PHASE_DIR}/TEST-EXECUTION-PLAN.json"
+PROJECT_FLAG=""
+if [ -f "$EXEC_PLAN" ] && [ -f "$CODEGEN_MANIFEST" ]; then
+  # Reorder SPEC_LIST per execution_order array
+  ORDERED=$(${PYTHON_BIN:-python3} -c "
+import json
+plan = json.loads(open('${EXEC_PLAN}', encoding='utf-8').read())
+manifest = json.loads(open('${CODEGEN_MANIFEST}', encoding='utf-8').read())
+specs = manifest.get('playwright_specs', manifest.get('specs', []))
+by_goal = {(s.get('goal_id') if isinstance(s, dict) else s): (s['path'] if isinstance(s, dict) else s) for s in specs}
+# execution_order: list of goal_ids in run order
+order = plan.get('execution_order', [])
+ordered = []
+for gid in order:
+    p = by_goal.get(gid)
+    if p:
+        ordered.append(p)
+# Append any manifest spec NOT in execution_order (defensive — no orphan drop)
+remaining = [p for s in specs for p in [s['path'] if isinstance(s, dict) else s] if p not in ordered]
+ordered.extend(remaining)
+print(' '.join(ordered))
+" 2>/dev/null)
+  if [ -n "$ORDERED" ]; then
+    echo "▸ Batch 21: reordered specs per TEST-EXECUTION-PLAN.execution_order"
+    PLAYWRIGHT_TARGETS="$ORDERED"
+  fi
+
+  # Family routing: pick playwright project per family if multi-family declared
+  FAMILY=$(${PYTHON_BIN:-python3} -c "
+import json
+plan = json.loads(open('${EXEC_PLAN}', encoding='utf-8').read())
+print(plan.get('family', plan.get('default_family', '')))
+" 2>/dev/null)
+  if [ -n "$FAMILY" ] && [ "$FAMILY" != "web" ] && [ "$FAMILY" != "mixed" ]; then
+    PROJECT_FLAG="--project=${FAMILY}"
+    echo "▸ Batch 21: family=${FAMILY} → adding ${PROJECT_FLAG} to playwright"
+  fi
+fi
+
 # Run regression with generated config
 run_on_target "cd ${PROJECT_PATH} && \
   VG_HEADED=${VG_HEADED} VG_SLOW_MO=${SLOW_MO} \
   npx playwright test \
     --config ${GENERATED_TESTS_DIR}/playwright.config.generated.ts \
+    ${PROJECT_FLAG} \
     ${PLAYWRIGHT_TARGETS}"
 
 # 4. H13 (v4.12.0): extract per-failure detail for AI introspection.
