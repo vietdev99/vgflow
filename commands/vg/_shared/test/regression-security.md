@@ -97,11 +97,39 @@ fi
 # Glob is fallback only when manifest missing (legacy phase).
 CODEGEN_MANIFEST="${PHASE_DIR}/CODEGEN-MANIFEST.json"
 if [ -f "$CODEGEN_MANIFEST" ]; then
+  # Batch 35 F11: verify manifest has spec_kind tagging per goal.
+  # Codex audit F11 CRITICAL: manifest only required at-least-one-spec.
+  # No required edge/negative/failure coverage. Phases could ship happy-
+  # path only and pass gate.
+  MANIFEST_KIND_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-manifest-spec-kinds.py"
+  if [ -f "$MANIFEST_KIND_VAL" ]; then
+    set +e
+    MANIFEST_KIND_ARGS=""
+    [[ "${ARGUMENTS:-}" =~ --allow-manifest-happy-only ]] && MANIFEST_KIND_ARGS="--allow-happy-only"
+    "${PYTHON_BIN:-python3}" "$MANIFEST_KIND_VAL" \
+      --phase "${PHASE_NUMBER}" \
+      --phase-dir "${PHASE_DIR}" \
+      $MANIFEST_KIND_ARGS \
+      > "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/manifest-kinds.out" \
+      2> "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/manifest-kinds.err"
+    KIND_RC=$?
+    set -e
+    if [ "$KIND_RC" -ne 0 ]; then
+      cat "${VG_TMP:-${PHASE_DIR}/.vg-tmp}/manifest-kinds.err" >&2
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.manifest_kind_shortfall" \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${KIND_RC}}" >/dev/null 2>&1 || true
+      if [[ ! "${ARGUMENTS:-}" =~ --allow-manifest-happy-only ]]; then
+        echo "⛔ Batch 35 F11: manifest spec_kind shortfall — escape via --allow-manifest-happy-only" >&2
+        exit 1
+      fi
+    fi
+  fi
+
   SPEC_LIST=$(${PYTHON_BIN:-python3} -c "
 import json
 m = json.loads(open('${CODEGEN_MANIFEST}', encoding='utf-8').read())
 specs = m.get('playwright_specs', m.get('specs', []))
-# Each entry: {'path': '...', 'goal_id': '...', 'family': '...'}
+# Each entry: {'path': '...', 'goal_id': '...', 'family': '...', 'spec_kind': '...'}
 print(' '.join(s['path'] if isinstance(s, dict) else s for s in specs))
 " 2>/dev/null)
   if [ -z "$SPEC_LIST" ]; then
