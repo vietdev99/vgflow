@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "VGFlow Deploy Contract",
+  "type": "object",
+  "required": ["method", "commands", "fingerprint_pattern", "lock_sha256"],
+  "properties": {
+    "method": {
+      "type": "string",
+      "enum": ["ansible", "pm2", "docker", "systemd", "kubectl", "helm", "terraform", "capistrano", "fabric", "custom"]
+    },
+    "commands": {
+      "type": "object",
+      "required": ["build", "restart", "health"],
+      "properties": {
+        "pre": {"type": "string"},
+        "build": {"type": "string"},
+        "restart": {"type": "string"},
+        "health": {"type": "string"},
+        "rollback": {"type": "string"}
+      }
+    },
+    "fingerprint_pattern": {"type": "string", "description": "Regex matching all valid deploy commands for drift detection"},
+    "lock_sha256": {"type": "string"},
+    "established_at": {"type": "string"},
+    "established_by_phase": {"type": "string"},
+    "established_by_run_id": {"type": "string"}
+  }
+}
