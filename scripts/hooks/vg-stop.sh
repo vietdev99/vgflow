@@ -61,11 +61,17 @@ if [ -x "$sm_validator" ] && [ -f "$db" ]; then
 fi
 
 # 3. Contract verify (delegated to existing vg-orchestrator if present).
+# Note: legacy `run-status --check-contract <run_id>` was removed in v4.x.
+# The real spawn-count / wave-completion checks moved into `wave-complete`
+# (see vg-orchestrator/__main__.py near line 1966). Probe with --help so this
+# stays a no-op until/unless a runtime-contract subcommand is reintroduced.
 if command -v vg-orchestrator >/dev/null 2>&1; then
-  if ! vg-orchestrator run-status --check-contract "$run_id" >/tmp/contract-err.$$ 2>&1; then
-    failures+=("CONTRACT: $(cat /tmp/contract-err.$$)")
+  if vg-orchestrator run-status --help 2>/dev/null | grep -q -- '--check-contract'; then
+    if ! vg-orchestrator run-status --check-contract "$run_id" >/tmp/contract-err.$$ 2>&1; then
+      failures+=("CONTRACT: $(cat /tmp/contract-err.$$)")
+    fi
+    rm -f /tmp/contract-err.$$
   fi
-  rm -f /tmp/contract-err.$$
 fi
 
 if [ "${#failures[@]}" -gt 0 ]; then
