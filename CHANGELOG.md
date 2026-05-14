@@ -1,5 +1,28 @@
 # Changelog
 
+## v4.18.0 — Batch 15: F3+F4 CRITICAL reviewer verdict gates (2026-05-14)
+
+Closes 2 CRITICAL audit findings from Codex blueprint+build audit. Both
+reviewer Agent spawns were comment-only scaffold; markers fired
+unconditionally, producing false "reviewed" build state.
+
+**F3 (B1 spec compliance verdict gate — post-execution-overview.md STEP 5.1):**
+Per-task `vg-build-spec-reviewer` loop now requires
+`${PHASE_DIR}/.spec-review/{task_id}.md` verdict file on disk. Missing
+file or `verdict: FAIL` frontmatter line blocks with exit 1 and emits
+`build.spec_review_missing_verdict` / `build.spec_review_failed` events.
+SKIP_SPEC_REVIEW=1 escape hatch retained (unchanged).
+
+**F4 (B4 cumulative final review verdict gate — build/close.md STEP 7.1.5):**
+`vg-build-final-reviewer` now requires `${PHASE_DIR}/.final-review/verdict.md`
+on disk with `verdict: PASS|PARTIAL|FAIL` frontmatter. Missing → BLOCK.
+FAIL → BLOCK. PARTIAL → advisory WARN (v4.18.0; flip to BLOCK in v4.19+
+after telemetry baseline). Marker only touched after verdict validated.
+Emits `build.final_review_missing_verdict` / `build.final_review_failed`.
+
+Tests: `tests/test_f3_b1_spec_review_verdict_gate.py` (3 tests),
+`tests/test_f4_b4_final_review_verdict_gate.py` (1 test).
+
 ## v4.17.2 — Stop hook --check-contract guard (PR #187, 2026-05-14)
 
 External PR from @vietnhprintway: Stop hook called legacy
