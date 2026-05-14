@@ -159,6 +159,23 @@ print(plan.get('family', plan.get('default_family', '')))
   fi
 fi
 
+# Batch 21 Task 3: pre-run existence gate — every manifest spec must exist on disk
+if [ -f "$CODEGEN_MANIFEST" ] && [ -n "${PLAYWRIGHT_TARGETS:-}" ]; then
+  MISSING_SPECS=""
+  for spec_rel in $PLAYWRIGHT_TARGETS; do
+    spec_abs="${PROJECT_PATH}/${spec_rel}"
+    [ -f "$spec_abs" ] || MISSING_SPECS="${MISSING_SPECS} ${spec_rel}"
+  done
+  if [ -n "$MISSING_SPECS" ]; then
+    echo "⛔ Batch 21 BLOCK: CODEGEN-MANIFEST.json references missing spec file(s):" >&2
+    echo "  ${MISSING_SPECS}" >&2
+    echo "   Re-run /vg:test-spec ${PHASE_NUMBER} to regenerate." >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.manifest_spec_missing" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"missing\":\"${MISSING_SPECS}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
 # Run regression with generated config
 run_on_target "cd ${PROJECT_PATH} && \
   VG_HEADED=${VG_HEADED} VG_SLOW_MO=${SLOW_MO} \
