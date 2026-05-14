@@ -163,12 +163,36 @@ else
   COMMIT_RANGE="${BUILD_START_SHA}..HEAD"
 
   bash scripts/vg-narrate-spawn.sh vg-build-final-reviewer spawning "cumulative review ${COMMIT_RANGE}"
-
-  # Then the orchestrator dispatches:
+  # AI orchestrator MUST call:
   #   Agent(subagent_type="vg-build-final-reviewer",
   #         prompt=<rendered with phase_dir + commit_range>)
-  # The agent's verdict text (PASS|PARTIAL|FAIL + gaps) is written to
-  # ${PHASE_DIR}/.final-review/verdict.md for downstream /vg:review/test.
+  # The agent MUST write verdict to ${PHASE_DIR}/.final-review/verdict.md
+  # with frontmatter format:
+  #   ---
+  #   verdict: PASS | PARTIAL | FAIL
+  #   commit_range: <range>
+  #   gaps: <markdown list>
+  #   ---
+
+  # F4 Batch 15: verdict file gate
+  VERDICT_FILE="${PHASE_DIR}/.final-review/verdict.md"
+  if [ ! -f "$VERDICT_FILE" ]; then
+    echo "⛔ STEP 7.1.5 F4: vg-build-final-reviewer did not write $VERDICT_FILE" >&2
+    echo "   Final review must persist verdict to disk; marker requires evidence." >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.final_review_missing_verdict" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  if grep -qE "^verdict:\s*FAIL" "$VERDICT_FILE"; then
+    echo "⛔ STEP 7.1.5 F4: cumulative final review FAIL" >&2
+    head -30 "$VERDICT_FILE" >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.final_review_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  if grep -qE "^verdict:\s*PARTIAL" "$VERDICT_FILE"; then
+    echo "⚠ STEP 7.1.5 F4: cumulative final review PARTIAL — gaps logged but proceeding (v4.18.0 advisory)" >&2
+  fi
 
   mkdir -p "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers" 2>/dev/null
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "7_1_5_final_review" "${PHASE_DIR}") || touch "${PHASE_DIR_CANDIDATE:-${PHASE_DIR:-.}}/.step-markers/7_1_5_final_review.done"
