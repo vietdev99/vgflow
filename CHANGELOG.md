@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.22.1 — Codex mirror sync after Batch 20 (2026-05-14)
+
+v4.22.0 release CI failed `verify-codex-mirror-equivalence.py` —
+`codex-skills/vg-override-resolve/SKILL.md` drifted from source after
+Batch 20 Task 4 added `--deploy-method` extension.
+
+Regenerated via `bash scripts/generate-codex-skills.sh --force`.
+verify-codex-mirror-equivalence.py: drift 1 → 0.
+
 ## v4.22.0 — Deploy contract lock + PreToolUse hook (Batch 20) (2026-05-14)
 
 Real-world dogfood feedback from PrintwayV3: different phases invented
