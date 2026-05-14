@@ -486,21 +486,39 @@ fi
 
 ### 5.5.5 — gate decision + auto-fix loop
 
-```
-Threshold T = state.thresholds (per chosen mode)
+Batch 33 gap #9 fix: pseudocode below converted to real bash setting
+`GATE_VERDICT`. Marker at 5.5.8 now tied to computed miss percentages.
 
-if decisions_miss_pct ≤ T.decisions_miss_pct AND
-   goals_miss_pct ≤ T.goals_miss_pct AND
-   endpoints_miss_pct ≤ T.endpoints_miss_pct:
-  → PASS (proceed to CrossAI 5.5.6)
-else if iteration < max_auto_fix (default 3):
-  → AUTO-FIX (write GAPS-REPORT.md, re-spawn vg-blueprint-planner in PATCH mode)
-else:
-  → EXHAUSTED (5.5.7)
-```
-
-Auto-fix iteration:
 ```bash
+# Read thresholds from blueprint-state.json (set during preflight from
+# .claude/vg.config.md per chosen mode). Fallback: 10/10/10 percent.
+T_DEC_PCT=$(jq -r '.thresholds.decisions_miss_pct // 10' "$STATE_FILE" 2>/dev/null || echo 10)
+T_GOAL_PCT=$(jq -r '.thresholds.goals_miss_pct // 10' "$STATE_FILE" 2>/dev/null || echo 10)
+T_EP_PCT=$(jq -r '.thresholds.endpoints_miss_pct // 10' "$STATE_FILE" 2>/dev/null || echo 10)
+MAX_AUTO_FIX=$(jq -r '.thresholds.max_auto_fix // 3' "$STATE_FILE" 2>/dev/null || echo 3)
+CUR_ITER=$(jq '.iterations | length' "$STATE_FILE" 2>/dev/null || echo 0)
+
+if [ "${decisions_miss_pct:-0}" -le "${T_DEC_PCT:-10}" ] \
+   && [ "${goals_miss_pct:-0}" -le "${T_GOAL_PCT:-10}" ] \
+   && [ "${endpoints_miss_pct:-0}" -le "${T_EP_PCT:-10}" ]; then
+  GATE_VERDICT="PASS"
+elif [ "${CUR_ITER:-0}" -lt "${MAX_AUTO_FIX:-3}" ]; then
+  GATE_VERDICT="AUTO_FIX"
+else
+  GATE_VERDICT="EXHAUSTED"
+fi
+
+echo "  Batch 33 gap #9: GATE_VERDICT=${GATE_VERDICT} (decisions_miss=${decisions_miss_pct}%, goals_miss=${goals_miss_pct}%, endpoints_miss=${endpoints_miss_pct}%; thresholds ${T_DEC_PCT}/${T_GOAL_PCT}/${T_EP_PCT}, iter ${CUR_ITER}/${MAX_AUTO_FIX})"
+
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+  "blueprint.validation_gate_verdict" \
+  --payload "{\"phase\":\"${PHASE_NUMBER}\",\"verdict\":\"${GATE_VERDICT}\",\"decisions_miss_pct\":${decisions_miss_pct:-0},\"goals_miss_pct\":${goals_miss_pct:-0},\"endpoints_miss_pct\":${endpoints_miss_pct:-0}}" \
+  >/dev/null 2>&1 || true
+```
+
+Auto-fix iteration (Batch 33: now gated on `GATE_VERDICT=AUTO_FIX`):
+```bash
+if [ "${GATE_VERDICT:-}" = "AUTO_FIX" ]; then
 ITER=$(jq '.iterations | length' "$STATE_FILE")
 NEXT_ITER=$((ITER + 1))
 cp "${PHASE_DIR}"/PLAN*.md "${PHASE_DIR}/PLAN.md.v${NEXT_ITER}"
@@ -530,6 +548,7 @@ vg_bootstrap_emit_fired "${BOOTSTRAP_PAYLOAD_FILE:-}" "blueprint" "${PHASE_NUMBE
 # Re-spawn vg-blueprint-planner in PATCH mode (read GAPS-REPORT.md, append tasks)
 # Then re-run granularity check (2a post), bidirectional linkage (2b5 post),
 # grep verify (5.1), compile check (5.4), back to 5.5.3.
+fi  # GATE_VERDICT=AUTO_FIX
 ```
 
 ### 5.5.6 — CrossAI consensus review (when gate PASSED)
@@ -628,6 +647,26 @@ else
     unknown|"") echo "⚠ CrossAI: verdict not set — empty config or --skip-crossai" ;;
     *) echo "⛔ CrossAI: unexpected verdict '${CROSSAI_VERDICT}'"; exit 1 ;;
   esac
+fi
+
+# Batch 33 gap #10: result-*.xml gate before mark. Previously marker fired
+# after Agent spawn regardless of XML output presence.
+CROSSAI_XML_FOUND=0
+if [ -d "${PHASE_DIR}/crossai" ]; then
+  if ls "${PHASE_DIR}/crossai/"result-*.xml 2>/dev/null | grep -q .; then
+    CROSSAI_XML_FOUND=1
+  fi
+fi
+
+if [ "$CROSSAI_XML_FOUND" -eq 0 ] && [ -z "$SKIP_CAUSE_BP" ]; then
+  echo "⚠ Batch 33 gap #10: 2d_crossai_review ran but no crossai/result-*.xml found"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.crossai_xml_missing" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+  if [[ ! "${ARGUMENTS:-}" =~ --allow-crossai-no-xml ]]; then
+    echo "⛔ Batch 33: crossai marker requires result-*.xml or --allow-crossai-no-xml" >&2
+    exit 1
+  fi
 fi
 
 # Mark CrossAI marker (fixes v1.15.2 marker drift bug — body wrote 2d_validation_gate but contract expected 2d_crossai_review)

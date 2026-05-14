@@ -227,20 +227,19 @@ done
 git commit -m "blueprint(${PHASE_NUMBER}): plans + contracts + goals — CrossAI ${CROSSAI_VERDICT:-skipped}"
 ```
 
-### 6.2.4 — write 3_complete marker
+### 6.2.4 — 3_complete marker deferred (Batch 33)
+
+Audit (docs/plans/2026-05-15-codex-blueprint-scaffold-audit.md gap #11):
+`3_complete` marker previously fired here BEFORE traceability/BLOCK5/
+workflow/slice gates (6.2.5+). If any subsequent gate exited non-zero,
+the marker was wrong (said complete but pipeline aborted).
+
+**Batch 33 fix:** marker write moved to new section 6.2.5e (AFTER all
+mandatory gates). No bash block here intentionally.
 
 ```bash
-STATE_FILE="${PHASE_DIR}/blueprint-state.json"
-if [ -f "$STATE_FILE" ]; then
-  jq '.steps_status["3_complete"] = "completed" |
-      .current_step = "complete" |
-      .updated_at = (now|strftime("%FT%TZ"))' \
-     "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-fi
-
-mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
-(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3_complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_complete.done"
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 3_complete 2>/dev/null || true
+# Batch 33: no-op. 3_complete marker now written at 6.2.5e after slice gate.
+echo "ℹ 3_complete marker deferred to 6.2.5e (post-gates) per Batch 33"
 ```
 
 ### 6.2.5 — Phase 6 traceability gates (v2.46+)
@@ -355,6 +354,26 @@ if [ -f "$SLICE_VALIDATOR" ]; then
     exit "$rc"
   fi
 fi
+```
+
+### 6.2.5e — write 3_complete marker (Batch 33 — moved from 6.2.4)
+
+All mandatory gates passed: traceability (6.2.5), BLOCK 5 (6.2.5b),
+WORKFLOW-SPECS (6.2.5c), slice size (6.2.5d). Safe to mark complete.
+
+```bash
+STATE_FILE="${PHASE_DIR}/blueprint-state.json"
+if [ -f "$STATE_FILE" ]; then
+  jq '.steps_status["3_complete"] = "completed" |
+      .current_step = "complete" |
+      .updated_at = (now|strftime("%FT%TZ"))' \
+     "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+fi
+
+mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3_complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3_complete.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 3_complete 2>/dev/null || true
+echo "✓ Batch 33: 3_complete marker written (after all gates passed)"
 ```
 
 ### 6.2.6 — terminal telemetry + run-complete
