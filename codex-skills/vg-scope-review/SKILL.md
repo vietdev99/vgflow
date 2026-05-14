@@ -176,7 +176,7 @@ Detects decision conflicts, module overlaps, endpoint collisions, dependency gap
 
 Output: ${PLANNING_DIR}/SCOPE-REVIEW.md (report with gate verdict)
 
-Pipeline position: specs -> scope -> **scope-review** -> blueprint -> build -> review -> test -> accept
+Pipeline position: specs -> scope -> **scope-review** -> blueprint -> build -> review -> test-spec -> test -> accept
 </objective>
 
 <process>

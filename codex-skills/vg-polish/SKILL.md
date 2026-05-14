@@ -160,7 +160,7 @@ Invoke this skill as `$vg-polish`. Treat all user text after the skill name as a
 
 
 <rules>
-1. **Optional, not a gate** — pipeline (specs → scope → blueprint → build → review → test → accept) does NOT depend on `/vg:polish` running. User invokes when satisfied with feature work and wants a tidy-up pass.
+1. **Optional, not a gate** — pipeline (specs → scope → blueprint → build → review → test-spec → test → accept) does NOT depend on `/vg:polish` running. User invokes when satisfied with feature work and wants a tidy-up pass.
 2. **Atomic per fix** — each fix is ONE commit. Failure reverts that fix only; other fixes survive.
 3. **Light is safe** — light mode only touches code that can never affect runtime (console.log, trailing whitespace, empty blocks). No typecheck loop needed.
 4. **Deep is gated** — deep mode requires test re-run after each fix; revert on regression.

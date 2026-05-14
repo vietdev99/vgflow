@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.28.1 — Codex mirror sync for Batch 25 pipeline order (2026-05-15)
+
+v4.28.0 release CI failed `verify-codex-mirror-equivalence.py` — 10
+codex-skills mirrors drifted after Batch 25 propagated pipeline order
+changes (review → test-spec → test) into canonical command files but
+codex mirrors were left at old order.
+
+Synced post-batch:
+- vg-amend, vg-map, vg-next, vg-phase, vg-polish, vg-prioritize,
+  vg-progress, vg-project, vg-roadmap, vg-scope-review SKILL.md mirrors
+
+`verify-codex-mirror-equivalence.py`: 0 drift.
+
 ## v4.28.0 — Batch 25: Pipeline order canonicalization (review → test-spec → test) (2026-05-15)
 
 Canonicalizes v4.0 pipeline order `specs → scope → blueprint → build → review → test-spec → test → accept`

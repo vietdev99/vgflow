@@ -173,7 +173,7 @@ Analyze ROADMAP.md and scan all phase directories to classify each phase by stat
 
 Output: terminal display only (no files written)
 
-Pipeline: project → roadmap → map → **prioritize** → specs → scope → blueprint → build → review → test → accept
+Pipeline: project → roadmap → map → **prioritize** → specs → scope → blueprint → build → review → test-spec → test → accept
 </objective>
 
 <process>
@@ -421,7 +421,7 @@ They have build artifacts (SUMMARY) but are missing VG review/test artifacts.
   Phase {NN}: {Name}
     Has: CONTEXT, PLAN, SUMMARY
     Missing: RUNTIME-MAP.json, GOAL-COVERAGE-MATRIX.md, SANDBOX-TEST.md
-    Migration: /vg:review {phase} → /vg:test {phase} → /vg:accept {phase}
+    Migration: /vg:review {phase} → /vg:test-spec {phase} → /vg:test {phase} → /vg:accept {phase}
 
   Phase {NN}: {Name}
     Has: SUMMARY

@@ -173,7 +173,7 @@ Derive a phased roadmap from PROJECT.md requirements. Groups related requirement
 
 Output: `${PLANNING_DIR}/ROADMAP.md` + phase directories created
 
-Pipeline: project → **roadmap** → map → prioritize → specs → scope → blueprint → build → review → test → accept
+Pipeline: project → **roadmap** → map → prioritize → specs → scope → blueprint → build → review → test-spec → test → accept
 </objective>
 
 <process>

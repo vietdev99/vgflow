@@ -1,8 +1,8 @@
 ---
 name: "vg-phase"
-description: "Run full 8-step phase pipeline — specs → scope → blueprint → build → test-spec → review → test → accept"
+description: "Run full 8-step phase pipeline — specs → scope → blueprint → build → review → test-spec → test → accept"
 metadata:
-  short-description: "Run full 8-step phase pipeline — specs → scope → blueprint → build → test-spec → review → test → accept"
+  short-description: "Run full 8-step phase pipeline — specs → scope → blueprint → build → review → test-spec → test → accept"
 ---
 
 <codex_skill_adapter>
@@ -169,7 +169,7 @@ Phase planning:   /vg:prioritize → /vg:specs → /vg:scope → /vg:scope-revie
 Phase execution:  /vg:blueprint → /vg:build → /vg:review → /vg:test-spec → /vg:test → /vg:accept
 ```
 
-This command runs the **phase execution** stage (8 steps): specs → scope → blueprint → build → test-spec → review → test → accept.
+This command runs the **phase execution** stage (8 steps): specs → scope → blueprint → build → review → test-spec → test → accept.
 For project init (`/vg:init` → `/vg:project` → `/vg:roadmap` → `/vg:map`) or phase planning (`/vg:prioritize`), use the individual commands listed above.
 
 Flags:

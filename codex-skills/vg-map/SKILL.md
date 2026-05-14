@@ -173,7 +173,7 @@ Rebuild the graphify knowledge graph from current codebase state and extract a s
 
 Output: `${PLANNING_DIR}/codebase-map.md` (+ graphify-out/ updated as side effect)
 
-Pipeline: project → roadmap → **map** → prioritize → specs → scope → blueprint → build → review → test → accept
+Pipeline: project → roadmap → **map** → prioritize → specs → scope → blueprint → build → review → test-spec → test → accept
 </objective>
 
 <process>

@@ -162,7 +162,7 @@ Invoke this skill as `$vg-progress`. Treat all user text after the skill name as
 <objective>
 Show detailed progress dashboard for the VG pipeline. Without arguments, shows current phase + overview of all phases. With a phase argument, shows deep detail for that phase.
 
-Pipeline steps: specs → scope → blueprint → build → review → test → accept
+Pipeline steps: specs → scope → blueprint → build → review → test-spec → test → accept
 </objective>
 
 <process>
@@ -334,7 +334,7 @@ For EACH phase in ${PHASES_DIR} (sorted numerically), render this block:
 ────────────────────────────────────────────────────────────────
 Phase {N}: {name}   [{step}/7]   {status_label}
 
-Pipeline: {s0} specs → {s1} scope → {s2} blueprint → {s3} build → {s4} review → {s5} test → {s6} accept
+Pipeline: {s0} specs → {s1} scope → {s2} blueprint → {s3} build → {s4} review → {s5} test-spec → {s6} test → {s7} accept
 
 Next: {next_command_or_dash}
 ────────────────────────────────────────────────────────────────
@@ -346,7 +346,7 @@ Why: status icons on their own line don't align with step names (different width
 
 Example rendered output:
 ```
-Pipeline: ✅ specs → ✅ scope → ✅ blueprint → ✅ build → 🔄 review → ⬜ test → ⬜ accept
+Pipeline: ✅ specs → ✅ scope → ✅ blueprint → ✅ build → 🔄 review → ⬜ test-spec → ⬜ test → ⬜ accept
 ```
 
 **Status icon per step (computed from artifacts):**
@@ -388,7 +388,7 @@ For the requested phase, show artifact detail:
 ```
 ### Phase {N}: {name}
 
-Pipeline: ✅ specs → ✅ scope → ✅ blueprint → ✅ build → 🔄 review → ⬜ test → ⬜ accept
+Pipeline: ✅ specs → ✅ scope → ✅ blueprint → ✅ build → 🔄 review → ⬜ test-spec → ⬜ test → ⬜ accept
 
 #### Artifacts
 | Step | Artifact | Status | Detail |

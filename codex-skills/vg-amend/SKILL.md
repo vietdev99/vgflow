@@ -177,7 +177,7 @@ Mid-pipeline change request handler. When requirements shift or decisions need r
 5. Analyzes cascade impact on downstream artifacts
 6. Tags + commits
 
-Pipeline: specs → scope → blueprint → build → review → test → accept
+Pipeline: specs → scope → blueprint → build → review → test-spec → test → accept
 Amend can run at ANY point after scope.
 </objective>
 
