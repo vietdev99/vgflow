@@ -1,5 +1,44 @@
 # Changelog
 
+## v4.28.0 — Batch 25: Pipeline order canonicalization (review → test-spec → test) (2026-05-15)
+
+Canonicalizes v4.0 pipeline order `specs → scope → blueprint → build → review → test-spec → test → accept`
+across ALL docs + scripts. User dogfood: "123 nơi vẫn giữ pipeline cũ. phải là test-specs nằm giữa review
+và test chứ".
+
+### Changes
+
+**Task 1 — phase-recon.py PIPELINE_STEPS**
+- `.claude/scripts/phase-recon.py:45`: swapped `test-spec,review` → `review,test-spec`
+
+**Task 2 — review.md gate inversion**
+- `commands/vg/review.md:447`: removed backwards "review requires test-spec first" gate
+- `commands/vg/review.md:453`: fixed pipeline arrow `test-spec → review` → `review → test-spec`
+
+**Task 3 — phase.md + next.md + test-spec.md**
+- `commands/vg/phase.md`: description + body pipeline strings fixed (2 occurrences)
+- `commands/vg/next.md`: pipeline order line + 2 Python list literals fixed (3 occurrences)
+- `commands/vg/test-spec.md`: pipeline arrow + description updated
+
+**Task 4 — 12 old 4-step references upgraded**
+- amend, deploy, map, polish, prioritize (2x), progress (4x), project, roadmap, scope-review, test.md
+- All upgraded from `build → review → test → accept` to `build → review → test-spec → test → accept`
+
+**Task 5 — Guard test**
+- `tests/test_pipeline_order_canonical.py`: 3-assertion comprehensive guard against future drift
+
+**Tests:** 26 new tests added (batch_25 + pipeline_order_canonical). Zero new regressions.
+
+## v4.27.1 — Codex mirror sync after Batches 23+24 merge (2026-05-15)
+
+v4.26.0 + v4.27.0 release CI failed `verify-codex-mirror-equivalence.py`
+— `codex-skills/vg-test-spec/SKILL.md` drifted after Batch 23 added
+spec-stage-coverage gate to `commands/vg/test-spec.md`. Curated-guard
+blocked auto-regen.
+
+Manual sync: added Batch 23 gate block to codex mirror matching canonical
+source. `verify-codex-mirror-equivalence.py` drift 1 → 0.
+
 ## v4.27.0 — Scaffold-pattern detector + audit CI (Batch 24) (2026-05-15)
 
 Codifies 8 scaffold/drift anti-patterns gặp trong Batches 9/14/15/18/19/22
@@ -28,6 +67,42 @@ with `--threshold 50` (baseline 23 findings at ship time, A:4 C:2 F:5 G:1 H:11).
 
 ### Tests
 `tests/test_batch24_scaffold_detector.py` (6 tests) + `tests/test_batch24_audit_wiring.py` (2 tests).
+
+## v4.26.0 — Spec stage coverage validator (Batch 23) (2026-05-15)
+
+Closes user dogfood bug: "test bật form modal, bật xong là xong, không hề test
+nhập form, save form". F1 CODEGEN-MANIFEST gate (Batch 19) only checked spec
+COUNT. Codegen subagent silently produced shallow `.spec.ts` missing fill/submit/
+waitForResponse/persistence assertions.
+
+### New validator: verify-spec-stage-coverage.py
+
+`scripts/validators/verify-spec-stage-coverage.py` — opens each spec file listed
+in `CODEGEN-MANIFEST.json`, regex-checks body covers per-stage required patterns
+from `LIFECYCLE-SPECS.json` declared stages per goal.
+
+STAGE_PATTERNS dict (IGNORECASE):
+- `read_before`: `page.goto(`
+- `create`: `page.fill(` + `page.click(button|submit)` + `waitForResponse(`
+- `read_after_create`: `toBeVisible()` / `toContainText(`
+- `update`: fill + click + waitForResponse
+- `read_after_update`: reload/goto + assertion
+- `delete`: click + waitForResponse
+- `read_after_delete`: `not.toBeVisible()` / `toBeHidden()` / `toHaveCount(0)`
+
+Missing pattern per declared stage → exit 1 with goal_id + stage context.
+`--json` flag emits structured `{ shallow_specs, failures }` for telemetry.
+
+### Two enforcement points
+
+1. `/vg:test-spec` — post-codegen, after F1 CODEGEN-MANIFEST gate, before
+   run-complete. Catches shallow specs at codegen time. Emits
+   `test_spec.spec_body_shallow` event on BLOCK.
+2. `/vg:test` preflight — early gate before playwright runtime. Defense-in-depth
+   for specs from prior codegen runs. Same event + exit 1.
+
+Tests: `tests/test_batch23_spec_stage_coverage.py` (4 tests) +
+`tests/test_batch23_validator_wired.py` (2 tests).
 
 ## v4.25.0 — Review scaffold + classification gaps (Batch 22) (2026-05-14)
 

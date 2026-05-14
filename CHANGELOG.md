@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.28.0 — Batch 25: Pipeline order canonicalization (review → test-spec → test) (2026-05-15)
+
+Canonicalizes v4.0 pipeline order `specs → scope → blueprint → build → review → test-spec → test → accept`
+across ALL docs + scripts. User dogfood: "123 nơi vẫn giữ pipeline cũ. phải là test-specs nằm giữa review
+và test chứ".
+
+### Changes
+
+**Task 1 — phase-recon.py PIPELINE_STEPS**
+- `.claude/scripts/phase-recon.py:45`: swapped `test-spec,review` → `review,test-spec`
+
+**Task 2 — review.md gate inversion**
+- `commands/vg/review.md:447`: removed backwards "review requires test-spec first" gate
+- `commands/vg/review.md:453`: fixed pipeline arrow `test-spec → review` → `review → test-spec`
+
+**Task 3 — phase.md + next.md + test-spec.md**
+- `commands/vg/phase.md`: description + body pipeline strings fixed (2 occurrences)
+- `commands/vg/next.md`: pipeline order line + 2 Python list literals fixed (3 occurrences)
+- `commands/vg/test-spec.md`: pipeline arrow + description updated
+
+**Task 4 — 12 old 4-step references upgraded**
+- amend, deploy, map, polish, prioritize (2x), progress (4x), project, roadmap, scope-review, test.md
+- All upgraded from `build → review → test → accept` to `build → review → test-spec → test → accept`
+
+**Task 5 — Guard test**
+- `tests/test_pipeline_order_canonical.py`: 3-assertion comprehensive guard against future drift
+
+**Tests:** 26 new tests added (batch_25 + pipeline_order_canonical). Zero new regressions.
+
 ## v4.27.1 — Codex mirror sync after Batches 23+24 merge (2026-05-15)
 
 v4.26.0 + v4.27.0 release CI failed `verify-codex-mirror-equivalence.py`

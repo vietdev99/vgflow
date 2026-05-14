@@ -134,10 +134,14 @@ def test_pipeline_wiring_places_test_spec_between_build_and_review() -> None:
     review_preflight = (REPO_ROOT / "commands" / "vg" / "_shared" / "review" / "preflight.md").read_text(encoding="utf-8")
 
     review = (REPO_ROOT / "commands" / "vg" / "review.md").read_text(encoding="utf-8")
-    assert "build → test-spec → **review**" in review
+    # v4.0 canonical: review BEFORE test-spec (review writes RUNTIME-MAP, test-spec consumes it)
+    assert "build → **review**" in review or "review → test-spec" in review or "build → review" in review
     assert "/vg:test-spec" in lifecycle
-    assert '"build", "test-spec", "review"' in phase_recon
-    assert "/vg:test-spec ${PHASE_NUMBER} before /vg:review" in review_preflight
+    # v4.0 canonical PIPELINE_STEPS order: review before test-spec
+    # Matches both scripts/phase-recon.py and .claude/scripts/phase-recon.py
+    assert '"review", "test-spec"' in phase_recon
+    # review/preflight.md still gates deep test specs (legacy gate still present)
+    assert "/vg:test-spec ${PHASE_NUMBER}" in review_preflight
     assert 'DEEP_SPEC_VALIDATOR="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-deep-test-specs.py"' in review_preflight
     assert 'DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"' in review_preflight
     assert "review.deep_test_spec_blocked" in review_preflight
