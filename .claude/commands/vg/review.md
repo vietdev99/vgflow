@@ -80,6 +80,11 @@ runtime_contract:
       content_min_bytes: 300
       content_required_sections: ["Coverage Matrix", "Plan hash"]
       required_unless_flag: "--probe-mode-skip"
+    # F7 Batch 22: deterministic generator writes this; marker-only was insufficient.
+    - path: "${PHASE_DIR}/MATRIX-INTENT.json"
+      content_min_bytes: 200
+      required_unless_flag: "--skip-matrix-intent"
+      must_be_created_in_run: true
   must_touch_markers:
     # ─── Hard gates (block) — foundational, always run ───
     - "00_gate_integrity_precheck"

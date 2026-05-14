@@ -41,6 +41,29 @@ Write `MATRIX-INTENT.json` to phase dir:
 }
 ```
 
+## Generate MATRIX-INTENT.json
+
+```bash
+# F7 Batch 22: deterministic generator. No more marker-only.
+MATRIX_GEN="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/generate-matrix-intent.py"
+[ -f "$MATRIX_GEN" ] || MATRIX_GEN="${REPO_ROOT:-.}/scripts/generate-matrix-intent.py"
+if [ ! -f "$MATRIX_GEN" ]; then
+  echo "⛔ F7 BLOCK: generate-matrix-intent.py missing" >&2
+  exit 1
+fi
+"${PYTHON_BIN:-python3}" "$MATRIX_GEN" \
+  --phase-dir "${PHASE_DIR}" \
+  --out "${PHASE_DIR}/MATRIX-INTENT.json" \
+  --phase-number "${PHASE_NUMBER}" || {
+    echo "⛔ F7 BLOCK: generate-matrix-intent.py failed" >&2
+    exit 1
+  }
+if [ ! -f "${PHASE_DIR}/MATRIX-INTENT.json" ]; then
+  echo "⛔ F7 BLOCK: MATRIX-INTENT.json not written" >&2
+  exit 1
+fi
+```
+
 ## Mark step
 
 ```bash
