@@ -1,5 +1,34 @@
 # Changelog
 
+## v4.44.0 — Batch 54: scan-aware SEED-RECIPE (data-informed seed recipes)
+
+Closes the final shortfall in the seed contract chain.
+
+Problem: Batch 51 KIND_TO_RECIPE templates only knew the variant kind,
+not the real scanner observations. filter_combination recipe said
+"INSERT 5 rows varied status+owner" without naming real filters;
+pagination_edge said ">=31 rows" regardless of observed page_size.
+AI follow-up filled <PLACEHOLDER> with INVENTED values.
+
+Fix: generate-seed-recipes.py now consumes phase_dir/scan-*.json
+(Haiku scanner output) and attaches observed_state per recipe when
+scan signal matches kind:
+  - filter_combination → real_filters (Status, Owner, real options)
+  - pagination_edge    → real_pagination (total_pages, page_size, view)
+  - boundary           → real_row_counts + real_search.debounce_ms
+  - empty_string       → empty_state cross-ref
+  - not_found_404      → error_state_4xx cross-ref
+  - rate_limit_429     → None (no scan signal exists)
+
+observed_state renders as indented YAML inside the existing ```yaml
+block, so codegen subagent + AI follow-up read seed_action AND
+observed_state in one pass.
+
+Back-compat: phase without scan-*.json → no observed_state →
+recipes identical to Batch 51. Both paths covered by tests.
+
+Tests: tests/test_batch54_scan_aware_seed_recipes.py (9 GREEN).
+
 ## v4.43.0 — Batch 53: 2b6_ui_spec + 2b6b_ui_map status (final B33 closure)
 
 Closes Batch 33 PARTIAL deferral fully. 8/8 markers now observable.
