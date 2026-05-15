@@ -271,6 +271,19 @@ fi
   "test_spec.generated" --step "2_generate_deep_specs" --actor "llm-claimed" \
   --outcome "PASS" --payload "$(cat "${PHASE_DIR}/.deep-test-spec-summary.json")" >/dev/null 2>&1 || true
 
+# Batch 48 F7: derive EDGE-CASES from LIFECYCLE-SPECS edge_cases[] (Batch 37
+# first-class) if blueprint didn't create EDGE-CASES dir. Codex F7: blueprint
+# owns EDGE-CASES gen; if skipped/legacy, codegen falls back to single-path.
+DERIVE_SCRIPT="${REPO_ROOT}/.claude/scripts/derive-edge-cases-from-lifecycle.py"
+[ -f "$DERIVE_SCRIPT" ] || DERIVE_SCRIPT="${REPO_ROOT}/scripts/derive-edge-cases-from-lifecycle.py"
+[ -f "$DERIVE_SCRIPT" ] || DERIVE_SCRIPT="${VG_HOME}/scripts/derive-edge-cases-from-lifecycle.py"
+if [ -f "$DERIVE_SCRIPT" ] && [ ! -d "${PHASE_DIR}/EDGE-CASES" ]; then
+  echo "▸ Batch 48 F7: EDGE-CASES/ missing — deriving from LIFECYCLE-SPECS..."
+  "${PYTHON_BIN:-python3}" "$DERIVE_SCRIPT" \
+    --phase "${PHASE_NUMBER}" \
+    --phase-dir "${PHASE_DIR}" 2>&1 | sed 's/^/  /' || true
+fi
+
 touch "${PHASE_DIR}/.step-markers/test-spec/2_generate_deep_specs.done"
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 2_generate_deep_specs 2>/dev/null || true
 ```
