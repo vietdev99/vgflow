@@ -1,5 +1,110 @@
 # Changelog
 
+## v4.34.0 — Batches 36-39: test-spec depth (R1+R2+R3+F3+F4) + coverage gates (2026-05-15)
+
+User dogfood: "test-specs còn khá sơ sài và test cũng không bám theo
+test specs". Sandbox deploy revealed many small issues AI couldn't catch.
+
+4-batch shipment closing the test-spec depth + coverage gap:
+
+### Batch 36 — test-spec depth (R1+R2+R3)
+
+R1 CRITICAL: generate-deep-test-specs.py called lifecycle generate
+without include_readonly=True. LIFECYCLE-SPECS.json contained only
+mutation goals → subagent emitted specs only for mutation. Read-only
+views (display, list, dashboard, filter, search, error states) skipped.
+
+Fix: pass include_readonly=True. All goals get lifecycle entries.
+
+R2 HIGH: GOAL_TYPE_STAGES["read-only"] only had (read_before,). Single-
+stage spec for entire read-only view.
+
+Fix: new READONLY_STAGES tuple (9 stages): read_before + render_initial
++ interaction_filter + interaction_sort + interaction_paginate +
+empty_state + error_state_4xx + loading_state + accessibility. Each
+stage has action + evidence description.
+
+R3 HIGH: acceptance_criteria / success_criteria not converted to per-
+stage assertion[]. Specs may not assert each criterion.
+
+Fix: new _parse_acceptance_criteria() handles list/dict/prose shapes.
+new _criteria_assertions() emits {source, check} entries. Wired into
+_step() for read_after_*, render_initial, empty_state, error_state_4xx,
+interaction_* stages.
+
+Effect: 10-goal phase (3 mutation + 7 read-only) used to ship
+~3×7=21 stages. Now ships 3×7 + 7×9 = 84 stages. 4x stage coverage.
+
+### Batch 37 — edge_cases + negative_specs first-class (F3+F4 CRITICAL)
+
+Codex audit deferred. Sub-agent told "never invent assertions beyond
+TEST-GOALS" → happy-path only.
+
+Fix: LIFECYCLE-SPECS schema extended with two first-class arrays per goal:
+
+edge_cases[]:
+- All goals: boundary_min, boundary_max, empty_string, unicode_special
+- Mutation: + large_payload
+- Read-only: + filter_combination, pagination_edge
+
+negative_specs[]:
+- All goals: unauthorized_401 + forbidden_403
+- Mutation: + validation_422 + not_found_404
+- Read-only: + not_found_404
+- All: rate_limit_429 (advisory)
+
+Each has {kind, label, input_hint/setup, expected/assert, expected_status}.
+
+Effect: +~9 variants per goal on top of stages. Combined with Batch 36:
+10-goal phase ships ~84 stages + 90 variants = ~10x coverage vs before.
+
+### Batch 38 — CONTEXT D-XX → spec traceability gate
+
+User: "test cũng không bám theo test specs". Decisions in CONTEXT.md
+may not translate to test assertions.
+
+Fix: new scripts/validators/verify-decision-to-spec-coverage.py:
+- Parse CONTEXT.md for D-XX IDs
+- Scan manifest spec files for D-XX mentions
+- FAIL if any uncovered; --allow-uncovered comma-list for debt
+
+Wired in commands/vg/test-spec.md after Batch 23 stage gate. --strict
+default. Emits test_spec.decision_coverage_failed event on shortfall.
+
+### Batch 39 — goal→spec coverage + orphan strict mode
+
+Two issues:
+1. Codegen subagent may silently skip goals (no validator enforced 1:1).
+2. Orphan specs (in tests/ but not in manifest) emitted WARN only —
+   stale specs could run with wrong assertions, hiding failures.
+
+Fix 1: new scripts/validators/verify-goal-to-spec-coverage.py:
+- Enumerates goals from TEST-GOALS/ + TEST-GOALS.md
+- Per goal_id, checks manifest entry with matching goal_id OR path
+  heuristic (G-\d+(?:\.\d+)*)
+- FAIL --strict if any uncovered
+
+Fix 2: orphan spec gate flipped WARN → BLOCK. exit 1 unless
+--allow-orphan-specs escape.
+
+Wired in commands/vg/_shared/test/regression-security.md.
+
+### Aggregate impact
+
+Phase with 10 goals + 8 decisions:
+- Before: ~21 stage assertions, no negative paths, decisions not bound
+  to specs, orphans warned silently
+- After: ~84 stages + 90 variants + 8 D-XX gates + every goal mapped
+  + strict orphan = ~200 enforced assertion points
+
+### Tests
+
+24 new GREEN tests across:
+- tests/test_batch36_testspec_depth.py (5)
+- tests/test_batch37_edge_negative_first_class.py (5+1)
+- tests/test_batch38_decision_to_spec.py (6)
+- tests/test_batch39_goal_spec_coverage.py (7)
+
 ## v4.33.2 — generate-codex-skills HARD-GATE-CODEX prose fix (2026-05-15)
 
 v4.33.1 Test CI failed: `test_review_global_paths.py` flagged

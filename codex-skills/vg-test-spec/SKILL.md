@@ -687,6 +687,30 @@ if [ -f "$STAGE_COV_VAL" ]; then
 fi
 ```
 
+**Batch 38: CONTEXT decision → spec coverage gate**
+
+```bash
+# Batch 38: every D-XX in CONTEXT.md must be referenced in >=1 spec file.
+# Without this, specs may not cover architectural decisions driving phase.
+DEC_COV_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-decision-to-spec-coverage.py"
+[ -f "$DEC_COV_VAL" ] || DEC_COV_VAL="${REPO_ROOT:-.}/scripts/validators/verify-decision-to-spec-coverage.py"
+if [ -f "$DEC_COV_VAL" ]; then
+  DEC_FLAGS=""
+  [[ ! "${ARGUMENTS:-}" =~ --allow-decision-shortfall ]] && DEC_FLAGS="--strict"
+  if ! "${PYTHON_BIN:-python3}" "$DEC_COV_VAL" \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "${PHASE_DIR}" \
+       $DEC_FLAGS; then
+    echo "⛔ Batch 38 BLOCK: CONTEXT D-XX decisions uncovered by specs" >&2
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+      "test_spec.decision_coverage_failed" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    if [[ ! "${ARGUMENTS:-}" =~ --allow-decision-shortfall ]]; then
+      exit 1
+    fi
+  fi
+fi
+```
+
 **Mark step:**
 ```bash
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 4_codegen 2>/dev/null || true
