@@ -141,6 +141,9 @@ time before /vg:build spawns executors.
 ```bash
 vg-orchestrator step-active 2c_verify_plan_paths
 
+# Batch 49: PATH_STATUS observability. Marker still fires (advisory step)
+# but step-status-ledger now records SKIPPED/PASS/WARN/FAIL explicitly.
+PATH_STATUS="UNKNOWN"
 PATH_CHECKER=".claude/scripts/verify-plan-paths.py"
 if [ -f "$PATH_CHECKER" ]; then
   echo ""
@@ -151,20 +154,32 @@ if [ -f "$PATH_CHECKER" ]; then
   PATH_EXIT=$?
 
   case "$PATH_EXIT" in
-    0) echo "✓ All PLAN paths valid" ;;
+    0) echo "✓ All PLAN paths valid"; PATH_STATUS="PASS" ;;
     2)
       echo "⚠ PLAN has path warnings — review output above."
       echo "  Intentional new subsystems → proceed (non-blocking)."
       echo "  Stale paths → fix PLAN now before /vg:build."
+      PATH_STATUS="WARN"
       ;;
     1)
       echo "⛔ PLAN has malformed paths — fix PLAN.md before proceeding."
+      PATH_STATUS="FAIL"
+      "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+        "blueprint.plan_path_invalid" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" \
+        >/dev/null 2>&1 || true
       exit 1
       ;;
   esac
 else
   echo "⚠ verify-plan-paths.py missing — skipping (older install)"
+  PATH_STATUS="SKIPPED"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.path_checker_absent" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" \
+    >/dev/null 2>&1 || true
 fi
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/step-status-ledger.py" \
+  --phase-dir "${PHASE_DIR}" --step "2c_verify_plan_paths" --status "${PATH_STATUS}" \
+  2>/dev/null || true
 ```
 
 Classifications: VALID (file exists OR parent dir exists OR another task creates
@@ -190,6 +205,8 @@ occurrences).
 ```bash
 vg-orchestrator step-active 2c_utility_reuse
 
+# Batch 49: UTIL_STATUS observability.
+UTIL_STATUS="UNKNOWN"
 UTILITY_CHECKER=".claude/scripts/verify-utility-reuse.py"
 PROJECT_MD="${PLANNING_DIR}/PROJECT.md"
 
@@ -202,10 +219,11 @@ if [ -f "$UTILITY_CHECKER" ] && [ -f "$PROJECT_MD" ]; then
   UTIL_EXIT=$?
 
   case "$UTIL_EXIT" in
-    0) echo "✓ No utility-reuse violations" ;;
+    0) echo "✓ No utility-reuse violations"; UTIL_STATUS="PASS" ;;
     2)
       echo "⚠ Utility-reuse warnings — consider consolidating into shared utils"
       echo "  Non-blocking. New helper genuinely phase-local → add Task 0 (extend utils)."
+      UTIL_STATUS="WARN"
       ;;
     1)
       echo "⛔ PLAN redeclares helpers already in shared utility contract."
@@ -224,12 +242,21 @@ if [ -f "$UTILITY_CHECKER" ] && [ -f "$PROJECT_MD" ]; then
         >/dev/null 2>&1 || true
       echo "⚠ --override-reason set — proceeding with duplication debt"
       echo "utility-reuse: $(date -u +%FT%TZ) phase=${PHASE_NUMBER} override=yes" >> "${PHASE_DIR}/build-state.log"
+      UTIL_STATUS="FAIL_OVERRIDDEN"
       ;;
   esac
 else
   [ ! -f "$UTILITY_CHECKER" ] && echo "⚠ verify-utility-reuse.py missing — skipping (older install)"
   [ ! -f "$PROJECT_MD" ] && echo "⚠ PROJECT.md missing — skipping (run /vg:project first)"
+  UTIL_STATUS="SKIPPED"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.utility_checker_absent" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"checker_missing\":$([ ! -f "$UTILITY_CHECKER" ] && echo true || echo false),\"project_md_missing\":$([ ! -f "$PROJECT_MD" ] && echo true || echo false)}" \
+    >/dev/null 2>&1 || true
 fi
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/step-status-ledger.py" \
+  --phase-dir "${PHASE_DIR}" --step "2c_utility_reuse" --status "${UTIL_STATUS}" \
+  2>/dev/null || true
 
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2c_utility_reuse" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2c_utility_reuse.done"
@@ -247,6 +274,8 @@ build consumes them. <10 sec.
 ```bash
 vg-orchestrator step-active 2c_compile_check
 
+# Batch 49: COMPILE_STATUS observability.
+COMPILE_STATUS="UNKNOWN"
 CONTRACTS="${PHASE_DIR}/API-CONTRACTS.md"
 COMPILE_CMD=$(vg_config_get contract_format.compile_cmd "")
 CONTRACT_TYPE=$(vg_config_get contract_format.type "zod_code_block")
@@ -292,9 +321,25 @@ if [ -n "$COMPILE_CMD" ]; then
   if [ $EXIT -ne 0 ]; then
     echo "CONTRACT COMPILE FAILED — see ${PHASE_DIR}/contract-compile.log"
     echo "Fix contract syntax in ${PHASE_DIR}/API-CONTRACTS.md and re-run /vg:blueprint --from=2b"
+    COMPILE_STATUS="FAIL"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "blueprint.contract_compile_failed" --payload "{\"phase\":\"${PHASE_NUMBER}\",\"exit\":${EXIT}}" \
+      >/dev/null 2>&1 || true
     exit 1
   fi
+  COMPILE_STATUS="PASS"
+else
+  # Batch 49: COMPILE_CMD empty — compile skipped. Emit event so step-status-ledger
+  # captures rather than silently passing as if compile ran.
+  echo "⚠ contract_format.compile_cmd unset — compile check skipped"
+  COMPILE_STATUS="SKIPPED"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.compile_cmd_unset" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" \
+    >/dev/null 2>&1 || true
 fi
+"${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/step-status-ledger.py" \
+  --phase-dir "${PHASE_DIR}" --step "2c_compile_check" --status "${COMPILE_STATUS}" \
+  2>/dev/null || true
 
 mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2c_compile_check" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2c_compile_check.done"
