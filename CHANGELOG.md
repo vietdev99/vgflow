@@ -1,5 +1,39 @@
 # Changelog
 
+## v4.45.0 — Batch 55: runSeedRecipe helper stub generator + validator
+
+Closes the runtime-resolution gap in the seed contract chain.
+
+Problem: Batch 52 codegen wraps test.each(variant) with
+runSeedRecipe(variant.id) / cleanup(variant.id) — but those helpers
+DON'T EXIST unless humans hand-write them. Runtime: ReferenceError
+on first test OR silent no-op (drift returns).
+
+Fix: generate-seed-helper-stub.py emits TypeScript switch/case stub
+at PHASE_DIR/tests/_helpers/seed-recipes.ts (or .js with --lang js):
+  - one case per variant_id from SEED-RECIPE.md
+  - kind / requires_state / seed_action / observed_state comments
+  - seed branches THROW by default (loud failure on unfilled stub)
+  - cleanup branches return (idempotent default)
+
+verify-seed-helper-stub.py gates:
+  1. helper file present at expected path
+  2. runSeedRecipe + cleanup exports declared
+  3. every variant_id has `case 'ID':` branch
+  --strict mode default in test-spec.md flow.
+
+test-spec.md wires generator + validator BETWEEN generate-seed-recipes
+and validate-deep-specs. BLOCK on shortfall unless
+--allow-seed-helper-shortfall. Emits test_spec.seed_helper_shortfall.
+
+Tests: tests/test_batch55_seed_helper_stub.py (10 GREEN).
+
+Seed contract chain B36→B55 end-to-end:
+  read-only lifecycle (B36) → variant kinds (B37) →
+  EDGE-CASES fallback (B48) → SEED-RECIPE foundation (B51) →
+  codegen binding (B52) → scan-aware observed_state (B54) →
+  helper stub loud-failure (B55).
+
 ## v4.44.0 — Batch 54: scan-aware SEED-RECIPE (data-informed seed recipes)
 
 Closes the final shortfall in the seed contract chain.
