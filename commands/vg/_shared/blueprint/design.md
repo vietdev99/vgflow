@@ -460,6 +460,8 @@ Write per-slug files to `${PHASE_DIR}/UI-SPEC/<slug>.md` and index to
 ```bash
 vg-orchestrator step-active 2b6_ui_spec
 
+# Batch 53: UI_SPEC_STATUS observability across all branches.
+UI_SPEC_STATUS="UNKNOWN"
 # ─── F9 Batch 16: --skip-ui-spec escape hatch ──────────────────────────────
 # blueprint.md runtime_contract declares UI-SPEC as required_unless_flag:
 # --skip-ui-spec. When skipped, must emit vg-orchestrator override so the
@@ -468,6 +470,7 @@ if [[ "${ARGUMENTS:-}" =~ --skip-ui-spec ]]; then
   OVERRIDE_REASON=$(echo "${ARGUMENTS}" | sed -nE 's/.*--override-reason=([^ ]+).*/\1/p' | head -1)
   if [ -z "$OVERRIDE_REASON" ]; then
     echo "⛔ F9: --skip-ui-spec requires --override-reason=<text> on the command line" >&2
+    UI_SPEC_STATUS="FAIL_NO_REASON"
     exit 1
   fi
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator override \
@@ -476,10 +479,16 @@ if [[ "${ARGUMENTS:-}" =~ --skip-ui-spec ]]; then
   type -t log_override_debt >/dev/null 2>&1 && \
     log_override_debt "blueprint-skip-ui-spec" "${PHASE_NUMBER}" "UI-SPEC generation skipped" "${PHASE_DIR}"
   echo "⚠ --skip-ui-spec set (override logged) — skipping UI-SPEC generation"
+  UI_SPEC_STATUS="SKIPPED"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.ui_spec_skipped" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"reason\":\"${OVERRIDE_REASON}\"}" \
+    >/dev/null 2>&1 || true
   mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6_ui_spec" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6_ui_spec.done"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b6_ui_spec 2>/dev/null || true
 else
+  UI_SPEC_STATUS="PASS"
 
 # ─── F9 Batch 16: --skip-form-api-map escape hatch ─────────────────────────
 # blueprint.md runtime_contract declares FORM-API-MAP.md as required_unless_flag:
@@ -573,10 +582,16 @@ sánh post-wave để phát hiện lệch hướng (drift).
 ```bash
 vg-orchestrator step-active 2b6b_ui_map
 
+# Batch 53: UI_MAP_STATUS observability across all 3 branches.
+UI_MAP_STATUS="UNKNOWN"
 UI_MAP_ENABLED=$(awk '/^ui_map:/{f=1; next} f && /^[a-z_]+:/{f=0} f && /enabled:/{print $2; exit}' .claude/vg.config.md 2>/dev/null | tr -d '"' || echo "true")
 
 if [ "$UI_MAP_ENABLED" != "true" ]; then
   echo "ℹ ui_map disabled in config — skipping UI-MAP generation"
+  UI_MAP_STATUS="SKIPPED_DISABLED"
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+    "blueprint.ui_map_skipped_disabled" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" \
+    >/dev/null 2>&1 || true
   (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6b_ui_map" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6b_ui_map.done"
   "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b6b_ui_map 2>/dev/null || true
 else
@@ -584,9 +599,14 @@ else
 
   if [ "${FE_TASKS:-0}" -eq 0 ]; then
     echo "ℹ Phase không có task FE — skip UI-MAP"
+    UI_MAP_STATUS="SKIPPED_NO_FE"
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event \
+      "blueprint.ui_map_skipped_no_fe" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" \
+      >/dev/null 2>&1 || true
     (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "2b6b_ui_map" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/2b6b_ui_map.done"
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step blueprint 2b6b_ui_map 2>/dev/null || true
   else
+    UI_MAP_STATUS="PASS"
     echo "Phase có ${FE_TASKS} dòng task FE. Chuẩn bị UI-MAP.md..."
 
     # Bước 1: Sinh as-is map nếu phase sửa view cũ
