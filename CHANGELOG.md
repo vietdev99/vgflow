@@ -1,5 +1,37 @@
 # Changelog
 
+## v4.49.0 — Batch 59: scanner data_observations + recipe sizing
+
+Closes data-shape blind spot in recipe generator.
+
+Problem: Batch 54 reads scan.filters[] but ignores actual data
+shape. Filter "Status" declared with 3 options might have
+distinct_count=1 in real data → filter_combination test asserts
+nothing meaningful. pagination_edge sizing ignores
+status_distribution → mixed-filter pagination test may not exercise
+interaction.
+
+Fix: Haiku scanner SKILL.md schema gains data_observations field:
+  - cardinality (tables_total_rows, visible_rows, filters_observed)
+  - status_diversity (http codes, console errors, non-2xx count)
+  - distinct_values_per_filter ({filter_name, distinct_count,
+    sampled_values})
+  - sampled_status_distribution {value: count}
+  - row_id_pattern (human-readable like "site-NNN")
+
+Note: emit when table/list has ≥3 rows.
+
+generate-seed-recipes.py _aggregate_scan_signals collects field
+cross-scan. _observed_for_kind extensions:
+  - filter_combination → filter_cardinality block + WARN hint
+    when distinct_count=1 (always-full-set filter)
+  - pagination_edge → status_distribution block (AI knows to vary
+    status across seeded rows)
+
+Back-compat: scans without data_observations still produce recipes.
+
+Tests: tests/test_batch59_data_observations.py (8 GREEN).
+
 ## v4.48.0 — Batch 58: scan→goal coverage validator (per-signal)
 
 Closes per-signal drift between scan-*.json and TEST-GOALS.
