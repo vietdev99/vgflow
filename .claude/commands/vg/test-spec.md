@@ -319,6 +319,10 @@ Flag precedence (highest first):
      `multi-actor` OR `realtime` OR `financial` (high-stakes semantic surface)
    - OR `verify-lifecycle-spec-depth.py` previously returned WARN (not BLOCK)
    - OR profile in `{mobile, realtime, fintech}` from `vg.config.md`
+   - **Batch 46 F12:** OR `verify-manifest-spec-kinds.py` reports any goal
+     lacking edge OR negative spec_kind in CODEGEN-MANIFEST.json (manifest
+     spec_kind gap) — deterministic gates pass on happy-only manifests;
+     semantic review must catch the missing failure-mode coverage.
    → FIRE the sweep.
 4. None of the above → SKIP with reason `low-stakes-profile`. Emit
    `test_spec.crossai_skipped`.
@@ -374,6 +378,29 @@ if os.path.exists(depth_verdict):
         if str(v.get('severity') or '').lower() == 'warn':
             print("depth-warn")
             sys.exit(0)
+    except Exception:
+        pass
+
+# Batch 46 F12: manifest spec_kind gap — fire CrossAI when any goal in
+# CODEGEN-MANIFEST.json lacks edge OR negative spec_kind. Deterministic
+# gates pass on happy-only manifests; semantic review catches the gap.
+manifest_path = os.path.join(phase_dir, 'CODEGEN-MANIFEST.json')
+if os.path.exists(manifest_path):
+    try:
+        m = json.load(open(manifest_path, encoding='utf-8'))
+        specs = m.get('playwright_specs') or m.get('specs') or []
+        by_goal = {}
+        for entry in specs:
+            if not isinstance(entry, dict):
+                continue
+            gid = entry.get('goal_id') or entry.get('goal') or '_unknown'
+            kind = entry.get('spec_kind') or entry.get('kind') or ''
+            by_goal.setdefault(gid, set()).add(kind)
+        # Any goal lacking edge OR negative → trigger
+        for gid, kinds in by_goal.items():
+            if 'edge' not in kinds or 'negative' not in kinds:
+                print(f"manifest_spec_kind_gap:{gid}")
+                sys.exit(0)
     except Exception:
         pass
 
