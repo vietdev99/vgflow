@@ -422,6 +422,94 @@ def classify_elements(view: str, scan: dict, runtime_view: dict,
             ],
         })
 
+    # Batch 43: accessibility findings → G-AUTO-a11y stubs.
+    # Scanner runs axe-core (WCAG 2A + 2AA). Emit per-rule stub for
+    # critical/serious findings only (moderate/minor = advisory, no stub).
+    a11y_findings = scan.get("accessibility_findings") or []
+    a11y_seen: set[str] = set()
+    for finding in a11y_findings:
+        if not isinstance(finding, dict):
+            continue
+        severity = (finding.get("severity") or "").lower()
+        if severity not in ("critical", "serious"):
+            continue
+        rule = (finding.get("rule") or "").strip()
+        if not rule or rule in a11y_seen:
+            continue
+        a11y_seen.add(rule)
+        selector = finding.get("selector") or ""
+        stubs.append({
+            "id": f"G-AUTO-{vslug}-a11y-{name_slug(rule)}",
+            "title": f"Accessibility: {rule} on {view} — WCAG {finding.get('wcag', '?')} ({severity})",
+            "priority": "important" if severity == "critical" else "nice-to-have",
+            "surface": "ui",
+            "source": "review.runtime_discovery",
+            "evidence": {
+                "view": view,
+                "axe_rule": rule,
+                "wcag": finding.get("wcag"),
+                "severity": severity,
+                "selector": selector,
+                "description": finding.get("description"),
+                "help_url": finding.get("help_url"),
+            },
+            "trigger": f"Page loaded on {view}",
+            "main_steps": [
+                {"S1": f"Navigate to {view}"},
+                {"S2": f"Run axe-core scan with WCAG 2A+2AA rules"},
+                {"S3": f"Assert NO violation of rule '{rule}' on selector '{selector}'"},
+                {"S4": "Manual review if violation re-appears: fix per help_url"},
+            ],
+        })
+
+    # Batch 41: state observation stubs (empty / error_4xx / loading).
+    # Scanner now actively probes these states; we emit per-state G-AUTO
+    # stubs carrying the observed selector so spec generator binds
+    # expect() to a real selector instead of guessing.
+    state_obs = scan.get("state_observations") or {}
+    state_map = [
+        ("empty_state", "empty-state",
+         f"Empty state on {view} renders friendly UI (no white-screen)",
+         "Filter/search to zero matches"),
+        ("error_state_4xx", "error-state",
+         f"Error state on {view} (4xx) renders user-facing message + no crash",
+         "Navigate to invalid id / unauthorized path"),
+        ("loading_state", "loading-state",
+         f"Loading state on {view} shows skeleton/spinner during fetch + no layout shift",
+         "Throttle network → reload"),
+    ]
+    for state_key, slug, title, trigger in state_map:
+        st = state_obs.get(state_key) or {}
+        if not isinstance(st, dict) or not st.get("observed"):
+            continue
+        selector = st.get("selector") or ""
+        if not selector:
+            continue
+        stubs.append({
+            "id": f"G-AUTO-{vslug}-{slug}",
+            "title": title,
+            "priority": "important",
+            "surface": "ui",
+            "source": "review.runtime_discovery",
+            "evidence": {
+                "view": view,
+                "state_kind": state_key,
+                "selector": selector,
+                "message_text": st.get("message_text"),
+                "screenshot": st.get("screenshot"),
+                "actual_status": st.get("actual_status"),
+                "skeleton_visible_ms": st.get("skeleton_visible_ms"),
+                "trigger_observed": st.get("trigger"),
+            },
+            "trigger": trigger + f" on {view}",
+            "main_steps": [
+                {"S1": f"User on {view} as authenticated role"},
+                {"S2": trigger},
+                {"S3": f"Element matching selector '{selector}' becomes visible"},
+                {"S4": "No console errors; no white-screen; UI remains functional"},
+            ],
+        })
+
     for sr in scan.get("search") or []:
         if not isinstance(sr, dict):
             continue

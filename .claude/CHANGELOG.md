@@ -1,5 +1,84 @@
 # Changelog
 
+## v4.35.0 — Batches 41-43: scanner active probing + variation + axe-core (2026-05-15)
+
+3 follow-up batches closing scanner depth chain from Batch 40 (filter/sort/
+paginate/search detection). User's "discovery sơ sài → specs sơ sài" chain
+now structurally closed at scanner layer.
+
+### Batch 41 — Active state probing (empty/error_4xx/loading)
+
+Read-only spec stages (Batch 36 R2) had stages declared but scanner never
+captured evidence → spec body uses generic selectors → flaky tests.
+
+Scanner workflow adds 3 explicit probes (per view, skip cli-tool/library):
+- empty_state: filter/search to no-match → snapshot DOM → record selector
+- error_state_4xx: visit `{view}/99999999-fake-id-probe` → record 404 UI
+- loading_state: throttle slow-3g + reload → snapshot skeleton → measure ms
+
+Schema: `state_observations: {empty_state, error_state_4xx, loading_state}`
+each with `{observed, trigger, selector, message_text, screenshot, ...}`.
+
+enrich-test-goals.py emits G-AUTO-{view}-{empty/error/loading}-state stubs
+with real selectors → spec generator binds expect() to scanner-observed
+selectors.
+
+### Batch 42 — Multi-row sampling + modal-input variation
+
+Scanner sampled first row only → row-specific bugs (data-dependent) miss.
+Modal forms tested with 1 input → boundary/empty/unicode bugs miss.
+
+Fixes:
+- Tables: sample first/middle/last row (3 vs 1). Schema:
+  `tables[].sampled_rows[].{row_index, row_id, action_outcomes}` +
+  `row_indexes_tested[]`. Modal recursion still first-only (cost cap).
+- Modals: 4-tier input variation (valid + empty + max-length + unicode).
+  Schema: `modals[].input_variants[].{variant, submit_status, outcome}`.
+  Skip cap: Cancel/Close modals + no-required-fields + file-upload.
+
+Spec generator emits `test.each([variants])` per modal using these.
+
+### Batch 43 — Accessibility scan via axe-core
+
+Read-only a11y stage prose-only. No real WCAG violations captured.
+
+Scanner now runs axe-core programmatically (CDN fallback if not vendored)
+via browser_evaluate. Filters to WCAG 2A + 2AA rules. Emits flattened
+findings per (rule × node):
+
+```
+accessibility_findings[]: {rule, wcag, severity, selector, html_snippet,
+                            description, help_url}
+accessibility_summary: {total_violations, by_severity, axe_run_at, viewport}
+```
+
+enrich-test-goals.py emits G-AUTO-{view}-a11y-{rule} stubs for
+critical/serious severity (skips moderate/minor as advisory).
+
+If axe load fails (CSP/CDN blocked): emit empty findings +
+`accessibility_summary: {skipped: "axe_unavailable"}`. Graceful fallback.
+
+### Aggregate effect
+
+Read-only view (list with filter + sort + paginate + search):
+- Before Batch 40: ~2 G-AUTO stubs (table-paging + tabs)
+- After Batch 40: ~6 stubs (filter/sort/paginate/search)
+- After Batch 41: ~9 stubs (+3 state stubs with real selectors)
+- After Batch 42: ~9 stubs (same count; per-spec depth richer via
+  multi-row + modal variants)
+- After Batch 43: ~9 + N a11y stubs (per critical/serious finding)
+
+Combined Batch 28 → 43 chain: phase with 10 goals + 8 decisions:
+- Pre-v4.32.0: ~21 assertion points
+- Post-v4.35.0: ~200+ assertion points (10x baseline)
+
+### Tests
+
+- tests/test_batch41_state_probing.py (5 GREEN)
+- tests/test_batch42_multirow_modal_variation.py (5 GREEN)
+- tests/test_batch43_accessibility_scan.py (4 GREEN)
+- Regression Batch 28/36-43: 21 + 52 = 73 GREEN
+
 ## v4.34.1 — Batch 40: Haiku scanner schema enrichment (2026-05-15)
 
 User question chain: "review xử lý discovery sơ sài → sinh test specs sơ sài".

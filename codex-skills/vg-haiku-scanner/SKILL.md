@@ -461,7 +461,7 @@ Per element type:
 | textbox / input / textarea | Record type/name/placeholder/required/pattern. Fill appropriate test data (email→`scan-test@example.com`, number→`9.99`, url→`scan-test.example.com`, phone→`+1234567890`, date→`2026-01-15`, name field→`Scan Test Item`, other→`scan-test-data`). |
 | select / combobox | Open → record option count + first 5 labels → select first non-placeholder. |
 | checkbox / radio / switch / toggle | Toggle → record state → toggle back. |
-| table / list with rows | Scroll container to count rows. Click actions on FIRST row only (representative sample). If row opens detail/modal → recurse. **Batch 40:** Also detect filter widgets / sort headers / pagination near this table (see classification rules below) and emit to `filters[]` / `sort_headers[]` / `pagination` arrays. |
+| table / list with rows | Scroll container to count rows. **Batch 42:** Click actions on first/middle/last row (3 samples vs 1) — index 0, floor(row_count/2), row_count-1. Record each in `tables[].sampled_rows[]` with row_index + row_id + action_outcomes per action. If row opens detail/modal → recurse on first row only (cost cap). **Batch 40:** Also detect filter widgets / sort headers / pagination near this table (see classification rules below) and emit to `filters[]` / `sort_headers[]` / `pagination` arrays. |
 | disabled / hidden | Record state. Try enable by selecting checkbox/row nearby → re-snapshot. If enables → interact. Else → mark stuck with `enable_condition: unknown`. |
 | form (inputs + submit button) | Fill ALL fields (rules above) → click submit → record `{fields_filled, submit_result, api_response, console_errors, toast}`. If confirm dialog → Cancel FIRST, then re-trigger + OK. **After submit, MANDATORY Persistence Probe (Layer 4) — see sub-table below.** |
 
@@ -487,6 +487,148 @@ Only `refresh + re-read + diff` detects ghost save.
 - Read-only forms (no mutation) — detect via absence of submit button or `method="get"`
 - Multi-step wizards — probe only on FINAL step (intermediate steps save draft, may not persist across refresh)
 - File upload forms — record `persistence_probe.skipped: "file_upload_progressive"` — manual verify
+
+### Batch 43 — Accessibility scan via axe-core
+
+Read-only spec accessibility stage previously generic prose (no real
+selectors). Scanner now runs axe-core programmatically and emits
+findings → spec body asserts specific violations.
+
+After STEP 4 element pass + Batch 40 widget classification + Batch 41
+state probing, run axe-core via `browser_evaluate`:
+
+```javascript
+// Injected via browser_evaluate
+() => {
+  return new Promise((resolve) => {
+    // Try local axe.min.js first (vendored), fallback to CDN
+    const loadAxe = () => {
+      if (window.axe) return Promise.resolve();
+      return new Promise((r) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.0/axe.min.js';
+        s.onload = r;
+        s.onerror = () => r();  // graceful fallback if CDN blocked
+        document.head.appendChild(s);
+      });
+    };
+    loadAxe().then(() => {
+      if (!window.axe) {
+        resolve({skipped: 'axe-core unavailable', findings: []});
+        return;
+      }
+      window.axe.run(document, {
+        runOnly: {type: 'tag', values: ['wcag2a', 'wcag2aa']}
+      }).then((results) => {
+        const findings = results.violations.map(v => ({
+          rule: v.id,
+          wcag: (v.tags.find(t => t.startsWith('wcag')) || '').replace('wcag', ''),
+          severity: v.impact,
+          description: v.description,
+          help_url: v.helpUrl,
+          nodes: v.nodes.slice(0, 3).map(n => ({
+            selector: n.target.join(' '),
+            html_snippet: n.html.slice(0, 200)
+          }))
+        }));
+        resolve({findings, run_at: new Date().toISOString()});
+      });
+    });
+  });
+}
+```
+
+Flatten `findings[].nodes[]` into top-level `accessibility_findings[]`
+(one entry per (rule × node)). Each entry: `{rule, wcag, severity,
+selector, html_snippet, description, help_url}`.
+
+`accessibility_summary` tallies counts by severity. Critical/serious
+violations are most actionable for spec body assertions.
+
+If axe load fails (CSP/CDN blocked): emit
+`accessibility_findings: [], accessibility_summary: {skipped: "axe_unavailable"}`.
+
+Downstream `enrich-test-goals.py` reads top-N findings per view →
+emits G-AUTO-{view}-a11y-{rule} stubs with selector + WCAG ref.
+
+### Batch 42 — Modal-form input variation (4-tier)
+
+Previous scanner submitted modal forms with 1 input set (valid data).
+Boundary/empty/unicode bugs that surface only on specific input shapes
+miss → spec body asserts only happy path.
+
+Variants tested per modal: `valid + empty + max-length + unicode`.
+
+For each modal-with-form discovered in STEP 4, after the existing
+Persistence Probe pass on `valid` variant, run 3 additional variants:
+
+| Variant | Input pattern | Expected outcome |
+|---|---|---|
+| `valid` | Original data per element-type rules (test data) | 201/200 + persisted |
+| `empty_required` | Submit with all required fields blank | 422 + inline validation errors |
+| `max_length` | Required string fields at max-length boundary | 201 OR 413/422 per contract |
+| `unicode_special` | 包含中文 🎉 ' " < > & in text fields | 201 + stored unchanged + no XSS reflection |
+
+Cost cap: skip variants if any of these hold:
+- Modal trigger is `Cancel`/`Close` (no submit)
+- Form has no required fields (empty_required is N/A)
+- File upload form (per existing skip rule)
+
+Each visit records `modals[].input_variants[]` array per the schema above.
+Downstream spec generator uses these to template `test.each([variants])`
+with real submit_status expectations.
+
+### Batch 41 — Active State Probing (empty / error_4xx / loading)
+
+Read-only spec stages (Batch 36 R2 — empty_state, error_state_4xx,
+loading_state) need real selectors + screenshots. Without scanner
+probing them, spec body uses generic `.empty-state` guesses → flaky.
+
+After STEP 4 element pass + Batch 40 widget classification, perform 3
+explicit probes (skip if profile is cli-tool/library — no UI):
+
+**Probe 1 — empty_state:**
+1. If `search[]` non-empty: pick first search input, type random
+   `'aaaa-zz-no-match-9999'` query, wait debounce + 500ms.
+2. Else if `filters[]` non-empty: apply filter to least-common option
+   (or 2 incompatible filters combined).
+3. Else: skip with `observed: false, reason: "no narrowing controls"`.
+4. Snapshot DOM. Find element matching empty-state heuristic:
+   `[data-testid*='empty'], [aria-label*='empty'], [aria-label*='no result'],
+    .empty-state, p:has-text(/no .*found|empty|zero result/i)`.
+5. Record `selector` + `message_text` + `cta_present` (any button inside).
+6. Screenshot → `state-observations.empty_state`.
+7. Clear filter/query to restore default.
+
+**Probe 2 — error_state_4xx:**
+1. If route has `:id` pattern (from view-assignments source): navigate to
+   `{view-base}/{99999999-fake-id-probe}` directly.
+2. Else: append fake query `?_probe=invalid_99999`.
+3. Wait network idle. Record `actual_status` from last network response.
+4. If status >= 400: snapshot DOM, find error-state element via heuristic:
+   `[data-testid*='error'], [role='alert'], .error-page, h1:has-text(/404|not found|error/i)`.
+5. Confirm `no_white_screen`: DOM has more than just `<body></body>` empty.
+6. Screenshot → `state-observations.error_state_4xx`.
+7. Navigate back to original view.
+
+**Probe 3 — loading_state:**
+1. Use Playwright `page.route` or CDP `Network.emulateNetworkConditions`
+   to throttle to slow-3g (400ms latency, 400Kb/s).
+2. `page.reload()` → IMMEDIATELY snapshot DOM (within 100-200ms).
+3. Find skeleton/spinner via heuristic:
+   `[data-testid*='skeleton'], [role='progressbar'], .skeleton, .spinner,
+    [aria-busy='true']`.
+4. Record `selector` + measure `skeleton_visible_ms` (time from reload
+   start to skeleton-disappeared).
+5. After full load, check `no_layout_shift_after`: row count + first
+   element position match prior baseline.
+6. Restore network speed to normal.
+7. Screenshot of mid-load state → `state-observations.loading_state`.
+
+**Output**: 3 entries in `state_observations` object (all observed,
+or `{observed: false, reason: "..."}` if skipped). Downstream
+`enrich-test-goals.py` reads each → emits per-state G-AUTO stubs with
+real selectors → spec generator binds expect() to those selectors.
 
 ### Batch 40 — Filter / Sort / Pagination / Search classification
 
@@ -590,10 +732,36 @@ optional fields — no breaking change for web.
       }
     }
   ],
-  "modals": [ { "trigger": "button Add Site", "elements_inside": 8, "elements_tested": 8, "has_form": true } ],
+  "modals": [
+    {
+      "trigger": "button Add Site",
+      "elements_inside": 8,
+      "elements_tested": 8,
+      "has_form": true,
+      "input_variants": [
+        {"variant": "valid", "submit_status": 201, "outcome": "created"},
+        {"variant": "empty_required", "submit_status": 422, "outcome": "validation_error_shown"},
+        {"variant": "max_length", "submit_status": 201, "outcome": "accepted_or_truncated"},
+        {"variant": "unicode_special", "submit_status": 201, "outcome": "stored_unchanged"}
+      ]
+    }
+  ],
   "tabs": [ { "ref": "e5", "name": "Settings", "elements_in_panel": 12, "elements_tested": 12 } ],
   "menus": [ { "trigger": "button Actions", "items": ["Edit", "Delete"], "items_clicked": 2 } ],
-  "tables": [ { "ref": "e20", "row_count": 15, "actions_per_row": ["Edit", "Delete"], "sample_row_tested": true } ],
+  "tables": [
+    {
+      "ref": "e20",
+      "row_count": 15,
+      "actions_per_row": ["Edit", "Delete"],
+      "sample_row_tested": true,
+      "sampled_rows": [
+        {"row_index": 0, "row_id": "site-001", "action_outcomes": {"Edit": "modal_opened", "Delete": "confirm_dialog"}},
+        {"row_index": 7, "row_id": "site-008", "action_outcomes": {"Edit": "modal_opened", "Delete": "confirm_dialog"}},
+        {"row_index": 14, "row_id": "site-015", "action_outcomes": {"Edit": "modal_opened", "Delete": "confirm_dialog"}}
+      ],
+      "row_indexes_tested": [0, 7, 14]
+    }
+  ],
   "filters": [
     { "ref": "e15", "name": "Status", "kind": "select", "options": ["all", "active", "archived"], "near_table_ref": "e20", "tested_values": ["active"] },
     { "ref": "e16", "name": "Owner", "kind": "combobox", "options": null, "near_table_ref": "e20", "tested_values": ["self"] },
@@ -614,6 +782,59 @@ optional fields — no breaking change for web.
   "search": [
     { "ref": "e10", "placeholder": "Search sites...", "tested_query": "test", "result_count_after": 3, "debounce_ms_observed": 250 }
   ],
+  "accessibility_findings": [
+    {
+      "rule": "color-contrast",
+      "wcag": "1.4.3",
+      "severity": "serious",
+      "selector": "button.primary-cta",
+      "html_snippet": "<button class='primary-cta'>Save</button>",
+      "description": "Background 4.1:1 below WCAG AA 4.5:1 threshold",
+      "help_url": "https://dequeuniversity.com/rules/axe/4.x/color-contrast"
+    },
+    {
+      "rule": "label",
+      "wcag": "4.1.2",
+      "severity": "critical",
+      "selector": "input#search",
+      "description": "Form input lacks accessible name (no label/aria-label/aria-labelledby)",
+      "help_url": "https://dequeuniversity.com/rules/axe/4.x/label"
+    }
+  ],
+  "accessibility_summary": {
+    "total_violations": 2,
+    "by_severity": {"critical": 1, "serious": 1, "moderate": 0, "minor": 0},
+    "axe_run_at": "{ISO timestamp}",
+    "viewport": "1280x800"
+  },
+  "state_observations": {
+    "empty_state": {
+      "observed": true,
+      "trigger": "search 'zzzzzzzz' produced 0 rows",
+      "selector": "[data-testid='empty-state'], .empty-state, [aria-label='No results']",
+      "message_text": "No sites found",
+      "cta_present": true,
+      "screenshot": "{SCREENSHOTS_DIR}/scan-{VIEW_SLUG}-empty.png"
+    },
+    "error_state_4xx": {
+      "observed": true,
+      "trigger": "navigate to {view}/99999999-fake-id-probe",
+      "expected_status": 404,
+      "actual_status": 404,
+      "selector": "[data-testid='error-404'], .error-page, [role='alert']",
+      "message_text": "Not found",
+      "no_white_screen": true,
+      "screenshot": "{SCREENSHOTS_DIR}/scan-{VIEW_SLUG}-error-404.png"
+    },
+    "loading_state": {
+      "observed": true,
+      "trigger": "throttle network slow-3g, reload",
+      "selector": "[data-testid='skeleton'], .skeleton, [role='progressbar'], .spinner",
+      "skeleton_visible_ms": 850,
+      "no_layout_shift_after": true,
+      "screenshot": "{SCREENSHOTS_DIR}/scan-{VIEW_SLUG}-loading.png"
+    }
+  },
   "disabled_elements": [ { "ref": "e30", "name": "Bulk Delete", "enable_attempted": true, "enabled_after": true } ],
   "sub_views_discovered": ["/sites/456"],
   "errors": [
