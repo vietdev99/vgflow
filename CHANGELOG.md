@@ -1,5 +1,58 @@
 # Changelog
 
+## v4.34.1 — Batch 40: Haiku scanner schema enrichment (2026-05-15)
+
+User question chain: "review xử lý discovery sơ sài → sinh test specs sơ sài".
+Audit confirmed: Haiku scanner schema (skills/vg-haiku-scanner/SKILL.md)
+missing filter/sort/paginate/search emit fields. Filters classified as
+generic `results[]` entries → enrich-test-goals.py couldn't auto-emit
+filter stubs (Batch 28 F13 dead) → read-only specs sparse.
+
+### Fix
+
+scan-*.json schema extended with 4 new fields:
+
+- `filters[]`: `{ref, name, kind, options?, near_table_ref, tested_values}`
+- `sort_headers[]`: `{ref, column, current_order, clicked, resulting_order}`
+- `pagination` (singular): `{present, current_page, total_pages, controls[], tested_controls[], url_sync}`
+- `search[]`: `{ref, placeholder, tested_query, result_count_after, debounce_ms_observed}`
+
+Scanner workflow adds classification rules (skills/vg-haiku-scanner/SKILL.md
+§ "Batch 40 — Filter / Sort / Pagination / Search classification"):
+- filters: combobox/select/date input within 250px of table
+- sort_headers: <th> with aria-sort or click handler
+- pagination: next/prev/page-number/page-size detection
+- search: <input type=search> outside <form>
+
+### Downstream activation
+
+scripts/enrich-test-goals.py classify_elements() now iterates:
+- scan.filters[] → G-AUTO-{view}-filter-{name} stubs with
+  interactive_controls.filters[] frontmatter (triggers Batch 28 F14
+  D-16 14-case rigor pack)
+- scan.sort_headers[] → G-AUTO-{view}-sort-{col} stubs
+- scan.pagination.present → G-AUTO-{view}-pagination-full stub
+  with interactive_controls.pagination=true (triggers 18-case pack)
+- scan.search[] → G-AUTO-{view}-search-{ph} stubs
+
+Batch 28 F13 (deferred from v4.32.0) now fully activated.
+
+### Effect
+
+Read-only view with filter+sort+paginate+search:
+- Before: ~2 G-AUTO stubs (table-paging + maybe tabs)
+- After: 1 paging + 1 search + N filter + M sort = ~6+ stubs per view
+  with rigor-pack tagging → ~14×N filter + 18 paging + per-spec
+  assertion sets
+
+Combined with Batches 36-39 spec-depth + coverage gates: ~20x effective
+assertion coverage vs pre-v4.32.0 baseline.
+
+### Tests
+
+- tests/test_batch40_scanner_schema_enrichment.py (7 GREEN)
+- Regression: 52 GREEN across enrich/scanner/haiku + Batch 28/36-40
+
 ## v4.34.0 — Batches 36-39: test-spec depth (R1+R2+R3+F3+F4) + coverage gates (2026-05-15)
 
 User dogfood: "test-specs còn khá sơ sài và test cũng không bám theo

@@ -306,7 +306,7 @@ Per element type:
 | textbox / input / textarea | Record type/name/placeholder/required/pattern. Fill appropriate test data (email→`scan-test@example.com`, number→`9.99`, url→`scan-test.example.com`, phone→`+1234567890`, date→`2026-01-15`, name field→`Scan Test Item`, other→`scan-test-data`). |
 | select / combobox | Open → record option count + first 5 labels → select first non-placeholder. |
 | checkbox / radio / switch / toggle | Toggle → record state → toggle back. |
-| table / list with rows | Scroll container to count rows. Click actions on FIRST row only (representative sample). If row opens detail/modal → recurse. |
+| table / list with rows | Scroll container to count rows. Click actions on FIRST row only (representative sample). If row opens detail/modal → recurse. **Batch 40:** Also detect filter widgets / sort headers / pagination near this table (see classification rules below) and emit to `filters[]` / `sort_headers[]` / `pagination` arrays. |
 | disabled / hidden | Record state. Try enable by selecting checkbox/row nearby → re-snapshot. If enables → interact. Else → mark stuck with `enable_condition: unknown`. |
 | form (inputs + submit button) | Fill ALL fields (rules above) → click submit → record `{fields_filled, submit_result, api_response, console_errors, toast}`. If confirm dialog → Cancel FIRST, then re-trigger + OK. **After submit, MANDATORY Persistence Probe (Layer 4) — see sub-table below.** |
 
@@ -332,6 +332,43 @@ Only `refresh + re-read + diff` detects ghost save.
 - Read-only forms (no mutation) — detect via absence of submit button or `method="get"`
 - Multi-step wizards — probe only on FINAL step (intermediate steps save draft, may not persist across refresh)
 - File upload forms — record `persistence_probe.skipped: "file_upload_progressive"` — manual verify
+
+### Batch 40 — Filter / Sort / Pagination / Search classification
+
+Read-only views (list/dashboard/index) typically have filter+sort+paginate UI
+that previously got lumped into `results[]` as generic combobox/button clicks.
+Test-spec generator can't distinguish them → read-only specs sparse.
+
+Per view, after main STEP 4 element pass, perform these classification scans:
+
+**filters[]** — interactive control above/beside a table that filters its rows:
+- Detector: `<select>`, `<input role=combobox>`, `<input type=date|search>`,
+  `<input role=switch>` located within 250px (top|left|right) of a table/list root.
+- Record: `{ref, name, kind, options?, near_table_ref, tested_values}`.
+- Test 1 non-default value → snapshot row count diff → record in `tested_values`.
+
+**sort_headers[]** — clickable column headers (`<th>` with `role=button`,
+`aria-sort` attribute, or click handler):
+- Detector: table `<th>` with `aria-sort` attribute OR `cursor:pointer` style
+  OR click handler in event listeners.
+- Click → snapshot ARIA sort attr → click again for desc order.
+- Record: `{ref, column, current_order, clicked, resulting_order}`.
+
+**pagination** (singular object, not array):
+- Detector: any of {next/prev button, page number buttons, page-size select,
+  "Showing X–Y of Z" text}.
+- Record: `{present, current_page, total_pages, controls[], tested_controls[], url_sync}`.
+- Test: click next → URL change detected → set `url_sync: true`. Click prev to restore.
+
+**search[]** — global or scoped search input:
+- Detector: `<input type=search>` OR `<input placeholder~="Search|Tìm">` outside
+  any `<form>` (filters are usually scoped to form; global search isn't).
+- Record: `{ref, placeholder, tested_query, result_count_after, debounce_ms_observed}`.
+- Type 3-letter query → wait 500ms → measure first network request timing (debounce).
+
+These 4 arrays MUST be present in output (empty `[]` or `{present:false}` if not found).
+Downstream `enrich-test-goals.py` reads `scan.filters[]` to emit per-filter test stubs
+with D-16 14-case rigor pack tagging.
 
 **Refresh-safe session:** Scanner auth cookie/token MUST survive `page.reload()`. If reload kicks back to login → record observation `{step: "session_persistence", expected_per_lens: "session survives reload", observed: "redirected to /login after reload", match: "no", evidence: { redirect_url: "/login", elapsed_ms: <ms> }}` + skip further persistence probes for this view. NO severity assignment — commander adjudicates.
 
@@ -402,6 +439,26 @@ optional fields — no breaking change for web.
   "tabs": [ { "ref": "e5", "name": "Settings", "elements_in_panel": 12, "elements_tested": 12 } ],
   "menus": [ { "trigger": "button Actions", "items": ["Edit", "Delete"], "items_clicked": 2 } ],
   "tables": [ { "ref": "e20", "row_count": 15, "actions_per_row": ["Edit", "Delete"], "sample_row_tested": true } ],
+  "filters": [
+    { "ref": "e15", "name": "Status", "kind": "select", "options": ["all", "active", "archived"], "near_table_ref": "e20", "tested_values": ["active"] },
+    { "ref": "e16", "name": "Owner", "kind": "combobox", "options": null, "near_table_ref": "e20", "tested_values": ["self"] },
+    { "ref": "e17", "name": "Created since", "kind": "date", "options": null, "near_table_ref": "e20", "tested_values": ["2026-01-01"] }
+  ],
+  "sort_headers": [
+    { "ref": "e21", "column": "Name", "current_order": "asc", "clicked": true, "resulting_order": "desc" },
+    { "ref": "e22", "column": "Created", "current_order": null, "clicked": true, "resulting_order": "asc" }
+  ],
+  "pagination": {
+    "present": true,
+    "current_page": 1,
+    "total_pages": 5,
+    "controls": ["first", "prev", "next", "last", "jump-to-page", "page-size-select"],
+    "tested_controls": ["next", "prev"],
+    "url_sync": true
+  },
+  "search": [
+    { "ref": "e10", "placeholder": "Search sites...", "tested_query": "test", "result_count_after": 3, "debounce_ms_observed": 250 }
+  ],
   "disabled_elements": [ { "ref": "e30", "name": "Bulk Delete", "enable_attempted": true, "enabled_after": true } ],
   "sub_views_discovered": ["/sites/456"],
   "errors": [

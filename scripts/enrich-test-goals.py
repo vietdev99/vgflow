@@ -312,6 +312,142 @@ def classify_elements(view: str, scan: dict, runtime_view: dict,
             ],
         })
 
+    # Batch 40 + Batch 28 F13: auto-emit filter rigor stubs from scan-detected
+    # filter widgets. Scanner (Batch 40) now emits scan.filters[] with
+    # {name, kind, options}. Each becomes a G-AUTO-*-filter-* goal with
+    # interactive_controls.filters[] frontmatter so /vg:test codegen renders
+    # the D-16 14-case rigor pack and verify-filter-test-coverage.py finds it.
+    for fw in scan.get("filters") or []:
+        if not isinstance(fw, dict):
+            continue
+        fname = (fw.get("name") or "").strip()
+        if not fname:
+            continue
+        fkey = name_slug(fname)
+        if f"filter:{fname}" in declared_set:
+            continue
+        stubs.append({
+            "id": f"G-AUTO-{vslug}-filter-{fkey}",
+            "title": f"Filter '{fname}' on {view} — D-16 rigor pack (cardinality + boundary + URL sync + edge)",
+            "priority": "important",
+            "surface": "ui",
+            "source": "review.runtime_discovery",
+            "evidence": {
+                "view": view,
+                "filter_name": fname,
+                "filter_kind": fw.get("kind"),
+                "filter_ref": fw.get("ref"),
+                "option_count": len(fw.get("options") or []) if fw.get("options") else None,
+            },
+            "interactive_controls": {
+                "filters": [{
+                    "name": fname,
+                    "kind": fw.get("kind") or "text",
+                    "options": fw.get("options") or [],
+                }],
+                "url_sync": True,
+            },
+            "trigger": f"Apply filter '{fname}' on {view}",
+            "main_steps": [
+                {"S1": f"User on {view} as authenticated role"},
+                {"S2": f"Open filter '{fname}' control"},
+                {"S3": "Select non-default value → list updates"},
+                {"S4": "URL reflects filter param; refresh persists state"},
+                {"S5": "Clear filter → list returns to default; URL param removed"},
+            ],
+            "alternate_flows": [
+                {"name": "empty_result", "trigger": "filter to value with 0 matches",
+                 "expected": "empty state shown, no errors"},
+                {"name": "filter_sort_pagination",
+                 "trigger": "apply filter while paginated/sorted",
+                 "expected": "page resets to 1, sort preserved"},
+                {"name": "xss_sanitize", "trigger": "filter value contains <script>",
+                 "expected": "sanitized, no script exec, no API error"},
+            ],
+        })
+
+    # Batch 40: auto-emit sort header rigor stubs
+    for sh in scan.get("sort_headers") or []:
+        if not isinstance(sh, dict):
+            continue
+        col = (sh.get("column") or "").strip()
+        if not col:
+            continue
+        skey = name_slug(col)
+        if f"sort:{col}" in declared_set:
+            continue
+        stubs.append({
+            "id": f"G-AUTO-{vslug}-sort-{skey}",
+            "title": f"Sort by '{col}' column on {view} — toggles asc/desc + URL persists",
+            "priority": "nice-to-have",
+            "surface": "ui",
+            "source": "review.runtime_discovery",
+            "evidence": {"view": view, "sort_column": col, "sort_ref": sh.get("ref")},
+            "trigger": f"Click sort header '{col}' on {view}",
+            "main_steps": [
+                {"S1": f"Table on {view} loaded, default order"},
+                {"S2": f"Click '{col}' header — order becomes asc"},
+                {"S3": "URL reflects sort=col+dir"},
+                {"S4": "Click again — order becomes desc"},
+                {"S5": "Refresh — sort state persists from URL"},
+            ],
+        })
+
+    # Batch 40: auto-emit pagination + search stubs if scan detected them
+    pgn = scan.get("pagination") or {}
+    if isinstance(pgn, dict) and pgn.get("present") and "pagination" not in declared_set:
+        stubs.append({
+            "id": f"G-AUTO-{vslug}-pagination-full",
+            "title": f"Pagination on {view} — D-16 rigor pack (18 cases)",
+            "priority": "important",
+            "surface": "ui",
+            "source": "review.runtime_discovery",
+            "evidence": {
+                "view": view,
+                "controls": pgn.get("controls") or [],
+                "current_page": pgn.get("current_page"),
+                "total_pages": pgn.get("total_pages"),
+                "url_sync_observed": pgn.get("url_sync"),
+            },
+            "interactive_controls": {
+                "pagination": True,
+                "url_sync": True,
+            },
+            "trigger": f"Navigate pages on {view}",
+            "main_steps": [
+                {"S1": f"Table on {view} loads page 1"},
+                {"S2": "Next/prev/jump-to-page exercises navigation"},
+                {"S3": "URL page param + deep-link verify"},
+                {"S4": "Out-of-range → graceful clamp/empty"},
+            ],
+        })
+
+    for sr in scan.get("search") or []:
+        if not isinstance(sr, dict):
+            continue
+        placeholder = (sr.get("placeholder") or "search").strip()
+        skey = name_slug(placeholder[:30])
+        stubs.append({
+            "id": f"G-AUTO-{vslug}-search-{skey}",
+            "title": f"Search '{placeholder}' on {view} — debounce + result narrowing + clear",
+            "priority": "important",
+            "surface": "ui",
+            "source": "review.runtime_discovery",
+            "evidence": {
+                "view": view,
+                "search_ref": sr.get("ref"),
+                "placeholder": placeholder,
+                "debounce_ms": sr.get("debounce_ms_observed"),
+            },
+            "trigger": f"Type search query on {view}",
+            "main_steps": [
+                {"S1": f"User on {view}"},
+                {"S2": "Type 3-char query — wait debounce → list narrows"},
+                {"S3": "Clear query — list returns to default"},
+                {"S4": "Empty result query → empty state"},
+            ],
+        })
+
     return stubs
 
 
