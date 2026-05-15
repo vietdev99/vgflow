@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Batch 44: git pre-push hook — block tag push when codex-skills/ mirror
+# differs from commands/vg/ source.
+#
+# Problem: v4.33.0 + v4.34.0 release CI failed because tag was pushed BEFORE
+# codex regen. Each cost a hotfix tag. This hook catches the drift locally
+# before the tag hits origin.
+#
+# Install: bash scripts/git-hooks/install.sh
+# Bypass:  git push --no-verify  (or set VG_SKIP_CODEX_GUARD=1)
+#
+# Reads remote ref list from stdin (git pre-push protocol). If any ref looks
+# like a tag push (refs/tags/v*), run verify-codex-mirror-equivalence.py.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$REPO_ROOT"
+
+# Allow opt-out for emergency push
+if [ "${VG_SKIP_CODEX_GUARD:-0}" = "1" ]; then
+  echo "▸ codex mirror guard skipped (VG_SKIP_CODEX_GUARD=1)" >&2
+  exit 0
+fi
+
+# Parse stdin per git pre-push protocol:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+tag_push=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/tags/v*) tag_push=1; tag_being_pushed="$remote_ref" ;;
+  esac
+done
+
+if [ "$tag_push" -eq 0 ]; then
+  # Branch push — no codex gate (CI handles it; faster local feedback only on tags)
+  exit 0
+fi
+
+echo "▸ Batch 44 pre-push: tag push detected (${tag_being_pushed:-?}); verifying codex mirror..." >&2
+
+VAL="scripts/verify-codex-mirror-equivalence.py"
+if [ ! -f "$VAL" ]; then
+  echo "⚠ verify-codex-mirror-equivalence.py absent — skipping (pre-v2.13.0 tag?)" >&2
+  exit 0
+fi
+
+PY="${PYTHON_BIN:-python3}"
+if ! command -v "$PY" >/dev/null 2>&1; then
+  PY=python
+fi
+
+if "$PY" "$VAL" >/tmp/vg-codex-mirror-check.out 2>&1; then
+  echo "✓ codex mirror OK — proceeding with tag push" >&2
+  exit 0
+fi
+
+cat /tmp/vg-codex-mirror-check.out >&2
+echo "" >&2
+echo "⛔ Batch 44 pre-push: codex mirror drift detected." >&2
+echo "" >&2
+echo "  Release CI will fail on this tag. Fix locally first:" >&2
+echo "" >&2
+echo "    bash scripts/generate-codex-skills.sh --force --force-overwrite-curated" >&2
+echo "    git add codex-skills/" >&2
+echo "    git commit -m \"fix(codex-mirrors): regenerate after canonical drift\"" >&2
+echo "    git tag -d ${tag_being_pushed##*/}" >&2
+echo "    git tag ${tag_being_pushed##*/}" >&2
+echo "    git push origin :${tag_being_pushed##*/}  # delete remote if pushed" >&2
+echo "    git push origin main --tags" >&2
+echo "" >&2
+echo "  Emergency bypass (NOT recommended): VG_SKIP_CODEX_GUARD=1 git push --tags" >&2
+exit 1
