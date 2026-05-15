@@ -37,11 +37,27 @@ REQUIRED_STAGES = (
 )
 
 # G2 Batch 2: per-verb stage derivation — shorten lifecycle for non-full-CRUD goals.
+# Batch 36 R2: read-only goals (display/list/dashboard/filter/search/error
+# views) need richer stage coverage than just read_before. Without these
+# stages, codegen subagent emits sparse specs for read-only views which
+# is the user-reported "test-specs sơ sài" root cause.
+READONLY_STAGES: tuple[str, ...] = (
+    "read_before",          # G14 back-compat: precondition snapshot
+    "render_initial",       # Page loads, layout renders, no console errors
+    "interaction_filter",   # Apply filter → URL+state updates, list refilters
+    "interaction_sort",     # Click sort column → order changes, URL persists
+    "interaction_paginate", # Navigate pages → URL param, deep-link works
+    "empty_state",          # Filter to zero results → friendly empty UI
+    "error_state_4xx",      # Backend 4xx/5xx → user-facing error, no crash
+    "loading_state",        # Skeleton/spinner shown during fetch
+    "accessibility",        # ARIA labels, keyboard nav, screen-reader hints
+)
+
 GOAL_TYPE_STAGES: dict[str, tuple[str, ...]] = {
     "create-only": ("read_before", "create", "read_after_create"),
     "update-only": ("read_before", "update", "read_after_update"),
     "delete-only": ("read_before", "delete", "read_after_delete"),
-    "read-only":   ("read_before",),  # G14 covered separately
+    "read-only":   READONLY_STAGES,  # Batch 36 R2: 8 stages
 }
 
 
@@ -568,6 +584,68 @@ _DEFAULT_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+def _parse_acceptance_criteria(goal: dict[str, Any]) -> list[str]:
+    """Batch 36 R3: extract acceptance_criteria from goal frontmatter.
+
+    Goal frontmatter may declare criteria in multiple shapes:
+      - list[str]: ["criterion 1", "criterion 2"]
+      - dict {"main": [...], "alternate": [...]}
+      - prose string: "Criteria: A. B. C." (split on sentence punctuation)
+      - alternate keys: acceptance_criteria, success_criteria, criteria
+    Returns deduplicated non-empty list.
+    """
+    candidates = (
+        goal.get("acceptance_criteria")
+        or goal.get("success_criteria")
+        or goal.get("criteria")
+        or []
+    )
+    items: list[str] = []
+    if isinstance(candidates, list):
+        for c in candidates:
+            if isinstance(c, str) and c.strip():
+                items.append(c.strip())
+            elif isinstance(c, dict):
+                for v in c.values():
+                    if isinstance(v, str) and v.strip():
+                        items.append(v.strip())
+    elif isinstance(candidates, dict):
+        for v in candidates.values():
+            if isinstance(v, list):
+                items.extend(s.strip() for s in v if isinstance(s, str) and s.strip())
+            elif isinstance(v, str) and v.strip():
+                items.append(v.strip())
+    elif isinstance(candidates, str):
+        for chunk in re.split(r"(?<=[.!?])\s+|\n+", candidates):
+            chunk = chunk.strip().lstrip("-•").strip()
+            if chunk:
+                items.append(chunk)
+    # Dedup preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        if it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
+def _criteria_assertions(goal: dict[str, Any]) -> list[dict[str, str]]:
+    """Batch 36 R3: convert acceptance_criteria to assertion[] entries.
+
+    Each criterion becomes a structured assertion the spec body MUST verify
+    with expect(). Validator verify-spec-criteria-coverage.py (separate)
+    will cross-check spec body against this list.
+    """
+    out: list[dict[str, str]] = []
+    for i, crit in enumerate(_parse_acceptance_criteria(goal), 1):
+        out.append({
+            "source": f"acceptance_criteria[{i}]",
+            "check": crit,
+        })
+    return out
+
+
 def _step_description(stage: str, goal: dict[str, Any], endpoint: dict[str, str] | None) -> str:
     """G3 Batch 3: build action description from endpoint binding when available.
 
@@ -609,12 +687,30 @@ def _step(
         "read_after_update": f"Re-read from a clean context and assert updated fields, derived state, events, permissions, or view state. Re-apply goal assertions: {criteria}",
         "delete": "Cleanup by delete, revoke, cancel, deactivate, rollback fixture, or restore original view/config state.",
         "read_after_delete": "Re-read active list/detail and assert no active test-owned resource remains; audit row may remain if required.",
+        # Batch 36 R2: read-only stages for display/list/dashboard/filter goals
+        "render_initial": f"Navigate to the page; assert layout renders, no console errors, key elements visible. Acceptance: {criteria}",
+        "interaction_filter": "Apply filter control (dropdown/text/date/select); assert URL updates with filter param, list re-renders with subset, filter state persists on refresh.",
+        "interaction_sort": "Click sort header (asc + desc); assert order changes, URL persists sort key+dir, multi-column sort respects priority.",
+        "interaction_paginate": "Navigate next/prev/last/first/jump-to-page; assert URL page param updates, deep-link works (paste URL → correct page), out-of-range clamps gracefully.",
+        "empty_state": "Filter/search to zero-result state; assert friendly empty UI (illustration/message), no error console, CTA visible if applicable.",
+        "error_state_4xx": "Trigger 4xx/5xx response (invalid filter, unauthorized, server down); assert user-facing error message, no white-screen, retry CTA where applicable.",
+        "loading_state": "Throttle network; assert skeleton/spinner shown during fetch, replaced by content on resolve, no layout shift after replace.",
+        "accessibility": "Tab through interactive controls; assert focus visible, ARIA labels on inputs, screen-reader announcements for state changes, color contrast ≥4.5:1 on text.",
     }
     evidence = {
         "read_before": ["response envelope", "DB/query snapshot", "no stale fixture collision"],
         "create": ["2xx response or expected 4xx", "correlation/request id", "created resource id or emitted event id"],
         "read_after_create": ["fresh read response", "DB persisted fields", "audit/outbox row when applicable"],
         "update": ["2xx/expected 4xx response", "version/idempotency behavior", "actor authorization result"],
+        # Batch 36 R2: read-only stage evidence
+        "render_initial": ["screenshot", "console messages (zero errors)", "key element snapshot"],
+        "interaction_filter": ["URL after filter applied", "filtered row count", "filter state in DOM"],
+        "interaction_sort": ["URL with sort param", "first/last row id post-sort", "ARIA sort indicator"],
+        "interaction_paginate": ["URL page param", "current page indicator", "row count per page"],
+        "empty_state": ["empty UI screenshot", "console (no errors)", "empty-state DOM signature"],
+        "error_state_4xx": ["error UI screenshot", "console message text", "HTTP response captured"],
+        "loading_state": ["skeleton DOM snapshot", "network throttled response time", "post-resolve content"],
+        "accessibility": ["axe-core findings", "keyboard nav trace", "screen-reader transcript"],
         "read_after_update": ["fresh read response", "event/webhook/queue capture when applicable", "no cross-tenant leakage"],
         "delete": ["cleanup mutation response or fixture cleanup receipt", "audit reason", "session/job/resource cleanup marker"],
         "read_after_delete": ["404/empty active list or terminal status", "revoked sessions/jobs", "cleanup confirmation"],
@@ -636,6 +732,14 @@ def _step(
             "source": "API-CONTRACTS",
             "check": f"{endpoint['method']} {endpoint['path']} returns expected envelope and status",
         })
+    # Batch 36 R3: append acceptance_criteria assertions on key stages.
+    # Apply criteria to read_after_* + render_initial stages (where user-
+    # visible behavior is asserted). Skip raw mutation stages to avoid
+    # double-counting (criteria better verified after persistence).
+    if stage in {"read_after_create", "read_after_update", "read_after_delete",
+                 "render_initial", "empty_state", "error_state_4xx",
+                 "interaction_filter", "interaction_sort", "interaction_paginate"}:
+        assertions.extend(_criteria_assertions(goal))
     return {
         "name": stage,
         "stage": stage,

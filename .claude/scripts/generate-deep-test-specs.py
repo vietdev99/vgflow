@@ -404,7 +404,11 @@ def main() -> int:
 
     lifecycle_module = load_lifecycle_generator()
     expander = load_test_spec_expander()
-    lifecycle = lifecycle_module.generate(phase_dir)
+    # Batch 36 R1: include read-only goals so LIFECYCLE-SPECS.json covers
+    # display/list/dashboard/filter/search/error views — not only mutation.
+    # Codegen subagent reads LIFECYCLE → generates specs per goal entry.
+    # Without read-only, subagent ignores most goals, producing sparse specs.
+    lifecycle = lifecycle_module.generate(phase_dir, include_readonly=True)
     surfaces = scan_surfaces(root, max_files=args.max_files)
     profile = expander.normalize_profile(
         str(lifecycle.get("phase_profile") or "") or expander.detect_phase_profile(phase_dir, root)
