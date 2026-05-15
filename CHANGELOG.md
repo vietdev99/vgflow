@@ -1,5 +1,30 @@
 # Changelog
 
+## v4.48.0 — Batch 58: scan→goal coverage validator (per-signal)
+
+Closes per-signal drift between scan-*.json and TEST-GOALS.
+
+Problem: existing enrich --validate-only checks VIEW-level
+coverage. If scanner saw filter "Status" but human deleted the
+G-AUTO-*-filter-status stub (or wrote TEST-GOALS.md from scratch),
+filter X never becomes spec → deploy sandbox renders wrong rows
+silently.
+
+Fix: verify-scan-goal-coverage.py reads all scan-*.json and per
+signal (filter, sort, pagination, search, empty/error/loading
+state, a11y) verifies a matching goal exists in TEST-GOALS.md,
+TEST-GOALS-DISCOVERED.md, TEST-GOALS-EXPANDED.md, or
+LIFECYCLE-SPECS.json.goals.
+
+Modes: default warn (gaps logged, exit 0); --strict + --threshold N
+graduated block.
+
+Wired into review/lens-and-findings.md Phase 2c after existing
+enrich --validate-only. Default warn-mode; flip with
+--strict-scan-goal-coverage. Emits review_phase2c_scan_goal_gap.
+
+Tests: tests/test_batch58_scan_goal_coverage.py (15 GREEN).
+
 ## v4.47.0 — Batch 57: end-to-end integration smoke for B36→B56 chain
 
 Cross-layer assertion harness. Each batch (B36, B48, B51, B52, B54,
