@@ -616,6 +616,31 @@ if [[ ! "$ARGUMENTS" =~ --skip-enrich-validate ]]; then
     exit 1
   fi
 fi
+
+# Batch 58: per-signal scan→goal coverage. Earlier validator (enrich
+# --validate-only) checks view-level coverage. This goes deeper: each
+# scan filter/sort/pagination/search/empty_state/error_state/a11y
+# signal must have a matching goal id or interactive_controls entry.
+# Default: warn-mode (--threshold high) so review doesn't block on
+# minor signal gaps; flip with --strict-scan-goal-coverage.
+SCAN_GOAL_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-scan-goal-coverage.py"
+[ -f "$SCAN_GOAL_VAL" ] || SCAN_GOAL_VAL="${REPO_ROOT:-.}/scripts/validators/verify-scan-goal-coverage.py"
+if [ -f "$SCAN_GOAL_VAL" ]; then
+  SGC_FLAGS=""
+  [[ "${ARGUMENTS:-}" =~ --strict-scan-goal-coverage ]] && SGC_FLAGS="--strict"
+  if ! ${PYTHON_BIN:-python3} "$SCAN_GOAL_VAL" \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "$PHASE_DIR" \
+       $SGC_FLAGS; then
+    emit_telemetry_v2 "review_phase2c_scan_goal_gap" "${PHASE_NUMBER}" \
+      "review.2c-scan-goal" "scan_goal_coverage" "FAIL" \
+      "{\"strict\":\"${SGC_FLAGS}\"}" 2>/dev/null || true
+    if [[ "${ARGUMENTS:-}" =~ --strict-scan-goal-coverage ]]; then
+      echo "  ⛔ Batch 58 BLOCK: scan signals without matching goals" >&2
+      exit 1
+    fi
+  fi
+fi
 "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator mark-step review phase2c_enrich_test_goals 2>/dev/null || true
 ```
 </step>
