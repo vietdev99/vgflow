@@ -85,6 +85,7 @@ Do NOT browse files outside input. Do NOT ask user — input is the contract.
 @${PHASE_DIR}/TEST-GOALS-EXPANDED.md     (if exists — G-CRUD-* skeleton specs)
 @${PHASE_DIR}/SEED-RECIPE.md             (Batch 51+52 — per-variant seed/cleanup contract)
 @${PHASE_DIR}/EDGE-CASES/                (Batch 48 — per-goal variant_id list)
+@${PHASE_DIR}/EDGE-CASES/VARIANTS.json   (Batch 56 — machine-readable variants index; PREFER this over markdown parsing)
 </inputs>
 
 <seed_contract>
@@ -121,6 +122,22 @@ test.each(variants)('${variant_id} — ${label}', async ({ page }, variant) => {
 If SEED-RECIPE entry has `<PLACEHOLDER>` values, emit `// TODO seed:
 fill seed_action / cleanup per project schema before running` instead
 of inline action. Spec body still binds variant_id reference.
+
+**Batch 56 — source-of-truth for `variants` array.** When
+${PHASE_DIR}/EDGE-CASES/VARIANTS.json exists (Batch 56), prefer it
+over markdown parsing. Each goal_id entry has a list of variant rows
+with strict fields (variant_id, kind, label, input_hint, expected,
+source, priority, idempotent). Generated spec imports the goal's
+variants as a JSON literal:
+
+```ts
+const variants = require('../../EDGE-CASES/VARIANTS.json').goals['G-01'];
+test.each(variants)(...);
+```
+
+OR inlines the array if the spec file lives outside the import tree.
+DO NOT regex-parse the markdown table — VARIANTS.json is authoritative
+and validated by verify-variants-json.py.
 </seed_contract>
 
 <ui_runtime_contract>

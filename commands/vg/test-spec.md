@@ -284,6 +284,39 @@ if [ -f "$DERIVE_SCRIPT" ] && [ ! -d "${PHASE_DIR}/EDGE-CASES" ]; then
     --phase-dir "${PHASE_DIR}" 2>&1 | sed 's/^/  /' || true
 fi
 
+# Batch 56: ensure EDGE-CASES/VARIANTS.json exists (machine-readable
+# index of variants for codegen). When EDGE-CASES dir was created by
+# older blueprint (pre-Batch 56), the directory may exist but
+# VARIANTS.json doesn't. Re-run derive with --force only when JSON
+# missing — preserves any human edits to existing G-NN.md files.
+if [ -f "$DERIVE_SCRIPT" ] && [ -d "${PHASE_DIR}/EDGE-CASES" ] \
+   && [ ! -f "${PHASE_DIR}/EDGE-CASES/VARIANTS.json" ]; then
+  echo "▸ Batch 56: VARIANTS.json missing — backfilling from LIFECYCLE-SPECS..."
+  "${PYTHON_BIN:-python3}" "$DERIVE_SCRIPT" \
+    --phase "${PHASE_NUMBER}" \
+    --phase-dir "${PHASE_DIR}" 2>&1 | sed 's/^/  /' || true
+fi
+
+# Batch 56: validate VARIANTS.json schema + coverage vs LIFECYCLE.
+VAR_VAL="${REPO_ROOT}/.claude/scripts/validators/verify-variants-json.py"
+[ -f "$VAR_VAL" ] || VAR_VAL="${REPO_ROOT}/scripts/validators/verify-variants-json.py"
+[ -f "$VAR_VAL" ] || VAR_VAL="${VG_HOME}/scripts/validators/verify-variants-json.py"
+if [ -f "$VAR_VAL" ] && [ -f "${PHASE_DIR}/LIFECYCLE-SPECS.json" ]; then
+  VAR_FLAGS=""
+  [[ ! "${ARGUMENTS:-}" =~ --allow-variants-shortfall ]] && VAR_FLAGS="--strict"
+  if ! "${PYTHON_BIN:-python3}" "$VAR_VAL" \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "${PHASE_DIR}" \
+       $VAR_FLAGS; then
+    "${PYTHON_BIN:-python3}" "$ORCH" emit-event "test_spec.variants_json_shortfall" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    if [[ ! "${ARGUMENTS:-}" =~ --allow-variants-shortfall ]]; then
+      echo "⛔ Batch 56 BLOCK: VARIANTS.json schema/coverage invalid" >&2
+      exit 1
+    fi
+  fi
+fi
+
 # Batch 51: derive SEED-RECIPE.md per phase from LIFECYCLE-SPECS edge_cases +
 # negative_specs. Codegen subagent reads recipes → wraps test.each with
 # beforeEach(seed)/afterEach(cleanup). Without recipes, tests run on undefined
