@@ -267,10 +267,40 @@ orphans = ran_paths - manifest_paths
 print(','.join(sorted(orphans)) if orphans else '')
 " 2>/dev/null)
   if [ -n "$ORPHANS" ]; then
-    echo "⚠ Batch 21: orphan specs executed (not in CODEGEN-MANIFEST.json): ${ORPHANS}" >&2
+    echo "⛔ Batch 39: orphan specs executed (not in CODEGEN-MANIFEST.json): ${ORPHANS}" >&2
     "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "test.orphan_spec_executed" \
       --payload "{\"phase\":\"${PHASE_NUMBER}\",\"orphans\":\"${ORPHANS}\"}" >/dev/null 2>&1 || true
     echo "   These specs may be stale from prior runs. Clean ${GENERATED_TESTS_DIR}/ or regenerate." >&2
+    # Batch 39: orphan now blocks by default (was warn). User dogfood:
+    # stale orphan specs were running with wrong assertions, hiding real
+    # failures. Use --allow-orphan-specs to opt out.
+    if [[ ! "${ARGUMENTS:-}" =~ --allow-orphan-specs ]]; then
+      exit 1
+    fi
+    echo "⚠ --allow-orphan-specs set — proceeding with stale orphan specs (debt logged)" >&2
+  fi
+fi
+```
+
+**Batch 39: every TEST-GOALS goal must have >=1 spec in manifest**
+
+```bash
+# Batch 39: reverse coverage check — goals without specs.
+GOAL_SPEC_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-goal-to-spec-coverage.py"
+[ -f "$GOAL_SPEC_VAL" ] || GOAL_SPEC_VAL="${REPO_ROOT:-.}/scripts/validators/verify-goal-to-spec-coverage.py"
+if [ -f "$GOAL_SPEC_VAL" ]; then
+  GS_FLAGS=""
+  [[ ! "${ARGUMENTS:-}" =~ --allow-goal-shortfall ]] && GS_FLAGS="--strict"
+  if ! "${PYTHON_BIN:-python3}" "$GOAL_SPEC_VAL" \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "${PHASE_DIR}" \
+       $GS_FLAGS; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+      "test.goal_coverage_failed" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    if [[ ! "${ARGUMENTS:-}" =~ --allow-goal-shortfall ]]; then
+      echo "⛔ Batch 39 BLOCK: TEST-GOALS uncovered by manifest specs" >&2
+      exit 1
+    fi
   fi
 fi
 ```
