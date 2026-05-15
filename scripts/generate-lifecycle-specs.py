@@ -584,6 +584,124 @@ _DEFAULT_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+def _derive_edge_cases(goal: dict[str, Any]) -> list[dict[str, Any]]:
+    """Batch 37 F3: emit first-class edge_cases[] per goal.
+
+    Defaults cover boundary + empty + unicode + large-payload variants
+    every spec must include. Spec generator emits test.each([variants])
+    where variants come from this list.
+    """
+    gtype = (goal.get("goal_type") or "").lower()
+    cases: list[dict[str, Any]] = [
+        {
+            "kind": "boundary",
+            "label": "min boundary value",
+            "input_hint": "use lowest allowed value (0, '', 1 char, min date)",
+            "expected": "accept or reject per spec; no crash",
+        },
+        {
+            "kind": "boundary",
+            "label": "max boundary value",
+            "input_hint": "use highest allowed (max int, max length, future date)",
+            "expected": "accept or reject per spec; no truncation silently",
+        },
+        {
+            "kind": "empty_string",
+            "label": "empty string for non-required field",
+            "input_hint": "submit empty for optional fields",
+            "expected": "no validation error if optional",
+        },
+        {
+            "kind": "unicode_special",
+            "label": "unicode + emoji + RTL + special chars",
+            "input_hint": "包含中文 🎉 العربية ' \" < > & --",
+            "expected": "stored/displayed unchanged; no XSS/SQL injection",
+        },
+    ]
+    if gtype in {"create-only", "update-only", "create", "update", "mutation"} or not gtype:
+        cases.append({
+            "kind": "large_payload",
+            "label": "payload at limit",
+            "input_hint": "field at max allowed size + many array items",
+            "expected": "accept or 413/422 per contract; no timeout",
+        })
+    if gtype == "read-only":
+        cases.extend([
+            {
+                "kind": "filter_combination",
+                "label": "multiple filters combined",
+                "input_hint": "apply >=2 filters simultaneously",
+                "expected": "AND semantics; URL reflects all; reset clears all",
+            },
+            {
+                "kind": "pagination_edge",
+                "label": "out-of-range page",
+                "input_hint": "?page=99999",
+                "expected": "clamp to last page OR empty state; no 500",
+            },
+        ])
+    return cases
+
+
+def _derive_negative_specs(goal: dict[str, Any]) -> list[dict[str, Any]]:
+    """Batch 37 F4: emit first-class negative_specs[] per goal.
+
+    Negative paths previously prompt-only. Codegen told 'never invent
+    assertions beyond TEST-GOALS' → no 401/403/422 coverage.
+    """
+    gtype = (goal.get("goal_type") or "").lower()
+    negs: list[dict[str, Any]] = [
+        {
+            "kind": "unauthorized_401",
+            "label": "missing/expired auth token",
+            "expected_status": 401,
+            "setup": "clear cookies/Authorization header before request",
+            "assert": "response.status == 401 with envelope {ok:false, error:{code:'UNAUTHORIZED'}}",
+        },
+        {
+            "kind": "forbidden_403",
+            "label": "wrong role / lacks permission",
+            "expected_status": 403,
+            "setup": "login as role without permission to this action",
+            "assert": "response.status == 403; UI hides/disables action; no state change",
+        },
+    ]
+    if gtype in {"create-only", "update-only", "mutation", "create", "update"} or not gtype:
+        negs.extend([
+            {
+                "kind": "validation_422",
+                "label": "invalid/missing required field",
+                "expected_status": 422,
+                "setup": "submit payload with required field absent or malformed",
+                "assert": "422 with envelope {error:{code:'VALIDATION_ERROR', fields:[...]}}; no DB write",
+            },
+            {
+                "kind": "not_found_404",
+                "label": "operate on non-existent resource",
+                "expected_status": 404,
+                "setup": "use id that doesn't exist or was deleted",
+                "assert": "404; no partial mutation; envelope error.code='NOT_FOUND'",
+            },
+        ])
+    if gtype == "read-only":
+        negs.append({
+            "kind": "not_found_404",
+            "label": "GET non-existent resource",
+            "expected_status": 404,
+            "setup": "navigate to URL with id that doesn't exist",
+            "assert": "404 page or empty state; no white-screen",
+        })
+    negs.append({
+        "kind": "rate_limit_429",
+        "label": "burst traffic triggers rate limit",
+        "expected_status": 429,
+        "setup": "issue rapid repeated requests beyond burst limit",
+        "assert": "429 with Retry-After header; subsequent OK after delay",
+        "advisory": True,
+    })
+    return negs
+
+
 def _parse_acceptance_criteria(goal: dict[str, Any]) -> list[str]:
     """Batch 36 R3: extract acceptance_criteria from goal frontmatter.
 
@@ -800,11 +918,15 @@ def _goal_spec(
         ],
         # G6: artifact_capture reflects goal.artifact_kind
         "artifact_capture": _artifact_capture_v2(goal),
+        # Batch 37 F3: first-class edge case variants per goal
+        "edge_cases": _derive_edge_cases(goal),
+        # Batch 37 F4: first-class negative path variants per goal
+        "negative_specs": _derive_negative_specs(goal),
         "cleanup": [
             {"target": fixture["id"], "action": fixture["cleanup"]}
             for fixture in reversed(fixture_dag)
         ],
-        "generator_note": "Generated from phase docs; executable tests must bind TS-XX to this goal and implement these steps.",
+        "generator_note": "Generated from phase docs; executable tests must bind TS-XX to this goal and implement these steps. Edge cases + negative specs MUST be rendered as test.each([...]) variants.",
     }
 
 
