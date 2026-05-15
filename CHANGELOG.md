@@ -1,5 +1,46 @@
 # Changelog
 
+## v4.41.0 — Batch 51: seed contract foundation (SEED-RECIPE per variant)
+
+User: "test specs mà không đưa ra phương án seed data thì test specs sẽ
+rất lỗi, nhưng discovery nằm ở review". Confirmed: Batches 36-37 declare
+edge_cases[]/negative_specs[] expected behavior but no seed for required
+runtime state → drift.
+
+Examples:
+- empty_state expects 0 rows, env has 15 → false fail
+- pagination_edge expects >=31 rows, env has 5 → false pass
+- unauthorized_401 needs cleared session → leaks across tests
+
+Fix: L4 seed contract (per variant_id).
+
+scripts/generate-seed-recipes.py reads LIFECYCLE-SPECS edge_cases +
+negative_specs, emits ${PHASE_DIR}/SEED-RECIPE.md with per-variant yaml:
+- variant_id, goal_id, kind
+- requires_state (human-readable)
+- seed_action (<PLACEHOLDER> for AI fill)
+- cleanup (<PLACEHOLDER>)
+- idempotent (bool)
+
+KIND_TO_RECIPE templates cover 11 patterns: boundary, empty_string,
+unicode_special, large_payload, filter_combination, pagination_edge,
+unauthorized_401, forbidden_403, validation_422, not_found_404,
+rate_limit_429.
+
+scripts/validators/verify-seed-recipe-coverage.py: enumerates variants
+from LIFECYCLE-SPECS, requires matching recipe entry. --strict default,
+--allow-placeholders allows <PLACEHOLDER> values (AI next-pass fills).
+
+test-spec.md wires after Batch 48 EDGE-CASES derive:
+- Generate SEED-RECIPE.md if missing
+- Validate --strict (escape via --allow-seed-shortfall)
+- Emit test_spec.seed_recipe_shortfall event
+
+Codegen subagent (future enhancement) reads SEED-RECIPE.md → wraps
+test.each(variant) with beforeEach(seed) + afterEach(cleanup).
+
+Tests: tests/test_batch51_seed_recipe.py (7 GREEN).
+
 ## v4.40.0 — Batches 49+50: 6 PARTIAL blueprint markers status observability (2026-05-15)
 
 Closes Batch 33 deferral. 6 PARTIAL markers in verify.md + design.md +

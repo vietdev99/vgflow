@@ -415,6 +415,42 @@ if [ -f "$DERIVE_SCRIPT" ] && [ ! -d "${PHASE_DIR}/EDGE-CASES" ]; then
     --phase-dir "${PHASE_DIR}" 2>&1 | sed 's/^/  /' || true
 fi
 
+# Batch 51: derive SEED-RECIPE.md per phase from LIFECYCLE-SPECS edge_cases +
+# negative_specs. Codegen subagent reads recipes → wraps test.each with
+# beforeEach(seed)/afterEach(cleanup). Without recipes, tests run on undefined
+# state → drift between spec expectations and runtime data.
+SEED_SCRIPT="${REPO_ROOT}/.claude/scripts/generate-seed-recipes.py"
+[ -f "$SEED_SCRIPT" ] || SEED_SCRIPT="${REPO_ROOT}/scripts/generate-seed-recipes.py"
+[ -f "$SEED_SCRIPT" ] || SEED_SCRIPT="${VG_HOME}/scripts/generate-seed-recipes.py"
+if [ -f "$SEED_SCRIPT" ]; then
+  if [ ! -f "${PHASE_DIR}/SEED-RECIPE.md" ]; then
+    echo "▸ Batch 51: SEED-RECIPE.md missing — deriving from LIFECYCLE-SPECS..."
+    "${PYTHON_BIN:-python3}" "$SEED_SCRIPT" \
+      --phase "${PHASE_NUMBER}" \
+      --phase-dir "${PHASE_DIR}" 2>&1 | sed 's/^/  /' || true
+  fi
+fi
+
+# Batch 51: verify every variant_id has SEED-RECIPE entry. Strict mode
+# unless --allow-seed-shortfall. Placeholders allowed (AI fills next pass).
+SEED_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-seed-recipe-coverage.py"
+[ -f "$SEED_VAL" ] || SEED_VAL="${REPO_ROOT:-.}/scripts/validators/verify-seed-recipe-coverage.py"
+if [ -f "$SEED_VAL" ] && [ -f "${PHASE_DIR}/SEED-RECIPE.md" ]; then
+  SEED_FLAGS="--allow-placeholders"
+  [[ ! "${ARGUMENTS:-}" =~ --allow-seed-shortfall ]] && SEED_FLAGS="$SEED_FLAGS --strict"
+  if ! "${PYTHON_BIN:-python3}" "$SEED_VAL" \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "${PHASE_DIR}" \
+       $SEED_FLAGS; then
+    "${PYTHON_BIN:-python3}" "$ORCH" emit-event "test_spec.seed_recipe_shortfall" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    if [[ ! "${ARGUMENTS:-}" =~ --allow-seed-shortfall ]]; then
+      echo "⛔ Batch 51 BLOCK: variants without seed recipe" >&2
+      exit 1
+    fi
+  fi
+fi
+
 touch "${PHASE_DIR}/.step-markers/test-spec/2_generate_deep_specs.done"
 "${PYTHON_BIN:-python3}" "$ORCH" mark-step test-spec 2_generate_deep_specs 2>/dev/null || true
 ```
