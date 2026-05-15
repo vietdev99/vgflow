@@ -1,5 +1,24 @@
 # Changelog
 
+## v4.43.0 — Batch 53: 2b6_ui_spec + 2b6b_ui_map status (final B33 closure)
+
+Closes Batch 33 PARTIAL deferral fully. 8/8 markers now observable.
+
+2b6_ui_spec (design.md):
+  - UI_SPEC_STATUS={PASS|SKIPPED|FAIL_NO_REASON}
+  - --skip-ui-spec emits blueprint.ui_spec_skipped with override_reason
+
+2b6b_ui_map (design.md):
+  - UI_MAP_STATUS={PASS|SKIPPED_DISABLED|SKIPPED_NO_FE}
+  - 3 branches now emit ui_map_skipped_disabled / ui_map_skipped_no_fe
+
+Batch 33 closure across B49+B50+B53:
+  ✓ 2c_verify_plan_paths, 2c_utility_reuse, 2c_compile_check (B49)
+  ✓ 2_fidelity_profile_lock, 2b5d_expand, 2b7_flow_detect (B50)
+  ✓ 2b6_ui_spec, 2b6b_ui_map (B53)
+
+Tests: tests/test_batch53_ui_spec_ui_map_status.py (6 GREEN).
+
 ## v4.42.0 — Batch 52: codegen wires SEED-RECIPE into spec body
 
 Closes Batch 51 chain. SEED-RECIPE.md declared but codegen subagent
