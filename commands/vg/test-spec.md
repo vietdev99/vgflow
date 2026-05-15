@@ -664,6 +664,31 @@ if [ -f "$STAGE_COV_VAL" ]; then
 fi
 ```
 
+**Batch 52: spec body seed binding gate**
+
+```bash
+# Batch 52: every variant_id in spec must have runSeedRecipe + cleanup
+# binding (Batch 51 contract). Without binding, test.each runs on undefined
+# state → drift.
+SEED_BIND_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-spec-seed-binding.py"
+[ -f "$SEED_BIND_VAL" ] || SEED_BIND_VAL="${REPO_ROOT:-.}/scripts/validators/verify-spec-seed-binding.py"
+if [ -f "$SEED_BIND_VAL" ]; then
+  SB_FLAGS=""
+  [[ ! "${ARGUMENTS:-}" =~ --allow-seed-binding-shortfall ]] && SB_FLAGS="--strict"
+  if ! "${PYTHON_BIN:-python3}" "$SEED_BIND_VAL" \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "${PHASE_DIR}" \
+       $SB_FLAGS; then
+    "${PYTHON_BIN:-python3}" "$ORCH" emit-event "test_spec.seed_binding_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    if [[ ! "${ARGUMENTS:-}" =~ --allow-seed-binding-shortfall ]]; then
+      echo "⛔ Batch 52 BLOCK: spec variants lack seed binding (runSeedRecipe + cleanup)" >&2
+      exit 1
+    fi
+  fi
+fi
+```
+
 **Batch 38: CONTEXT decision → spec coverage gate**
 
 ```bash

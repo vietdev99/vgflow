@@ -83,7 +83,45 @@ Do NOT browse files outside input. Do NOT ask user — input is the contract.
 @${PHASE_DIR}/LIFECYCLE-SPECS.json       (fixture DAG + actors + RCRURDR stages for mutation/multi-actor goals)
 @${PHASE_DIR}/TEST-GOALS-DISCOVERED.md   (if exists — G-AUTO-* skeleton specs)
 @${PHASE_DIR}/TEST-GOALS-EXPANDED.md     (if exists — G-CRUD-* skeleton specs)
+@${PHASE_DIR}/SEED-RECIPE.md             (Batch 51+52 — per-variant seed/cleanup contract)
+@${PHASE_DIR}/EDGE-CASES/                (Batch 48 — per-goal variant_id list)
 </inputs>
+
+<seed_contract>
+Batch 52: every `test.each([variant])` row generated from EDGE-CASES /
+LIFECYCLE-SPECS edge_cases[] / negative_specs[] MUST be wrapped with seed
+binding from SEED-RECIPE.md. Without seed wrap, tests run on undefined
+state → drift (Batch 51 documented the cascade).
+
+For each variant_id in spec:
+  1. Parse SEED-RECIPE.md ```yaml fences. Match variant_id field.
+  2. Emit `beforeEach(async () => { await runSeedRecipe('${variant_id}'); })`
+     OR inline seed_action from recipe (per project convention).
+  3. Emit `afterEach(async () => { await cleanup('${variant_id}'); })`
+     OR inline cleanup from recipe.
+  4. If recipe has `idempotent: false`, add note in test comment:
+     `// Seed not idempotent — test order matters`.
+
+Sample emission per variant:
+```ts
+test.each(variants)('${variant_id} — ${label}', async ({ page }, variant) => {
+  // vg-edge-case: ${variant_id}
+  // seed recipe: ${SEED-RECIPE.md#${variant_id}}
+  // requires_state: ${requires_state}
+  await runSeedRecipe(variant.id);
+  try {
+    // ... test body using variant.input_hint
+    // ... expect() per variant.expected
+  } finally {
+    await cleanup(variant.id);
+  }
+});
+```
+
+If SEED-RECIPE entry has `<PLACEHOLDER>` values, emit `// TODO seed:
+fill seed_action / cleanup per project schema before running` instead
+of inline action. Spec body still binds variant_id reference.
+</seed_contract>
 
 <ui_runtime_contract>
 v3.5.0 (#173 Stage 5) — when ${PHASE_DIR}/UI-RUNTIME-CONTRACT.json exists and
