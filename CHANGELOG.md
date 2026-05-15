@@ -1,5 +1,25 @@
 # Changelog
 
+## v4.47.0 — Batch 57: end-to-end integration smoke for B36→B56 chain
+
+Cross-layer assertion harness. Each batch (B36, B48, B51, B52, B54,
+B55, B56) has unit tests in isolation. Drift BETWEEN layers
+(variant_id format mismatch, observed_state field lost, idempotent
+rule diverged) escapes single-batch tests.
+
+Adds test_batch57_seed_chain_integration.py running entire chain
+on synthetic phase with all 11 kinds (6 edge + 5 negative) +
+realistic scan-*.json. Asserts:
+  - variant_id identical across VARIANTS.json + SEED-RECIPE.md +
+    helper.ts
+  - observed_state propagates scan → recipe for filter_combination,
+    pagination_edge, not_found_404
+  - rate_limit_429 idempotent=false flows through all layers
+  - helper.ts case branches THROW (loud-failure contract)
+  - lifecycle drift after derive triggers validator failure
+
+No script/contract changes — pure harness. 9 GREEN.
+
 ## v4.46.0 — Batch 56: VARIANTS.json machine-readable variants index
 
 Closes the codegen parse-fragility gap.
