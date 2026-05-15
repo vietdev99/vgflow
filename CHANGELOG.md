@@ -1,5 +1,25 @@
 # Changelog
 
+## v4.50.0 — Batch 60: seed-chain-status.py end-to-end diagnostic
+
+Single-command diagnostic for the entire seed-contract chain
+(B36→B59). Runs every validator for a phase and prints PASS/FAIL
+per layer as Markdown table:
+
+  1. LIFECYCLE-SPECS.json (B36+37)
+  2. EDGE-CASES/ dir (B48)
+  3. EDGE-CASES/VARIANTS.json (B56)
+  4. SEED-RECIPE.md (B51)
+  5. tests/_helpers/seed-recipes.{ts,js} (B55)
+  6. scan→goal coverage (B58 — informational)
+  7. spec seed binding (B52 — SKIP when no CODEGEN-MANIFEST)
+
+Modes: default warn (exit 0); --strict (exit 1 on FAIL); --json
+(machine-readable). UTF-8 forced on subprocess to avoid Windows
+charmap errors on validator stdout (✓ / ⛔).
+
+Tests: tests/test_batch60_seed_chain_status.py (10 GREEN).
+
 ## v4.49.0 — Batch 59: scanner data_observations + recipe sizing
 
 Closes data-shape blind spot in recipe generator.
