@@ -1,5 +1,36 @@
 # Changelog
 
+## v4.46.0 — Batch 56: VARIANTS.json machine-readable variants index
+
+Closes the codegen parse-fragility gap.
+
+Problem: EDGE-CASES/G-NN.md (Batch 48) is markdown. Codegen
+subagent must regex-parse the table to build test.each(variants).
+Drift in markdown formatting → silent variant loss → kinds skip.
+
+Fix: derive-edge-cases-from-lifecycle.py ALSO emits
+EDGE-CASES/VARIANTS.json with strict schema {phase, schema_version,
+source, goals: {goal_id: [variant rows]}}. Each variant has
+{variant_id, kind, label, input_hint, expected, source, priority,
+idempotent}. Negative specs included; rate_limit_429 marked
+idempotent=false.
+
+Codegen delegation.md updated: prefer JSON import over markdown
+parse. Sample:
+  const variants = require('../../EDGE-CASES/VARIANTS.json')
+    .goals['G-01'];
+  test.each(variants)(...);
+
+verify-variants-json.py gates schema + coverage vs LIFECYCLE-SPECS
+(every LIFECYCLE variant_id must appear in VARIANTS.json).
+
+test-spec.md backfills when EDGE-CASES exists but JSON missing
+(preserves human edits to .md files), then runs validator. BLOCK
+on shortfall unless --allow-variants-shortfall. Emits
+test_spec.variants_json_shortfall event.
+
+Tests: tests/test_batch56_variants_json.py (11 GREEN).
+
 ## v4.45.0 — Batch 55: runSeedRecipe helper stub generator + validator
 
 Closes the runtime-resolution gap in the seed contract chain.
