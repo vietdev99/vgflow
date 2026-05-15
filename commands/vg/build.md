@@ -339,9 +339,21 @@ if [ "$IS_FINAL_WAVE" != "true" ]; then
   else
     echo "  Run \`/vg:build ${PHASE_NUMBER}\` (no --wave) for the FINAL wave to fire post-execution."
   fi
-  # Mark partial-wave run-complete (orchestrator emits run.completed with partial flag)
-  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete --partial-wave 2>/dev/null || \
-    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete 2>/dev/null || true
+  # Batch 47 C: capture rc + emit event on failure (was silent || true swallow).
+  set +e
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete --partial-wave 2>/dev/null
+  PARTIAL_RC=$?
+  if [ "$PARTIAL_RC" -ne 0 ]; then
+    # Fallback to non-partial run-complete
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete 2>/dev/null
+    PARTIAL_RC=$?
+  fi
+  set -e
+  if [ "$PARTIAL_RC" -ne 0 ]; then
+    echo "⚠ Batch 47 C: run-complete (partial-wave) rc=${PARTIAL_RC} — orchestrator detected integrity issue" >&2
+    "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "build.run_complete_partial_failed" \
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${PARTIAL_RC}}" >/dev/null 2>&1 || true
+  fi
   exit 0
 fi
 ```

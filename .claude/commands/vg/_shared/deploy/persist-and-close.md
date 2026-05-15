@@ -97,6 +97,17 @@ Before `run-complete`, close the native tasklist:
 ```bash
 (type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER}" "complete" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/complete.done"
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step deploy complete 2>/dev/null || true
-"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete 2>&1 | tail -1 || true
+
+# Batch 47 C: capture run-complete rc + emit event on failure (was tail+swallow).
+set +e
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator run-complete > /tmp/vg-deploy-runcomplete.out 2>&1
+RUN_COMPLETE_RC=$?
+set -e
+tail -1 /tmp/vg-deploy-runcomplete.out 2>/dev/null || true
+if [ "$RUN_COMPLETE_RC" -ne 0 ]; then
+  echo "⚠ Batch 47 C: deploy run-complete rc=${RUN_COMPLETE_RC} — see /tmp/vg-deploy-runcomplete.out" >&2
+  "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator emit-event "deploy.run_complete_failed" \
+    --payload "{\"phase\":\"${PHASE_NUMBER}\",\"rc\":${RUN_COMPLETE_RC}}" >/dev/null 2>&1 || true
+fi
 ```
 </step>

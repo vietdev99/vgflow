@@ -355,11 +355,30 @@ fi
 Verify generated mutation specs have console assertion:
 
 ```python
-import re, sys, os
+import json, re, sys, os
 from pathlib import Path
 
+# Batch 47 H: prefer CODEGEN-MANIFEST.json as canonical spec list over glob.
+# Manifest has authoritative goal_id binding; glob may pick up stale orphans.
 tests_dir = Path("${GENERATED_TESTS_DIR}")
-spec_files = list(tests_dir.rglob("*.spec.ts"))
+manifest_path = Path("${PHASE_DIR}/CODEGEN-MANIFEST.json")
+spec_files = []
+if manifest_path.is_file():
+    try:
+        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entries = m.get("playwright_specs") or m.get("specs") or []
+        for e in entries:
+            p = e.get("path") if isinstance(e, dict) else str(e)
+            if not p:
+                continue
+            cand = Path(p) if Path(p).is_absolute() else Path.cwd() / p
+            if cand.is_file():
+                spec_files.append(cand)
+    except Exception:
+        spec_files = []
+if not spec_files:
+    # Fallback: glob (legacy phase or manifest absent)
+    spec_files = list(tests_dir.rglob("*.spec.ts"))
 
 SETUP_PATTERNS = [
     r'window\.__consoleErrors',
