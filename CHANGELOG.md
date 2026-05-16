@@ -1,5 +1,31 @@
 # Changelog
 
+## v4.51.0 — Batch 61: blueprint script 3-tier fallback (slim-entry fix)
+
+User report: Phase 8 blueprint fails "scripts thiếu tại
+.claude/scripts/". Root cause: 10 hardcoded `.claude/scripts/`
+paths in blueprint files lack the standard 3-tier VG_HOME fallback
+used by test-spec.md.
+
+Fix: patch all 10 to pattern
+  VAR="${REPO_ROOT:-.}/.claude/scripts/..."
+  [ -f "$VAR" ] || VAR="${REPO_ROOT:-.}/scripts/..."
+  [ -f "$VAR" ] || VAR="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/..."
+
+Patched (4 files):
+  - close.md: TRACE_VAL, ORCH_BIN, DTASK_VAL, DGOAL_VAL,
+    BLOCK5_VALIDATOR
+  - contracts-overview.md: CRUD_VALIDATOR
+  - design.md: TR_SCRIPT, UIMAP_PRE_VAL, UIMAP_VAL, ORCH_BIN,
+    EMITTER
+  - verify.md: PATH_CHECKER, UTILITY_CHECKER, GROUNDING_VAL
+
+Effect: slim-entry projects (no local .claude/scripts/, vgflow
+installed at ~/.vgflow) run Phase 8 blueprint without the 4
+workarounds (symlink, rsync, env override, skip harness).
+
+Tests: tests/test_batch61_blueprint_script_fallback.py (16 GREEN).
+
 ## v4.50.0 — Batch 60: seed-chain-status.py end-to-end diagnostic
 
 Single-command diagnostic for the entire seed-contract chain
