@@ -1,5 +1,41 @@
 # Changelog
 
+## v4.58.0 — B65c: codegen feature_chain test.each OUTER + test.step INNER
+
+Closes codex BLOCKERs #1 + #4 from feature-chain plan audit.
+
+#1: chain_steps belongs to TEST-GOAL frontmatter (B65a persisted in
+LIFECYCLE-SPECS.json), NOT VARIANTS.json schema.
+
+#4: "one test() per chain_step" breaks Batch 52 seed contract.
+Correct shape: test.each(variants) OUTER + test.step() INNER per
+chain step. OUTER preserves per-variant seed/cleanup; INNER produces
+sequential closed-loop trace.
+
+Fix: commands/vg/_shared/test/codegen/delegation.md extended:
+- <inputs> add LIFECYCLE-SPECS.json (B65a) + scan-*.json (B63)
+- New <feature_chain_emission> section with:
+  - Correct emission shape sample
+  - Explicit rejection of "test() per chain_step" anti-pattern
+  - Per-step assertion contract (target_view transition,
+    expected_state observable, downstream_effects expect())
+  - B63 cross-view hookup (entity_id visibility assertions)
+  - chain_steps source priority order
+  - Sample preserves runSeedRecipe + cleanup (Batch 52)
+
+Feature-chain coverage now end-to-end:
+- B65a producer (chain_steps in LIFECYCLE-SPECS.json)
+- B65b validator (per-goal-class stage sets)
+- B65c consumer (codegen emits test.step per chain step)
+
+User-reported shallow specs ("click button → modal → done") now
+exercised by closed-loop chain traversal: source view → form →
+submit → navigate target (dashboard/audit/sibling) → click detail →
+edit → cascade check → delete → archive verify.
+
+Tests: tests/test_batch65c_codegen_chain_consumption.py (11 GREEN).
+138 cross-batch tests still green.
+
 ## v4.57.0 — B65b: validator per-goal-class stage sets (codex BLOCKER #3)
 
 scripts/validators/verify-deep-test-specs.py hard-required `stages
