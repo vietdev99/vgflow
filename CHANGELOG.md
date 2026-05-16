@@ -1,5 +1,45 @@
 # Changelog
 
+## v4.60.0 — B67: preflight cross-artifact consistency REVISED (codex MAJOR)
+
+Codex MAJOR fix: B67 original "every goal_id has variant" was false.
+VARIANTS.json optional when no lifecycle variants. Validator must
+exempt goals without edge_cases/negative_specs + goals with infra_deps
+tag (manual test).
+
+Fix:
+scripts/validators/verify-test-artifact-consistency.py cross-checks
+goal presence across 4 artifact families:
+  1. EDGE-CASES/VARIANTS.json (only when goal has variants)
+  2. SEED-RECIPE.md per-variant entries (only when goal has variants)
+  3. CODEGEN-MANIFEST.json playwright_specs (only when manifest exists)
+  4. LIFECYCLE-SPECS.json goals (source of truth)
+
+Exemptions:
+- infra_deps tag → manual test, skip entirely
+- No edge_cases AND no negative_specs → exempt VARIANTS+SEED checks
+- CODEGEN-MANIFEST absent → skip manifest check
+
+Modes: --strict (exit 1 on gap) | default (warn-only, exit 0).
+JSON output via --json.
+
+commands/vg/_shared/test/preflight.md wired: ADVISORY by default,
+operator opt-in BLOCK via --strict-artifact-consistency flag. Emits
+test.preflight_artifact_gap on gap.
+
+Tests: tests/test_batch67_artifact_consistency.py (12 GREEN).
+181 cross-batch tests still green.
+
+This completes codex MAJOR-derived backlog from /vg:test audit:
+  v4.55.0 B65a — chain_steps producer (BLOCKERs #2 + #5)
+  v4.56.0 B68 — cascade post-build gates (user pain)
+  v4.57.0 B65b — validator goal-class (BLOCKER #3)
+  v4.58.0 B65c — codegen test.step (BLOCKERs #1 + #4)
+  v4.59.0 B66 — fix-loop hardening (4 MAJORs)
+  v4.60.0 B67 — preflight consistency (MAJORs)
+
+All codex audit BLOCKERs + MAJORs resolved.
+
 ## v4.59.0 — B66: fix-loop hardening REVISED (codex MAJOR fixes)
 
 Closes codex MAJOR concerns from feature-chain plan audit. Four fixes:
