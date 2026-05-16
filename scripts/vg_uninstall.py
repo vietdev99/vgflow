@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -242,9 +243,23 @@ def _collect_paths(root: Path, purge_state: bool, extra_paths: Iterable[Path] = 
         )
 
     # Keep stable order and avoid nested duplicate removals.
+    # Issue #188 (v4.51.2): also filter paths outside root. p.resolve()
+    # follows symlinks; if .claude/scripts is symlinked to a sibling
+    # project clone, resolve() returns the target path which is OUTSIDE
+    # root → downstream relative_to() raises ValueError. Defensive filter
+    # at collection time (in addition to per-path guard in _backup_then_remove).
+    root_resolved = root.resolve()
     unique = sorted({p.resolve() for p in paths if p.exists()}, key=lambda p: len(p.parts))
     filtered: list[Path] = []
     for path in unique:
+        try:
+            path.relative_to(root_resolved)
+        except ValueError:
+            print(
+                f"⚠ vg-uninstall: skip path outside root: {path} (likely symlink to sibling clone)",
+                file=sys.stderr,
+            )
+            continue
         if any(parent in path.parents for parent in filtered):
             continue
         filtered.append(path)
@@ -252,7 +267,19 @@ def _collect_paths(root: Path, purge_state: bool, extra_paths: Iterable[Path] = 
 
 
 def _backup_then_remove(path: Path, root: Path, backup_root: Path) -> None:
-    rel = path.relative_to(root)
+    # Issue #188 fix (v4.51.2): guard sibling-project leak. When user has
+    # multiple VGFlow clones (e.g. ~/Code/foo + ~/Code/vgflow-bugfix), the
+    # removal candidate list may include paths OUTSIDE `root`. relative_to()
+    # raises ValueError on those — crashes mid-cleanup, exit !=0 confuses
+    # downstream gates. Skip + warn instead.
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        print(
+            f"⚠ vg-uninstall: skip path outside root: {path} (root={root})",
+            file=sys.stderr,
+        )
+        return
     backup_path = backup_root / rel
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(path), str(backup_path))
