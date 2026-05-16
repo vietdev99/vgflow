@@ -20,9 +20,9 @@ flowchart LR
     P1 --> P2[2. Scope]
     P2 --> P3[3. Plan]
     P3 --> P4[4. Build]
-    P4 --> P4B[4b. Test Spec]
-    P4B --> P5[5. Verify]
-    P5 --> P6[6. Test]
+    P4 --> P5[5. Review]
+    P5 --> P5B[5b. Test Spec]
+    P5B --> P6[6. Test]
     P6 --> P7[7. Accept]
     P7 --> P8{Deploy?}
     P8 -->|yes| Deploy[8. Deploy]
@@ -36,13 +36,19 @@ flowchart LR
     style P2 fill:#e3f2fd
     style P3 fill:#fff9c4
     style P4 fill:#c8e6c9
-    style P4B fill:#ffe0b2
     style P5 fill:#f8bbd0
+    style P5B fill:#ffe0b2
     style P6 fill:#f8bbd0
     style P7 fill:#dcedc8
     style Deploy fill:#bbdefb
     style Close fill:#d1c4e9
 ```
+
+> **B69 fix:** mermaid corrected to match real code dependencies.
+> `/vg:test-spec` Step 1 gate requires `RUNTIME-MAP.json` from
+> `/vg:review` (lines 174-190 of test-spec.md). Therefore canonical
+> order is `build → review → test-spec → test`. Prior diagram showed
+> `build → test-spec → review` which contradicted code.
 
 ---
 
@@ -54,9 +60,9 @@ flowchart LR
 | **1. Define** | `/vg:specs <N>` | `${PHASE_DIR}/SPECS.md` (frontmatter: phase, status=draft, required H2 sections) + `${PHASE_DIR}/INTERFACE-STANDARDS.md` (when API/UI surface) | `/vg:scope` validates SPECS schema before round 1 |
 | **2. Scope** | `/vg:scope <N>` (5 rounds + deep probe) | `${PHASE_DIR}/CONTEXT.md` (decisions D-XX, monotonic), `DISCUSSION-LOG.md` | `/vg:blueprint` reads CONTEXT decisions; missing D-IDs → BLOCK |
 | **3. Plan** | `/vg:blueprint <N>` | `${PHASE_DIR}/PLAN.md`, `API-CONTRACTS.md`, `TEST-GOALS.md`, `CRUD-SURFACES.md`, `INTERFACE-STANDARDS.md` | `/vg:build` validates blueprint schema + plan-vs-context coherence |
-| **4. Build** | `/vg:build <N>` (wave-based parallel) | `${PHASE_DIR}/SUMMARY.md` (per-wave commits + per-task evidence) | `/vg:test-spec` reads build output and implemented surfaces |
-| **4b. Test Spec** | `/vg:test-spec <N>` (post-build deep spec authoring) | `${PHASE_DIR}/DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/PROMPT.md`, `PLAYWRIGHT-SPEC-PLAN.md`, `TEST-SPEC-GAPS.md` | `/vg:review` verifies runtime against deep lifecycle contract |
-| **5. Verify** | `/vg:review <N>` (code scan + browser discovery + fix loop) | `${PHASE_DIR}/RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md` | `/vg:test` reads goals coverage matrix; pre-test-gate blocks if review BLOCKed |
+| **4. Build** | `/vg:build <N>` (wave-based parallel) | `${PHASE_DIR}/SUMMARY.md` (per-wave commits + per-task evidence) | `/vg:review` reads build output for runtime discovery |
+| **5. Review** | `/vg:review <N>` (code scan + browser discovery + fix loop) | `${PHASE_DIR}/RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md` | `/vg:test-spec` reads RUNTIME-MAP + coverage matrix to author deep specs |
+| **5b. Test Spec** | `/vg:test-spec <N>` (post-review deep spec authoring; B69 — runs AFTER review since Step 1 gate requires RUNTIME-MAP.json) | `${PHASE_DIR}/DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/PROMPT.md`, `PLAYWRIGHT-SPEC-PLAN.md`, `TEST-SPEC-GAPS.md`, `CODEGEN-MANIFEST.json` | `/vg:test` consumes LIFECYCLE-SPECS + CODEGEN-MANIFEST for playwright runtime |
 | **6. Test** | `/vg:test <N>` (codegen + smoke + regression + security) | `${PHASE_DIR}/SANDBOX-TEST.md` + `.test-step-status.json` + Playwright spec files | `/vg:accept` validates test outcomes |
 | **7. Accept** | `/vg:accept <N>` (UAT checklist + audit + reflector) | `${PHASE_DIR}/UAT.md` (verdict + bootstrap candidates) | Phase considered complete; milestone closer reads accept verdict |
 | **8. Deploy** | `/vg:deploy [<N>]` (multi-env: sandbox/staging/prod) | `.vg/deploy/STATE.json` (project-level v3.0.0+) | Optional — does not block next phase Init |
@@ -170,8 +176,9 @@ Bypass: `VG_MARKER_STRICT=0` (UNSAFE — only for explicit migration of pre-Batc
 | `specs/write-and-commit.md` | `/vg:scope {phase}` | always |
 | `scope/close.md` | `/vg:blueprint {phase}` | always |
 | `blueprint/close.md` | `/vg:build {phase}` | always |
-| `test-spec.md` | `/vg:review {phase}` | always |
-| `review/close.md` | `/vg:test {phase}` | always (existing, pre-Batch-10) |
+| `build/close.md` | `/vg:review {phase}` | always (B69 fix — was missing emit) |
+| `review/close.md` | `/vg:test-spec {phase}` | always (B69 fix — was implicit user-message only) |
+| `test-spec.md` | `/vg:test {phase}` | always (B69 fix — was incorrectly /vg:review) |
 | `test/close.md` | `/vg:accept {phase}` | PASSED / GAPS\_FOUND only |
 | `test/close.md` | `/vg:review --resume {phase}` | FAILED |
 

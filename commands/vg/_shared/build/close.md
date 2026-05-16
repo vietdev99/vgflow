@@ -831,6 +831,12 @@ now = datetime.now().isoformat()
 s['status'] = 'executed'
 s['pipeline_step'] = 'build-complete'
 s['updated_at'] = now
+# B69 fix: emit next_command so /vg:next + auto-chain don't skip review.
+# Canonical pipeline: build → review → test-spec → test → accept.
+# Previously build/close had no next_command emit → user/AI had to
+# guess next step → pipeline drift.
+s['next_command'] = '/vg:review ${PHASE_NUMBER}'
+s['next_command_emitted_at'] = now
 prev = s.get('steps', {}).get('build', {})
 prev.update({
     'status': 'built-complete',

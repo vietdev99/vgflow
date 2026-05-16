@@ -191,17 +191,20 @@ paths, command names, JSON keys, and code identifiers stay English.
 </LANGUAGE_POLICY>
 
 <objective>
-Run the dedicated deep test-spec lane after `/vg:build` and before
-`/vg:review`.
+Run the dedicated deep test-spec lane after `/vg:review` (which produces
+RUNTIME-MAP.json) and before `/vg:test` (which consumes
+LIFECYCLE-SPECS + CODEGEN-MANIFEST for Playwright runtime).
 
 Why this exists:
 - Blueprint is too early: implemented DOM, route files, API handlers, generated
   UI, and concrete form state may not exist yet.
 - Build must not self-certify runtime coverage.
-- Review should verify runtime against a pre-authored deep spec contract, not
-  discover test depth late and route it ambiguously.
+- Review observes runtime + produces RUNTIME-MAP + GOAL-COVERAGE-MATRIX
+  (the input artifacts test-spec Step 1 gate REQUIRES, lines 174-190).
+- Test-spec authors deep contract from review observations + emits
+  LIFECYCLE-SPECS.json + CODEGEN-MANIFEST.json that /vg:test executes.
 
-Pipeline:
+Pipeline (B69 canonical):
 `specs → scope → blueprint → build → review → test-spec → test → accept`
 </objective>
 
@@ -969,7 +972,12 @@ state["steps"]["test-spec"].update({
     "updated_at": datetime.now().isoformat(),
 })
 state["pipeline_step"] = "test-spec-complete"
-state["next_command"] = "/vg:review ${PHASE_NUMBER}"
+# B69 fix: next_command was incorrectly /vg:review (review already ran
+# upstream — test-spec REQUIRES RUNTIME-MAP.json from review per Step 1
+# gate). Canonical pipeline: build → review → test-spec → test → accept.
+# After test-spec produces LIFECYCLE-SPECS + CODEGEN-MANIFEST + Playwright
+# specs, next step is /vg:test which consumes those artifacts.
+state["next_command"] = "/vg:test ${PHASE_NUMBER}"
 state["next_command_emitted_at"] = datetime.now().isoformat() + "Z"
 state["updated_at"] = datetime.now().isoformat()
 p.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")

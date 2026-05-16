@@ -297,11 +297,18 @@ Reflector crash or timeout → log warning, continue to `complete` step. Never b
 # VG-native state update (no GSD dependency)
 PIPELINE_STATE="${PHASE_DIR}/PIPELINE-STATE.json"
 ${PYTHON_BIN} -c "
-import json; from pathlib import Path
+import json; from datetime import datetime; from pathlib import Path
 p = Path('${PIPELINE_STATE}')
 s = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
 s['status'] = 'reviewed'; s['pipeline_step'] = 'review-complete'
-s['updated_at'] = __import__('datetime').datetime.now().isoformat()
+now = datetime.now().isoformat()
+s['updated_at'] = now
+# B69 fix: review previously didn't emit next_command — only printed
+# user-facing 'Next: /vg:test-spec' message. /vg:next read empty
+# next_command → users skipped test-spec → review preflight failed
+# next run. Canonical pipeline: build → review → test-spec → test.
+s['next_command'] = '/vg:test-spec ${PHASE_NUMBER}'
+s['next_command_emitted_at'] = now
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
 ```
