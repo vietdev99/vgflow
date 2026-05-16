@@ -1,5 +1,45 @@
 # Changelog
 
+## v4.53.0 — B63: scanner cross-view propagation + feature_chain bottom-up
+
+Bottom-up half of feature-chain coverage system.
+
+Scanner SKILL.md adds `cross_view_propagation_observations[]` field
++ workflow: after persistence_probe success on CREATE/UPDATE/DELETE,
+scanner navigates top-N sibling views from RUNTIME-MAP and captures
+whether entity propagated.
+
+Configuration:
+- VG_CROSS_VIEW_MODE=sample|enabled|disabled (default sample)
+- VG_CROSS_VIEW_N=3 target views per probe
+- VG_CROSS_VIEW_TOTAL_BUDGET_S=60 phase-wide budget cap
+- Per-probe 10s cap → WARN + skip (not BLOCK)
+
+Heuristic priority: shared entity slug → dashboard/summary → sibling
+list. Dedup by (entity_slug_family, target_view_class).
+
+Limitations[] documented per audit ID-7: single_role_scan,
+no_delayed_propagation. Multi-tenant + async deferred to B65+.
+
+enrich-test-goals.py consumes observations → emits feature_chain
+goals with stable goal-id from entity_canonical_id (audit ID-6 view-
+rename-stable). Per action:
+- create → G-AUTO-{entity}-visibility-{target_view_class}
+- update → G-AUTO-{entity}-status-cascade-{target_view_class}
+- delete → G-AUTO-{entity}-archive-{target_view_class}
+
+verify-cross-view-coverage.py validator: every CRUD-creating resource
+must have ≥1 cross_view observation OR `skip_cross_view[<resource>]:
+true` in .vg/scanner-overrides.yaml OR global `cross_view_scan:
+disabled`.
+
+seed-chain-status.py: layer 8 "feature_chain coverage (B62-63)"
+combining top-down + bottom-up validator results.
+
+Tests: tests/test_batch63_cross_view_propagation.py (17 GREEN).
+tests/test_batch60_seed_chain_status.py updated for 8-layer count.
+All cross-batch tests still green.
+
 ## v4.52.0 — B62: feature_chain goal class top-down enforcement
 
 Top-down enforcement that AI emits closed-loop goals for every CRUD
