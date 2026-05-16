@@ -108,7 +108,7 @@ expected_assertion: |
   #    → flagged_suspicious=true; AND amount sum >= AMOUNT_THRESHOLD ($100)
   #    in same window → flagged_suspicious=true (count OR amount triggers)"
 
-goal_class: mutation | readonly | crud-roundtrip | wizard | approval | webhook
+goal_class: mutation | readonly | crud-roundtrip | wizard | approval | webhook | feature_chain | post_create_cascade
   # REQUIRED. Drives min_steps validator threshold.
   # readonly: ≥3 steps (navigate → snapshot → assert)
   # mutation: ≥6 steps (pre-snapshot → submit → wait → refresh → re-read → diff)
@@ -119,6 +119,122 @@ goal_class: mutation | readonly | crud-roundtrip | wizard | approval | webhook
   #                      Read empty)
   # wizard: ≥10 (multi-step form, capture each step transition)
   # webhook: ≥4 (trigger event → wait → query downstream state → assert)
+  # feature_chain: ≥8 (B62 — closed-loop feature lifecycle. Min 8 steps with
+  #                    ≥1 step where target_view_class is NOT in
+  #                    {source_view, source_view_modal, source_view_form} AND
+  #                    ≥2 steps with non-empty downstream_effects[].
+  #                    Models: create on view A → verify in target view B →
+  #                    click → detail loads → edit → cascade check → delete →
+  #                    archive check. Dispatches FEATURE_CHAIN_STAGES in
+  #                    generate-lifecycle-specs.py: read_before, create,
+  #                    read_after_create, visibility_check, interaction_chain,
+  #                    update, read_after_update, cascade_check, delete,
+  #                    read_after_delete, archive_visibility_check.)
+  # post_create_cascade: alias for feature_chain (B62)
+
+# ─────────────────────────────────────────────────────────────────────
+# B62: Feature-chain frontmatter (REQUIRED when goal_class=feature_chain)
+# ─────────────────────────────────────────────────────────────────────
+# Closed-loop modeling. Captures inverse-dependency edges + downstream
+# state propagation. Validated by verify-feature-chain-coverage.py +
+# verify-enables-deps-symmetry.py (B62-pre).
+
+enables:
+  # OPTIONAL but recommended for mutation/crud-roundtrip/feature_chain.
+  # List of G-XX goal ids that BECOME testable AFTER this goal succeeds.
+  # Forward-edge declaration. Must mirror backward Dependencies[] on
+  # target goal (validator: verify-enables-deps-symmetry.py).
+  # Example: G-01 creates a site → enables: [G-04 (dashboard visible),
+  #                                          G-07 (audit log entry)]
+  # Truth-source rule: Dependencies[] is canonical; enables[] is a
+  # readability + coverage hint. Both must agree or symmetry gate fires.
+  - G-04
+  - G-07
+
+chain_consumes_state:
+  # OPTIONAL. Named state precondition this goal expects to exist.
+  # Examples: "customer_exists", "tenant_authenticated", "site_in_active_pool".
+  # Used by codegen subagent to wire beforeEach fixtures matching the
+  # chain_produces_state of upstream goals.
+  # Namespaced (B62 audit ID-11) to avoid collision with potential
+  # state-machine `produces_state` / `consumes_state` fields in FLOW-SPEC.
+  customer_exists: true
+
+chain_produces_state:
+  # OPTIONAL. Named state postcondition this goal establishes.
+  # Examples: "invoice_persisted", "site_in_active_pool", "user_logged_in".
+  # Downstream goals reference this via chain_consumes_state.
+  invoice_persisted: true
+
+chain_steps:
+  # REQUIRED when goal_class=feature_chain. List of explicit chain steps.
+  # MIN 8 entries (B62 + audit ID-3 anti-cheat). MIN 1 entry must have
+  # target_view_class NOT in {source_view, source_view_modal,
+  # source_view_form} — chain MUST traverse to a structurally different view.
+  # MIN 2 entries must have non-empty downstream_effects[] — chain MUST
+  # observe at least 2 downstream consequences, not just rename existing
+  # shallow mutation steps.
+  #
+  # target_view_class enum (B62 + audit ID-6 view-rename-stable identity):
+  #   - source_view: the originating view (e.g. /sites)
+  #   - source_view_modal: modal/drawer on source view
+  #   - source_view_form: dedicated form route for the source view
+  #   - primary_list: list view for the resource type (NOT source_view)
+  #   - dashboard_summary: aggregate dashboard cards / metrics
+  #   - audit_log: change-log / activity feed view
+  #   - sibling_list: list view for a related resource type
+  #   - notification_feed: in-app notification surface
+  #   - report_view: detailed report / drill-down
+  #
+  # Goal-id derived from (entity_canonical_id + target_view_class), NOT raw
+  # view path → stable across view renames.
+  - step_id: S1
+    description: User authenticates and navigates to source view
+    target_view_class: source_view
+    expected_state: list_loaded_with_baseline_items
+    downstream_effects: []
+  - step_id: S2
+    description: User clicks Create → form opens
+    target_view_class: source_view_modal
+    expected_state: create_form_visible
+    downstream_effects: []
+  - step_id: S3
+    description: User fills form + submits, server returns 201
+    target_view_class: source_view_modal
+    expected_state: form_closes_toast_visible
+    downstream_effects:
+      - "row_count[/sites] increments by 1"
+      - "audit_log entry appended"
+  - step_id: S4
+    description: Navigate to dashboard → newly created entity visible
+    target_view_class: dashboard_summary
+    expected_state: entity_in_active_count
+    downstream_effects:
+      - "dashboard counter +1"
+  - step_id: S5
+    description: Click entity card → detail view loads
+    target_view_class: sibling_list
+    expected_state: detail_route_resolved
+    downstream_effects: []
+  - step_id: S6
+    description: Edit entity → status flips
+    target_view_class: source_view
+    expected_state: entity_status_updated
+    downstream_effects:
+      - "status badge updated"
+  - step_id: S7
+    description: Delete entity → confirm modal → confirmed
+    target_view_class: source_view_modal
+    expected_state: entity_deleted
+    downstream_effects:
+      - "row_count[/sites] decrements by 1"
+  - step_id: S8
+    description: Navigate to archive list → entity searchable but not in active
+    target_view_class: audit_log
+    expected_state: entity_in_archive_only
+    downstream_effects:
+      - "archive_count +1"
+      - "active_count -1"
 
 goal_grounding: api | flow | presentation
   # REQUIRED post-2026-05-01 (PR-F). Drives /vg:test verification strategy

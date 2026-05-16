@@ -250,6 +250,41 @@ Each goal:
     - mention emitted artifacts (email/token/webhook/queue/OAuth/notification)
       when the flow consumes them.
 
+    **B62 — feature_chain coverage (REQUIRED for CRUD-creating resources).**
+    For EVERY CRUD-creating resource you identify (mutation, crud-roundtrip,
+    or resource with CREATE in CRUD-SURFACES.md), you MUST emit ≥1 sibling
+    goal with `goal_class: feature_chain`. This goal models the CLOSED-LOOP
+    journey from data creation through downstream consequences:
+
+      create on source_view
+        → verify entity visible in dashboard_summary OR primary_list
+        → click entity → detail loads
+        → edit entity → status propagates
+        → cascade check on dashboard
+        → delete entity
+        → archive_visibility_check (entity in audit_log, gone from primary)
+
+    Required frontmatter (see TEST-GOAL-enriched-template.md lines 111+):
+    - `enables: [G-XX]` — forward edges (downstream goals unlocked by this)
+    - `chain_consumes_state: <key>` — precondition state name
+    - `chain_produces_state: <key>` — postcondition state name
+    - `chain_steps: [≥8 entries]` — at least 1 step with target_view_class
+      NOT in {source_view, source_view_modal, source_view_form}, at least
+      2 steps with non-empty downstream_effects[]
+
+    DO NOT emit a feature_chain goal that just renames an existing mutation
+    goal. The validator (verify-feature-chain-coverage.py) checks:
+      - chain_steps length ≥ 8
+      - distinct expected_state per step
+      - target_view_class traversal (chain leaves source view family)
+      - downstream_effects non-empty on ≥ 2 steps
+    Renaming without true chain content will FAIL the gate.
+
+    Waiver: if a resource legitimately has no cross-view propagation
+    (e.g. internal admin-only mutation invisible elsewhere), declare
+    `feature_chain_waiver: <reason>` in CONTEXT.md per affected resource.
+    Waivers are audited in override-debt.md.
+
     `/vg:test-spec` will generate the post-build `fixture_dag`, actor/session
     matrix, RCRURDR stages, artifact_capture, and cleanup contracts.
 4. Dependencies reference goal IDs (G-XX).
