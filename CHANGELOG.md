@@ -1,5 +1,37 @@
 # Changelog
 
+## v4.59.0 — B66: fix-loop hardening REVISED (codex MAJOR fixes)
+
+Closes codex MAJOR concerns from feature-chain plan audit. Four fixes:
+
+1. **--retry-only mode**: test.md argument-hint adds flag. fix-loop
+   handler at top skips classify + fix, re-runs failed test IDs once
+   on same SHA, emits .retry-report.json. Use for flaky-suspect
+   debugging without burning fixer agents.
+
+2. **Advisory classifier with UNKNOWN class**: new
+   scripts/classify-test-failure.py — heuristic-based classifier
+   with confidence weights. Patterns:
+     - INFRA_ISSUE: ECONNREFUSED 0.75, 5xx 0.7, port-in-use 0.7
+     - CODE_BUG: TypeError stack 0.45+0.5=0.95
+     - SPEC_GAP: locator-not-found 0.45 (stacks)
+     - FLAKY: previous_runs[] same-SHA pass ratio 0.85
+   Threshold: < 0.6 confidence → UNKNOWN safety net.
+   Auto-fix eligible only when class ∈ {CODE_BUG, SPEC_GAP} AND
+   confidence ≥ 0.7. Prevents misrouting infra outages → code fixes.
+
+3. **Same-SHA flaky retry only**: Codex MAJOR — 3x retry-every-failure
+   triples CI cost. Classifier uses historical previous_runs[]
+   evidence to detect flake without burning extra CI runs.
+
+4. **CROSS-PHASE-DEPS for ripple**: cross-phase ripple analysis prefers
+   CROSS-PHASE-DEPS.json (static deps blueprint encoded) over raw
+   grep across P{N+1}/P{N+2}. Grep has high false-positive rate
+   (variable name collisions) + misses sideways/older deps.
+
+Tests: tests/test_batch66_fix_loop_revised.py (15 GREEN).
+169 cross-batch tests still green.
+
 ## v4.58.0 — B65c: codegen feature_chain test.each OUTER + test.step INNER
 
 Closes codex BLOCKERs #1 + #4 from feature-chain plan audit.
