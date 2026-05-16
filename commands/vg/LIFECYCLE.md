@@ -20,7 +20,7 @@ flowchart LR
     P1 --> P2[2. Scope]
     P2 --> P3[3. Plan]
     P3 --> P4[4. Build]
-    P4 --> P5[5. Review]
+    P4 --> P5[5. Verify]
     P5 --> P5B[5b. Test Spec]
     P5B --> P6[6. Test]
     P6 --> P7[7. Accept]
@@ -44,11 +44,11 @@ flowchart LR
     style Close fill:#d1c4e9
 ```
 
-> **B69 fix:** mermaid corrected to match real code dependencies.
-> `/vg:test-spec` Step 1 gate requires `RUNTIME-MAP.json` from
-> `/vg:review` (lines 174-190 of test-spec.md). Therefore canonical
-> order is `build → review → test-spec → test`. Prior diagram showed
-> `build → test-spec → review` which contradicted code.
+> **B69 fix (legacy):** mermaid corrected to match real code
+> dependencies. `/vg:test-spec` Step 1 gate requires `RUNTIME-MAP.json`
+> from `/vg:review` (lines 174-190 of test-spec.md). Therefore
+> canonical order is `build → review → test-spec → test`. Prior v3.x
+> diagram inverted that ordering and contradicted code.
 
 ---
 
@@ -61,7 +61,7 @@ flowchart LR
 | **2. Scope** | `/vg:scope <N>` (5 rounds + deep probe) | `${PHASE_DIR}/CONTEXT.md` (decisions D-XX, monotonic), `DISCUSSION-LOG.md` | `/vg:blueprint` reads CONTEXT decisions; missing D-IDs → BLOCK |
 | **3. Plan** | `/vg:blueprint <N>` | `${PHASE_DIR}/PLAN.md`, `API-CONTRACTS.md`, `TEST-GOALS.md`, `CRUD-SURFACES.md`, `INTERFACE-STANDARDS.md` | `/vg:build` validates blueprint schema + plan-vs-context coherence |
 | **4. Build** | `/vg:build <N>` (wave-based parallel) | `${PHASE_DIR}/SUMMARY.md` (per-wave commits + per-task evidence) | `/vg:review` reads build output for runtime discovery |
-| **5. Review** | `/vg:review <N>` (code scan + browser discovery + fix loop) | `${PHASE_DIR}/RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md` | `/vg:test-spec` reads RUNTIME-MAP + coverage matrix to author deep specs |
+| **5. Verify** | `/vg:review <N>` (code scan + browser discovery + fix loop) | `${PHASE_DIR}/RUNTIME-MAP.json`, `GOAL-COVERAGE-MATRIX.md` | `/vg:test-spec` reads RUNTIME-MAP + coverage matrix to author deep specs |
 | **5b. Test Spec** | `/vg:test-spec <N>` (post-review deep spec authoring; B69 — runs AFTER review since Step 1 gate requires RUNTIME-MAP.json) | `${PHASE_DIR}/DEEP-TEST-SPECS.md`, `LIFECYCLE-SPECS.json`, `TEST-FIXTURE-DAG.json`, `TEST-EXECUTION-PLAN.json`, `TEST-SPEC-LOCALIZER/PROMPT.md`, `PLAYWRIGHT-SPEC-PLAN.md`, `TEST-SPEC-GAPS.md`, `CODEGEN-MANIFEST.json` | `/vg:test` consumes LIFECYCLE-SPECS + CODEGEN-MANIFEST for playwright runtime |
 | **6. Test** | `/vg:test <N>` (codegen + smoke + regression + security) | `${PHASE_DIR}/SANDBOX-TEST.md` + `.test-step-status.json` + Playwright spec files | `/vg:accept` validates test outcomes |
 | **7. Accept** | `/vg:accept <N>` (UAT checklist + audit + reflector) | `${PHASE_DIR}/UAT.md` (verdict + bootstrap candidates) | Phase considered complete; milestone closer reads accept verdict |

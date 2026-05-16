@@ -92,8 +92,9 @@ def test_b4_lifecycle_mermaid_canonical_order():
     mermaid_start = body.find("```mermaid")
     mermaid_end = body.find("```", mermaid_start + 10)
     mermaid = body[mermaid_start:mermaid_end]
-    # Canonical edges
-    assert "P4 --> P5[5. Review]" in mermaid
+    # Canonical edges (Phase 5 = "Verify" per LIFECYCLE convention,
+    # slash command /vg:review). B69 inserted test-spec as Phase 5b.
+    assert "P4 --> P5[5. Verify]" in mermaid
     assert "P5 --> P5B[5b. Test Spec]" in mermaid
     assert "P5B --> P6[6. Test]" in mermaid
     # Old broken edges must be gone

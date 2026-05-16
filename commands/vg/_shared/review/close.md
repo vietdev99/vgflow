@@ -305,8 +305,9 @@ now = datetime.now().isoformat()
 s['updated_at'] = now
 # B69 fix: review previously didn't emit next_command — only printed
 # user-facing 'Next: /vg:test-spec' message. /vg:next read empty
-# next_command → users skipped test-spec → review preflight failed
-# next run. Canonical pipeline: build → review → test-spec → test.
+# next_command → users skipped test-spec entirely → review preflight
+# failed on the following run. Canonical pipeline order:
+# build → review → test-spec → test.
 s['next_command'] = '/vg:test-spec ${PHASE_NUMBER}'
 s['next_command_emitted_at'] = now
 p.write_text(json.dumps(s, indent=2))
