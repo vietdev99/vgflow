@@ -54,11 +54,48 @@ ENABLES_FIELD_RE = re.compile(
 GOAL_ID_RE = re.compile(r"\bG-[\w.-]+\b")
 
 
+def _parse_field_values(block: str, field_name: str) -> list[str]:
+    """Extract goal-ids from a field that may be inline OR YAML block-list.
+
+    NF-2 fix: support both styles.
+      Inline:  `Dependencies: [G-01, G-02]` or `Dependencies: G-01, G-02`
+      Block:   `Dependencies:\\n  - G-01\\n  - G-02`
+    """
+    out: list[str] = []
+    # Match field line (with optional **bold**), capture rest of line + continuation
+    field_re = re.compile(
+        rf"(?:\*\*)?{re.escape(field_name)}:?(?:\*\*)?\s*(.*?)(?=^\S|^##|\Z)",
+        re.M | re.DOTALL | re.I,
+    )
+    for m in field_re.finditer(block):
+        # Limit lookahead to ~10 lines max to avoid greedy match across goals
+        snippet = m.group(1)[:600]
+        # Stop at next top-level (non-indented) line that's NOT a `- G-` row
+        lines = snippet.split("\n")
+        chunk_lines: list[str] = []
+        first_line = lines[0] if lines else ""
+        chunk_lines.append(first_line)
+        for ln in lines[1:]:
+            stripped = ln.lstrip()
+            if not stripped:
+                continue
+            # YAML block-list item OR indented continuation
+            if ln.startswith((" ", "\t", "-")) or stripped.startswith("- "):
+                chunk_lines.append(ln)
+                continue
+            # New field or heading → stop
+            break
+        chunk = "\n".join(chunk_lines)
+        out.extend(GOAL_ID_RE.findall(chunk))
+    return out
+
+
 def _parse_goals(text: str) -> dict[str, dict]:
     """Parse TEST-GOALS.md into {goal_id: {enables: [...], deps: [...]}}.
 
-    Splits text by goal headings (## G-XX). For each block, extracts
-    Dependencies + enables field references.
+    Splits text by goal headings (## G-XX). Per block, extracts
+    Dependencies + enables in BOTH inline list AND YAML block-list form
+    (NF-2 fix from codex replay audit).
     """
     goals: dict[str, dict] = {}
     matches = list(GOAL_HEADING_RE.finditer(text))
@@ -67,12 +104,8 @@ def _parse_goals(text: str) -> dict[str, dict]:
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         block = text[start:end]
-        deps: list[str] = []
-        for dm in DEPS_FIELD_RE.finditer(block):
-            deps.extend(GOAL_ID_RE.findall(dm.group(1) or ""))
-        enables: list[str] = []
-        for em in ENABLES_FIELD_RE.finditer(block):
-            enables.extend(GOAL_ID_RE.findall(em.group(1) or ""))
+        deps = _parse_field_values(block, "Dependencies")
+        enables = _parse_field_values(block, "enables")
         # Dedupe + filter self-reference
         goals[gid] = {
             "deps": sorted(set(d for d in deps if d != gid)),

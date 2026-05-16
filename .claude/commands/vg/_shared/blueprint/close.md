@@ -307,30 +307,56 @@ if [ -f "$DGOAL_VAL" ]; then
   fi
 fi
 
+# B62-pre (audit ID-2 + NF-1): enables[] / Dependencies[] symmetry gate.
+# A.enables=[B] must mirror B.Dependencies=[A]. Asymmetry → FLOW-SPEC
+# walker drift, duplicate chains. Default strict in block mode.
+SYM_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-enables-deps-symmetry.py"
+[ -f "$SYM_VAL" ] || SYM_VAL="${REPO_ROOT:-.}/scripts/validators/verify-enables-deps-symmetry.py"
+[ -f "$SYM_VAL" ] || SYM_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-enables-deps-symmetry.py"
+if [ -f "$SYM_VAL" ]; then
+  SYM_FLAGS=""
+  [ "$TRACE_MODE" = "block" ] && SYM_FLAGS="--strict"
+  [[ "${ARGUMENTS}" =~ --allow-symmetry-gaps ]] && SYM_FLAGS=""
+  ${PYTHON_BIN:-python3} "$SYM_VAL" --phase "${PHASE_NUMBER}" --phase-dir "${PHASE_DIR}" $SYM_FLAGS
+  SYM_RC=$?
+  if [ "$SYM_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+    echo "⛔ B62-pre enables/Dependencies symmetry gate failed."
+    echo "   Every goal-A.enables=[goal-B] must have goal-B.Dependencies=[goal-A]."
+    echo "   Bypass: --allow-symmetry-gaps (transitional only)."
+    exit 1
+  fi
+fi
+
 # B62: feature_chain coverage. Every CRUD resource with POST in
 # CRUD-SURFACES.md must have ≥1 goal_class=feature_chain in TEST-GOALS.md
 # with chain_steps ≥ 8, distinct expected_state, ≥1 step out of
 # source view family, ≥2 steps with downstream_effects.
 # Waiver: CONTEXT.md `feature_chain_waiver[<resource>]: <reason>`.
-# Legacy escape: --allow-feature-chain-shortfall.
+# Legacy escape: --allow-feature-chain-shortfall OR
+# VG_FEATURE_CHAIN_MODE=warn env (B64 audit ID-9 fix). VG_FEATURE_CHAIN_MODE
+# defaults to "block" (strict). Set to "warn" for pre-2026-05-16 phases
+# during transition; they'll log gap to override-debt.md but not block.
 FEATURE_CHAIN_VAL="${REPO_ROOT:-.}/.claude/scripts/validators/verify-feature-chain-coverage.py"
 [ -f "$FEATURE_CHAIN_VAL" ] || FEATURE_CHAIN_VAL="${REPO_ROOT:-.}/scripts/validators/verify-feature-chain-coverage.py"
 [ -f "$FEATURE_CHAIN_VAL" ] || FEATURE_CHAIN_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-feature-chain-coverage.py"
+FC_MODE="${VG_FEATURE_CHAIN_MODE:-block}"
 if [ -f "$FEATURE_CHAIN_VAL" ]; then
   FC_FLAGS="--strict"
   [[ "${ARGUMENTS}" =~ --allow-feature-chain-shortfall ]] && FC_FLAGS="$FC_FLAGS --allow-feature-chain-shortfall"
+  # B64 ID-9: warn-mode env override for legacy phases
+  [ "$FC_MODE" = "warn" ] && FC_FLAGS="$FC_FLAGS --allow-feature-chain-shortfall"
   ${PYTHON_BIN:-python3} "$FEATURE_CHAIN_VAL" --phase "${PHASE_NUMBER}" $FC_FLAGS
   FC_RC=$?
-  if [ "$FC_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ]; then
+  if [ "$FC_RC" -ne 0 ] && [ "$TRACE_MODE" = "block" ] && [ "$FC_MODE" = "block" ]; then
     echo "⛔ B62 feature_chain coverage gate failed."
     echo "   Every CRUD-creating resource needs ≥1 valid feature_chain goal."
     echo "   See TEST-GOAL-enriched-template.md for chain_steps schema."
-    echo "   Bypass: --allow-feature-chain-shortfall (transitional only)."
+    echo "   Bypass: --allow-feature-chain-shortfall OR VG_FEATURE_CHAIN_MODE=warn."
     ORCH_BIN="${REPO_ROOT:-.}/.claude/scripts/vg-orchestrator"
     [ -f "$ORCH_BIN" ] || ORCH_BIN="${REPO_ROOT:-.}/scripts/vg-orchestrator"
     [ -f "$ORCH_BIN" ] || ORCH_BIN="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator"
     "${PYTHON_BIN:-python3}" "$ORCH_BIN" emit-event "blueprint.feature_chain_blocked" \
-      --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"fc_mode\":\"${FC_MODE}\"}" >/dev/null 2>&1 || true
     exit 1
   fi
 fi
