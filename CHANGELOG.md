@@ -1,5 +1,44 @@
 # Changelog
 
+## v4.55.0 — B65a: chain_steps end-to-end producer chain (codex audit fixes)
+
+Codex audit of B65/B66/B67 plan returned BLOCK verdict. 5 BLOCKERs +
+6 MAJORs. Splitting B65 into B65a/B65b/B65c. This batch addresses 2
+of 5 BLOCKERs (producer chain):
+
+BLOCKER #2 — chain_steps lost in pipeline:
+enrich-test-goals.py created feature_chain stubs with chain_steps[]
+but render_markdown silently dropped them. generate-lifecycle-specs.py
+had no parser. → Codegen consumer impossible because data died at
+the producer.
+
+Fix:
+- enrich render_markdown emits goal_class + enables[] + chain_steps
+  YAML block
+- generate-lifecycle-specs.py: _parse_chain_steps() + _parse_enables()
+  (handle inline + YAML block forms)
+- _goal_spec persists chain_steps + enables + goal_class
+
+BLOCKER #5 — cross_view enrich emitted S1-S4 only (4 steps):
+B62 validator requires MIN_CHAIN_STEPS=8. Producer/validator mismatch
+would BLOCK every auto-generated cross_view goal at blueprint close.
+
+Fix: expanded enrich cross_view chain to S1-S8 covering full lifecycle
+(create → form → submit+audit → navigate target → click detail → edit
+status flip → delete → archive verify).
+
+Side fix — _step() KeyError on FEATURE_CHAIN_STAGES:
+B62-pre added stages tuple but actions/evidence dicts had no entries
+for visibility_check/interaction_chain/cascade_check/archive_visibility_check.
+Added all 4.
+
+Tests: tests/test_batch65a_chain_steps_producer.py (15 GREEN).
+117 cross-batch tests still green.
+
+Codex audit artifacts: dev-phases/test-flow-hardening/CODEX-AUDIT.md.
+
+Next: B65b validator per-goal-class stage sets, B65c codegen test.step.
+
 ## v4.54.0 — B64: feature_chain integration smoke + replay audit fixes
 
 Closes feature-chain coverage initiative. End-to-end integration
