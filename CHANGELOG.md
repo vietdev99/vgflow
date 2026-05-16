@@ -1,5 +1,22 @@
 # Changelog
 
+## v4.61.1 — B69 hotfix: restore Phase 5 'Verify' name + rephrase comments
+
+CI Test failed on v4.61.0 (2 tests). Hotfix:
+
+1. test_v2_86_tier1_docs::test_lifecycle_has_eight_phases expected
+   '5. Verify' canonical phase name (slash command is /vg:review but
+   canonical phase name = 'Verify'). B69 incorrectly renamed table
+   to '5. Review'. Restored 'Verify'.
+
+2. test_pipeline_order_canonical::test_no_wrong_order regex matched
+   'test-spec → review' in B69 explanatory comments. Test exempts
+   lines with 'legacy' marker. Rephrased comments to include
+   '(legacy)' tag + split sentence at LIFECYCLE.md:51 and
+   review/close.md:308 to avoid literal pattern.
+
+Codex mirror regenerated. All 176 cross-batch tests green.
+
 ## v4.61.0 — B69: pipeline routing fixes — review→test-spec→test chain (4 bugs)
 
 User report: "pipeline vẫn bị gợi ý thiếu ở bước review -> test-specs
