@@ -37,6 +37,79 @@ REQUIRED_STAGES = (
     "read_after_delete",
 )
 
+# B65b (codex BLOCKER #3 fix): per-goal-class stage sets.
+# Previous validator hard-required stages == REQUIRED_STAGES (RCRURDR 7).
+# generate-lifecycle-specs.py:67-79 defines FEATURE_CHAIN_STAGES (11 stages)
+# + READONLY_STAGES (9 stages, B36 R2). Both legitimate. Strict equality
+# blocked valid feature_chain + readonly output.
+#
+# These sets MUST mirror scripts/generate-lifecycle-specs.py — keep in sync
+# whenever stage tuples change there. Test ensures parity.
+FEATURE_CHAIN_STAGES = (
+    "read_before",
+    "create",
+    "read_after_create",
+    "visibility_check",
+    "interaction_chain",
+    "update",
+    "read_after_update",
+    "cascade_check",
+    "delete",
+    "read_after_delete",
+    "archive_visibility_check",
+)
+
+READONLY_STAGES = (
+    "read_before",
+    "render_initial",
+    "interaction_filter",
+    "interaction_sort",
+    "interaction_paginate",
+    "empty_state",
+    "error_state_4xx",
+    "loading_state",
+    "accessibility",
+)
+
+CREATE_ONLY_STAGES = ("read_before", "create", "read_after_create")
+UPDATE_ONLY_STAGES = ("read_before", "update", "read_after_update")
+DELETE_ONLY_STAGES = ("read_before", "delete", "read_after_delete")
+
+# Map goal_class / goal_type → expected stage set.
+# Lookup order in _expected_stages_for_spec():
+#   1. goal_class (B62-pre dispatch precedence)
+#   2. goal_type
+#   3. fallback REQUIRED_STAGES (legacy RCRURDR)
+GOAL_CLASS_STAGE_SETS = {
+    "feature_chain": FEATURE_CHAIN_STAGES,
+    "post_create_cascade": FEATURE_CHAIN_STAGES,  # alias per B62-pre
+    "readonly": READONLY_STAGES,
+}
+
+GOAL_TYPE_STAGE_SETS = {
+    "read-only": READONLY_STAGES,
+    "create-only": CREATE_ONLY_STAGES,
+    "update-only": UPDATE_ONLY_STAGES,
+    "delete-only": DELETE_ONLY_STAGES,
+}
+
+
+def _expected_stages_for_spec(spec: dict[str, Any]) -> tuple[tuple[str, ...], str]:
+    """B65b: per-goal-class stage set lookup. Returns (stages, dispatch_key).
+
+    Mirrors generate-lifecycle-specs.py _stages_for_goal precedence:
+      1. goal_class (feature_chain etc.) — wins over goal_type
+      2. goal_type (create-only, read-only etc.)
+      3. fallback REQUIRED_STAGES (full RCRURDR)
+    """
+    gclass = (str(spec.get("goal_class") or "")).strip().lower()
+    if gclass in GOAL_CLASS_STAGE_SETS:
+        return GOAL_CLASS_STAGE_SETS[gclass], f"goal_class={gclass}"
+    gtype = (str(spec.get("goal_type") or "")).strip().lower()
+    if gtype in GOAL_TYPE_STAGE_SETS:
+        return GOAL_TYPE_STAGE_SETS[gtype], f"goal_type={gtype}"
+    return REQUIRED_STAGES, "default RCRURDR"
+
 SUPPORTED_PROFILES = {
     "web-fullstack",
     "web-frontend-only",
@@ -103,10 +176,25 @@ def validate_goal_contract(out: Output, args: argparse.Namespace, phase_dir: Pat
         for step in steps
         if isinstance(step, dict)
     ]
-    if stages != list(REQUIRED_STAGES):
-        missing = sorted(set(REQUIRED_STAGES) - set(stages))
-        detail = f" missing: {', '.join(missing)}" if missing else ""
-        add_error(out, args, type="lifecycle_stage_missing", message=f"{goal_id} lifecycle stages not in required order.{detail}", file=lifecycle_path, expected="full ordered RCRURDR stages")
+    # B65b (codex BLOCKER #3): per-goal-class stage set (was: hard-required
+    # REQUIRED_STAGES for ALL goals, blocking valid feature_chain + readonly).
+    expected_stages, dispatch_key = _expected_stages_for_spec(spec)
+    if stages != list(expected_stages):
+        missing = sorted(set(expected_stages) - set(stages))
+        extra = sorted(set(stages) - set(expected_stages))
+        details: list[str] = []
+        if missing:
+            details.append(f"missing: {', '.join(missing)}")
+        if extra:
+            details.append(f"unexpected: {', '.join(extra)}")
+        detail = f" ({'; '.join(details)})" if details else ""
+        add_error(
+            out, args,
+            type="lifecycle_stage_missing",
+            message=f"{goal_id} lifecycle stages not in expected order for {dispatch_key}.{detail}",
+            file=lifecycle_path,
+            expected=f"ordered stages for {dispatch_key}: {list(expected_stages)}",
+        )
 
     fixture_ids = {str(fixture.get("id")) for fixture in fixtures if isinstance(fixture, dict) and fixture.get("id")}
     for fixture in fixtures:
