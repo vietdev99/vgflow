@@ -60,11 +60,51 @@ GOAL_TYPE_STAGES: dict[str, tuple[str, ...]] = {
     "read-only":   READONLY_STAGES,  # Batch 36 R2: 8 stages
 }
 
+# B62-pre (audit ID-1): feature_chain class needs RCRURDR + visibility_check
+# stages per chain step. Without this, AI emits goal_class=feature_chain but
+# pipeline falls through to default RCRURDR → visibility_check never emits →
+# B62 silent no-op.
+FEATURE_CHAIN_STAGES: tuple[str, ...] = (
+    "read_before",
+    "create",
+    "read_after_create",
+    "visibility_check",        # B62-pre: navigate to target view, assert entity visible
+    "interaction_chain",       # Click entity in target view → detail loads
+    "update",
+    "read_after_update",
+    "cascade_check",           # B62-pre: re-verify visibility post-update
+    "delete",
+    "read_after_delete",
+    "archive_visibility_check",  # B62-pre: assert entity in archive list, gone from primary
+)
+
+# B62-pre (audit ID-1): goal_class enum dispatch (separate from goal_type).
+# AI may set goal_class without goal_type. Without this lookup, the
+# template/goal-class enum extension would be a no-op.
+GOAL_CLASS_STAGES: dict[str, tuple[str, ...]] = {
+    "feature_chain":       FEATURE_CHAIN_STAGES,
+    "post_create_cascade": FEATURE_CHAIN_STAGES,  # alias
+}
+
 
 def _stages_for_goal(goal: dict[str, Any]) -> tuple[str, ...]:
-    """Derive lifecycle stages per goal_type. Default RCRURDR for full mutation."""
+    """Derive lifecycle stages.
+
+    Dispatch precedence (B62-pre — audit ID-1):
+      1. goal_class (NEW dispatch key — feature_chain wins over RCRURDR default)
+      2. goal_type (existing dispatch — backward compatible)
+      3. HTTP verb inference from mutation_evidence (legacy fallback)
+
+    Without B62-pre fix, AI setting goal_class=feature_chain produced no
+    stage change because pipeline read goal_type only.
+    """
+    # B62-pre: goal_class takes priority (feature_chain etc.)
+    gclass = (goal.get("goal_class") or "").strip().lower()
+    if gclass in GOAL_CLASS_STAGES:
+        return GOAL_CLASS_STAGES[gclass]
+
     gtype = (goal.get("goal_type") or "").strip().lower()
-    # Explicit goal_type mapping takes priority
+    # Explicit goal_type mapping takes priority over inference
     if gtype in GOAL_TYPE_STAGES:
         return GOAL_TYPE_STAGES[gtype]
     # Non-empty but unrecognised goal_type (e.g. multi-actor, wizard) → full RCRURDR

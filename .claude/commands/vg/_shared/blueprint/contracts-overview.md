@@ -547,6 +547,16 @@ else
   echo "━━━ 2b7 — FLOW-SPEC auto-detect ━━━"
 
   # Step 1: Parse dependency graph from TEST-GOALS.md (deterministic, no AI)
+  #
+  # B62-pre edge normalization (audit ID-2):
+  #   Truth source = Dependencies[] (backward edge, canonical).
+  #   enables[] = forward-edge declaration (B62+), validated by
+  #   verify-enables-deps-symmetry.py to mirror Dependencies[].
+  #   This walker reads Dependencies[] ONLY. enables[] is intentionally
+  #   NOT walked here — avoids double-traversal + cycle pseudo-edges.
+  #   AI may populate enables[] for human readability; symmetry validator
+  #   enforces consistency. Truth-source rule documented in
+  #   commands/vg/_shared/templates/TEST-GOAL-enriched-template.md.
   CHAIN_OUTPUT=$(${PYTHON_BIN:-python3} - "${PHASE_DIR}/TEST-GOALS.md" <<'PYEOF'
 import sys, re, json
 from pathlib import Path
