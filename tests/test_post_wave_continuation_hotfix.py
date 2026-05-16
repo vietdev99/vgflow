@@ -52,7 +52,9 @@ def test_stop_hook_post_wave_only_triggers_on_build_command():
     # The new block must be gated on command = vg:build (else triggers on every Stop)
     post_wave_idx = body.find("POST-WAVE CONTINUATION")
     assert post_wave_idx > 0
-    block = body[max(0, post_wave_idx - 800):post_wave_idx]
+    # B68 widened window: cascade checks added 4b + 4c → comment block grew.
+    # Search 1500 chars backward to find guard.
+    block = body[max(0, post_wave_idx - 1500):post_wave_idx]
     assert ("\"$command\" = \"vg:build\"" in block or '"$command" = "build"' in block), (
         "POST-WAVE CONTINUATION check must gate on $command being vg:build"
     )
