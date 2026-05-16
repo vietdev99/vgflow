@@ -86,6 +86,8 @@ Do NOT browse files outside input. Do NOT ask user — input is the contract.
 @${PHASE_DIR}/SEED-RECIPE.md             (Batch 51+52 — per-variant seed/cleanup contract)
 @${PHASE_DIR}/EDGE-CASES/                (Batch 48 — per-goal variant_id list)
 @${PHASE_DIR}/EDGE-CASES/VARIANTS.json   (Batch 56 — machine-readable variants index; PREFER this over markdown parsing)
+@${PHASE_DIR}/LIFECYCLE-SPECS.json       (B65a — chain_steps + enables + goal_class persisted per goal; READ for feature_chain emission)
+@${PHASE_DIR}/scan-*.json                (B63 — cross_view_propagation_observations[] used by feature_chain target_view assertions)
 </inputs>
 
 <seed_contract>
@@ -139,6 +141,97 @@ OR inlines the array if the spec file lives outside the import tree.
 DO NOT regex-parse the markdown table — VARIANTS.json is authoritative
 and validated by verify-variants-json.py.
 </seed_contract>
+
+<feature_chain_emission>
+**B65c (codex BLOCKERs #1 + #4)** — When `goal_class: feature_chain`
+or `post_create_cascade`, the goal has `chain_steps[]` in TEST-GOAL
+frontmatter (NOT VARIANTS.json — chain_steps schema lives at
+`commands/vg/_shared/templates/TEST-GOAL-enriched-template.md:154+`).
+LIFECYCLE-SPECS.json persists `chain_steps[]` per goal (B65a).
+
+**Correct emission shape** — one closed-loop `test.each(variants)`
+OUTER, with `test.step()` per chain_step INNER:
+
+```ts
+import { test, expect } from '@playwright/test';
+import { runSeedRecipe, cleanup } from './_helpers/seed-recipes';
+
+// Loaded from LIFECYCLE-SPECS.json or inlined from frontmatter.
+// chain_steps is GOAL-LEVEL (one chain per goal), variants is VARIANT-LEVEL
+// (one row per edge_case / negative_spec). Their cross-product is the
+// closed-loop traversal repeated per variant.
+const variants = require('../../EDGE-CASES/VARIANTS.json').goals['G-01'];
+const chainSteps = [
+  { step_id: 'S1', target_view_class: 'source_view',
+    expected_state: 'list_loaded_baseline', downstream_effects: [] },
+  { step_id: 'S2', target_view_class: 'source_view_modal',
+    expected_state: 'form_visible', downstream_effects: [] },
+  // ... S3-S8 from goal frontmatter
+];
+
+test.describe('G-01 — feature_chain', () => {
+  test.each(variants)('${goal_id}-${variant.variant_id} — ${variant.label}',
+    async ({ page }, variant) => {
+      // OUTER: variant-level seed binding (Batch 52 contract preserved)
+      await runSeedRecipe(variant.id);
+      try {
+        // INNER: chain_steps via test.step — each step is a closed-loop hop
+        for (const cs of chainSteps) {
+          await test.step(`${cs.step_id}: ${cs.expected_state}`, async () => {
+            // assert target_view_class transition (navigate when out-of-source-family)
+            // assert expected_state observable (DOM / network / db read-after-write)
+            // for each downstream_effects[i]: emit specific expect() per effect
+          });
+        }
+      } finally {
+        await cleanup(variant.id);
+      }
+    });
+});
+```
+
+**Why this shape (codex BLOCKER #4 fix):**
+- `test.each(variants)` OUTER preserves Batch 52 per-variant seed/cleanup
+  contract — every variant gets isolated state.
+- `test.step()` INNER produces sequential closed-loop trace within one
+  test run. Trace viewer shows S1 → S2 → ... → S8 timeline.
+- NOT one test() per chain_step — that would either lose sequential
+  state across tests OR multiply tests as steps × variants (cost
+  explosion + lost trace continuity).
+
+**Per chain_step assertions (REQUIRED):**
+1. **target_view transition:** when `target_view_class` differs from
+   previous step's class AND is NOT in {source_view, source_view_modal,
+   source_view_form}, emit `await page.goto(target_view_url)` OR click
+   that navigates to the target view, followed by `expect(page).toHaveURL(...)`.
+2. **expected_state observable:** emit at least 1 `expect()` matching
+   the step's `expected_state` semantically (e.g.,
+   `expect(page.getByTestId('entity-card')).toBeVisible()` for state
+   `propagation_visible_in_dashboard_summary`).
+3. **downstream_effects[]:** for each non-empty effect, emit a specific
+   `expect()`. Examples:
+   - "row_count +1" → assert table rows increased by 1
+   - "audit_log entry appended" → re-read audit log via API + assert
+     entry with current entity_id present
+   - "active_count -1, archive_count +1" → query counts before/after,
+     assert deltas
+
+**Cross-view propagation (B63 hookup):**
+When LIFECYCLE-SPECS.json has scan-derived chain_steps (entity_canonical_id
+in evidence), generated spec MUST navigate to `target_view` (raw path
+from scan) AND assert `entity_id` visibility there. This closes the
+"create here → verify it shows up there" loop the user reported as
+missing from shallow specs.
+
+**chain_steps source priority:**
+1. LIFECYCLE-SPECS.json `goals.{G-XX}.chain_steps[]` (canonical post-B65a)
+2. TEST-GOAL frontmatter `chain_steps` YAML block (fallback)
+3. If absent → goal is NOT feature_chain; fall back to standard RCRURDR
+   stages emission.
+
+DO NOT mix chain_steps with negative_specs variants — negative specs
+have their own `test()` paths via `goal_class: mutation` shape.
+</feature_chain_emission>
 
 <ui_runtime_contract>
 v3.5.0 (#173 Stage 5) — when ${PHASE_DIR}/UI-RUNTIME-CONTRACT.json exists and
