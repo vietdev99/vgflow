@@ -1,5 +1,41 @@
 # Changelog
 
+## v4.54.0 — B64: feature_chain integration smoke + replay audit fixes
+
+Closes feature-chain coverage initiative. End-to-end integration
+smoke (10 tests) + replay audit (PASS-WITH-NOTES) + 3 follow-on
+fixes from replay findings:
+
+ID-9 (NOT ADDRESSED → FIXED): VG_FEATURE_CHAIN_MODE env added to
+close.md gate. Default "block". Pre-2026-05-16 phases set
+VG_FEATURE_CHAIN_MODE=warn for transitional warn-mode bypass.
+
+NF-1 (new): verify-enables-deps-symmetry.py validator wired into
+close.md 6.2.5 traceability gate. TRACE_MODE=block → --strict.
+Escape via --allow-symmetry-gaps.
+
+NF-2 (new): symmetry validator regex extended to parse YAML block-
+list form:
+  Dependencies:
+    - G-01
+    - G-02
+Previously only matched inline form. New _parse_field_values()
+multi-line continuation logic handles both styles.
+
+Tests: tests/test_batch64_feature_chain_integration.py (14 GREEN
+incl. 5 new for ID-9/NF-1/NF-2). All 85 cross-batch tests green.
+
+Replay audit artifact: dev-phases/feature-chain-design/CODEX-AUDIT-REPLAY.md
+
+Feature-chain coverage initiative complete:
+- v4.51.1 B62-pre (BLOCKERs ID-1/ID-2)
+- v4.52.0 B62 (top-down feature_chain class)
+- v4.53.0 B63 (scanner cross-view propagation)
+- v4.54.0 B64 (integration smoke + replay audit fixes)
+
+Multi-tenant + async + live AI dogfood deferred to B65+
+(documented in dev-phases/feature-chain-design/OUT-OF-SCOPE.md).
+
 ## v4.53.0 — B63: scanner cross-view propagation + feature_chain bottom-up
 
 Bottom-up half of feature-chain coverage system.
