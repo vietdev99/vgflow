@@ -147,6 +147,20 @@ def _check_layer_7_spec_binding(phase: str, phase_dir: Path) -> dict:
     return {"ok": False, "detail": (r["stdout"] + " " + r["stderr"])[:200].strip()}
 
 
+def _check_layer_8_feature_chain(phase: str, phase_dir: Path) -> dict:
+    """B62+B63: feature_chain top-down + bottom-up coverage."""
+    fc_val = VALIDATORS / "verify-feature-chain-coverage.py"
+    xv_val = VALIDATORS / "verify-cross-view-coverage.py"
+    fc = _run_validator(fc_val, phase, phase_dir, [])  # default warn
+    xv = _run_validator(xv_val, phase, phase_dir, [])
+    fc_out = fc["stdout"].splitlines()[-1] if fc["stdout"] else ""
+    xv_out = xv["stdout"].splitlines()[-1] if xv["stdout"] else ""
+    return {
+        "ok": True,  # informational; never FAIL in status report
+        "detail": f"top-down: {fc_out} | bottom-up: {xv_out}",
+    }
+
+
 def _render_table(results: list[dict]) -> str:
     """Render layer results as a Markdown table."""
     lines = [
@@ -184,6 +198,7 @@ def main() -> int:
         {"name": "5. helper stub (B55)",         **_check_layer_5_helper(phase, phase_dir)},
         {"name": "6. scan→goal coverage (B58)",  **_check_layer_6_scan_goal(phase, phase_dir)},
         {"name": "7. spec seed binding (B52)",   **_check_layer_7_spec_binding(phase, phase_dir)},
+        {"name": "8. feature_chain coverage (B62-63)", **_check_layer_8_feature_chain(phase, phase_dir)},
     ]
 
     if args.json:

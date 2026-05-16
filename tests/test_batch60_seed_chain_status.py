@@ -135,7 +135,7 @@ def test_json_mode_emits_structured(tmp_path):
     doc = json.loads(r.stdout)
     assert doc["phase"] == "7"
     assert "results" in doc
-    assert len(doc["results"]) == 7  # 7 layers
+    assert len(doc["results"]) == 8  # B63: added layer 8 feature_chain coverage
 
 
 def test_codegen_manifest_absent_layer7_skip(tmp_path):
@@ -151,8 +151,8 @@ def test_summary_counts_correct(tmp_path):
     r = _run(phase_dir)
     assert "Summary:" in r.stdout
     summary_line = [l for l in r.stdout.split("\n") if l.startswith("Summary:")][0]
-    # Healthy phase: 6 PASS (layers 1-6) + 1 SKIP (layer 7)
-    assert "6 PASS" in summary_line
+    # B63: Healthy phase now has 8 layers — 7 PASS (1,2,3,4,5,6,8) + 1 SKIP (7 spec binding)
+    assert "7 PASS" in summary_line
     assert "1 SKIP" in summary_line
 
 

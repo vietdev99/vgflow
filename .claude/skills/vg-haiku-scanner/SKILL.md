@@ -423,6 +423,70 @@ Each visit records `modals[].input_variants[]` array per the schema above.
 Downstream spec generator uses these to template `test.each([variants])`
 with real submit_status expectations.
 
+### Batch 63 — Cross-view propagation probe (post-mutation)
+
+AFTER persistence_probe success on CREATE/UPDATE/DELETE actions on the
+SOURCE view, scanner navigates to top-N related sibling views and
+captures whether the mutated entity propagated. Without this, test
+specs only verify "entity persists on same view" — they miss the
+deploy-time pain "create site → dashboard count doesn't update" or
+"delete order → still appears in admin list".
+
+**Configuration:**
+- `VG_CROSS_VIEW_MODE` env: `sample|enabled|disabled` (default `sample`)
+  - `sample` = scan top-3 highest-priority CREATE mutations per phase
+  - `enabled` = scan EVERY CREATE/UPDATE/DELETE (expensive)
+  - `disabled` = skip entirely (legacy back-compat)
+- `VG_CROSS_VIEW_N` env: number of target views per probe (default 3)
+- `VG_CROSS_VIEW_TOTAL_BUDGET_S` env: phase-wide budget (default 60s)
+- Default OFF for readonly goals
+
+**Target view selection (heuristic priority):**
+1. Views sharing entity slug in path (e.g. `/sites` mutation → look for
+   `/sites/{id}`, `/sites/archive`, `/admin/sites`)
+2. Dashboard / summary views (`/dashboard`, `/home`, `/`)
+3. Sibling list views derived from RUNTIME-MAP route_inventory[] that
+   share the entity's resource family
+
+**Per-target probe steps:**
+1. Capture pre-snapshot of target view (entity_id absent? count baseline?)
+2. Trigger source-view mutation (already happened in persistence_probe)
+3. Navigate to target view via SPA route OR full reload
+4. Wait network idle (≤ 3s)
+5. Search DOM for entity_id (text match, NOT XHR — scanner observes
+   rendered state)
+6. Compute observed_count_delta if target view shows a count badge
+7. Record `cross_view_propagation_observations[]` entry with:
+   - `target_view_class` (B62 enum, view-rename-stable identity)
+   - `entity_canonical_id` (NOT raw path — drives enrich goal-id stability)
+   - `observed_in_target: yes|no|partial` (partial = entity found but
+     count delta off, or in archive list when expected in primary)
+   - `limitations: ["single_role_scan"]` always; add `no_delayed_propagation`
+     when scan happened within 2s of mutation (insufficient for async)
+8. If `observed_in_target == no` for a CREATE on dashboard_summary →
+   record `match: no` step (commander adjudicates severity)
+
+**Budget enforcement:**
+- Per-probe cap: 10s (5s navigate + 5s scan). Exceeded → WARN + skip.
+- Phase-wide cap: 60s. Exceeded → WARN + skip remaining probes.
+  Already-collected observations preserved.
+
+**Dedup:**
+- Key: `(entity_slug_family, target_view_class)`. If sites→dashboard
+  already scanned, skip sites→dashboard for other sites mutations
+  unless `VG_CROSS_VIEW_MODE=enabled`.
+
+**Skip conditions:**
+- Action is readonly (GET on source view)
+- RUNTIME-MAP route_inventory[] empty OR missing
+- VG_CROSS_VIEW_MODE=disabled
+- Total budget exhausted
+
+**Output:** Each scan-{view}.json gets `cross_view_propagation_observations[]`
+array. enrich-test-goals.py consumes to emit
+`G-AUTO-{entity_canonical_id}-{action_class}-{target_view_class}` goals
+with `goal_class: feature_chain` + 4-step chain_steps stub.
+
 ### Batch 41 — Active State Probing (empty / error_4xx / loading)
 
 Read-only spec stages (Batch 36 R2 — empty_state, error_state_4xx,
@@ -692,6 +756,48 @@ optional fields — no breaking change for web.
     "captured_at": "{ISO timestamp}"
   },
   "_data_observations_note": "Batch 59: emit when table/list has ≥3 rows. Recipe generator reads to size pagination_edge seeds, validate filter_combination distinctness, and detect single-value columns that cause empty filter results.",
+  "cross_view_propagation_observations": [
+    {
+      "source_view": "/sites",
+      "target_view": "/dashboard",
+      "target_view_class": "dashboard_summary",
+      "action": "create",
+      "entity_id": "site-001",
+      "entity_canonical_id": "sites:create",
+      "observed_in_target": "yes",
+      "evidence_screenshot": "{SCREENSHOTS_DIR}/scan-{VIEW_SLUG}-xview-dashboard.png",
+      "observed_count_delta": 1,
+      "navigation_duration_ms": 1850,
+      "limitations": ["single_role_scan"]
+    },
+    {
+      "source_view": "/sites",
+      "target_view": "/sites/site-001",
+      "target_view_class": "sibling_list",
+      "action": "create",
+      "entity_id": "site-001",
+      "entity_canonical_id": "sites:create",
+      "observed_in_target": "yes",
+      "evidence_screenshot": null,
+      "observed_count_delta": null,
+      "navigation_duration_ms": 920,
+      "limitations": ["single_role_scan"]
+    },
+    {
+      "source_view": "/sites",
+      "target_view": "/audit",
+      "target_view_class": "audit_log",
+      "action": "delete",
+      "entity_id": "site-001",
+      "entity_canonical_id": "sites:delete",
+      "observed_in_target": "partial",
+      "evidence_screenshot": null,
+      "observed_count_delta": 1,
+      "navigation_duration_ms": 2100,
+      "limitations": ["single_role_scan", "no_delayed_propagation"]
+    }
+  ],
+  "_cross_view_propagation_note": "Batch 63: AFTER persistence_probe success on CREATE/UPDATE/DELETE, scanner navigates top-N (default N=3, env VG_CROSS_VIEW_N) related sibling views from RUNTIME-MAP. Heuristic priority: (1) shared entity slug, (2) dashboard/summary, (3) sibling list. Total budget cap 60s/phase via VG_CROSS_VIEW_TOTAL_BUDGET_S. Default mode=sample (env VG_CROSS_VIEW_MODE=sample|enabled|disabled) — only top-3 highest-priority CREATE mutations scanned. Dedup by (entity_slug_family, target_view_class). entity_canonical_id is view-rename-stable identity (NOT raw path) used by enrich-test-goals to generate feature_chain goal ids. limitations[] documents known scan-time gaps for downstream awareness: single_role_scan (multi-tenant not covered), no_delayed_propagation (async webhook/notification chains not observed).",
   "disabled_elements": [ { "ref": "e30", "name": "Bulk Delete", "enable_attempted": true, "enabled_after": true } ],
   "sub_views_discovered": ["/sites/456"],
   "errors": [

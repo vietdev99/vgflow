@@ -213,6 +213,103 @@ def classify_elements(view: str, scan: dict, runtime_view: dict,
                 })
                 break
 
+    # B63: cross-view propagation → feature_chain goals.
+    # For each observed_in_target=yes|partial entry, emit a feature_chain
+    # goal with chain_steps stub. Goal-id derived from entity_canonical_id
+    # + target_view_class (NOT raw path → stable across view renames).
+    seen_propagations: set[str] = set()
+    action_class_map = {
+        "create": "visibility",
+        "update": "status-cascade",
+        "delete": "archive",
+    }
+    for obs in scan.get("cross_view_propagation_observations") or []:
+        if not isinstance(obs, dict):
+            continue
+        if obs.get("observed_in_target") not in ("yes", "partial"):
+            continue
+        action = obs.get("action") or "create"
+        action_class = action_class_map.get(action, "visibility")
+        target_class = (obs.get("target_view_class") or "").strip()
+        if not target_class:
+            continue
+        entity_canon = (obs.get("entity_canonical_id") or "").strip()
+        if not entity_canon:
+            # fallback: derive from source_view path
+            sv = (obs.get("source_view") or "").strip("/")
+            entity_canon = f"{name_slug(sv) or 'entity'}:{action}"
+        # idempotent goal-id (audit ID-6 view-rename-stable)
+        entity_slug = name_slug(entity_canon.split(":")[0])
+        gid = f"G-AUTO-{entity_slug}-{action_class}-{target_class}"
+        if gid in seen_propagations:
+            continue
+        seen_propagations.add(gid)
+        stubs.append({
+            "id": gid,
+            "title": (
+                f"Feature-chain: {action} on {obs.get('source_view')} "
+                f"propagates to {target_class} ({obs.get('target_view')})"
+            ),
+            "priority": "important",
+            "surface": "ui",
+            "source": "review.runtime_discovery.cross_view",
+            "goal_class": "feature_chain",
+            "enables": [],
+            "evidence": {
+                "source_view": obs.get("source_view"),
+                "target_view": obs.get("target_view"),
+                "target_view_class": target_class,
+                "entity_canonical_id": entity_canon,
+                "observed_in_target": obs.get("observed_in_target"),
+                "observed_count_delta": obs.get("observed_count_delta"),
+                "limitations": obs.get("limitations") or [],
+            },
+            "trigger": f"{action.upper()} on {obs.get('source_view')}",
+            "chain_steps": [
+                {
+                    "step_id": "S1",
+                    "description": f"User on source view {obs.get('source_view')}",
+                    "target_view_class": "source_view",
+                    "expected_state": f"{action}_form_ready",
+                    "downstream_effects": [],
+                },
+                {
+                    "step_id": "S2",
+                    "description": f"Perform {action} → server returns 2xx",
+                    "target_view_class": "source_view_modal" if action == "create" else "source_view",
+                    "expected_state": f"{action}_persisted",
+                    "downstream_effects": [
+                        f"entity {entity_canon} state change",
+                    ],
+                },
+                {
+                    "step_id": "S3",
+                    "description": f"Navigate to {target_class} ({obs.get('target_view')})",
+                    "target_view_class": target_class,
+                    "expected_state": f"propagation_visible_in_{target_class}",
+                    "downstream_effects": [
+                        f"observed_count_delta={obs.get('observed_count_delta')}",
+                    ],
+                },
+                {
+                    "step_id": "S4",
+                    "description": f"Re-open detail and assert state synced",
+                    "target_view_class": "sibling_list",
+                    "expected_state": "detail_reflects_source_mutation",
+                    "downstream_effects": [],
+                },
+            ],
+            "main_steps": [
+                {"S1": f"User performs {action} on {obs.get('source_view')}"},
+                {"S2": f"Navigate to {obs.get('target_view')} ({target_class})"},
+                {"S3": f"Assert entity_id present (observed: {obs.get('observed_in_target')})"},
+                {"S4": "Click → detail loads, mutation reflected end-to-end"},
+            ],
+            "postcondition": [
+                f"feature chain {action} → {target_class} verified closed-loop",
+            ],
+        })
+
     for f in scan.get("forms", []):
         trigger = f.get("trigger", "unknown-form")
         key = name_slug(trigger)
