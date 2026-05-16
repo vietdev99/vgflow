@@ -293,6 +293,32 @@ if [ -f "$LIFECYCLE_DEPTH_VAL" ]; then
   fi
 fi
 
+# B67 (codex MAJOR): cross-artifact consistency gate. Goals declared
+# in LIFECYCLE-SPECS.json must have matching entries across:
+#   - EDGE-CASES/VARIANTS.json (when goal has edge_cases/negative_specs)
+#   - SEED-RECIPE.md (per-variant entries)
+#   - CODEGEN-MANIFEST.json (playwright_specs list, when specs exist)
+# Goals with infra_deps tag exempt (manual test). Codex MAJOR mitigated:
+# NOT every goal blindly — only goals that actually need automation.
+# Default ADVISORY (warn-only); strict via --strict-artifact-consistency.
+ARTIFACT_CONSISTENCY_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-test-artifact-consistency.py"
+[ -f "$ARTIFACT_CONSISTENCY_VAL" ] || ARTIFACT_CONSISTENCY_VAL="${REPO_ROOT:-.}/scripts/validators/verify-test-artifact-consistency.py"
+if [ -f "$ARTIFACT_CONSISTENCY_VAL" ] && [ -f "${PHASE_DIR}/LIFECYCLE-SPECS.json" ]; then
+  AC_FLAGS=""
+  [[ "${ARGUMENTS:-}" =~ --strict-artifact-consistency ]] && AC_FLAGS="--strict"
+  if ! "${PYTHON_BIN:-python3}" "$ARTIFACT_CONSISTENCY_VAL" \
+       --phase "${PHASE_NUMBER}" \
+       --phase-dir "${PHASE_DIR}" \
+       $AC_FLAGS; then
+    "${PYTHON_BIN:-python3}" "${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator" emit-event \
+      "test.preflight_artifact_gap" --payload "{\"phase\":\"${PHASE_NUMBER}\"}" >/dev/null 2>&1 || true
+    if [[ "${ARGUMENTS:-}" =~ --strict-artifact-consistency ]]; then
+      echo "⛔ B67 BLOCK: cross-artifact consistency failed" >&2
+      exit 1
+    fi
+  fi
+fi
+
 # Batch 23: spec body coverage gate — defense-in-depth before playwright runtime.
 # Catches shallow specs from prior codegen runs that slipped through test-spec gate.
 STAGE_COV_VAL="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-spec-stage-coverage.py"
