@@ -1,5 +1,42 @@
 # Changelog
 
+## v4.52.0 — B62: feature_chain goal class top-down enforcement
+
+Top-down enforcement that AI emits closed-loop goals for every CRUD
+resource. Built on B62-pre dispatch + symmetry foundation.
+
+Template (TEST-GOAL-enriched-template.md):
+- goal_class enum: `feature_chain` + `post_create_cascade` alias
+- New required frontmatter: `enables[]`, `chain_consumes_state`,
+  `chain_produces_state`, `chain_steps[]` (with target_view_class enum)
+- min_steps[feature_chain] = 8 documented
+
+Prompt (contracts-delegation.md): AI instruction for every CRUD-
+creating resource to emit ≥1 sibling feature_chain goal modeling
+closed-loop journey (create → list-visibility → click → detail →
+edit → cascade → delete → archive). Anti-cheat: do NOT rename
+existing mutation goal.
+
+Validator (verify-feature-chain-coverage.py): enforces audit ID-3
+anti-cheat rules:
+- chain_steps length ≥ 8
+- distinct expected_state per step
+- ≥1 step traverses out of {source_view, source_view_modal,
+  source_view_form} family
+- ≥2 steps with non-empty downstream_effects[]
+
+Waiver: CONTEXT.md `feature_chain_waiver[<resource>]: <reason>`.
+Escape: `--allow-feature-chain-shortfall`.
+
+Close.md wires gate with 3-tier fallback. Emits
+blueprint.feature_chain_blocked event.
+
+OUT-OF-SCOPE.md documents deferrals: multi-tenant + async + real-
+prompt dogfood → B65 candidates.
+
+Tests: tests/test_batch62_feature_chain.py (15 GREEN). Pre-B62
+lifecycle tests still green — zero regression.
+
 ## v4.51.2 — fix #188: vg_uninstall ValueError on sibling-project symlink
 
 Bug-auto report e6f720cc: vg_uninstall.py crashed mid-cleanup with
