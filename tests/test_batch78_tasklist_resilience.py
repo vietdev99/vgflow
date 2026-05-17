@@ -51,6 +51,12 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 # Bug 1: hook script parses on bash 3.2 (macOS default)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="bash 3.2 regression is macOS-only; Windows lacks /bin/bash. "
+           "Static guard test_hook_has_no_inline_heredoc_command_substitution "
+           "covers this case cross-platform.",
+)
 def test_hook_script_parses_on_bash_3_2() -> None:
     """vg-post-tool-use-todowrite.sh must parse on macOS bash 3.2.
 
@@ -62,8 +68,12 @@ def test_hook_script_parses_on_bash_3_2() -> None:
     hook = SCRIPTS_DIR / "hooks" / "vg-post-tool-use-todowrite.sh"
     assert hook.is_file(), f"hook missing: {hook}"
 
+    bash_bin = "/bin/bash"
+    if not Path(bash_bin).exists():
+        import shutil
+        bash_bin = shutil.which("bash") or bash_bin
     proc = subprocess.run(
-        ["/bin/bash", "-n", str(hook)],
+        [bash_bin, "-n", str(hook)],
         capture_output=True, text=True,
     )
     assert proc.returncode == 0, (
