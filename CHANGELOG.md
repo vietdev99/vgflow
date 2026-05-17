@@ -1,3 +1,79 @@
+# v4.63.11 — B79 tasklist evidence: TaskCreate taskId + accumulation threshold
+
+User dogfood report (PrintwayV3 `/vg:blueprint 8.3` session, 2026-05-18):
+two latent bugs in `_vg_tasklist_evidence_payload.py` broke the
+TaskCreate/TaskUpdate evidence-binding chain on every hierarchical
+projection (7-group blueprint contract × 31 sub-steps = 38 todos).
+
+**Bugs surfaced + fixed:**
+
+1. **TaskCreate `task_id` extraction silently empty.** Helper read
+   tool_response field as snake_case `task_id` or `id`. Real Claude
+   TaskCreate response shape is `{ "taskId": "1349" }` (camelCase).
+   Mismatch made every trace `create` row record `task_id=""`, which
+   meant later `TaskUpdate` events could never pair against the
+   matching create row to flip status — every task appeared `pending`
+   to the gate forever.
+
+   **Symptom:** `tasklist-projected --adapter claude` repeatedly
+   reported `latest_marked_status_valid: false` with status='pending'
+   even after the user explicitly marked the step completed via
+   TaskUpdate. The gate refused to unblock.
+
+   **Fix:** check `taskId` first, fall back to `task_id` then `id` for
+   legacy compatibility:
+   ```python
+   task_id = str(
+       tr.get("taskId")
+       or tr.get("task_id")
+       or tr.get("id")
+       or ""
+   )
+   ```
+
+2. **Accumulation threshold compared against checklists count instead
+   of projection_items count.** A correctly hierarchical TodoWrite
+   projection emits one todo per `projection_items[]` entry — group
+   headers + `↳` sub-steps. For a typical blueprint contract (7
+   checklists × ~5 sub-steps each), that's 38 todos. The helper
+   computed `accumulation_threshold = max(1.5×7, 7+3) = 10.5`, so 38
+   triggered `accumulation_suspected=true` even though every todo was
+   contract-bound.
+
+   **Symptom:** `PreToolUse-tasklist: TodoWrite accumulation suspected
+   (todos=38, contract=7). UI carrying tasks from prior runs.` —
+   user-visible message accusing operator of failing to replace prior
+   tasklists when in fact the projection was fully correct.
+
+   **Fix:** compare against `len(projection_items)` (full
+   group+sub-step inventory). Falls back to `contract_projection_count`
+   for legacy contracts that lack `projection_items`:
+   ```python
+   projection_count_full = len(projection_items) if projection_items else contract_projection_count
+   accumulation_threshold = max(
+       projection_count_full * 1.5, projection_count_full + 3
+   )
+   ```
+
+**Why this matters:** without B79, every native-tasklist runtime that
+uses TaskCreate/TaskUpdate adapter (Claude Code v2.51+) hits both bugs
+simultaneously on any pipeline with ≥6 group headers and ≥3 sub-steps
+each. The operator's only escape was direct evidence-file resign via
+HMAC, which is undocumented and bypasses the safety gate.
+
+**Files:**
+- `scripts/hooks/_vg_tasklist_evidence_payload.py` (canonical)
+- `.claude/scripts/hooks/_vg_tasklist_evidence_payload.py` (mirror,
+  byte-identical per B77 parity assertion)
+
+**Tests:** existing B77 `test_b77_post_hook_emits_accumulation_flag`
++ `test_b77_threshold_definition` still pass (they assert presence of
+threshold tokens, not the comparison field). A B79-specific test for
+the camelCase taskId + projection_count semantics will follow in a
+subsequent commit.
+
+---
+
 # v4.63.10 — B78 tasklist resilience (macOS bash 3.2 + FK + profile merge)
 
 User dogfood report (PrintwayV3 `/vg:test 8.2` session, 2026-05-18):

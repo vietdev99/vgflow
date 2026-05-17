@@ -60,7 +60,16 @@ def main() -> int:
         task_id = ""
         tr = hook_input.get("tool_response") or hook_input.get("tool_result") or {}
         if isinstance(tr, dict):
-            task_id = str(tr.get("task_id") or tr.get("id") or "")
+            # B79: Claude TaskCreate tool_response field is camelCase `taskId`.
+            # Old check for snake_case `task_id` always missed → trace records
+            # `task_id=""` → TaskUpdate cannot pair against create row → status
+            # stays "pending" → tasklist-projected gate fires false-positive.
+            task_id = str(
+                tr.get("taskId")
+                or tr.get("task_id")
+                or tr.get("id")
+                or ""
+            )
         if subject:
             trace_path.parent.mkdir(parents=True, exist_ok=True)
             with trace_path.open("a", encoding="utf-8") as f:
@@ -193,12 +202,19 @@ def main() -> int:
                     break
 
     contract_projection_count = len(contract_ids)
+    # B79: accumulation threshold MUST compare against projection_items count
+    # (groups + sub-steps), NOT checklists count (groups only). Otherwise a
+    # correctly hierarchical TodoWrite (e.g. 7 groups × ~5 sub-steps = 38)
+    # trips a false-positive accumulation block, since 38 > 1.5×7 even though
+    # every sub-step is contract-bound. Fall back to checklists count when
+    # projection_items missing (legacy schema).
+    projection_count_full = len(projection_items) if projection_items else contract_projection_count
     todo_count_actual = len(todos)
     accumulation_threshold = max(
-        contract_projection_count * 1.5, contract_projection_count + 3
+        projection_count_full * 1.5, projection_count_full + 3
     )
     accumulation_suspected = bool(
-        contract_projection_count > 0
+        projection_count_full > 0
         and todo_count_actual > accumulation_threshold
     )
 
