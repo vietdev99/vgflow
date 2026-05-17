@@ -1,3 +1,57 @@
+# v4.63.8 — B76 issue #191 real root cause (C-M1/C-M5/C-M8 verified fix)
+
+B75 v4.63.7 claimed "8/8 complete" but consumer measurement on Phase 8.2
+(PrintwayV3 dogfood) showed defects unchanged:
+
+- C-M1 endpoint=null: 1218/1218 lifecycle steps still null
+- C-M5 path mismatch: 114/185 primary_endpoints don't match API-CONTRACTS
+- C-M8 decision_refs empty: 206/206 goals (traceability never wired)
+
+## Root cause
+
+### C-M1 / C-M5 (endpoint binding)
+
+`ENDPOINT_HEADER_RE` only matched `### GET /path` markdown headers. The
+3-layer split API-CONTRACTS.md (Batch 60+) uses TOC index links:
+`- [GET /path](file.md)` + per-endpoint files under `API-CONTRACTS/`.
+Result: 0 contracts loaded → `_bind_endpoint()` returned None for every
+stage → all 1218/1218 lifecycle step endpoints null.
+
+### C-M8 (decision_refs)
+
+`DECISION_HEADER_RE = r"^#{2,3}\s+(D-[\w.-]+):?\s*(.+?)$"` required `D-`
+immediately after whitespace. Phase docs use prefixed form
+`### P8.D-67:` so this regex matched 0 headers. Goal-ref regex captured
+bare `D-XX` (word boundary tolerated `P8.` prefix), but since the
+decisions dict was empty, lookup always failed → decision_refs empty
+for every goal.
+
+## Fix
+
+1. `scripts/generate-lifecycle-specs.py`:
+   - Add `ENDPOINT_TOC_LINK_RE` matching `- [METHOD /path](file)` index
+     links. Extend `_parse_api_contracts` to merge header + TOC + per-
+     endpoint sub-files into a deduplicated set.
+   - Allow optional `P\d+\.` prefix in both `DECISION_HEADER_RE` and
+     `DECISION_REF_RE` so phase-prefixed IDs flow through to canonical
+     decisions dict and goal refs resolve.
+
+2. `tests/test_batch76_real_root_cause.py`: 9 regression assertions
+   covering both regex matches AND end-to-end `_parse_api_contracts`/
+   `_parse_context_decisions` counter contracts. B75-style stub-pass
+   no longer possible.
+
+## Verified on Phase 8.2 fixture
+
+| Defect | v4.63.7 | v4.63.8 |
+|--------|---------|---------|
+| Endpoint=null | 1218/1218 | **0/1218** |
+| Decision_refs empty | 206/206 | **12/206** (94.2% coverage) |
+| Parser contract count | 0 | 123 |
+| Parser decision count | 0 | 214 |
+
+Closes vietdev99/vgflow#191 (real, this time — measurable assertions).
+
 # Changelog
 
 ## v4.63.7 — B75: close issue #191 remaining 4 defects (8/8 complete)
