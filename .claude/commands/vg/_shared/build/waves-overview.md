@@ -85,9 +85,17 @@ Mark step active and gate on `WAVE_FILTER`:
 ```bash
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 8_execute_waves
 
-# WAVE_FILTER gate (v2.2): execute ONLY filtered wave then exit to step 9.
+# WAVE_FILTER gate (v2.2 + B72 v4.63.4): execute ONLY filtered wave then
+# decide based on whether the filtered wave IS the final wave.
+#   - Mid-wave (N < max_wave): exit early after wave commits — partial run.
+#   - Final wave (N == max_wave): MUST NOT EXIT — continue STEP 5 / 6 / 7
+#     post-execution + CrossAI + close IN THE SAME ASSISTANT TURN.
+# The `.is-final-wave` marker written at the end of STEP 4 carries this
+# signal forward into the build.md post-wave gate (line ~327).
 if [ -n "${WAVE_FILTER:-}" ]; then
-  echo "▸ --wave ${WAVE_FILTER} mode: orchestrator will execute ONLY Wave ${WAVE_FILTER} then exit to step 9."
+  echo "▸ --wave ${WAVE_FILTER} mode: orchestrator runs Wave ${WAVE_FILTER} only."
+  echo "  If ${WAVE_FILTER} < max_wave → partial run, exit to step 9 (caller re-runs /vg:build --wave N+1)."
+  echo "  If ${WAVE_FILTER} == max_wave → FINAL wave — DO NOT END TURN. Continue STEP 5/6/7 inline."
 fi
 ```
 
@@ -1365,6 +1373,35 @@ fi
 # Persist for subsequent steps (slim entry STEP 5 reads this)
 mkdir -p ".vg/runs/${RUN_ID}" 2>/dev/null
 echo "$IS_FINAL_WAVE" > ".vg/runs/${RUN_ID}/.is-final-wave"
+
+# B72 v4.63.4 — explicit AUTO-CONTINUE directive when wave is final. AI was
+# observed ending turn after final wave commits because earlier waves-overview
+# prose "exit to step 9" was ambiguous. Print a system-reminder-shaped block
+# so AI cannot rationalize ending the turn here.
+if [ "$IS_FINAL_WAVE" = "true" ]; then
+  cat <<'AUTO_CONTINUE_DIRECTIVE'
+
+<system-reminder>
+[B72 AUTO-CONTINUE — FINAL WAVE COMPLETE]
+
+The final wave has finished writing commits. You MUST NOT end this assistant
+turn here. The build run is NOT complete until:
+  - STEP 5  9_post_execution.done
+  - STEP 6  11_crossai_build_verify_loop.done
+  - STEP 7  10_postmortem_sanity.done + 12_run_complete.done + actual
+            vg-orchestrator run-complete invocation
+
+Continue IMMEDIATELY with:
+  1. Read commands/vg/_shared/build/post-execution-overview.md and run STEP 5.
+  2. Read commands/vg/_shared/build/crossai-loop.md and run STEP 6 (HARD-GATE).
+  3. Read commands/vg/_shared/build/close.md and run STEP 7 (postmortem + run-complete).
+
+The Stop hook will BLOCK this turn-end with cascade gates 4a/4b/4c/4d/4e if
+you try to exit before all four markers are present and run state is completed.
+</system-reminder>
+
+AUTO_CONTINUE_DIRECTIVE
+fi
 ```
 
 After step 8 + 8.5 markers touched for ALL waves (or for the FINAL wave when

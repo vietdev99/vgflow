@@ -1,5 +1,50 @@
 # Changelog
 
+## v4.63.4 — B72: wave→post-build auto-continuation hardening
+
+User report (dogfood RTB): "build xong từng wave dùng --wave. chạy hết wave
+thì phiên chạy đó đáng lẽ nên kích hoạt nốt các bước sau của build. nhưng
+hiện tại nó không tự kích hoạt".
+
+Parallel cavecrew-investigator traced root cause:
+  1. `waves-overview.md:88-90` echoed "execute ONLY filtered wave then exit
+     to step 9" — ambiguous prose. AI sometimes interpreted as "exit now"
+     after final wave commits even when `is_final_wave=true`.
+  2. Stop hook cascade gates 4a/4b/4c/4d/4e (shipped B68 v4.56.0) DETECT
+     missing post-build steps via `exit 2 + stderr` but rely on Claude Code
+     re-injecting stderr into next-turn context. Older Claude Code versions
+     drop this silently on certain turn-end transitions.
+
+Fix (single tag):
+
+**B72.a — waves-overview.md final-wave directive:**
+  - `--wave N` mode echo now states BOTH branches:
+    `If N < max_wave → partial run, exit to step 9 (caller re-runs).`
+    `If N == max_wave → FINAL wave — DO NOT END TURN. Continue STEP 5/6/7 inline.`
+  - AFTER `.is-final-wave=true` marker write, EMIT explicit
+    `<system-reminder>` heredoc to stdout listing all 4 required markers
+    (`9_post_execution.done`, `11_crossai_build_verify_loop.done`,
+    `10_postmortem_sanity.done`, `12_run_complete.done`) and citing cascade
+    gates 4a/4e as the enforcement mechanism. AI cannot rationalize
+    "build finished" — the reminder is in the same turn output.
+
+**B72.b — Stop hook JSON decision protocol:**
+  - When cascade gates fire, emit JSON `{"decision":"block","reason":"..."}`
+    to stdout per Claude Code Stop hook decision contract (more reliable
+    than stderr-only injection).
+  - `reason` includes the full failures[] list + diagnostic file path +
+    explicit "AI MUST continue in the SAME assistant turn" directive.
+  - Backward-compat: still exit 2 + stderr orange-title log for older
+    Claude Code versions.
+
+Coverage: **13 tests** including a real bash subprocess invocation that
+seeds `.vg/active-runs/{sid}.json` + `.vg/runs/{rid}/.is-final-wave=true`
++ `.step-markers/wave-1.done` (waves done but no post_execution.done) and
+asserts the Stop hook emits a parseable JSON decision block with
+`POST-WAVE CONTINUATION` in the reason.
+
+No regression: 68 cross-batch tests (B68 + B71 + B72) all green.
+
 ## v4.63.3 — B71f+B71g: RTB fixture regression + TaskList architecture doc
 
 Final B71 ship. Closes remaining backlog (B71f integration + B71g docs).

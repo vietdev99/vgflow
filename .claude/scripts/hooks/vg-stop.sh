@@ -179,6 +179,35 @@ if [ "${#failures[@]}" -gt 0 ]; then
   # Title color: error → orange (\033[38;5;208m); warn → yellow (\033[33m). Reset: \033[0m. Color applies ONLY to title.
   printf "\033[38;5;208m%s: %d failure(s) for run %s (%s)\033[0m\n→ Read %s for details + fix\n" \
     "$gate_id" "${#failures[@]}" "$run_id" "$command" "$block_file" >&2
+
+  # B72 v4.63.4 — emit JSON decision-block to stdout per Claude Code Stop
+  # hook contract so AI is FORCED to receive the failure list as a structured
+  # re-prompt reason (more reliable than relying on stderr injection alone,
+  # which older Claude Code versions sometimes drop silently after the
+  # turn-end transition). The exit 2 below preserves backward-compat for
+  # older Claude Code versions that read stderr from non-zero exit.
+  python3 - "$gate_id" "$run_id" "$command" "$block_file" "${failures[@]}" <<'JSON_DECISION_PY' 2>/dev/null || true
+import json, sys
+gate_id, run_id, command, block_file = sys.argv[1:5]
+failures = sys.argv[5:]
+reason_lines = [
+    f"{gate_id} gate fired {len(failures)} time(s) for run {run_id} ({command}).",
+    "",
+    "Failures (must resolve before next turn-end):",
+]
+reason_lines.extend(f"- {f}" for f in failures)
+reason_lines.append("")
+reason_lines.append(f"Full diagnostic: {block_file}")
+reason_lines.append(
+    "AI MUST continue in the SAME assistant turn — invoke the next missing "
+    "step inline. Do NOT acknowledge the block and stop."
+)
+print(json.dumps({
+    "decision": "block",
+    "reason": "\n".join(reason_lines),
+}))
+JSON_DECISION_PY
+
   exit 2
 fi
 
