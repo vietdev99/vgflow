@@ -1,5 +1,62 @@
 # Changelog
 
+## v4.63.7 — B75: close issue #191 remaining 4 defects (8/8 complete)
+
+Closes [#191](https://github.com/vietdev99/vgflow/issues/191) (HIGH). v4.63.6
+B74 shipped 4/8 deterministic fixes (C-M1/M2/M5/M6); this release ships the
+remaining 4 that required slightly deeper refactor.
+
+**C-M3 — Actor canonical role lookup + generic placeholder replacement:**
+
+`scripts/generate-lifecycle-specs.py:_infer_actors_v2`:
+  - NEW `_load_foundation_roles(phase_dir)` walks up to project root, reads
+    `FOUNDATION.md` / `vg.config.md` `## Roles` block, returns lowercase
+    snake_case role IDs.
+  - NEW `_GENERIC_ACTOR_PLACEHOLDERS` frozenset: `secondary_user_or_external_system`,
+    `external_system`, `approver`, `reviewer`, `secondary_user`,
+    `secondary_actor`, `any_authenticated_user`.
+  - When canonical roles available AND goal actor matches a generic
+    placeholder → remap to first canonical role + record
+    `_b75_generic_actor_replaced` counter on goal for caller diagnostics.
+  - When no FOUNDATION.md found → keep prior behavior (back-compat).
+
+**C-M4 — `immutable: true` flag → stage filter:**
+
+`_parse_goal_block` now parses `**immutable:** true|yes|1` from goal
+frontmatter. `_stages_for_goal` checks immutable BEFORE goal_class/goal_type
+dispatch and returns `(read_before, create, read_after_create)` only —
+skipping update/delete/read_after_update/read_after_delete stages. Fixes
+the 52-goal partial-RCRURDR BLOCK pattern (ledger entries, audit logs,
+append-only resources cannot be updated/deleted).
+
+**C-M7 — `mutation_evidence` vs `success_status` cross-validation:**
+
+`_parse_goal_block` now parses `**success_status:** <code>` from
+frontmatter. NEW `_validate_success_status_consistency(goal)` returns
+`{"declared": "200", "observed": "201"}` when declared status doesn't
+appear in mutation_evidence text. Returns None on missing fields or
+consistent. Caller (downstream emitter) surfaces drift count for
+diagnostic. Catches G-048-style internal contradiction
+(POST returns 200 stated, but evidence expects 201).
+
+**C-M8 — TEST-GOALS source merge (split + flat dedup):**
+
+`_parse_goals` previously did `if split_dir: return only split` — flat
+TEST-GOALS.md was SKIPPED entirely if split-dir had any G-*.md. Phase 8.2
+PrintwayV3 dogfood: split-dir had G-001..G-200, flat had G-001..G-226 →
+G-201..G-226 silently dropped → 74 CONTEXT.md decisions absent from coverage.
+**Fix:** merge both sources by goal_id with split-dir winning on duplicates.
+Goals appended to flat file but not yet migrated to split-dir are now
+preserved.
+
+Coverage: **19 new tests** + 41 cross-batch lifecycle/test-spec tests no
+regression. Mirror parity.
+
+**Issue #191 final summary (2 ships v4.63.6 → v4.63.7):**
+  - 8/8 defects fixed.
+  - 33 new tests (14 B74 + 19 B75).
+  - Issue closed.
+
 ## v4.63.6 — B74: fix issue #191 test-spec generator defects (4/8 partial)
 
 Partially closes [#191](https://github.com/vietdev99/vgflow/issues/191) (HIGH,

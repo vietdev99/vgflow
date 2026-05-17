@@ -98,6 +98,13 @@ def _stages_for_goal(goal: dict[str, Any]) -> tuple[str, ...]:
     Without B62-pre fix, AI setting goal_class=feature_chain produced no
     stage change because pipeline read goal_type only.
     """
+    # B75 v4.63.7 (issue #191 C-M4): immutable resources skip update + delete.
+    # Goal authors mark `immutable: true` when the resource cannot be mutated
+    # (e.g. ledger entries, audit logs, append-only journals). Avoids the
+    # 52-goal partial-RCRURDR BLOCK reported in Phase 8.2 dogfood.
+    if goal.get("immutable") is True:
+        return ("read_before", "create", "read_after_create")
+
     # B62-pre: goal_class takes priority (feature_chain etc.)
     gclass = (goal.get("goal_class") or "").strip().lower()
     if gclass in GOAL_CLASS_STAGES:
@@ -305,6 +312,13 @@ def _parse_goal_block(text: str, source: Path) -> dict[str, Any] | None:
         return None
     goal_id = heading.group(1).strip()
     title = heading.group(2).strip()
+    # B75 v4.63.7 (issue #191 C-M4): parse `immutable` flag from frontmatter.
+    # Goals marked immutable: true skip update + delete stages (RCRURDR
+    # becomes RCR — read-create-read_after_create only).
+    immutable_raw = _field(text, "immutable").strip().lower()
+    is_immutable = immutable_raw in ("true", "yes", "1")
+    # B75 v4.63.7 (C-M7): parse success_status for cross-validation.
+    success_status_raw = _field(text, "success_status").strip()
     return {
         "id": goal_id,
         "title": title,
@@ -325,33 +339,59 @@ def _parse_goal_block(text: str, source: Path) -> dict[str, Any] | None:
         # B65a (codex BLOCKER #2): chain_steps + enables now parsed first-class
         "chain_steps": _parse_chain_steps(text),
         "enables": _parse_enables(text),
+        # B75 v4.63.7 (issue #191): new fields for C-M4 immutable + C-M7 cross-validation.
+        "immutable": is_immutable,
+        "success_status": success_status_raw,
         "source": str(source),
     }
 
 
 def _parse_goals(phase_dir: Path) -> list[dict[str, Any]]:
+    """B75 v4.63.7 (issue #191 C-M8): merge BOTH TEST-GOALS/G-*.md (split) AND
+    TEST-GOALS.md (flat) sources. Dedup by goal id, split-dir wins when both
+    present (split files are the canonical source-of-truth post-Batch-9; the
+    flat file may carry goals appended later that weren't migrated yet).
+
+    Previously: split dir = ANY match → flat file was IGNORED. Caused
+    G-201..G-226 to be dropped in Phase 8.2 (split dir had G-001..G-200,
+    flat had G-001..G-226). 74 CONTEXT.md decisions absent from coverage.
+    """
+    goals_by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    # 1. Split dir (canonical source).
     split_dir = phase_dir / "TEST-GOALS"
-    goals: list[dict[str, Any]] = []
     if split_dir.is_dir():
         for path in sorted(split_dir.glob("G-*.md")):
             goal = _parse_goal_block(_read(path), path)
-            if goal:
-                goals.append(goal)
-    if goals:
-        return goals
+            if goal and goal.get("id"):
+                gid = goal["id"]
+                if gid not in goals_by_id:
+                    order.append(gid)
+                goals_by_id[gid] = goal
 
-    text = _read(phase_dir / "TEST-GOALS.md")
-    pattern = re.compile(
-        r"^##\s+(?:Goal\s+)?(G-[\w.-]+):?\s*(.*?)$"
-        r"(?P<body>(?:(?!^##\s+(?:Goal\s+)?G-[\w.-]+).)*)",
-        re.MULTILINE | re.DOTALL,
-    )
-    for match in pattern.finditer(text):
-        body = f"## Goal {match.group(1)}: {match.group(2)}\n{match.group('body') or ''}"
-        goal = _parse_goal_block(body, phase_dir / "TEST-GOALS.md")
-        if goal:
-            goals.append(goal)
-    return goals
+    # 2. Flat TEST-GOALS.md (merge; only ADD missing goals — split-dir wins
+    # for duplicates so per-goal split semantics are preserved).
+    flat_path = phase_dir / "TEST-GOALS.md"
+    if flat_path.is_file():
+        text = _read(flat_path)
+        pattern = re.compile(
+            r"^##\s+(?:Goal\s+)?(G-[\w.-]+):?\s*(.*?)$"
+            r"(?P<body>(?:(?!^##\s+(?:Goal\s+)?G-[\w.-]+).)*)",
+            re.MULTILINE | re.DOTALL,
+        )
+        for match in pattern.finditer(text):
+            gid_raw = match.group(1).strip()
+            body = f"## Goal {gid_raw}: {match.group(2)}\n{match.group('body') or ''}"
+            goal = _parse_goal_block(body, flat_path)
+            if goal and goal.get("id"):
+                gid = goal["id"]
+                if gid not in goals_by_id:
+                    order.append(gid)
+                    goals_by_id[gid] = goal
+                # else: split-dir version already wins — skip flat.
+
+    return [goals_by_id[gid] for gid in order]
 
 
 def _combined(goal: dict[str, Any]) -> str:
@@ -472,8 +512,84 @@ def _preconditions(goal: dict[str, Any]) -> list[str]:
 ACTOR_METADATA_KEYS = ("actors", "actor")
 
 
-def _infer_actors_v2(goal: dict[str, Any]) -> list[dict[str, Any]]:
-    """Read explicit actors metadata first; fall back to word-match heuristic."""
+# B75 v4.63.7 (issue #191 C-M3): generic role placeholders that should NOT
+# be emitted when canonical foundation roles are available. AI-generated
+# placeholders like "secondary_user_or_external_system" or "reviewer"
+# leaked through fallback `_infer_actors`. Loading the project FOUNDATION
+# roles + auditing the field surfaces these generic placeholders.
+_GENERIC_ACTOR_PLACEHOLDERS = frozenset({
+    "secondary_user_or_external_system",
+    "external_system",
+    "approver",
+    "reviewer",
+    "secondary_user",
+    "secondary_actor",
+    "any_authenticated_user",
+})
+
+
+def _load_foundation_roles(phase_dir: Path | None) -> list[str]:
+    """Best-effort read of canonical project roles from FOUNDATION.md / vg.config.md.
+
+    Looks for a `## Roles` or `**Roles:**` block. Returns lowercase
+    snake_case role IDs. Empty list = no canonical source found
+    (caller falls back to existing inference).
+    """
+    if phase_dir is None:
+        return []
+    candidates: list[Path] = []
+    project_root = phase_dir
+    for _ in range(6):
+        if ((project_root / ".vg").is_dir()
+                or (project_root / "vg.config.md").is_file()
+                or (project_root / "FOUNDATION.md").is_file()):
+            break
+        if project_root.parent == project_root:
+            break
+        project_root = project_root.parent
+    for name in ("FOUNDATION.md", "vg.config.md"):
+        candidates.append(project_root / name)
+        candidates.append(project_root / ".vg" / name)
+    seen_paths: set[str] = set()
+    text = ""
+    for p in candidates:
+        try:
+            if p.is_file() and str(p.resolve()) not in seen_paths:
+                seen_paths.add(str(p.resolve()))
+                text += "\n" + p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+    if not text:
+        return []
+    roles: list[str] = []
+    m_block = re.search(
+        r"(?im)^(?:##\s+Roles|^\*\*Roles:\*\*)\s*\n(?P<body>.+?)(?=^##\s+|\n\*\*[\w-]+:\*\*|\Z)",
+        text,
+        re.DOTALL,
+    )
+    if m_block:
+        body = m_block.group("body")
+        for line in body.splitlines():
+            line = line.strip().lstrip("-*").strip()
+            if not line:
+                continue
+            # Extract first identifier-like token, drop trailing punctuation/desc.
+            m_role = re.match(r"^([A-Za-z][\w/-]+)", line)
+            if m_role:
+                rid = m_role.group(1).lower().replace("-", "_").replace("/", "_")
+                if rid and rid not in roles:
+                    roles.append(rid)
+    return roles
+
+
+def _infer_actors_v2(goal: dict[str, Any], phase_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Read explicit actors metadata first; fall back to word-match heuristic.
+
+    B75 v4.63.7 (issue #191 C-M3): when canonical roles available from
+    FOUNDATION.md/vg.config.md, reject generic placeholders and remap
+    to canonical names where possible.
+    """
+    canonical_roles = _load_foundation_roles(phase_dir) if phase_dir else []
     explicit = None
     for k in ACTOR_METADATA_KEYS:
         v = goal.get(k)
@@ -490,6 +606,13 @@ def _infer_actors_v2(goal: dict[str, Any]) -> list[dict[str, Any]]:
         seen: set[str] = set()
         for item in items:
             aid = item.lower().replace(" ", "_")
+            # B75 C-M3: replace generic placeholders with first canonical role
+            # if a project role list exists (otherwise keep as-is for compat).
+            if aid in _GENERIC_ACTOR_PLACEHOLDERS and canonical_roles:
+                aid = canonical_roles[0]
+                item = aid
+                goal.setdefault("_b75_generic_actor_replaced", 0)
+                goal["_b75_generic_actor_replaced"] += 1
             if aid in seen:
                 continue
             seen.add(aid)
@@ -497,8 +620,46 @@ def _infer_actors_v2(goal: dict[str, Any]) -> list[dict[str, Any]]:
                            "permissions": [f"least privilege required for {item} path"]})
         if actors:
             return actors
-    # Fallback to existing _infer_actors() word-match
-    return _infer_actors(goal)
+    # Fallback to existing _infer_actors() word-match, then post-filter
+    # generic placeholders if canonical roles known.
+    actors = _infer_actors(goal)
+    if canonical_roles:
+        for a in actors:
+            if a.get("role") in _GENERIC_ACTOR_PLACEHOLDERS:
+                a["role"] = canonical_roles[0]
+                a["id"] = canonical_roles[0]
+                a["session"] = f"{canonical_roles[0]}_session"
+                goal.setdefault("_b75_generic_actor_replaced", 0)
+                goal["_b75_generic_actor_replaced"] += 1
+    return actors
+
+
+# B75 v4.63.7 (issue #191 C-M7): validate mutation_evidence vs success_status.
+# Goal frontmatter `success_status: 201` should be consistent with
+# `Mutation evidence: ... returns 201`. G-048-style internal contradiction
+# (success=200 vs evidence=201) is silently emitted today.
+_STATUS_RE = re.compile(r"\b(2\d\d|3\d\d|4\d\d|5\d\d)\b")
+
+
+def _validate_success_status_consistency(goal: dict[str, Any]) -> dict[str, Any] | None:
+    """Return None when consistent; dict with `expected`/`observed` when drift."""
+    success_status = (goal.get("success_status") or "").strip()
+    mutation = goal.get("mutation_evidence") or ""
+    if not success_status or not mutation:
+        return None
+    # Extract HTTP status code from success_status field.
+    m = _STATUS_RE.search(success_status)
+    if not m:
+        return None
+    declared = m.group(1)
+    # Extract codes from mutation_evidence text.
+    evidence_codes = _STATUS_RE.findall(mutation)
+    if not evidence_codes:
+        return None
+    if declared in evidence_codes:
+        return None
+    # Mismatch — pick the FIRST observed evidence code as the conflict.
+    return {"declared": declared, "observed": evidence_codes[0]}
 
 
 # G5 Batch 4: root-level fixture DAG from goal.dependencies cross-references
