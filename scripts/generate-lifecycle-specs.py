@@ -175,6 +175,16 @@ ENDPOINT_HEADER_RE = re.compile(
     r"^#{2,4}\s+(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)\s*$",
     re.MULTILINE,
 )
+# B76 v4.63.8 (issue #191 C-M1/C-M5 real root cause):
+# 3-layer split API-CONTRACTS.md uses TOC links `- [GET /path](file.md)`
+# instead of `### GET /path` headers. Pre-B76 regex matched 0 entries
+# → contracts=[] → _bind_endpoint() returned None for every step
+# → 1218/1218 endpoint=null on consumer side. New pattern matches both
+# index-link and header forms.
+ENDPOINT_TOC_LINK_RE = re.compile(
+    r"^\s*[-*]\s+\[(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)\]\([^)]+\)",
+    re.MULTILINE,
+)
 
 EMPTY_VALUES = {"", "none", "n/a", "na", "null", "-", "[]", "{}"}
 
@@ -773,15 +783,24 @@ def _fixture_dag(goal: dict[str, Any], actors: list[dict[str, Any]]) -> list[dic
     return fixtures
 
 
+# B76 v4.63.8 (issue #191 C-M8 real root cause):
+# Phase decision headers in CONTEXT.md use `### P8.D-67:` form
+# (project-prefixed). Pre-B76 regex only matched bare `D-XX` → 0
+# decisions parsed from P8/P9/P10 phases → decision_refs empty for
+# every goal. Allow optional `P\d+\.` prefix and normalize to the
+# prefixed canonical ID so lookup matches goal references.
 DECISION_HEADER_RE = re.compile(
-    r"^#{2,3}\s+(D-[\w.-]+):?\s*(.+?)\s*$",
+    r"^#{2,3}\s+((?:P\d+\.)?D-[\w.-]+):?\s*(.+?)\s*$",
     re.MULTILINE,
 )
 DECISION_FIELD_RE = re.compile(
     r"^\*\*expected_assertion:\*\*\s*(.+?)(?=^\*\*|\n##|\n#\s+D-|\Z)",
     re.MULTILINE | re.DOTALL,
 )
-DECISION_REF_RE = re.compile(r"\b(D-[\w.-]+)\b")
+# B76 v4.63.8 (issue #191 C-M8): match optional `P\d+\.` prefix so
+# goal references like `P8.D-84` resolve against decisions parsed with
+# the same canonical form.
+DECISION_REF_RE = re.compile(r"\b((?:P\d+\.)?D-[\w.-]+)\b")
 
 
 def _parse_context_decisions(phase_dir: Path) -> dict[str, dict[str, str]]:
@@ -821,15 +840,36 @@ def _goal_decision_refs(goal: dict[str, Any], decisions: dict[str, dict[str, str
 
 
 def _parse_api_contracts(phase_dir: Path) -> list[dict[str, str]]:
-    """Parse API-CONTRACTS.md → list of {method, path} dicts."""
+    """Parse API-CONTRACTS.md → list of {method, path} dicts.
+
+    B76 v4.63.8 (issue #191 C-M1/C-M5 real root cause):
+    Supports two layouts emitted by /vg:blueprint:
+      (a) flat:     `### GET /api/v1/...` headers (legacy single-file).
+      (b) 3-layer split: TOC index `- [GET /path](file.md)` + per-endpoint
+          markdown files in `API-CONTRACTS/<slug>.md` (Batch 60+).
+    Pre-B76 only matched (a) → P8.2-style index files returned 0 contracts
+    → all step endpoints null. Now matches both and de-duplicates.
+    """
     contracts_path = phase_dir / "API-CONTRACTS.md"
     if not contracts_path.is_file():
         return []
     text = _read(contracts_path)
-    return [
-        {"method": m.group(1), "path": m.group(2)}
-        for m in ENDPOINT_HEADER_RE.finditer(text)
-    ]
+    found: dict[tuple[str, str], dict[str, str]] = {}
+    for m in ENDPOINT_HEADER_RE.finditer(text):
+        method, path = m.group(1), m.group(2)
+        found[(method, path)] = {"method": method, "path": path}
+    for m in ENDPOINT_TOC_LINK_RE.finditer(text):
+        method, path = m.group(1), m.group(2)
+        found.setdefault((method, path), {"method": method, "path": path})
+    # Also pull from per-endpoint files in API-CONTRACTS/ subdirectory
+    split_dir = phase_dir / "API-CONTRACTS"
+    if split_dir.is_dir():
+        for sub in split_dir.glob("*.md"):
+            sub_text = _read(sub)
+            for m in ENDPOINT_HEADER_RE.finditer(sub_text):
+                method, path = m.group(1), m.group(2)
+                found.setdefault((method, path), {"method": method, "path": path})
+    return list(found.values())
 
 
 def _bind_endpoint(stage: str, goal: dict[str, Any], contracts: list[dict[str, str]]) -> dict[str, str] | None:
