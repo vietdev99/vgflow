@@ -1,3 +1,44 @@
+# v4.63.9 — B77 TodoWrite accumulation gate (UI stuck-state fix)
+
+User dogfood report: TodoWrite UI was carrying 699 items across runs
+(10 in_progress + 116 pending + 573 completed). Screenshot showed
+"Wave 2 Build (resume)" + "Build Preflight" both rendered in the same
+TodoWrite list with duplicate sub-steps — AI was APPENDING new run's
+tasks to the prior UI state instead of REPLACING.
+
+**Root cause:** `_write_contract` `native_adapters.claude` string read
+"TodoWrite per projection_items entry. content = item.title VERBATIM..."
+— ambiguous. AI interpreted as "add items" rather than "submit complete
+fresh list, replacing all prior". Contract `lifecycle.projection_mode:
+replace-on-start` was hint-only, not hook-enforced.
+
+**Fix (4 surfaces):**
+
+1. `scripts/emit-tasklist.py` `_write_contract.native_adapters.claude`:
+   string now reads "TodoWrite REPLACES the entire prior list in one
+   call. Pass EXACTLY the projection_items[] from this contract — no
+   items from previous runs, no accumulated history."
+
+2. `commands/vg/_shared/lib/tasklist-projection-instruction.md`:
+   added "B77 REPLACE semantics (HARD-GATE)" block explicitly listing
+   the behavior + naming the `accumulation_suspected` flag.
+
+3. `scripts/hooks/vg-post-tool-use-todowrite.sh`: bloat detector
+   computes `threshold = max(contract * 1.5, contract + 3)`. When
+   `len(todos[]) > threshold` → evidence payload carries
+   `accumulation_suspected: true` + `contract_projection_count` field.
+
+4. `scripts/hooks/vg-pre-tool-use-bash.sh`: new `accumulation_check_result`
+   gate AFTER depth gate, BEFORE match gate. Parses
+   `payload.accumulation_suspected`; on true → BLOCK step-active with
+   directive to re-call TodoWrite with EXACTLY contract items. B73
+   run-complete bypass (issue #189) preserved.
+
+Coverage: 12 new tests (text presence + mirror parity + behavioral
+including real bash subprocess invocation that seeds synthetic evidence
+and asserts BLOCK fires on `accumulation_suspected=true` + PASS on
+clean evidence + B73 run-complete bypass preserved).
+
 # v4.63.8 — B76 issue #191 real root cause (C-M1/C-M5/C-M8 verified fix)
 
 B75 v4.63.7 claimed "8/8 complete" but consumer measurement on Phase 8.2

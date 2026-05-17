@@ -742,9 +742,14 @@ def _write_contract(
         "projection_item_count": len(projection_items),
         "native_adapters": {
             "claude": (
-                "TodoWrite per projection_items entry. content = item.title VERBATIM "
-                "(do NOT prepend `[id]` or `id:`). PostToolUse hook does tolerant match "
-                "by id OR title, so plain titles work. Sub-steps already include ↳ indent."
+                "TodoWrite REPLACES the entire prior list in one call. Pass EXACTLY "
+                "the projection_items[] from this contract — no items from previous "
+                "runs, no accumulated history. Each call discards whatever was visible "
+                "before. content = item.title VERBATIM (do NOT prepend `[id]` or `id:`). "
+                "PostToolUse hook does tolerant match by id OR title. Sub-steps already "
+                "include ↳ indent. B77 v4.63.9 (issue #191 follow-up): >1.5× contract "
+                "size in todos[] → bloat detector flags accumulation_suspected → "
+                "PreToolUse blocks next step-active until you re-project clean."
             ),
             "codex": (
                 "Codex native plan UI — compact window, not full hierarchy. "

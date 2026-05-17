@@ -789,6 +789,33 @@ case "$depth_check_result" in
   *) emit_block "depth check failed: ${depth_check_result}" ;;
 esac
 
+# B77 v4.63.9 (TodoWrite accumulation gate): user dogfood showed UI growing
+# to 699 items (10 in_progress / 116 pending / 573 completed) across runs
+# because AI was APPENDING new run's tasks instead of REPLACING. The hook
+# now BLOCKS step-active when post-tool-use marked accumulation_suspected.
+# Forces AI to re-call TodoWrite with EXACTLY contract projection_items[].
+accumulation_check_result="$(python3 - "$evidence_path" <<'PY'
+import json, sys
+ev = json.loads(open(sys.argv[1]).read())
+payload = ev.get("payload", {}) if isinstance(ev, dict) else {}
+if payload.get("accumulation_suspected") is True:
+    todo_count = payload.get("todo_count", 0)
+    contract_count = payload.get("contract_projection_count", 0)
+    print(f"accum:{todo_count}:{contract_count}", end="")
+    sys.exit(0)
+print("ok", end="")
+PY
+)"
+case "$accumulation_check_result" in
+  ok) ;;
+  accum:*)
+    todo_n="$(echo "$accumulation_check_result" | cut -d: -f2)"
+    contract_n="$(echo "$accumulation_check_result" | cut -d: -f3)"
+    emit_block "TodoWrite accumulation suspected (todos=${todo_n}, contract=${contract_n}). UI carrying tasks from prior runs. Re-call TodoWrite with EXACTLY the ${contract_n} projection_items[] from .vg/runs/${run_id}/tasklist-contract.json — no items from previous waves/commands. Each TodoWrite call REPLACES the entire prior list (Claude Code semantics)."
+    ;;
+  *) ;;  # other parse errors: ignore (don't block on bloat-check failure)
+esac
+
 # HOTFIX session 2 (2026-05-05) — Codex insight #2: verify TodoWrite items
 # COVER all contract checklists (match=true), not just "TodoWrite happened".
 # Without this, AI could call TodoWrite with a subset of group headers

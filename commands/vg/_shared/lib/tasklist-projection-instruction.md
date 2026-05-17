@@ -25,6 +25,14 @@ Then **the AI agent MUST** (this is the part the hook enforces):
 1. Read `${CONTRACT_PATH}` and parse `checklists[]`.
 2. Project the contract to the runtime-native task UI.
    - Lifecycle: `replace-on-start`; `close-on-complete`.
+   - **B77 v4.63.9 — REPLACE semantics (HARD-GATE):** every `TodoWrite` call
+     REPLACES the entire prior list in one shot. Pass EXACTLY the
+     `projection_items[]` from this contract — **no items from previous
+     waves/commands, no accumulated history.** PostToolUse hook now writes
+     `accumulation_suspected: true` when `todos[]` exceeds 1.5× contract
+     size; PreToolUse-bash BLOCKs the next `step-active` until you
+     re-project clean. The user-visible UI carrying 500+ stale items from
+     prior runs is the symptom this gate prevents.
    - Claude uses `TodoWrite` with the full two-layer hierarchy.
    - Codex uses a compact plan window, not the full hierarchy: at most 6
      visible rows, active group/step first, next 2-3 pending steps, completed

@@ -184,12 +184,27 @@ if db_path.exists():
                 latest_marked_status_valid = latest_marked_status == "completed"
                 break
 
+# B77 v4.63.9 — bloat detector: AI sometimes appends new run's tasks to prior
+# UI state instead of replacing → TodoWrite grows unboundedly. Threshold:
+# todos[] length > 1.5× contract projection_items[] → accumulation_suspected.
+# PreToolUse-tasklist blocks next step-active when this flag is true so AI
+# is forced to re-call TodoWrite with EXACTLY contract projection_items.
+contract_projection_count = len(contract_ids)
+todo_count_actual = len(todos)
+accumulation_threshold = max(contract_projection_count * 1.5, contract_projection_count + 3)
+accumulation_suspected = bool(
+    contract_projection_count > 0
+    and todo_count_actual > accumulation_threshold
+)
+
 payload = {
     "run_id": run_id,
     "adapter": "claude",
     "tool_name": tool_name,
     "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    "todo_count": len(todos),
+    "todo_count": todo_count_actual,
+    "contract_projection_count": contract_projection_count,
+    "accumulation_suspected": accumulation_suspected,
     "contract_sha256": hashlib.sha256(open(contract_path, "rb").read()).hexdigest(),
     "todo_ids": sorted(matched_ids),
     "contract_ids": contract_ids,
