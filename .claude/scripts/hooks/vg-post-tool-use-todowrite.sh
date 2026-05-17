@@ -7,6 +7,16 @@
 # expose TaskCreate instead of TodoWrite). Per-call appends are aggregated
 # into .vg/runs/{run_id}/.taskcreate-trace.jsonl and reconstructed into a
 # todos[] shape so the existing matching logic works unchanged.
+#
+# B78 (v4.63.10) — extracted inline heredoc Python to standalone helper
+# scripts. Reason: macOS ships bash 3.2 (GPLv2 freeze) which cannot parse
+# heredocs nested inside `"$(...)"` command substitution. Linux CI runs
+# bash 4+ which masked the regression. Symptom on macOS:
+#   line 31: unexpected EOF while looking for matching `)'
+#
+# Helpers (siblings of this hook):
+#   _vg_tasklist_evidence_payload.py — builds evidence JSON payload
+#   _vg_tasklist_snapshot_input.py    — resolves todo step_ids + snapshots
 
 set -euo pipefail
 
@@ -26,203 +36,20 @@ if [ ! -f "$contract_path" ]; then
   exit 0
 fi
 
-# Build evidence payload from TodoWrite input + contract.
-# NOTE: pass hook input via env var (VG_HOOK_INPUT) — heredoc consumes stdin.
-payload="$(VG_HOOK_INPUT="$input" python3 - "$contract_path" "$run_id" <<'PY'
-import hashlib, json, os, sqlite3, sys
-from pathlib import Path
-from datetime import datetime, timezone
-contract_path, run_id = sys.argv[1:]
-hook_input = json.loads(os.environ.get("VG_HOOK_INPUT", "{}"))
-contract = json.loads(open(contract_path).read())
-
-# v2.51+ tool dispatch: TodoWrite is legacy; TaskCreate/TaskUpdate are the
-# native task UI on newer Claude Code runtimes. TaskCreate fires once per
-# todo; aggregate via per-run trace file so a single 37-call sequence
-# reconstructs the same {todos: [...]} shape TodoWrite would have produced.
-tool_name = hook_input.get("tool_name") or "TodoWrite"
-trace_path = Path(f".vg/runs/{run_id}/.taskcreate-trace.jsonl")
-
-if tool_name == "TodoWrite":
-    todos = hook_input.get("tool_input", {}).get("todos", []) or []
-elif tool_name == "TaskCreate":
-    tool_input = hook_input.get("tool_input", {}) or {}
-    subject = (tool_input.get("subject") or "").strip()
-    # Optional task_id captured from response so TaskUpdate can match later
-    task_id = ""
-    tr = hook_input.get("tool_response") or hook_input.get("tool_result") or {}
-    if isinstance(tr, dict):
-        task_id = str(tr.get("task_id") or tr.get("id") or "")
-    if subject:
-        trace_path.parent.mkdir(parents=True, exist_ok=True)
-        with trace_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({
-                "action": "create",
-                "task_id": task_id,
-                "subject": subject,
-                "status": "pending",
-            }) + "\n")
-elif tool_name == "TaskUpdate":
-    tool_input = hook_input.get("tool_input", {}) or {}
-    upd_id = str(tool_input.get("taskId") or "")
-    upd_status = str(tool_input.get("status") or "")
-    if upd_id and upd_status and trace_path.exists():
-        trace_path.parent.mkdir(parents=True, exist_ok=True)
-        with trace_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({
-                "action": "update",
-                "task_id": upd_id,
-                "status": upd_status,
-            }) + "\n")
-# else: unknown tool — leave trace untouched
-
-# Reconstruct todos[] from trace when this is a TaskCreate/TaskUpdate run.
-if tool_name in ("TaskCreate", "TaskUpdate"):
-    items_by_id = {}        # task_id -> {content, status}
-    items_no_id = []        # entries without task_id (degraded fallback)
-    if trace_path.exists():
-        for line in trace_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            act = rec.get("action")
-            tid = rec.get("task_id") or ""
-            if act == "create":
-                entry = {"content": rec.get("subject", ""), "status": rec.get("status", "pending")}
-                if tid:
-                    items_by_id[tid] = entry
-                else:
-                    items_no_id.append(entry)
-            elif act == "update":
-                if tid in items_by_id and rec.get("status"):
-                    items_by_id[tid]["status"] = rec["status"]
-    todos = list(items_by_id.values()) + items_no_id
-checklists = contract.get("checklists", [])
-projection_items = contract.get("projection_items", []) or []
-
-# Tolerant match: each contract checklist matched if any group-header todo
-# content contains its id or its title. Allows AI to format group content
-# as "id", "title", or "id: title (N steps)" without breaking verification.
-todo_contents = [t.get("content", "").strip() for t in todos if t.get("content")]
-
-# Task 44b — Rule V2 (depth check): scan all raw todos in order and count, per
-# group_header, the number of immediately-following items prefixed with "↳".
-# A group with 0 children is "flat" → depth_valid=false. The previous
-# implementation FILTERED OUT ↳ rows before matching (audit P4 smoking gun);
-# that REWARDED flat tasklists. We now keep raw order and walk it linearly.
-
-def _is_sub(content: str) -> bool:
-    return content.lstrip().startswith("↳")
-
-# Walk todos in order. For each group-header (non-↳), count the number of ↳
-# items that immediately follow before the next group-header.
-groups_seen = []        # ordered list of (matched_id, header_text)
-sub_counts = {}         # matched_id -> int
-current_id = None
-for content in todo_contents:
-    if _is_sub(content):
-        if current_id is not None:
-            sub_counts[current_id] = sub_counts.get(current_id, 0) + 1
-        # else: orphan sub before any group — ignored
-        continue
-    # group-header row: try to match against contract checklists by id or title.
-    matched = None
-    for c in checklists:
-        if c["id"] in content or c["title"] in content:
-            matched = c["id"]
-            break
-    current_id = matched
-    if matched is not None and matched not in sub_counts:
-        sub_counts[matched] = 0
-        groups_seen.append((matched, content))
-
-matched_ids = set(sub_counts.keys())
-contract_ids = sorted([c["id"] for c in checklists])
-match = matched_ids == set(contract_ids)
-
-# depth_valid: every matched group must have ≥1 ↳ child.
-flat_groups = [gid for gid, n in sub_counts.items() if n == 0]
-groups_with_subs_count = sum(1 for n in sub_counts.values() if n >= 1)
-depth_valid = (len(matched_ids) > 0) and (len(flat_groups) == 0)
-
-latest_marked_step = None
-latest_marked_at = None
-latest_marked_status = None
-latest_marked_status_valid = True
-db_path = Path(".vg/events.db")
-if db_path.exists():
-    try:
-        conn = sqlite3.connect(str(db_path))
-        row = conn.execute(
-            "SELECT step, ts FROM events "
-            "WHERE run_id = ? AND event_type = 'step.marked' "
-            "ORDER BY id DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-        conn.close()
-    except Exception:
-        row = None
-    if row and row[0]:
-        latest_marked_step = row[0]
-        latest_marked_at = row[1]
-        accepted = {latest_marked_step}
-        for item in projection_items:
-            if item.get("kind") == "step" and item.get("id") == latest_marked_step:
-                title = str(item.get("title") or "").strip()
-                if title:
-                    accepted.add(title)
-                    accepted.add(title.lstrip(" ↳").strip())
-        latest_marked_status_valid = False
-        for todo in todos:
-            content = str(todo.get("content") or "")
-            if any(token and token in content for token in accepted):
-                latest_marked_status = str(todo.get("status") or "")
-                latest_marked_status_valid = latest_marked_status == "completed"
-                break
-
-# B77 v4.63.9 — bloat detector: AI sometimes appends new run's tasks to prior
-# UI state instead of replacing → TodoWrite grows unboundedly. Threshold:
-# todos[] length > 1.5× contract projection_items[] → accumulation_suspected.
-# PreToolUse-tasklist blocks next step-active when this flag is true so AI
-# is forced to re-call TodoWrite with EXACTLY contract projection_items.
-contract_projection_count = len(contract_ids)
-todo_count_actual = len(todos)
-accumulation_threshold = max(contract_projection_count * 1.5, contract_projection_count + 3)
-accumulation_suspected = bool(
-    contract_projection_count > 0
-    and todo_count_actual > accumulation_threshold
-)
-
-payload = {
-    "run_id": run_id,
-    "adapter": "claude",
-    "tool_name": tool_name,
-    "todowrite_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    "todo_count": todo_count_actual,
-    "contract_projection_count": contract_projection_count,
-    "accumulation_suspected": accumulation_suspected,
-    "contract_sha256": hashlib.sha256(open(contract_path, "rb").read()).hexdigest(),
-    "todo_ids": sorted(matched_ids),
-    "contract_ids": contract_ids,
-    "match": match,
-    "depth_valid": depth_valid,
-    "groups_with_subs_count": groups_with_subs_count,
-    "flat_groups": sorted(flat_groups),
-    "latest_marked_step": latest_marked_step,
-    "latest_marked_at": latest_marked_at,
-    "latest_marked_status": latest_marked_status,
-    "latest_marked_status_valid": latest_marked_status_valid,
-}
-print(json.dumps(payload))
-PY
-)"
-
-# Resolve helper path relative to this hook (works when synced to .claude/scripts/).
 hook_dir="$(cd "$(dirname "$0")" && pwd)"
+evidence_helper="${hook_dir}/_vg_tasklist_evidence_payload.py"
+if [ ! -f "$evidence_helper" ]; then
+  # Fallback when hook is symlinked/synced to .claude/scripts/hooks.
+  evidence_helper=".claude/scripts/hooks/_vg_tasklist_evidence_payload.py"
+fi
+
+# Build evidence payload from TodoWrite/TaskCreate/TaskUpdate input.
+# B78: hook input passes via VG_HOOK_INPUT env (NOT heredoc stdin) —
+# heredoc-inside-command-substitution does not parse on bash 3.2 (macOS
+# default). Helper writes evidence JSON to stdout.
+payload="$(VG_HOOK_INPUT="$input" python3 "$evidence_helper" "$contract_path" "$run_id")"
+
+# Resolve signed-evidence emitter path relative to this hook.
 helper="${hook_dir}/../vg-orchestrator-emit-evidence-signed.py"
 if [ ! -f "$helper" ]; then
   helper="scripts/vg-orchestrator-emit-evidence-signed.py"
@@ -237,147 +64,18 @@ if command -v vg-orchestrator >/dev/null 2>&1; then
   vg-orchestrator emit-event "${cmd}.native_tasklist_projected" >/dev/null 2>&1 || true
 fi
 
-# F2 v2.60.0: capture latest TodoWrite payload to snapshot for F1 restore on
-# resume/compact. Best-effort — never block the hook on snapshot failure.
-# Reuses $input (the original stdin) so we don't try to re-read closed stdin.
+# F2 v2.60.0: capture latest TodoWrite payload to snapshot for F1 restore
+# on resume/compact. Best-effort — never block the hook on snapshot
+# failure.
 snap_helper="${hook_dir}/vg-tasklist-snapshot.py"
 if [ ! -f "$snap_helper" ]; then
   snap_helper="scripts/hooks/vg-tasklist-snapshot.py"
 fi
-if [ -f "$snap_helper" ]; then
-  # Pull the todos[] (TodoWrite path) or reconstruct from the trace
-  # (TaskCreate/TaskUpdate path) and pipe to the snapshot helper.
-  VG_HOOK_INPUT="$input" VG_RUN_ID="$run_id" python3 - "$snap_helper" <<'PY' >/dev/null 2>&1 || true
-# B71a v4.63.0: resolve display labels → contract step_ids before piping to
-# snapshot writer. Snapshot v2 schema persists {id (step_id), content (label),
-# status, match_class}. Caller-side resolution per audit (codex B-3) keeps
-# .taskcreate-trace.jsonl unchanged with raw task_id for TaskUpdate joins.
-import hashlib, importlib.util, json, os, subprocess, sys
-from pathlib import Path
-helper = sys.argv[1]
-hook_input = json.loads(os.environ.get("VG_HOOK_INPUT", "{}") or "{}")
-run_id = os.environ.get("VG_RUN_ID", "")
-if not run_id:
-    sys.exit(0)
-
-contract_path = Path(f".vg/runs/{run_id}/tasklist-contract.json")
-contract_items = []
-contract_hash = ""
-if contract_path.exists():
-    try:
-        contract_body = contract_path.read_text(encoding="utf-8")
-        contract = json.loads(contract_body)
-        contract_items = contract.get("projection_items") or []
-        contract_hash = "sha256:" + hashlib.sha256(contract_body.encode("utf-8")).hexdigest()[:16]
-    except Exception:
-        contract_items = []
-
-# Locate resolver — canonical scripts/ first, fall back to .claude/scripts.
-resolver_mod = None
-for cand in [Path("scripts/tasklist_id_resolver.py"),
-             Path(".claude/scripts/tasklist_id_resolver.py")]:
-    if cand.exists():
-        spec = importlib.util.spec_from_file_location("tasklist_id_resolver", cand)
-        if spec and spec.loader:
-            resolver_mod = importlib.util.module_from_spec(spec)
-            try:
-                spec.loader.exec_module(resolver_mod)
-                break
-            except Exception:
-                resolver_mod = None
-
-def _resolve_label(label, fallback_id):
-    if resolver_mod is None or not contract_items:
-        return (str(fallback_id or label or "").strip(), "exact")
-    try:
-        return resolver_mod.resolve(str(label), contract_items)
-    except Exception:
-        return (str(fallback_id or label or "").strip(), "exact")
-
-tool_name = hook_input.get("tool_name") or "TodoWrite"
-todos = []
-if tool_name == "TodoWrite":
-    raw_todos = hook_input.get("tool_input", {}).get("todos") or []
-    contract_ids_set = {it.get("id") for it in contract_items if it.get("id")}
-    for t in raw_todos:
-        if not isinstance(t, dict):
-            continue
-        content = t.get("content") or t.get("activeForm") or t.get("subject") or ""
-        raw_id = str(t.get("id") or "").strip()
-        if raw_id and raw_id in contract_ids_set:
-            step_id, match_class = raw_id, "exact"
-        else:
-            step_id, match_class = _resolve_label(content, raw_id)
-        todos.append({
-            "id": step_id,
-            "content": str(content),
-            "status": t.get("status", "pending"),
-            "match_class": match_class,
-        })
-else:
-    trace = Path(f".vg/runs/{run_id}/.taskcreate-trace.jsonl")
-    if trace.exists():
-        items_by_id, items_no_id = {}, []
-        for line in trace.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            act = rec.get("action")
-            tid = rec.get("task_id") or ""
-            if act == "create":
-                subject = rec.get("subject", "") or ""
-                step_id, match_class = _resolve_label(subject, tid)
-                entry = {
-                    "id": step_id,
-                    "content": subject,
-                    "status": rec.get("status", "pending"),
-                    "match_class": match_class,
-                    "_trace_task_id": tid,
-                }
-                if tid:
-                    items_by_id[tid] = entry
-                else:
-                    items_no_id.append(entry)
-            elif act == "update":
-                if tid in items_by_id and rec.get("status"):
-                    items_by_id[tid]["status"] = rec["status"]
-        todos = list(items_by_id.values()) + items_no_id
-
-if not todos:
-    sys.exit(0)
-
-# Status-precedence dedup: same step_id resolves from multiple labels →
-# in_progress > completed > pending (B71a status_precedence).
-if resolver_mod is not None:
-    by_step = {}
-    for t in todos:
-        sid = t["id"]
-        if sid not in by_step:
-            by_step[sid] = t
-        else:
-            prev = by_step[sid]
-            if resolver_mod.status_precedence(prev["status"], t["status"]) != prev["status"]:
-                by_step[sid] = t
-    todos = list(by_step.values())
-
-for t in todos:
-    t.pop("_trace_task_id", None)
-
-payload = json.dumps({
-    "schema_version": 2,
-    "items": todos,
-    "id_map_provenance": {
-        "contract_path": str(contract_path),
-        "contract_hash": contract_hash,
-    },
-})
-proc = subprocess.run(
-    [sys.executable, helper, "--write", "--run-id", run_id],
-    input=payload, capture_output=True, text=True,
-)
-PY
+snap_input_resolver="${hook_dir}/_vg_tasklist_snapshot_input.py"
+if [ ! -f "$snap_input_resolver" ]; then
+  snap_input_resolver=".claude/scripts/hooks/_vg_tasklist_snapshot_input.py"
+fi
+if [ -f "$snap_helper" ] && [ -f "$snap_input_resolver" ]; then
+  VG_HOOK_INPUT="$input" VG_RUN_ID="$run_id" \
+    python3 "$snap_input_resolver" "$snap_helper" >/dev/null 2>&1 || true
 fi

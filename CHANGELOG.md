@@ -1,3 +1,76 @@
+# v4.63.10 — B78 tasklist resilience (macOS bash 3.2 + FK + profile merge)
+
+User dogfood report (PrintwayV3 `/vg:test 8.2` session, 2026-05-18):
+three tasklist surfaces broke simultaneously on macOS, blocking the
+TodoWrite/TaskCreate evidence gate for an entire run.
+
+**Bugs surfaced + fixed:**
+
+1. **`vg-post-tool-use-todowrite.sh` syntax error on bash 3.2** (macOS
+   default ships GPLv2 bash 3.2 forever). The hook embedded a 190-line
+   heredoc Python block inside `"$(...)"` command substitution. bash 3.2
+   cannot parse that nesting — bash 4+ on Linux CI parsed fine, which
+   masked the regression. Symptom (literal user-visible error):
+
+   ```
+   /Users/.../vg-post-tool-use-todowrite.sh: line 31: unexpected EOF
+   while looking for matching `)'
+   ```
+
+   **Fix:** extracted the embedded Python to two standalone sibling
+   scripts:
+   - `scripts/hooks/_vg_tasklist_evidence_payload.py`
+   - `scripts/hooks/_vg_tasklist_snapshot_input.py`
+
+   Hook now invokes them via `python3 path "$contract" "$run_id"` with
+   the hook input passed through `VG_HOOK_INPUT` env (no heredoc).
+   `bash -n` passes cleanly on the macOS default bash.
+
+2. **`vg-orchestrator tasklist-projected --adapter claude` crashed with
+   FOREIGN KEY constraint failed** when the `runs` row was missing for
+   the active run_id. This happens when a hook wrote
+   `.vg/active-runs/<sid>.json` (with run_id) but the orchestrator's
+   `run-start` was never invoked to insert the matching `runs` row.
+   Operator's only escape was hand-writing the evidence file —
+   undocumented workaround.
+
+   **Fix:** `db.append_event` now catches `sqlite3.IntegrityError`,
+   inspects whether the message is `FOREIGN KEY constraint failed`, and
+   attempts to backfill the orphan `runs` row from the active-runs JSON
+   state file (`command`, `phase`, `started_at`, `session_id`, `args`)
+   via the new `_backfill_run_row` helper. After backfill the original
+   INSERT retries exactly once. Idempotent — concurrent writer wins are
+   handled by re-checking `run_row_exists` post-IntegrityError.
+
+3. **`filter-steps.py` for `/vg:test --profile web-fullstack` returned
+   only 2 steps** (`step5_fix_loop`, `step7_matrix_verdict`) of an
+   expected 22. Pre-B78 logic was "use frontmatter markers IF XML
+   parser yielded 0 steps." Two stray `<step>` XML tags in
+   `_shared/test/fix-loop-and-verdict.md` narrative satisfied the
+   positive branch, causing the 22-entry `runtime_contract.must_touch_
+   markers` YAML list to be silently dropped.
+
+   **Fix:** merge frontmatter markers with XML steps (XML carries
+   explicit profile gating; frontmatter is profile-agnostic universal).
+   `/vg:test web-fullstack` now emits 26 steps (verified manually).
+   Other commands unaffected: build 22, review 38, blueprint 31,
+   scope 9, specs 10, accept 21.
+
+**Tests:** `tests/test_batch78_tasklist_resilience.py` (7 cases) covers
+all three fixes:
+- `test_hook_script_parses_on_bash_3_2` — bash -n on macOS default bash
+- `test_hook_has_no_inline_heredoc_command_substitution` — guard
+  against `<<'PY'` re-introduction in the parent shell
+- `test_extracted_helpers_present_and_compile` — py_compile both helpers
+- `test_extracted_evidence_helper_emits_payload` — payload shape
+- `test_append_event_backfills_orphan_run_row` — FK backfill loop
+- `test_filter_steps_merges_frontmatter_when_xml_present` — merge logic
+- `test_filter_steps_real_test_md_includes_runtime_markers` — `/vg:test`
+  now emits > 10 steps for web-fullstack
+
+Test sweep: B78 tests 7/7 pass; pre-existing CLAUDECODE-env failures
+(8 → 6) unchanged by this PR.
+
 # v4.63.9 — B77 TodoWrite accumulation gate (UI stuck-state fix)
 
 User dogfood report: TodoWrite UI was carrying 699 items across runs

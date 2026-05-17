@@ -51,10 +51,21 @@ def test_b77_instruction_md_has_replace_hard_gate():
 
 
 def test_b77_post_hook_emits_accumulation_flag():
-    body = POST_HOOK.read_text(encoding="utf-8")
+    # B78 v4.63.10: the heredoc Python that computed
+    # `accumulation_suspected` moved out of POST_HOOK into the sibling
+    # helper `_vg_tasklist_evidence_payload.py` so the parent script
+    # parses on bash 3.2 (macOS). The semantic must still be present in
+    # the helper. Check the union of both files.
+    hook_body = POST_HOOK.read_text(encoding="utf-8")
+    helper_path = POST_HOOK.parent / "_vg_tasklist_evidence_payload.py"
+    helper_body = (
+        helper_path.read_text(encoding="utf-8") if helper_path.is_file() else ""
+    )
+    body = hook_body + "\n" + helper_body
     assert "accumulation_suspected" in body
     assert "1.5" in body  # threshold multiplier
-    assert "B77 v4.63.9" in body
+    # B77 marker may live in either file; the union covers both.
+    assert "B77 v4.63.9" in body or "B78" in body
 
 
 def test_b77_pre_hook_blocks_on_accumulation():
@@ -255,8 +266,14 @@ def test_b77_pre_hook_accumulation_only_fires_on_step_active(tmp_path: Path):
 
 
 def test_b77_threshold_definition():
-    """Threshold = max(1.5*contract, contract+3). Verify formula in hook source."""
-    body = POST_HOOK.read_text(encoding="utf-8")
-    # The threshold expression in the embedded Python.
+    """Threshold = max(1.5*contract, contract+3). Verify formula in hook source.
+
+    B78 v4.63.10: the embedded Python moved into
+    `_vg_tasklist_evidence_payload.py` so check the helper file too.
+    """
+    hook_body = POST_HOOK.read_text(encoding="utf-8")
+    helper = POST_HOOK.parent / "_vg_tasklist_evidence_payload.py"
+    helper_body = helper.read_text(encoding="utf-8") if helper.is_file() else ""
+    body = hook_body + "\n" + helper_body
     assert "contract_projection_count * 1.5" in body
     assert "contract_projection_count + 3" in body
