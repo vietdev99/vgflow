@@ -20,6 +20,53 @@ ACTIVE_RUN_PATH=".vg/active-runs/${SESSION_ID}.json"
 # twin carrying the same run_id (provable leftover from pre-fix bash hooks).
 vg_sweep_orphan_default || true
 
+# B70c — version-gated migration auto-invoke. Runs the v4.61.0 PIPELINE-STATE
+# backfill once per VG_HOME version bump. Stdout MUST be silenced because
+# this hook later writes a JSON contract to stdout (printf at file tail)
+# that Claude Code parses for additionalContext. Stderr is captured to a
+# log for diagnostics. Per codex audit MINOR m-7, insertion is BEFORE the
+# JSON printf, not after, and uses semver compare via Python (not bash
+# string compare per BLOCKER B-6).
+if [ -d ".vg/phases" ]; then
+  vghome_version=""
+  vghome_root="${VG_HOME:-${HOME}/.vgflow}"
+  if [ -f "${vghome_root}/VERSION" ]; then
+    vghome_version="$(tr -d ' \n\r\t' < "${vghome_root}/VERSION" 2>/dev/null || true)"
+  fi
+  last_migration_file=".vg/.last-migration-version"
+  last_migration_version="0.0.0"
+  if [ -f "$last_migration_file" ]; then
+    last_migration_version="$(tr -d ' \n\r\t' < "$last_migration_file" 2>/dev/null || echo "0.0.0")"
+    [ -z "$last_migration_version" ] && last_migration_version="0.0.0"
+  fi
+  migration_script="${vghome_root}/scripts/migrations/v4.61.0_backfill_pipeline_state.py"
+  [ -f "$migration_script" ] || migration_script="scripts/migrations/v4.61.0_backfill_pipeline_state.py"
+  if [ -n "$vghome_version" ] && [ -f "$migration_script" ]; then
+    needs_run="$(python3 - "$vghome_version" "$last_migration_version" <<'PYVER' 2>/dev/null || true
+import sys
+def parse(v):
+    parts = (v or "0.0.0").split("-")[0].split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    try:
+        return tuple(int(p) for p in parts[:3])
+    except ValueError:
+        return (0, 0, 0)
+have = parse(sys.argv[1])
+last = parse(sys.argv[2])
+print("yes" if have >= (4, 62, 0) and have > last else "no")
+PYVER
+)"
+    if [ "$needs_run" = "yes" ]; then
+      mig_log=".vg/.last-migration.log"
+      mkdir -p "$(dirname "$mig_log")" 2>/dev/null || true
+      if python3 "$migration_script" --planning-dir .vg/phases --quiet >/dev/null 2>>"$mig_log"; then
+        printf '%s\n' "$vghome_version" > "$last_migration_file" 2>/dev/null || true
+      fi
+    fi
+  fi
+fi
+
 if [ ! -f "$META_SKILL_PATH" ]; then
   # Graceful degrade — VG meta-skill missing, no context to inject.
   # Log once per invocation for diagnostics; do NOT block session.

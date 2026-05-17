@@ -297,7 +297,7 @@ Reflector crash or timeout → log warning, continue to `complete` step. Never b
 # VG-native state update (no GSD dependency)
 PIPELINE_STATE="${PHASE_DIR}/PIPELINE-STATE.json"
 ${PYTHON_BIN} -c "
-import json; from datetime import datetime; from pathlib import Path
+import json, re; from datetime import datetime; from pathlib import Path
 p = Path('${PIPELINE_STATE}')
 s = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
 s['status'] = 'reviewed'; s['pipeline_step'] = 'review-complete'
@@ -308,8 +308,51 @@ s['updated_at'] = now
 # next_command → users skipped test-spec entirely → review preflight
 # failed on the following run. Canonical pipeline order:
 # build → review → test-spec → test.
-s['next_command'] = '/vg:test-spec ${PHASE_NUMBER}'
-s['next_command_emitted_at'] = now
+# B70a fix: also write steps.review subkey with verdict parsed from
+# GOAL-COVERAGE-MATRIX so downstream consumers (test-spec/close,
+# /vg:next routing precedence, accept gate) can read review status
+# directly from PIPELINE-STATE.json. Closes B69 oversight where only
+# top-level next_command was written, leaving steps.review absent.
+matrix_json = Path('${PHASE_DIR}/GOAL-COVERAGE-MATRIX.json')
+matrix_md = Path('${PHASE_DIR}/GOAL-COVERAGE-MATRIX.md')
+verdict = 'UNKNOWN'
+if matrix_json.exists():
+    try:
+        mj = json.loads(matrix_json.read_text(encoding='utf-8'))
+        verdict = (mj.get('gate') or mj.get('verdict') or 'UNKNOWN').upper()
+    except Exception:
+        verdict = 'UNKNOWN'
+elif matrix_md.exists():
+    try:
+        body = matrix_md.read_text(encoding='utf-8', errors='replace')
+        m = re.search(r'(?im)^\s*(?:\*\*)?(?:Phase\s+[\w.-]+\s+)?(?:review\s+)?verdict\s*:?\s*\*?\*?\s*(PASS-WITH-FLAGS|PASS|TEST_PENDING|BLOCK|FAIL|STATIC-READY|READY|BROWSER-PENDING)', body)
+        if m:
+            raw = m.group(1).upper()
+            verdict = {'STATIC-READY':'TEST_PENDING','BROWSER-PENDING':'TEST_PENDING','READY':'PASS','FAIL':'BLOCK'}.get(raw, raw)
+        else:
+            mg = re.search(r'(?im)^\s*Gate\s*:?\s*(PASS-WITH-FLAGS|PASS|TEST_PENDING|BLOCK|FAIL)', body)
+            if mg:
+                verdict = mg.group(1).upper()
+    except Exception:
+        verdict = 'UNKNOWN'
+s.setdefault('steps', {})['review'] = {
+    'status': 'done',
+    'verdict': verdict,
+    'finished_at': now,
+}
+# B70a — verdict-aware top-level next_command. BLOCK/FAIL → null so
+# /vg:next will not auto-advance past the gate (verdict gate at
+# next.md line 185). PASS / PASS-WITH-FLAGS / TEST_PENDING / UNKNOWN
+# → /vg:test-spec (preserve B69 behavior; UNKNOWN errs toward forward
+# motion since absence of matrix verdict is not a BLOCK signal).
+if verdict in ('BLOCK','FAIL'):
+    s['next_command'] = None
+    s['next_command_blocked_reason'] = f'review verdict={verdict}'
+    s['next_command_emitted_at'] = now
+else:
+    s['next_command'] = '/vg:test-spec ${PHASE_NUMBER}'
+    s['next_command_emitted_at'] = now
+    s['steps']['review']['next_command'] = '/vg:test-spec ${PHASE_NUMBER}'
 p.write_text(json.dumps(s, indent=2))
 " 2>/dev/null
 ```

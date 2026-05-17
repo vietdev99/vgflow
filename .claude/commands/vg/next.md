@@ -59,7 +59,47 @@ print('yes' if s['recommended_action'].get('pre_action') else 'no')
 ")
 ```
 
-**Route 0 (priority):** `STATE.md` shows `paused_at` field
+**Route 0a (B70b — pipeline-state precedence):** Before any recon-state route, prefer `PIPELINE-STATE.next_command` when it is set AND `PIPELINE-STATE.updated_at` is newer than `.recon-state.json.classified_at`. Reason: `phase-recon.py` re-derives `.recon-state.next_command` from heuristic on every `/vg:next` run — it can mask a freshly-emitted authoritative `PIPELINE-STATE.next_command` from a close.md (e.g. review/close.md emits `/vg:test-spec` but recon then suggests `/vg:test` based on `pipeline_position[*].status`).
+
+```bash
+PIPELINE_STATE="${PHASE_DIR}/PIPELINE-STATE.json"
+RECON_STATE="${PHASE_DIR}/.recon-state.json"
+PIPELINE_NEXT=$(${PYTHON_BIN} -c "
+import json, sys
+from pathlib import Path
+ps = Path('${PIPELINE_STATE}')
+rs = Path('${RECON_STATE}')
+if not ps.exists():
+    sys.exit(0)
+try:
+    p = json.loads(ps.read_text(encoding='utf-8'))
+except Exception:
+    sys.exit(0)
+nc = p.get('next_command')
+if not nc:
+    sys.exit(0)
+p_ts = p.get('updated_at') or p.get('next_command_emitted_at') or ''
+r_ts = ''
+if rs.exists():
+    try:
+        r = json.loads(rs.read_text(encoding='utf-8'))
+        r_ts = r.get('classified_at') or r.get('updated_at') or ''
+    except Exception:
+        pass
+if not r_ts or (p_ts and p_ts >= r_ts):
+    print(nc)
+" 2>/dev/null)
+
+if [ -n "$PIPELINE_NEXT" ]; then
+  echo "✓ PIPELINE-STATE.next_command authoritative (newer than recon-state): $PIPELINE_NEXT"
+  echo "→ Invoke: $PIPELINE_NEXT"
+  # Hand off — caller invokes the SlashCommand.
+fi
+```
+
+→ When `PIPELINE_NEXT` non-empty, SkipRoute0/1/2 entirely; invoke `$PIPELINE_NEXT`.
+
+**Route 0 (legacy resume):** `STATE.md` shows `paused_at` field
 → Read PIPELINE-STATE.json. Resume logic (tightened 2026-04-17 — field-specific):
 
 ```bash

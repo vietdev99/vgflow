@@ -1,5 +1,67 @@
 # Changelog
 
+## v4.62.0 — B70: root-cause fix for legacy-phase routing (post-B69 fallout)
+
+User report (dogfood RTB phase 7.16): /vg:next after review suggested
+/vg:test instead of /vg:test-spec. Initial mis-diagnosis claimed
+PIPELINE-STATE.json was missing; codex adversarial audit (6 BLOCKERS,
+8 MAJORS) refuted that — the file existed and `next_command` was
+correctly `/vg:test 7.16` (test-spec ran later). Real defect was a
+B69 oversight: review/close.md emitted top-level `next_command` but
+NEVER wrote `steps.review` subkey, leaving downstream consumers
+(test-spec/close merge, /vg:next routing, accept gate) blind to
+review verdict. Stale `.recon-state.next_command` from earlier phase
+step (re-derived on every recon run) then masked the freshly-written
+PIPELINE-STATE.
+
+Three-leg fix, single tag:
+
+**B70a — review/close.md writes `steps.review` + verdict-aware next_command:**
+  - Parse verdict from `GOAL-COVERAGE-MATRIX.json` (canonical Batch 34 F2
+    format) → fall back to `GOAL-COVERAGE-MATRIX.md` regex.
+  - Normalize legacy verdict strings: STATIC-READY / BROWSER-PENDING →
+    TEST_PENDING; READY → PASS; FAIL → BLOCK.
+  - Write `s['steps']['review'] = {status, verdict, finished_at}` alongside
+    existing top-level `next_command`.
+  - BLOCK / FAIL verdict → `next_command = None` + `next_command_blocked_reason`
+    recorded so /vg:next won't auto-advance past a failing gate.
+  - PASS / PASS-WITH-FLAGS / TEST_PENDING / UNKNOWN → /vg:test-spec
+    (UNKNOWN errs toward forward motion — absence of matrix verdict is
+    not itself a BLOCK signal).
+
+**B70b — /vg:next prefers PIPELINE-STATE.next_command over recon-state:**
+  - New Route 0a inserted BEFORE existing Route 0 (legacy resume).
+  - Reads `PIPELINE-STATE.next_command`; compares `pipeline_state.updated_at`
+    vs `recon-state.classified_at`; emits PIPELINE-STATE when newer-or-equal.
+  - Fixes audit BLOCKER B-2 (phase-recon.py re-derives next_command on every
+    invocation, so a recon-state.invalidate from close.md would live for
+    milliseconds — fix is precedence, not invalidate).
+
+**B70c — verdict-aware migration backfill script + session-start auto-invoke:**
+  - `scripts/migrations/v4.61.0_backfill_pipeline_state.py` (stdlib only).
+  - Scans `.vg/phases/*/`; backfills phases whose review closed under
+    v4.40.0 (pre-B69) so `steps.review` is populated retroactively from
+    matrix verdict.
+  - Uses `.step-markers/review/complete.done` sentinel (preferred) or
+    REVIEW.md + RUNTIME-MAP.json artifact pair (legacy fallback).
+  - Idempotent: skip when `steps.review` already present OR review never
+    closed.
+  - Records `backfilled_at`, `backfilled_by`, `backfilled_verdict_source`
+    for provenance.
+  - `scripts/hooks/vg-session-start.sh` appends version-gated auto-invoke
+    BEFORE the JSON printf (per audit MINOR m-7 — stdout must stay clean
+    for `additionalContext` hook contract). Uses **Python tuple semver
+    compare**, not bash string compare (audit BLOCKER B-6).
+
+Codex adversarial audit (pre-implementation) verdict on initial plan:
+**FAIL — 6 BLOCKERS / 8 MAJORS / 8 MINORS / 10 coverage gaps**. Plan
+re-written from scratch following audit recommendations. All BLOCKER fixes
+shipped. Audit artifact: `dev-phases/B70-legacy-pipeline-state-migration/CODEX-AUDIT.md`.
+
+Coverage: 18 tests B70a/B70b + 20 tests B70c (38 new) + B69 test
+slice widened (B69-B3 anchor block grew 1500→4000 chars). Codex mirror
+regenerated; verify-codex-mirror-equivalence.py clean (63 pairs).
+
 ## v4.61.1 — B69 hotfix: restore Phase 5 'Verify' name + rephrase comments
 
 CI Test failed on v4.61.0 (2 tests). Hotfix:

@@ -74,12 +74,16 @@ def test_b2_test_spec_next_command_is_test_not_review():
 
 
 def test_b3_review_close_emits_next_command_test_spec():
-    """B3: review/close.md MUST emit next_command=/vg:test-spec."""
+    """B3: review/close.md MUST emit next_command=/vg:test-spec.
+
+    Slice widened from 1500 → 4000 in B70a — verdict-aware parser added
+    a ~1.5KB comment + parsing block before the actual assignment.
+    """
     body = _read(REVIEW_CLOSE)
     # The PIPELINE-STATE write block must include next_command
     pipeline_block_idx = body.find("**Update PIPELINE-STATE.json:**")
     assert pipeline_block_idx > 0
-    block = body[pipeline_block_idx:pipeline_block_idx + 1500]
+    block = body[pipeline_block_idx:pipeline_block_idx + 4000]
     assert "s['next_command'] = '/vg:test-spec" in block, (
         "B69-B3: review/close.md must emit next_command=/vg:test-spec"
     )
