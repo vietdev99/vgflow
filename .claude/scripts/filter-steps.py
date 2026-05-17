@@ -257,10 +257,27 @@ def main() -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 3
 
-    # Fallback: slim entry SKILL.md format has no <step> XML tags. Read step
-    # list from runtime_contract.must_touch_markers in YAML frontmatter.
+    # B78 v4.63.10: merge frontmatter markers in addition to XML tags.
+    # Previously only used parse_steps_from_frontmatter() as a fallback
+    # when XML matched 0 steps. That dropped EVERY runtime_contract
+    # marker the moment ONE residual `<step>` tag survived a refactor
+    # (observed on /vg:test: 13 bare markers + 9 severity-wrapped markers
+    # silently ignored because two `<step>` tags in `_shared/test/`
+    # narrative satisfied the XML-positive branch). Result: tasklist
+    # contract only contained 2 of 22 expected steps for web-fullstack.
+    #
+    # Strategy: union the two parsers' outputs, preferring the XML entry
+    # when a step name appears in both (XML carries explicit profile/mode
+    # gating; frontmatter entries are profile-agnostic universal). Order
+    # preserved as XML-first → frontmatter-additions.
+    frontmatter_steps = parse_steps_from_frontmatter(text)
     if not steps:
-        steps = parse_steps_from_frontmatter(text)
+        steps = frontmatter_steps
+    elif frontmatter_steps:
+        xml_names = {name for name, _, _ in steps}
+        for fm_entry in frontmatter_steps:
+            if fm_entry[0] not in xml_names:
+                steps.append(fm_entry)
 
     applicable = filter_for_profile(steps, args.profile, args.mode)
 

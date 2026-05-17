@@ -354,7 +354,17 @@ EVENT_SCHEMA_VERSION = 1
 def append_event(run_id: str, event_type: str, phase: str, command: str,
                  actor: str = "orchestrator", outcome: str = "INFO",
                  step: str | None = None, payload: dict | None = None) -> dict:
-    """Atomic event insert with hash chain. Returns the inserted event row."""
+    """Atomic event insert with hash chain. Returns the inserted event row.
+
+    B78 v4.63.10: when the FOREIGN KEY check fails (runs row missing for
+    the supplied run_id — typical when run-start was driven by a hook that
+    populated `.vg/active-runs/{session}.json` but never inserted the
+    `runs` table row), we transparently backfill the runs row from the
+    state file and retry ONCE. This eliminates the
+    `sqlite3.IntegrityError: FOREIGN KEY constraint failed` crash observed
+    when `tasklist-projected`, `emit-event`, or `mark-step` are called on
+    an orphan active-run state file.
+    """
     ts = _utc_now()
     # Inject schema version into every event payload (non-destructive — caller
     # payloads don't need to know about it). Readers can do
@@ -391,9 +401,88 @@ def append_event(run_id: str, event_type: str, phase: str, command: str,
         finally:
             conn.close()
 
-    event_dict = _retry_locked(_do)
+    try:
+        event_dict = _retry_locked(_do)
+    except sqlite3.IntegrityError as exc:
+        # B78 v4.63.10: FK target missing → auto-backfill runs row.
+        # Distinguishes FK fail from other integrity errors via the
+        # `FOREIGN KEY` substring in the canonical sqlite3 message.
+        if "FOREIGN KEY" not in str(exc):
+            raise
+        if not _backfill_run_row(run_id, command=command, phase=phase):
+            # Couldn't recover — re-raise original error.
+            raise
+        # Retry exactly once after backfill.
+        event_dict = _retry_locked(_do)
     _append_projection(event_dict)
     return event_dict
+
+
+def _backfill_run_row(run_id: str, *, command: str, phase: str) -> bool:
+    """Insert a runs[] row for an orphan run_id using state-file context.
+
+    Returns True when the row now exists (either inserted by this call or
+    already present from a concurrent writer); False when no state was
+    available to source command/phase metadata.
+
+    Looks at `.vg/active-runs/<session>.json` for matching `run_id` first,
+    then falls back to `.vg/.session-context.json`. The caller-supplied
+    command/phase serve as last-resort defaults.
+    """
+    if run_row_exists(run_id):
+        return True
+
+    cmd = command or ""
+    ph = phase or ""
+    started_at = None
+    session_id = None
+    args_field = ""
+
+    try:
+        from . import state as _state  # local import — avoid cycle at import
+    except Exception:
+        _state = None
+
+    candidates: list[Path] = []
+    try:
+        from pathlib import Path as _Path
+        candidates = sorted(_Path(".vg/active-runs").glob("*.json"))
+        ctx = _Path(".vg/.session-context.json")
+        if ctx.exists():
+            candidates.append(ctx)
+    except Exception:
+        pass
+
+    for cand in candidates:
+        try:
+            data = json.loads(cand.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("run_id") != run_id:
+            continue
+        cmd = data.get("command") or cmd
+        ph = str(data.get("phase") or ph)
+        started_at = data.get("started_at") or started_at
+        session_id = data.get("session_id") or session_id
+        args_field = data.get("args") or args_field
+        break
+
+    if not cmd:
+        return False
+
+    try:
+        create_run_with_id(
+            run_id=run_id,
+            command=cmd,
+            phase=ph,
+            args=args_field,
+            started_at=started_at,
+            session_id=session_id,
+        )
+    except sqlite3.IntegrityError:
+        # Raced with another writer — fine if the row now exists.
+        return run_row_exists(run_id)
+    return run_row_exists(run_id)
 
 
 def query_events(run_id: str | None = None, event_type: str | None = None,
