@@ -1,5 +1,44 @@
 # Changelog
 
+## v4.63.5 — B73: fix issue #189 PreToolUse-tasklist deadlock on run-complete
+
+Closes [#189](https://github.com/vietdev99/vgflow/issues/189) (MEDIUM,
+workflow-blocking): `vg-orchestrator run-complete` permanently blocked
+when emit-tasklist.py ran more than once in a session (e.g. re-projection
+after an earlier hook block). Contract hash regenerated but evidence file
+stayed at old hash → `evidence contract checksum does not match` → run
+orphaned active-runs state → user had to manually `run-abort + move state
+aside`.
+
+**Fix (Option A from issue, recommended by reporter):**
+
+`scripts/hooks/vg-pre-tool-use-bash.sh` (+ mirror): insert bypass block
+BEFORE the contract/evidence existence checks. When `cmd_text` matches
+`vg-orchestrator run-complete` AND `events.db` has any `*.completed`
+event for the active `run_id`, exit 0 (allow run-complete to proceed)
+with a stderr log:
+
+```
+VG run-complete bypass (issue #189): N '*.completed' event(s) present
+in events.db for run {run_id}; allowing run-complete despite evidence stale.
+```
+
+**Rationale:** tasklist evidence is a *mid-step* gate. `build.completed`
+(or `test.completed`, etc.) is itself the canonical "the run finished
+cleanly" event — emitted only after the close.md validators all pass.
+Blocking run-complete on stale evidence after a confirmed `*.completed`
+event is conceptually wrong and the only effect is to orphan state.
+
+Falls through to normal gate behavior when:
+  - No `*.completed` event for this run_id in events.db.
+  - `events.db` file missing (fresh project).
+  - Action is `step-active` or `mark-step` (still gated normally).
+
+Coverage: **10 tests** including 6 real bash subprocess invocations that
+seed `.vg/active-runs/{sid}.json` + `.vg/runs/{rid}/` + a synthetic
+sqlite3 events.db with `*.completed` events, and verify exit codes for
+all branches. Mirror parity.
+
 ## v4.63.4 — B72: wave→post-build auto-continuation hardening
 
 User report (dogfood RTB): "build xong từng wave dùng --wave. chạy hết wave

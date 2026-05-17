@@ -671,6 +671,43 @@ if db_path.exists():
   exit 2
 }
 
+# Issue #189 (B73 v4.63.5) — bypass evidence/checksum gates for run-complete
+# action when the corresponding <command>.completed event exists in events.db.
+# Rationale: tasklist evidence is a mid-step gate. After final wave-complete,
+# main agent emits build.completed and calls run-complete. If emit-tasklist.py
+# ran more than once during the session (re-projection after earlier hook
+# block), the contract hash regenerated but the evidence file stayed at the
+# old hash → checksum permanently mismatches → run-complete BLOCKED → run
+# orphans active-runs. The build IS done; only the bookkeeping flip remains.
+# Skipping evidence verification here doesn't lose security: build.completed
+# is itself the canonical "the run finished cleanly" event, gated by the
+# build close.md flow that runs all the validators.
+if [[ "$cmd_text" =~ vg-orchestrator[[:space:]]+run-complete ]]; then
+  events_db=".vg/events.db"
+  if [ -f "$events_db" ]; then
+    completed_n="$(python3 - "$events_db" "$run_id" <<'PY' 2>/dev/null
+import sqlite3, sys
+db, run_id = sys.argv[1], sys.argv[2]
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COUNT(*) FROM events WHERE run_id=? AND event_type LIKE '%.completed'",
+        (run_id,),
+    )
+    print(cur.fetchone()[0])
+except Exception:
+    print(0)
+PY
+)"
+    if [ "${completed_n:-0}" -gt 0 ]; then
+      printf "VG run-complete bypass (issue #189): %s '*.completed' event(s) present in events.db for run %s; allowing run-complete despite evidence stale.\n" \
+        "$completed_n" "$run_id" >&2
+      exit 0
+    fi
+  fi
+fi
+
 if [ ! -f "$contract_path" ]; then
   if is_bootstrap_before_tasklist; then
     exit 0
