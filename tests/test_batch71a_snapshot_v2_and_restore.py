@@ -158,6 +158,12 @@ def _make_run(repo_root: Path, run_id: str,
 
 
 def _run_restore(repo_root: Path, run_id: str) -> subprocess.CompletedProcess:
+    # VG_HOME must point at a real install (REPO carries .claude/ + commands/).
+    # CI runners have no global VG install — point VG_HOME at the canonical
+    # repo .claude tree (it's a complete VG install layout).
+    env = {**os.environ, "VG_REPO_ROOT": str(repo_root),
+           "PYTHONIOENCODING": "utf-8",
+           "VG_HOME": str(REPO / ".claude")}
     return subprocess.run(
         [sys.executable, str(EMIT_TASKLIST), "--restore-mode", "--run-id", run_id,
          "--command", "vg:test-spec", "--phase", "7.16", "--profile", "web-fullstack"],
@@ -165,7 +171,7 @@ def _run_restore(repo_root: Path, run_id: str) -> subprocess.CompletedProcess:
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={**os.environ, "VG_REPO_ROOT": str(repo_root), "PYTHONIOENCODING": "utf-8"},
+        env=env,
         timeout=30,
         cwd=str(repo_root),
     )

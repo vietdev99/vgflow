@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.63.1 — B71a hotfix: test fixtures set VG_HOME for CI
+
+CI Test failed on v4.63.0 (6 tests in test_batch71a_snapshot_v2_and_restore.py
+hit `RuntimeError: VG not installed`). Local dev works because `~/.vgflow/`
+exists; CI runners have no global install and the test fixture didn't pass
+`VG_HOME` env var to the subprocess.
+
+Hotfix: `_run_restore` helper now sets `VG_HOME=REPO/.claude` (the canonical
+repo .claude tree IS a complete VG install layout). Snapshot writer tests
+unaffected (don't invoke emit-tasklist).
+
+No code change to ship surface — pure test fixture fix.
+
 ## v4.63.0 — B71a+B71d: TaskList ID schema mismatch fix (deep-scan root cause)
 
 User report (dogfood RTB): "TaskList vẫn không hiệu quả, vẫn bị ẩn các task
