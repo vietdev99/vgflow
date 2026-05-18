@@ -1,3 +1,69 @@
+# v4.64.2 — B84+B85 issue #194 deferred items 4 + 3
+
+Closes the remaining 2 of 3 deferred items from issue #194 (RTB Windows
+harness friction report). Item #6 (sync.sh Windows junction) defers to
+v4.65.x — bigger refactor.
+
+## B84 — PreToolUse-tasklist refresh cycle (issue #194 finding #4)
+
+User dogfood (RTB phase 8.1 wave 0-7): every `mark-step` followed by any
+bash invocation hit PreToolUse-tasklist HARD BLOCK with "block.handled
+emitted but evidence not refreshed". Operator workaround required 3
+extra bash calls per cycle (~90 wasted ops per phase).
+
+Root cause: V4 staleness check (vg-pre-tool-use-bash.sh:1057-1128)
+enforced strict `evidence_mtime > last_handled_ts` even when projection
+contract hadn't changed. Mark-step doesn't refresh evidence. After AI
+legitimately runs TodoWrite+tasklist-projected at T2, then emits a fresh
+vg.block.handled at T3 > T2, the next bash sees ev_mtime=T2 <= T3 and
+blocks despite contract being unchanged.
+
+Fix (user's suggestion (b)): exception when `contract_sha256` UNCHANGED.
+If evidence file's contract_sha256 matches the current
+tasklist-contract.json sha256, the existing evidence still satisfies the
+current contract and the V4 check returns 'ok'. HMAC + contract-mismatch
+checks above the V4 block still fire for tampered or drifted evidence.
+
+Files: `scripts/hooks/vg-pre-tool-use-bash.sh:1057-1145` + mirror.
+
+## B85 — reserved-event repair via --force (issue #194 finding #3)
+
+User dogfood scenario: partial-wave dogfood with prior session aborted
+before emitting `wave.completed`; operator needed to backfill the
+reserved event but `emit-event` rejected with "RESERVED for orchestrator
+core — cannot be emitted via CLI."
+
+Fix: `--force --reason "<text>"` opt-in bypass:
+  - `--force` REQUIRES `--reason` (operator justification)
+  - Forced emission records `actor="cli-forced"` (audit trail)
+  - Forced emission injects `payload.override_debt = {reason, issued_at,
+    issued_by, event_type}` (forgery filter for validators)
+  - Forced emission appends row to `.vg/OVERRIDE-DEBT.md` (operator log)
+  - Reject message gains `B85 OPERATOR OVERRIDE: pass --force --reason ...`
+    hint when --force is missing
+
+Validators that count reserved events can filter `actor != 'cli-forced'`
+to distinguish operator-backfilled from genuine orchestrator-emitted
+events.
+
+Files: `scripts/vg-orchestrator/__main__.py:1687-1745, 5129-5145` + mirror.
+
+## Tests
+
+- `tests/test_batch84_handled_unchanged_contract_bypass.py` — 5 cases
+  (3 source guards + 2 behavioral; behavioral skip on Windows)
+- `tests/test_batch85_reserved_event_force_override.py` — 5 cases
+  (parser additions, reason mandatory, actor rewrite, payload override_debt,
+  mirror parity)
+
+## Deferred to v4.65.x
+
+- Issue #194 finding #6: `sync.sh` Windows junction support
+  (`cmd //c mklink /J` branch + smarter `--check` for stale-vs-intentional
+  detection). Bigger refactor than 2026-05-18 session budget allows.
+
+---
+
 # v4.64.1 — B83 hotfix — strip literal `test-spec → review` from audit comment
 
 CI Test workflow on v4.64.0 failed: `test_pipeline_order_canonical::

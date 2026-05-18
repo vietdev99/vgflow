@@ -1059,17 +1059,28 @@ esac
 # tasklist-projected. We require evidence mtime > most recent block.handled
 # for gate=PreToolUse-tasklist on this run. Any handled-without-refresh
 # pattern HARD BLOCKS here.
+#
+# B84 v4.64.2 (issue #194 finding #4): exception when contract_sha256 is
+# UNCHANGED. If the projection contract hasn't mutated since the last
+# evidence write, the evidence is semantically still valid even though
+# ev_mtime <= handled_epoch (which can happen when AI re-emits handled
+# from a different gate context but the original TodoWrite projection
+# still satisfies the current contract). Previously this fired on EVERY
+# mark-step → next-bash sequence forcing ~3 extra calls per mark-step,
+# observed ~90 wasted ops per phase in dogfood (RTB 8.1 Wave 0-7).
 events_db_path=".vg/events.db"
+contract_path_for_v4="${contract_path:-}"
 handled_check_result="ok"
 if [ -f "$events_db_path" ]; then
-  handled_check_result="$(VG_RUN_ID="${run_id}" VG_EV_PATH="$evidence_path" VG_DB_PATH="$events_db_path" python3 - <<'PY'
-import os, sqlite3, sys, json
+  handled_check_result="$(VG_RUN_ID="${run_id}" VG_EV_PATH="$evidence_path" VG_DB_PATH="$events_db_path" VG_CONTRACT_PATH="$contract_path_for_v4" python3 - <<'PY'
+import os, sqlite3, sys, json, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 
 run_id = os.environ["VG_RUN_ID"]
 ev_path = Path(os.environ["VG_EV_PATH"])
 db_path = Path(os.environ["VG_DB_PATH"])
+contract_path = os.environ.get("VG_CONTRACT_PATH", "")
 gate_id = "PreToolUse-tasklist"
 
 if not ev_path.exists() or not db_path.exists():
@@ -1119,10 +1130,29 @@ ev_mtime = ev_path.stat().st_mtime
 # Codex round-4 I-1 fix: drop 1s slack — was inverting safety direction
 # (created 2s bypass window when AI emitted handled then raced to write
 # evidence). Strict ev_mtime > handled_epoch instead.
-if ev_mtime <= handled_epoch:
-    print(f"unresolved|{last_handled_ts}", end="")
+if ev_mtime > handled_epoch:
+    print("ok", end="")
     sys.exit(0)
-print("ok", end="")
+
+# B84 contract-checksum bypass: if evidence's contract_sha256 still matches
+# the current tasklist-contract.json checksum, the projection is semantically
+# valid even though ev_mtime <= handled_epoch. AI did NOT skip TodoWrite —
+# the contract simply hasn't changed since.
+if contract_path and Path(contract_path).exists():
+    try:
+        ev_payload = json.loads(ev_path.read_text(encoding="utf-8")).get("payload", {})
+        evidence_contract_sha = ev_payload.get("contract_sha256", "")
+        current_contract_sha = hashlib.sha256(
+            Path(contract_path).read_bytes()
+        ).hexdigest()
+        if evidence_contract_sha and evidence_contract_sha == current_contract_sha:
+            print("ok", end="")
+            sys.exit(0)
+    except Exception:
+        # Fall through to staleness block if comparison errors
+        pass
+
+print(f"unresolved|{last_handled_ts}", end="")
 PY
 )"
 fi

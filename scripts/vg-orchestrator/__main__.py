@@ -1684,23 +1684,43 @@ def cmd_emit_event(args) -> int:
         return 1
 
     # OHOK-8: block forgery of gate-relevant event types via CLI
+    # B85 v4.64.3 (issue #194 finding #3): --force bypass for operator-driven
+    # backfill (partial-wave dogfood, aborted runs missing terminal events).
     if _is_reserved_event(args.event_type):
-        print(
-            f"⛔ Event type '{args.event_type}' is RESERVED for orchestrator "
-            f"core — cannot be emitted via CLI.\n"
-            f"   Reserved prefixes: {', '.join(RESERVED_EVENT_PREFIXES)}\n"
-            f"   Reserved exact: {', '.join(sorted(RESERVED_EVENT_EXACT))}\n\n"
-            f"   Reserved suffixes: {', '.join(RESERVED_EVENT_SUFFIXES)}\n\n"
-            f"   Rationale (OHOK-8 round-3): CrossAI reviewers found that\n"
-            f"   AI could forge terminal events like build.crossai_loop_complete\n"
-            f"   via `emit-event` CLI → bypass validators that count events.\n"
-            f"   These events must come from the actual code paths (run-start/\n"
-            f"   run-complete/wave-complete/vg-build-crossai-loop.py etc.).\n\n"
-            f"   If you need a custom skill signal, use a non-reserved\n"
-            f"   namespace like `skill.<name>.custom_event` or similar.",
-            file=sys.stderr,
-        )
-        return 2
+        forced = getattr(args, "force", False)
+        reason = getattr(args, "reason", None) or ""
+        if not forced:
+            print(
+                f"⛔ Event type '{args.event_type}' is RESERVED for orchestrator "
+                f"core — cannot be emitted via CLI.\n"
+                f"   Reserved prefixes: {', '.join(RESERVED_EVENT_PREFIXES)}\n"
+                f"   Reserved exact: {', '.join(sorted(RESERVED_EVENT_EXACT))}\n\n"
+                f"   Reserved suffixes: {', '.join(RESERVED_EVENT_SUFFIXES)}\n\n"
+                f"   Rationale (OHOK-8 round-3): CrossAI reviewers found that\n"
+                f"   AI could forge terminal events like build.crossai_loop_complete\n"
+                f"   via `emit-event` CLI → bypass validators that count events.\n"
+                f"   These events must come from the actual code paths (run-start/\n"
+                f"   run-complete/wave-complete/vg-build-crossai-loop.py etc.).\n\n"
+                f"   If you need a custom skill signal, use a non-reserved\n"
+                f"   namespace like `skill.<name>.custom_event` or similar.\n\n"
+                f"   B85 OPERATOR OVERRIDE: pass --force --reason \"<text>\" to\n"
+                f"   bypass + log override-debt. ONLY use for backfilling a\n"
+                f"   reserved event the orchestrator failed to emit itself\n"
+                f"   (e.g. partial-wave dogfood where prior session aborted).",
+                file=sys.stderr,
+            )
+            return 2
+        if not reason.strip():
+            print(
+                "⛔ --force REQUIRES --reason \"<operator justification>\". "
+                "The reason is logged to OVERRIDE-DEBT.md + the event's "
+                "payload.override_debt for post-hoc audit.",
+                file=sys.stderr,
+            )
+            return 2
+        # Force-emit path: rewrite actor + inject override_debt metadata.
+        # Payload override_debt gets merged later (after payload parse).
+        args.actor = "cli-forced"
 
     payload = {}
     if args.payload:
@@ -1722,6 +1742,36 @@ def cmd_emit_event(args) -> int:
         flag_val = getattr(args, flag_name, None)
         if flag_val is not None and payload_key not in payload:
             payload[payload_key] = flag_val
+
+    # B85 v4.64.3: forced reserved-event emission — inject override_debt
+    # metadata into payload + append to OVERRIDE-DEBT.md (best-effort).
+    if getattr(args, "force", False) and _is_reserved_event(args.event_type):
+        reason = getattr(args, "reason", "") or ""
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        payload["override_debt"] = {
+            "reason": reason,
+            "issued_at": ts,
+            "issued_by": "cli-forced",
+            "event_type": args.event_type,
+        }
+        try:
+            from pathlib import Path as _P
+            debt_path = _P(os.environ.get("VG_REPO_ROOT", ".")) / ".vg" / "OVERRIDE-DEBT.md"
+            debt_path.parent.mkdir(parents=True, exist_ok=True)
+            if not debt_path.exists():
+                debt_path.write_text(
+                    "# VG Override Debt Register\n\nManaged by vg-orchestrator. "
+                    "/vg:accept verifies clean before approving a phase.\n\n",
+                    encoding="utf-8",
+                )
+            entry = (
+                f"- {ts} `{args.event_type}` run={current['run_id'][:8]} "
+                f"phase={current['phase']} cli-forced reason={reason!r}\n"
+            )
+            with debt_path.open("a", encoding="utf-8") as f:
+                f.write(entry)
+        except Exception:
+            pass
 
     evt = db.append_event(
         run_id=current["run_id"],
@@ -5126,6 +5176,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Block resolution text (merged into payload as 'resolution')")
     s.add_argument("--block-file", default=None, dest="block_file",
                    help="Path to .vg/blocks/{run_id}/{gate_id}.md (merged into payload)")
+    # B85 v4.64.3 (issue #194 finding #3): operator-driven reserved-event
+    # repair. Use case: partial-wave dogfood where prior session aborted
+    # before emitting `wave.completed`, leaving the orchestrator's
+    # must_emit_telemetry gate stuck. --force lets the operator emit a
+    # reserved event with mandatory --reason logged to OVERRIDE-DEBT.md.
+    # Forced emissions are recorded with actor="cli-forced" and a payload
+    # `override_debt` field so post-hoc audit can tell forged-vs-genuine.
+    s.add_argument("--force", action="store_true",
+                   help="Override RESERVED_EVENT protection (B85). REQUIRES --reason.")
+    s.add_argument("--reason", default=None,
+                   help="Operator justification (mandatory when --force set). "
+                        "Logged to OVERRIDE-DEBT.md + event payload.override_debt.reason.")
     s.set_defaults(func=cmd_emit_event)
 
     s = sub.add_parser(
