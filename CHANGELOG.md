@@ -1,3 +1,62 @@
+# v4.63.13 — B81 orchestrator-owned PIPELINE-STATE flip
+
+User dogfood report (RTB Phase 8.1 Flow 9 Admin Reports, 2026-05-18):
+"trong RTB, build xong vẫn không thấy tự kích hoạt các step còn lại sau
+wave cuối cùng. rà soát lại RTB là thấy dogfood đó."
+
+**Root cause** (events.db forensics on run `4ea0f060`):
+
+- Build session ran 2026-05-18 05:28 → 06:24. All build steps marked done
+  in events.db. `build.completed` + `run.completed` events fired.
+- BUT `.vg/phases/08.1-.../PIPELINE-STATE.json` was last updated 2026-05-17
+  by blueprint close. `next_command` still said `/vg:build 8.1`.
+- `/vg:next` reads PIPELINE-STATE.json → routes user back into `/vg:build`
+  instead of advancing to `/vg:review`. Pipeline auto-chain dead.
+
+**Forensics tracking the failure**:
+
+- RTB is global install (`.vg/.install-target=global`).
+- `/vg:update` correctly pruned `.claude/scripts/` per global doctrine.
+- `commands/vg/_shared/build/close.md:818` hardcodes
+  `python3 .claude/scripts/vg-orchestrator run-complete` with NO tier
+  fallback. The path doesn't exist in RTB → Python errors → exit 2.
+- Lines 825-848 (inline Python that flips PIPELINE-STATE.json) NEVER ran.
+- `run.completed` event still made it into events.db only because Claude AI
+  fell back to a different invocation path manually — the canonical state
+  flip skipped that handoff.
+
+This affected 68 other skill files that reference `.claude/scripts/`
+hardcoded; build close was the most-visible victim because its non-blocked
+state transition gates the entire downstream pipeline. Other invocations
+have `|| true` fallback so failures are silent (events lost, but no
+script termination).
+
+**Fix**: move PIPELINE-STATE flip into `cmd_run_complete` so the canonical
+state transition is owned by the orchestrator binary, surviving any
+skill-side path resolution failure. Skill-side close.md flip remains as a
+parallel path for backwards compat (both writers idempotent on the same
+end state).
+
+New module-level `_PIPELINE_FLIP_MAP` covers the full pipeline:
+`specs → scope → blueprint → build → review → test-spec → test → accept`.
+`_flip_pipeline_state(command, phase, outcome)` resolves phase dir via
+`contracts.resolve_phase_dir()`, merges into existing PIPELINE-STATE.json
+(preserves upstream step entries), writes
+`next_command + status + pipeline_step + steps.{cmd}` atomically. Returns
+False on BLOCK/UNKNOWN-COMMAND/UNKNOWN-PHASE so retries land in same step.
+
+Files: `scripts/vg-orchestrator/__main__.py:1414-1488` + `.claude/scripts/`
+mirror.
+
+**Tests**: `tests/test_batch81_pipeline_state_in_run_complete.py` — 8
+cases (map coverage, helper signature, mirror parity, behavioral state
+write, BLOCK-no-mutate, idempotency, every pipeline step covered,
+missing-phase tolerance).
+
+**Manual backfill applied to RTB**: phase `08.1-align-flow-9-admin-reports-with-business-specs/PIPELINE-STATE.json` updated to `next_command: /vg:review 8.1` + `steps.build.status: built-complete` so user's `/vg:next` advances correctly without re-running build.
+
+---
+
 # v4.63.12 — B80 PR #195 TaskCreate camelCase taskId + threshold count
 
 PR #195 (vietnhprintway) surfaced two latent bugs in

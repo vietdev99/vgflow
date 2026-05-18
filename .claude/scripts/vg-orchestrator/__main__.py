@@ -1411,6 +1411,68 @@ def cmd_run_status(_args) -> int:
     return 0
 
 
+# B81 v4.63.13 — canonical PIPELINE-STATE flip mapping. Owned by orchestrator
+# so the state transition survives skill-side path resolution failures
+# (e.g. global install with `.claude/scripts/` pruned, where skill's hardcoded
+# `python3 .claude/scripts/vg-orchestrator ...` Python invocation fails before
+# the inline PIPELINE-STATE write runs).
+_PIPELINE_FLIP_MAP = {
+    "vg:specs":     {"next": "/vg:scope {phase}",      "status": "drafted",         "step": "specs-complete",      "step_key": "specs"},
+    "vg:scope":     {"next": "/vg:blueprint {phase}",  "status": "scoped",          "step": "scope-complete",      "step_key": "scope"},
+    "vg:blueprint": {"next": "/vg:build {phase}",      "status": "blueprinted",     "step": "blueprint-complete",  "step_key": "blueprint"},
+    "vg:build":     {"next": "/vg:review {phase}",     "status": "executed",        "step": "build-complete",      "step_key": "build", "step_status": "built-complete"},
+    "vg:review":    {"next": "/vg:test-spec {phase}",  "status": "reviewed",        "step": "review-complete",     "step_key": "review"},
+    "vg:test-spec": {"next": "/vg:test {phase}",       "status": "test-specced",    "step": "test-spec-complete",  "step_key": "test-spec"},
+    "vg:test":      {"next": "/vg:accept {phase}",     "status": "tested",          "step": "test-complete",       "step_key": "test"},
+    "vg:accept":    {"next": None,                     "status": "accepted",        "step": "accept-complete",     "step_key": "accept"},
+}
+
+
+def _flip_pipeline_state(command: str, phase: str, outcome: str) -> bool:
+    """B81: write PIPELINE-STATE.json for the phase reflecting `command` done.
+
+    Returns True if state flipped successfully. False if the phase dir or the
+    pipeline mapping is missing — caller treats this as informational, never
+    blocking (skill-side flip remains a parallel path for backwards compat).
+
+    Only flips when outcome == "PASS". Block/partial outcomes leave state as-is
+    so retries land in the same step.
+    """
+    if outcome != "PASS":
+        return False
+    mapping = _PIPELINE_FLIP_MAP.get(command)
+    if not mapping:
+        return False
+    try:
+        phase_dir = contracts.resolve_phase_dir(phase)
+    except Exception:
+        phase_dir = None
+    if phase_dir is None or not phase_dir.is_dir():
+        return False
+    state_path = phase_dir / "PIPELINE-STATE.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except Exception:
+        state = {}
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    state["status"] = mapping["status"]
+    state["pipeline_step"] = mapping["step"]
+    state["updated_at"] = now
+    if mapping["next"]:
+        state["next_command"] = mapping["next"].format(phase=phase)
+        state["next_command_emitted_at"] = now
+    steps = state.setdefault("steps", {})
+    step_entry = steps.setdefault(mapping["step_key"], {})
+    step_entry["status"] = mapping.get("step_status", mapping["status"])
+    step_entry["finished_at"] = now
+    step_entry["updated_at"] = now
+    try:
+        state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
 def cmd_run_complete(args) -> int:
     """Verify runtime_contract evidence, emit completion event, clear current-run."""
     current = state_mod.read_current_run()
@@ -1462,6 +1524,12 @@ def cmd_run_complete(args) -> int:
         # DB outcome reflects caller's --outcome (not hardcoded PASS).
         # Contract verdict True ≠ phase goal verdict True.
         db.complete_run(run_id, outcome=caller_outcome)
+        # B81 v4.63.13: flip PIPELINE-STATE.json from the orchestrator so the
+        # state transition survives skill-side path resolution failures
+        # (global install + pruned .claude/scripts). Skill-side close.md
+        # flip still runs as a parallel path for backwards compat — both
+        # writers are idempotent on the same end state.
+        _flip_pipeline_state(command, phase, caller_outcome)
         # v2.5.2 Phase O — release repo-lock if we own it
         lock_token = current.get("lock_token")
         if lock_token and _lock_mod is not None:
