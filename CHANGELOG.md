@@ -1,3 +1,23 @@
+# v4.64.4 — B84 hotfix — update pre-existing staleness test for contract bypass
+
+CI Test on v4.64.2/v4.64.3 failed:
+`tests/test_block_handled_counter_check.py::test_block_handled_without_evidence_refresh_blocks_next_step_active`
+returned exit 0 instead of the expected non-zero BLOCK.
+
+Root cause: B84 added the `contract_sha256` UNCHANGED bypass to the V4
+staleness check. The pre-existing test seeds evidence with the same
+contract that exists on disk (`tasklist-contract.json`), so the bypass
+correctly kicks in and the V4 check returns 'ok' — no BLOCK.
+
+Fix: pre-existing test now mutates the contract AFTER evidence is signed,
+so `evidence_contract_sha != current_contract_sha`, the bypass declines,
+and the staleness BLOCK fires as the test expects. Test docstring
+updated with B84 reference.
+
+No production code change vs v4.64.3. Test fixture adjustment only.
+
+---
+
 # v4.64.3 — B86 Issue #194 finding #6 Windows junction support (closes issue)
 
 Final deferred item from issue #194. Issue can now be closed.

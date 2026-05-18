@@ -149,7 +149,13 @@ def _run_pre_hook(tmp: Path, command: str, session_id: str = "test-session"):
 def test_block_handled_without_evidence_refresh_blocks_next_step_active(
     tmp_path: Path,
 ) -> None:
-    """vg.block.handled emitted AFTER evidence mtime → BLOCK on next step-active."""
+    """vg.block.handled emitted AFTER evidence mtime → BLOCK on next step-active.
+
+    B84 v4.64.2: V4 staleness check now bypasses when contract_sha256
+    UNCHANGED (eliminates ~90 wasted ops/phase from RTB dogfood). For
+    the BLOCK to fire, the contract must mutate after evidence write so
+    the bypass condition fails.
+    """
     run_id = "run-handled-stale"
     _setup_run(tmp_path, run_id)
     _mk_key(tmp_path)
@@ -160,6 +166,17 @@ def test_block_handled_without_evidence_refresh_blocks_next_step_active(
     # Force evidence mtime to a known earlier instant.
     old_ts = time.time() - 60
     os.utime(ev_path, (old_ts, old_ts))
+
+    # B84: mutate the contract AFTER evidence is signed so contract_sha256
+    # in evidence no longer matches current contract → V4 bypass declines
+    # and staleness BLOCK fires as originally intended.
+    contract_path = tmp_path / ".vg" / "runs" / run_id / "tasklist-contract.json"
+    contract_data = json.loads(contract_path.read_text(encoding="utf-8"))
+    contract_data["checklists"].append({"id": "step_drift", "title": "Drift"})
+    contract_data["projection_items"] = contract_data.get("projection_items", []) + [
+        {"id": "step_drift", "kind": "step"}
+    ]
+    contract_path.write_text(json.dumps(contract_data), encoding="utf-8")
 
     # Then emit vg.block.handled with timestamp NEWER than evidence mtime
     # (evidence has not been refreshed since the handled event).
