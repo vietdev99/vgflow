@@ -53,8 +53,10 @@ def test_stop_hook_post_wave_only_triggers_on_build_command():
     post_wave_idx = body.find("POST-WAVE CONTINUATION")
     assert post_wave_idx > 0
     # B68 widened window: cascade checks added 4b + 4c → comment block grew.
-    # Search 1500 chars backward to find guard.
-    block = body[max(0, post_wave_idx - 1500):post_wave_idx]
+    # B82 widened again: wave-done marker filename fix added ~700 chars of
+    # B82 explanatory comment between the $command guard and the
+    # POST-WAVE CONTINUATION block. Search 2500 chars backward.
+    block = body[max(0, post_wave_idx - 2500):post_wave_idx]
     assert ("\"$command\" = \"vg:build\"" in block or '"$command" = "build"' in block), (
         "POST-WAVE CONTINUATION check must gate on $command being vg:build"
     )

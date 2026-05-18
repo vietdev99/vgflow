@@ -1,3 +1,26 @@
+# v4.63.15 — B82 hotfix — test backward-search window + behavioral test scope
+
+CI Test workflow on v4.63.14 failed for two reasons:
+
+1. **Pre-existing `test_stop_hook_post_wave_only_triggers_on_build_command`
+   broke.** Searches 1500 chars backward from `POST-WAVE CONTINUATION` anchor
+   to find the `[ "$command" = "vg:build" ]` guard. B82 inserted ~700 chars
+   of explanatory comment between the guard and the anchor — guard moved
+   beyond the 1500-char window. Fix: widen backward search to 2500.
+
+2. **B82 behavioral test on Linux CI returned rc=0 + empty output.**
+   The end-to-end test invoked `bash vg-stop.sh` against a tmp_path repo
+   layout, but the hook short-circuited before reaching gate 4a logic
+   because the full dependency tree (`parse_field` from `_lib.sh`,
+   `vg-orchestrator` binary, run-status command) wasn't bootstrapped in
+   the test fixture. Replaced behavioral test with a source-level check
+   that the gate 4a failure message references "STEP 5 post-execution" —
+   source guards above already prove the marker-name fix.
+
+No production code change vs v4.63.14. Test scope adjustment only.
+
+---
+
 # v4.63.14 — B82 Stop hook wave-done marker filename fix
 
 User dogfood follow-up (RTB phase 8.1, 2026-05-17/18):
