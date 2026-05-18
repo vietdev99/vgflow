@@ -1,3 +1,25 @@
+# v4.64.1 — B83 hotfix — strip literal `test-spec → review` from audit comment
+
+CI Test workflow on v4.64.0 failed: `test_pipeline_order_canonical::
+test_no_wrong_order_test_spec_before_review` lint detected the literal
+substring `test-spec → review` inside the B83 audit comment in
+`commands/vg/_shared/review/preflight.md:301`.
+
+The comment quoted the user's contradiction verbatim ("Pipeline order
+theo skill spec: build → test-spec → review → test → accept ... build →
+review → test-specs → test chứ?"). The first quoted phrase contains
+the forbidden v3.x backwards ordering substring that the canonical
+pipeline lint rejects.
+
+Fix: rephrase the comment to describe the contradiction abstractly
+("contradiction between the legacy gate emitting the reverse order and
+the close.md emissions matching the B69 canonical order") without
+embedding the forbidden substring.
+
+No production code change vs v4.64.0. Comment text only.
+
+---
+
 # v4.64.0 — B83 Remove stale v3.6.6 deep-test-specs preflight gate
 
 **Pipeline canonicalization milestone.** Folds B78→B82 patches + B83 fix

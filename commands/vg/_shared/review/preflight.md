@@ -297,9 +297,9 @@ Reasons:
 User dogfood (RTB phase 8.1, 2026-05-18): after B81 PIPELINE-STATE flip
 shipped `next_command=/vg:review`, the v3.6.6 gate in review/preflight.md
 fired immediately and forced `/vg:test-spec` first — masking the canonical
-B69 ordering. User flagged the contradiction: "Pipeline order theo skill
-spec: build → test-spec → review → test → accept ... build → review →
-test-specs → test chứ? nên tin cái nào đây?"
+B69 ordering. User flagged the contradiction between the legacy gate
+emitting the reverse order and the close.md emissions matching the B69
+canonical order; resolution: trust B69.
 
 Answer: trust B69 + LIFECYCLE.md. v3.6.6 gate was a stale design that
 the B69 reorganization in test-spec.md superseded but never cleaned up.
