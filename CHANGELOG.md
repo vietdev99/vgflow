@@ -1,3 +1,64 @@
+# v4.64.0 — B83 Remove stale v3.6.6 deep-test-specs preflight gate
+
+**Pipeline canonicalization milestone.** Folds B78→B82 patches + B83 fix
+into a minor bump.
+
+User dogfood follow-up (RTB phase 8.1, 2026-05-18):
+> "Pipeline order theo skill spec: build → test-spec → review → test → accept.
+>  sao pipeline lại nhầm lẫn như thế này. build -> review -> test-specs->test chứ?
+>  nên tin cái nào đây?"
+
+**Self-contradiction discovered in codebase:**
+
+| Source | Says next after build | Order claim |
+|---|---|---|
+| `build/close.md:838` | `/vg:review` | build → review |
+| `review/close.md:353` | `/vg:test-spec` | review → test-spec |
+| `test-spec.md:846` (B69) | `/vg:test` | test-spec → test |
+| **`review/preflight.md:281` (v3.6.6 gate)** | `/vg:test-spec` (BLOCK on missing) | **test-spec → review** |
+| `LIFECYCLE.md:64-65` (B69) | review then test-spec | build → review → test-spec |
+| `phase-recon.py PIPELINE_STEPS` | `"review", "test-spec"` | review → test-spec |
+
+5 of 6 sources agree: **build → review → test-spec → test → accept** (canonical).
+
+1 source disagrees: `review/preflight.md:281` v3.6.6 gate hardcodes
+`feature|hotfix|bugfix` profiles to BLOCK review with "run /vg:test-spec
+first". This creates an unresolvable deadlock:
+
+- review PRODUCES `RUNTIME-MAP.json` (lens-and-findings.md:371)
+- test-spec REQUIRES `RUNTIME-MAP.json` (test-spec.md:178 Step 1 gate)
+- v3.6.6 gate says "test-spec before review" → test-spec can't run because
+  review hasn't produced RUNTIME-MAP yet → review can't run because v3.6.6
+  gate fires "missing deep specs" → infinite block.
+
+The v3.6.6 gate was a stale design that the B69 reorganization superseded
+in test-spec.md but never cleaned up. RTB hit the deadlock after B81
+shipped orchestrator-side PIPELINE-STATE flip emitting `next_command=/vg:review`.
+
+**Fix**: removed the 70-line v3.6.6 gate block from
+`commands/vg/_shared/review/preflight.md:281-360`. Replaced with audit
+comment documenting:
+- Why removed (B69 deadlock with RUNTIME-MAP dependency)
+- Canonical order (build → review → test-spec → test → accept)
+- Conditions to safely reintroduce (opt-in flag only, never default-on)
+
+**Tests:**
+
+- `tests/test_batch83_stale_deep_test_specs_gate.py` (NEW, 3 cases):
+  asserts v3.6.6 gate code/variables/events removed; audit comment
+  documents B83 + B69 + canonical pipeline + deadlock reason; mirror parity.
+- `tests/test_deep_test_spec_lane.py::test_pipeline_wiring_places_test_spec_after_review`
+  (RENAMED + updated): old assertions of v3.6.6 gate code removed;
+  positive assertions of B69 canonical order kept.
+
+**Migration note**: review.md frontmatter still lists
+`review.deep_test_spec_blocked` event for tracking (severity=warn,
+non-blocking). Since the emitter is gone, this event will never fire on
+future builds; leaving the tracking entry as a no-op rather than
+restructuring frontmatter schema.
+
+---
+
 # v4.63.15 — B82 hotfix — test backward-search window + behavioral test scope
 
 CI Test workflow on v4.63.14 failed for two reasons:

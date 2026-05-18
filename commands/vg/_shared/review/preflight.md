@@ -278,87 +278,37 @@ if [ -n "$MISSING" ]; then
 fi
 ```
 
-**Post-build deep test-spec gate (v3.6.6) — `/vg:test-spec` sits between build and review.**
+<!-- B83 v4.64.0 (2026-05-18) — REMOVED: v3.6.6 deep-test-specs preflight gate.
 
-Review compares runtime behavior against a post-build deep spec contract.
-Blueprint cannot provide this because implemented DOM/routes/API/forms may not
-exist yet; `/vg:test` is too late because review would already have missed
-the lifecycle contract.
+The gate hardcoded `/vg:test-spec` to run BEFORE `/vg:review` and BLOCKed
+review with "run /vg:test-spec first" when post-build deep specs were
+missing. This contradicted the canonical pipeline established by B69
+and documented in commands/vg/LIFECYCLE.md:64-65:
 
-```bash
-DEEP_SPEC_REQUIRED=0
-case "${PHASE_PROFILE}" in
-  feature|hotfix|bugfix) DEEP_SPEC_REQUIRED=1 ;;
-esac
+    build → review → test-spec → test → accept
 
-# Retry/evaluate modes reuse prior review artifacts and should not demand a
-# fresh pre-review spec lane. Full first review must have it.
-if [ "$DEEP_SPEC_REQUIRED" = "1" ] && \
-   [ -z "${RETRY_FAILED:-}" ] && [ -z "${RE_SCAN_GOALS:-}" ] && \
-   [ -z "${EVALUATE_ONLY:-}" ] && [ -z "${FIX_ONLY:-}" ]; then
-  DEEP_SPEC_VALIDATOR="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-deep-test-specs.py"
-  [ -f "$DEEP_SPEC_VALIDATOR" ] || DEEP_SPEC_VALIDATOR="${REPO_ROOT}/scripts/validators/verify-deep-test-specs.py"
-  [ -f "$DEEP_SPEC_VALIDATOR" ] || DEEP_SPEC_VALIDATOR="${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-deep-test-specs.py"
+Reasons:
+1. review PRODUCES `RUNTIME-MAP.json` (lens-and-findings.md:371).
+2. test-spec REQUIRES `RUNTIME-MAP.json` (test-spec.md:178 Step 1 gate).
+3. v3.6.6 gate created an unresolvable deadlock: review blocked on
+   test-spec output, but test-spec couldn't run without review's
+   RUNTIME-MAP.json first.
 
-  if [ ! -f "$DEEP_SPEC_VALIDATOR" ]; then
-    echo "⛔ verify-deep-test-specs.py missing — re-sync VGFlow before review." >&2
-    echo "   Expected: ${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-deep-test-specs.py" >&2
-    exit 1
-  fi
+User dogfood (RTB phase 8.1, 2026-05-18): after B81 PIPELINE-STATE flip
+shipped `next_command=/vg:review`, the v3.6.6 gate in review/preflight.md
+fired immediately and forced `/vg:test-spec` first — masking the canonical
+B69 ordering. User flagged the contradiction: "Pipeline order theo skill
+spec: build → test-spec → review → test → accept ... build → review →
+test-specs → test chứ? nên tin cái nào đây?"
 
-  mkdir -p "${PHASE_DIR}/.tmp"
-  "${PYTHON_BIN:-python3}" "$DEEP_SPEC_VALIDATOR" --phase "${PHASE_NUMBER}" \
-    > "${PHASE_DIR}/.tmp/deep-test-specs-review.json" 2>&1
-  DEEP_SPEC_RC=$?
-  if [ "$DEEP_SPEC_RC" != "0" ]; then
-    echo "⛔ Deep test specs missing or shallow — run /vg:test-spec ${PHASE_NUMBER} before /vg:review." >&2
-    echo "   Details: ${PHASE_DIR}/.tmp/deep-test-specs-review.json" >&2
-    echo "   This is review-owned precondition, not /vg:test coverage debt." >&2
+Answer: trust B69 + LIFECYCLE.md. v3.6.6 gate was a stale design that
+the B69 reorganization in test-spec.md superseded but never cleaned up.
 
-    DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"
-    [ -f "$DIAG_SCRIPT" ] || DIAG_SCRIPT="${REPO_ROOT}/scripts/review-block-diagnostic.py"
-    [ -f "$DIAG_SCRIPT" ] || DIAG_SCRIPT="${VG_HOME:-$HOME/.vgflow}/scripts/review-block-diagnostic.py"
-    if [ -f "$DIAG_SCRIPT" ]; then
-      "${PYTHON_BIN:-python3}" "$DIAG_SCRIPT" \
-        --gate-id "review.deep_test_specs" \
-        --phase-dir "$PHASE_DIR" \
-        --input "${PHASE_DIR}/.tmp/deep-test-specs-review.json" \
-        --out-md "${PHASE_DIR}/.tmp/deep-test-specs-diagnostic.md" \
-        --out-json "${PHASE_DIR}/.tmp/deep-test-specs-diagnostic.json" \
-        >/dev/null 2>&1 || true
-      cat "${PHASE_DIR}/.tmp/deep-test-specs-diagnostic.md" 2>/dev/null || true
-    fi
+If a future use case genuinely needs deep specs BEFORE review (e.g.
+test-driven review where specs author the runtime contract), reintroduce
+as an opt-in flag — never as default-on for feature/hotfix/bugfix
+profiles. -->
 
-    PIPELINE_STATE="${PHASE_DIR}/PIPELINE-STATE.json"
-    "${PYTHON_BIN:-python3}" - "$PIPELINE_STATE" "$PHASE_NUMBER" <<'PY' 2>/dev/null || true
-import json
-import sys
-from datetime import datetime
-from pathlib import Path
-
-path = Path(sys.argv[1])
-phase = sys.argv[2]
-state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-state["status"] = "blocked"
-state["pipeline_step"] = "review-preflight-blocked"
-state["blocked_reason"] = "deep_test_specs_missing_or_shallow"
-state["next_command"] = f"/vg:test-spec {phase}"
-state["retry_command"] = f"/vg:review {phase} --mode=full --force"
-state["updated_at"] = datetime.now().isoformat()
-path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-PY
-
-    "${PYTHON_BIN:-python3}" ${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/vg-orchestrator emit-event \
-      "review.deep_test_spec_blocked" \
-      --step "0_parse_and_validate" \
-      --actor "llm-claimed" \
-      --outcome "BLOCK" \
-      --payload "{\"phase\":\"${PHASE_NUMBER}\",\"details\":\"${PHASE_DIR}/.tmp/deep-test-specs-review.json\",\"next_command\":\"/vg:test-spec ${PHASE_NUMBER}\"}" \
-      >/dev/null 2>&1 || true
-    exit 1
-  fi
-fi
-```
 
 **Update PIPELINE-STATE.json:**
 ```bash

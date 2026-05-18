@@ -128,25 +128,30 @@ def test_verify_deep_test_specs_blocks_missing(tmp_path: Path) -> None:
     assert any(item["type"] == "deep_test_spec_missing" for item in payload["evidence"])
 
 
-def test_pipeline_wiring_places_test_spec_between_build_and_review() -> None:
+def test_pipeline_wiring_places_test_spec_after_review() -> None:
+    """B83 v4.64.0: canonical pipeline is build → review → test-spec → test.
+
+    Previously asserted the v3.6.6 preflight gate that forced test-spec
+    BEFORE review. B83 removed that gate because it deadlocked with B69's
+    review → test-spec ordering (review produces RUNTIME-MAP.json that
+    test-spec requires as Step 1 precondition).
+    """
     lifecycle = (REPO_ROOT / "commands" / "vg" / "LIFECYCLE.md").read_text(encoding="utf-8")
     phase_recon = (REPO_ROOT / "scripts" / "phase-recon.py").read_text(encoding="utf-8")
     review_preflight = (REPO_ROOT / "commands" / "vg" / "_shared" / "review" / "preflight.md").read_text(encoding="utf-8")
-
     review = (REPO_ROOT / "commands" / "vg" / "review.md").read_text(encoding="utf-8")
-    # v4.0 canonical: review BEFORE test-spec (review writes RUNTIME-MAP, test-spec consumes it)
+
+    # Canonical order: review BEFORE test-spec (review writes RUNTIME-MAP).
     assert "build → **review**" in review or "review → test-spec" in review or "build → review" in review
     assert "/vg:test-spec" in lifecycle
-    # v4.0 canonical PIPELINE_STEPS order: review before test-spec
-    # Matches both scripts/phase-recon.py and .claude/scripts/phase-recon.py
     assert '"review", "test-spec"' in phase_recon
-    # review/preflight.md still gates deep test specs (legacy gate still present)
-    assert "/vg:test-spec ${PHASE_NUMBER}" in review_preflight
-    assert 'DEEP_SPEC_VALIDATOR="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/validators/verify-deep-test-specs.py"' in review_preflight
-    assert 'DIAG_SCRIPT="${VG_SCRIPT_ROOT:-${VG_HOME:-$HOME/.vgflow}/scripts}/review-block-diagnostic.py"' in review_preflight
-    assert "review.deep_test_spec_blocked" in review_preflight
-    assert 'state["next_command"] = f"/vg:test-spec {phase}"' in review_preflight
-    assert "review.deep_test_spec_blocked" in review
+    # B83 removed the v3.6.6 deep-test-specs gate from review/preflight.md.
+    # The audit-trail comment must remain so future readers don't reintroduce
+    # the deadlock.
+    assert "B83" in review_preflight
+    assert "B69" in review_preflight
+    assert "DEEP_SPEC_VALIDATOR" not in review_preflight, "v3.6.6 gate must be removed"
+    assert "review.deep_test_spec_blocked" not in review_preflight, "v3.6.6 gate event must be removed"
 
 def test_test_spec_command_supports_global_only_install() -> None:
     command = (REPO_ROOT / "commands" / "vg" / "test-spec.md").read_text(encoding="utf-8")
