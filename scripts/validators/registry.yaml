@@ -1207,3 +1207,15 @@ validators:
     runtime_target_ms: 400
     added_in: v2.48
     description: 'TEST-GOALS must declare goal_grounding ∈ {api, flow, presentation} per goal. Drives /vg:test verification strategy dispatch — different grounding = different proof shape (api → recipe_executor; flow → FLOW-runner walks checkpoints; presentation → screenshot diff + display-computation check). Pre-2026-05-01 phases get warn-mode with inferred grounding from surface/title heuristics. Override: --allow-grounding-gaps.'
+
+  # ──── Phase 7 vendor-portal Amendment #1 — SPA i18n provider invariant (2026-05-20) ────
+
+  - id: spa-i18n-provider
+    path: scripts/validators/verify-spa-i18n-provider.py
+    severity: warn
+    phases_active: [build, accept]
+    domain: artifact
+    runtime_target_ms: 300
+    added_in: v2.79
+    description: 'Every apps/*/src/main.tsx that calls createRoot().render() must wrap <App /> with <I18nextProvider> or <I18nProvider> (follows App-import one hop to handle wrapper-in-App.tsx style per Phase 6 merchant-v3 reference). Closes SPA i18n binding drift root cause: a portal SPA can ship without i18n binding and pass every accept gate because no validator catches the missing wrapper. Default severity=warn during initial rollout; flip to block once all portal SPAs wrap I18nextProvider. Override: --severity warn or skip flag.'
+
