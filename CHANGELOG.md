@@ -1,3 +1,81 @@
+# v4.66.0 — PR #196 spa-i18n-provider + B89 mirror/tests/regex fix
+
+Minor bump: PR #196 (vietnhprintway) added a new validator catching SPA
+i18n binding drift. B89 ships the mirrors, tests, and one regex bug fix
+that surfaced during the test layering.
+
+## PR #196 — spa-i18n-provider (merged commit 04f7e74)
+
+Detects portal SPAs that ship without binding `<I18nextProvider>`
+(or project-local `<I18nProvider>`) around the root tree. Real-world
+miss caught in PrintwayV3 Phase 7 vendor-portal: 0/115 TSX files used
+`useTranslation` and every accept gate passed despite untranslated keys
+in production. Algorithm: regex-based AST-lite, scans
+`apps/*/src/main.{tsx,jsx,ts,js}`, follows `App` import one hop.
+
+Files:
+- `scripts/validators/verify-spa-i18n-provider.py` (new, 312 lines)
+- `scripts/validators/registry.yaml` entry (id=`spa-i18n-provider`,
+  severity=`warn`, phases_active=`[build, accept]`)
+
+Severity ships as `warn` per PR — repos with WIP portal SPAs don't
+break on first `/vg:update`. Project-side flip to `block` via
+`--severity block` when all SPAs wrap.
+
+Credit: @vietnhprintway.
+
+## B89 follow-up — mirror, tests, regex fix
+
+PR #196 shipped without `.claude/` mirrors (existing convention for
+script paths under global install) and without test coverage. B89
+closes both gaps plus one bug found while writing tests.
+
+**B89 fix — nested-paren regex bug** in `CREATE_ROOT_RE`:
+
+Original pattern `createRoot\s*\([^)]*\)\s*\.\s*render\s*\(` fails on
+`createRoot(document.getElementById('root')).render(<App />)`. The
+`[^)]*` stops at the FIRST `)` (inside `getElementById`), then the
+rest of the pattern sees `).render(` which does NOT match `\)\s*\.\s*render`.
+Validator falls through to "no createRoot call → skipped" → silent PASS
+bypass. PR smoke testing didn't catch this because real PrintwayV3
+main.tsx uses a pre-declared `rootElement` variable (no nested parens).
+
+Fix: detect `createRoot(` AND `.render(` independently — drop the
+nested-paren middle. Position check skipped (no valid SPA puts `.render(`
+before `createRoot(`).
+
+**B89 — `added_in` tag correction:**
+
+PR shipped with `added_in: v2.79` (stale — looked like cut-paste from
+a much older registry entry). Corrected to `v4.66.0` to reflect actual
+ship version.
+
+**B89 tests** (`tests/test_batch89_spa_i18n_provider.py`, 11 cases):
+
+  - Empty repo → PASS scanned=0
+  - SPA missing wrapper → FAIL (catches regex bug; without B89 fix
+    this test would pass falsely)
+  - Wrapper in main.tsx → PASS
+  - Wrapper in App.tsx (one-hop follow) → PASS (Phase 6 merchant-v3
+    reference style)
+  - Aliased `import { App as Root } from './App'` → PASS
+  - Non-SPA library (no createRoot) → PASS (skipped)
+  - `--severity warn` exits 0 with violations
+  - `<I18nProviderFactory` (substring) NOT treated as wrapper → FAIL
+  - Validator mirror parity
+  - Registry mirror parity
+  - Registry contains entry with correct `added_in: v4.66.0` +
+    `severity: warn`
+
+## Out of scope for this minor
+
+- Wiring the validator into `build/close.md` or `accept/gates.md` —
+  catalog-only registration leaves it dormant. PR author explicitly
+  wanted opt-in adoption for the first rollout; build-time wiring can
+  layer in a follow-up once `severity` flips to `block`.
+
+---
+
 # v4.65.1 — B88 post-ship audit fixes for B87 IMPLEMENTATION-NOTES.html
 
 User-requested audit (2026-05-20): check B87 ship for gaps. Found 4
