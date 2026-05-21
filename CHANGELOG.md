@@ -1,3 +1,49 @@
+# v4.67.2 — B93 issue #197 F-CAI-07 decision coverage propagation
+
+Closes 1 of 3 remaining issue #197 architectural findings.
+
+## F-CAI-07 (major) — decision coverage below gate
+
+PrintwayV3 Phase 8.2: 68.4% (162/237 P8.D-XX) — below 85% target.
+`decision_refs` empty on all 200 emitted goals because
+`_goal_decision_refs` relied entirely on text-scan over goal body. Many
+goals didn't inline-reference D-XX strings, so coverage stayed sparse.
+P8.D-214 (audit log), P8.D-447 (seed conditions), P8.D-511 (row count,
+freshly amended) had no goals bound.
+
+Fix:
+- New `_parse_explicit_decision_refs(goal)` reads `decision_refs:`
+  frontmatter list (inline `[X, Y]` + block `- X\n  - Y` forms). Blueprint
+  AI can declare refs explicitly without needing inline body text.
+- `_goal_decision_refs` returns union of explicit + text-scanned. Unknown
+  refs (not in `decisions`) dropped.
+- New `_decision_coverage(goals, decisions)` audit computes coverage %
+  + lists first 30 unbound IDs. Threshold 85.0 advisory.
+- Summary surfaces `decision_coverage_audit` with `total_decisions`,
+  `bound_decisions`, `coverage_pct`, `unbound`, `unbound_count`,
+  `threshold`, `passed`.
+- `main()` warns when below threshold + lists first 5 unbound.
+
+Advisory in v4.67.2. Flips to BLOCK in v4.68.x once dogfood phases
+backfill explicit decision_refs on remaining goals.
+
+## Tests
+
+`tests/test_batch93_decision_coverage.py` — 13 cases:
+  - Explicit parser: inline + block + empty + bogus-filter
+  - Union behavior: explicit-wins, text-scan-only, stale-drop
+  - Coverage audit: full / below-threshold / above-threshold / no-decisions
+  - Summary field present + behavioral phase fixture
+  - Mirror parity
+
+## Deferred
+
+  F-CAI-09: Read-only goal auto-detect → B94 (next)
+  Build-gate proposal → B95 (needs RFC)
+  Gemini CLI TLS → B95 docs
+
+---
+
 # v4.67.1 — B92 issue #197 multi-actor (F-CAI-02 + F-CAI-06)
 
 Closes 2 of 4 remaining architectural findings from issue #197.

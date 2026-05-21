@@ -955,17 +955,105 @@ def _parse_context_decisions(phase_dir: Path) -> dict[str, dict[str, str]]:
     return decisions
 
 
+def _parse_explicit_decision_refs(goal: dict[str, Any]) -> list[str]:
+    """B93 v4.67.2 (issue #197 F-CAI-07): parse explicit `decision_refs:`
+    frontmatter field on goal. Supports inline + block list forms:
+
+        decision_refs: [P8.D-12, P8.D-44]
+        decision_refs:
+          - P8.D-12
+          - P8.D-44
+    """
+    body = goal.get("body") or ""
+    raw = _field(body, "decision_refs").strip()
+    if not raw:
+        return []
+    refs: list[str] = []
+    # Inline `[X, Y, Z]`
+    if raw.startswith("[") and raw.endswith("]"):
+        inner = raw[1:-1]
+        for piece in inner.split(","):
+            piece = piece.strip().strip('"').strip("'")
+            if DECISION_REF_RE.fullmatch(piece):
+                refs.append(piece)
+        return refs
+    # Block: each line `- X`
+    for line in raw.splitlines():
+        line = line.strip().lstrip("-").strip().strip('"').strip("'")
+        if not line or line.startswith("#"):
+            continue
+        if DECISION_REF_RE.fullmatch(line):
+            refs.append(line)
+    return refs
+
+
 def _goal_decision_refs(goal: dict[str, Any], decisions: dict[str, dict[str, str]]) -> list[str]:
-    """Extract D-XX refs from goal text — match against parsed decisions."""
+    """Extract D-XX refs from goal — explicit frontmatter first, then text scan.
+
+    B93 v4.67.2 (issue #197 F-CAI-07): prefer explicit `decision_refs:`
+    frontmatter list when declared. Previously: relied entirely on text-scan
+    regex over goal body. Many goals didn't reference D-XX inline → coverage
+    came out 68.4% on PrintwayV3 Phase 8.2 (162/237 P8.D-XX, below 85%
+    gate). Explicit frontmatter lets blueprint AI bind decisions directly.
+
+    Returns sorted union of explicit + text-scanned references that exist
+    in `decisions`.
+    """
     if not decisions:
         return []
-    haystack = _combined(goal)
     found: set[str] = set()
+    # 1. Explicit frontmatter declaration
+    for ref in _parse_explicit_decision_refs(goal):
+        if ref in decisions:
+            found.add(ref)
+    # 2. Text scan fallback (legacy)
+    haystack = _combined(goal)
     for m in DECISION_REF_RE.finditer(haystack):
         d_id = m.group(1)
         if d_id in decisions:
             found.add(d_id)
     return sorted(found)
+
+
+def _decision_coverage(goals: list[dict[str, Any]],
+                       decisions: dict[str, dict[str, str]]) -> dict[str, Any]:
+    """B93 v4.67.2 (issue #197 F-CAI-07): compute decision coverage % +
+    list unbound decision IDs.
+
+    Returns:
+      total_decisions: phase total (denominator)
+      bound_decisions: count referenced by ≥1 goal
+      coverage_pct: 0-100
+      unbound: list of decision IDs no goal references (first 30)
+      threshold: 85.0 (advisory gate; flips to BLOCK in later batch)
+      passed: coverage_pct >= threshold
+    """
+    if not decisions:
+        return {
+            "total_decisions": 0,
+            "bound_decisions": 0,
+            "coverage_pct": 100.0,
+            "unbound": [],
+            "threshold": 85.0,
+            "passed": True,
+        }
+    referenced: set[str] = set()
+    for g in goals:
+        for ref in _goal_decision_refs(g, decisions):
+            referenced.add(ref)
+    total = len(decisions)
+    bound = len(referenced & set(decisions.keys()))
+    pct = round((bound / total) * 100.0, 1) if total else 100.0
+    unbound = sorted(set(decisions.keys()) - referenced)
+    return {
+        "total_decisions": total,
+        "bound_decisions": bound,
+        "coverage_pct": pct,
+        "unbound": unbound[:30],
+        "unbound_count": len(unbound),
+        "threshold": 85.0,
+        "passed": pct >= 85.0,
+    }
 
 
 def _parse_api_contracts(phase_dir: Path) -> list[dict[str, str]]:
@@ -1620,6 +1708,8 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
     decisions = _parse_context_decisions(phase_dir)
     # B91 v4.67.0 (issue #197 F-CAI-03): source assertion audit before spec gen
     source_audit = _audit_source_assertions(goals)
+    # B93 v4.67.2 (issue #197 F-CAI-07): decision coverage audit
+    decision_audit = _decision_coverage(goals, decisions)
     selected = [goal for goal in goals if include_readonly or _needs_lifecycle(goal)]
     specs = {goal["id"]: _goal_spec(goal, contracts, decisions) for goal in selected}
     return {
@@ -1661,6 +1751,8 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
                     for g in selected
                 ),
             },
+            # B93 v4.67.2 (issue #197 F-CAI-07): decision coverage audit
+            "decision_coverage_audit": decision_audit,
         },
         # G5 Batch 4: root-level fixture DAG from cross-goal dependencies
         "fixture_dag": _root_fixture_dag(selected),
@@ -1742,6 +1834,20 @@ def main() -> int:
             f"avoids cross-resource pollution per B91 F-CAI-01).",
             file=sys.stderr,
         )
+    # B93 v4.67.2 (issue #197 F-CAI-07): warn when decision coverage below threshold
+    dca = summary.get("decision_coverage_audit", {})
+    if dca.get("total_decisions") and not dca.get("passed", True):
+        print(
+            f"⚠ decision coverage below {dca['threshold']}% threshold — "
+            f"{dca['bound_decisions']}/{dca['total_decisions']} "
+            f"({dca['coverage_pct']}%) of CONTEXT.md decisions bound to goals. "
+            f"{dca.get('unbound_count', 0)} unbound. "
+            f"Advisory only — blueprint AI should add `decision_refs: [...]` "
+            f"frontmatter to each goal or reference D-XX in goal body.",
+            file=sys.stderr,
+        )
+        for d_id in dca.get("unbound", [])[:5]:
+            print(f"  - unbound: {d_id}", file=sys.stderr)
     return 0
 
 
