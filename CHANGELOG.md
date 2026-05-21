@@ -1,3 +1,64 @@
+# v4.67.1 — B92 issue #197 multi-actor (F-CAI-02 + F-CAI-06)
+
+Closes 2 of 4 remaining architectural findings from issue #197.
+Continues from B91 (F-CAI-01/03/04/10).
+
+## F-CAI-02 (major) — multi-actor declared not exercised
+
+PrintwayV3 Phase 8.2: 178/206 goals declared
+`actors: admin/approver/reviewer` but every lifecycle step ran as
+`admin`. RBAC binding missing. Stage transitions never switched actors.
+
+Fix: new `_parse_actor_workflow(goal)` reads explicit per-stage actor
+assignments from goal frontmatter:
+
+```
+actor_workflow:
+  create: requestor
+  update: approver
+  delete: admin
+```
+
+Supports inline (`{...}`) and block (indented list) forms.
+`_stage_actor()` consults declared workflow first; falls back to keyword
+heuristic (APPROVER_WORDS / INVITEE_WORDS) when no declaration. Invalid
+actor IDs (not in `actors` list) ignored, fall back to heuristic.
+
+## F-CAI-06 (major) — disconnected fixture DAG (multi-actor)
+
+PrintwayV3 Phase 8.2: approver/reviewer sessions had no edges to
+`owned_resource`. Cleanup chain had no restoration path for sequence
+(create-by-A → patch-by-B → delete-by-C).
+
+Fix: `_fixture_dag` now computes `owned_resource.depends_on` from ALL
+mutating actor sessions. Three cases:
+  - Single actor → depends on that actor's session (unchanged).
+  - Multi-actor with `actor_workflow` → depends on union of
+    {create, update, delete} actor sessions.
+  - Multi-actor without explicit workflow → depends on ALL actor
+    sessions (conservative — cleanup walker can reverse-traverse).
+
+Cleanup string for multi-actor cases explicitly directs unwind sequence:
+"actor-C delete → actor-B revert patch → actor-A delete".
+
+## Tests
+
+`tests/test_batch92_actor_workflow_dag.py` — 11 cases:
+  - F-CAI-02: inline/block workflow parse, empty, stage_actor honors
+    workflow, falls back to legacy, invalid actor ignored
+  - F-CAI-06: single-actor unchanged, multi-actor all-session deps,
+    explicit-workflow filtered deps, cleanup string for multi-actor
+  - Mirror parity
+
+## Deferred
+
+  F-CAI-07: Decision coverage gate → B93 (next batch)
+  F-CAI-09: Read-only goal auto-detect → B94
+  Build-gate proposal → B95 (needs RFC)
+  Gemini CLI TLS → B95 docs
+
+---
+
 # v4.67.0 — B91 issue #197 generator correctness (F-CAI-01 + F-CAI-03 + F-CAI-04 + F-CAI-10)
 
 Continues from v4.66.1 B90 (F-CAI-05 + F-CAI-08 shipped). B91 closes 4 of

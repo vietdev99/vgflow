@@ -760,19 +760,73 @@ def _artifact_capture_v2(goal: dict[str, Any]) -> list[dict[str, Any]]:
              "artifact_kind": kind}]
 
 
+def _parse_actor_workflow(goal: dict[str, Any]) -> dict[str, str]:
+    """B92 v4.67.1 (issue #197 F-CAI-02): parse explicit per-stage actor
+    assignments from goal frontmatter.
+
+    Supported form (in body, parsed via _field):
+        actor_workflow:
+          create: requestor
+          update: approver
+          delete: admin
+
+    Or inline:
+        actor_workflow: {create: requestor, update: approver}
+
+    Returns dict mapping stage → actor_id. Empty when not declared.
+    """
+    body = goal.get("body") or ""
+    raw = _field(body, "actor_workflow").strip()
+    if not raw:
+        return {}
+    mapping: dict[str, str] = {}
+    # Inline form `{stage: actor, stage: actor}`
+    if raw.startswith("{") and raw.endswith("}"):
+        inner = raw[1:-1]
+        for piece in inner.split(","):
+            kv = piece.strip().split(":", 1)
+            if len(kv) == 2:
+                mapping[kv[0].strip()] = kv[1].strip()
+        return mapping
+    # Block form: each line `  stage: actor`
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        stage, actor = line.split(":", 1)
+        mapping[stage.strip()] = actor.strip()
+    return mapping
+
+
 def _stage_actor(stage: str, goal: dict[str, Any], actors: list[dict[str, Any]]) -> str:
     """Resolve which actor performs this stage.
 
-    Heuristic:
+    B92 v4.67.1 (issue #197 F-CAI-02): explicit `actor_workflow:` frontmatter
+    overrides keyword heuristics. When declared:
+      actor_workflow:
+        create: requestor
+        update: approver
+        delete: admin
+    each stage's actor is pinned. Falls back to keyword heuristic when not
+    declared (legacy behavior).
+
+    Pre-B92 heuristic kept for goals without explicit workflow:
     - Single actor → that actor for all stages.
-    - update/read_after_update + 'admin'/'approver' words in goal → admin/approver actor.
-    - read_after_create/read_after_update + 'invitee'/'accept' words → invitee actor.
+    - update/read_after_update + 'admin'/'approver' words → admin/approver actor.
+    - read_after_create + 'invitee'/'accept' words → invitee actor.
     - Default → actors[0].
     """
     if not actors:
         return "primary"
     if len(actors) == 1:
         return actors[0]["id"]
+    actor_ids = {a["id"] for a in actors}
+    # B92: explicit workflow declaration wins
+    workflow = _parse_actor_workflow(goal)
+    if stage in workflow and workflow[stage] in actor_ids:
+        return workflow[stage]
     haystack = _combined(goal)
     if stage in {"update", "read_after_update"} and APPROVER_WORDS.search(haystack):
         # Find admin/approver actor
@@ -787,6 +841,20 @@ def _stage_actor(stage: str, goal: dict[str, Any], actors: list[dict[str, Any]])
 
 
 def _fixture_dag(goal: dict[str, Any], actors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """B92 v4.67.1 (issue #197 F-CAI-06): multi-actor DAG with cross-owner
+    cleanup chain.
+
+    Pre-B92: `owned_resource` depended only on `actors[0]_session`. When a
+    workflow involved sequence (create-by-actor-A → patch-by-actor-B →
+    delete-by-actor-C), each actor's session existed but the resource
+    cleanup chain had no restoration path — cleanup walker couldn't
+    traverse mutations across actor boundaries.
+
+    B92: `owned_resource.depends_on` lists ALL actor sessions involved in
+    mutations (not just the first). When `actor_workflow` declared, the
+    set respects declared mutation stages; otherwise depends on all actor
+    sessions present. Cleanup chain phrased to reverse-traverse mutations.
+    """
     fixtures = [
         {
             "id": f"{actor['id']}_session",
@@ -796,11 +864,36 @@ def _fixture_dag(goal: dict[str, Any], actors: list[dict[str, Any]]) -> list[dic
         }
         for actor in actors
     ]
+    # B92 F-CAI-06: owned_resource depends on ALL mutating actor sessions
+    if fixtures:
+        workflow = _parse_actor_workflow(goal)
+        mutating_stages = ("create", "update", "delete")
+        if workflow:
+            mut_actors = {workflow.get(s) for s in mutating_stages if workflow.get(s)}
+            owned_deps = sorted({f"{a}_session" for a in mut_actors if a})
+            if not owned_deps:
+                owned_deps = [fixtures[0]["id"]]
+        elif len(fixtures) > 1:
+            # Multi-actor goal without explicit workflow → conservatively
+            # depend on ALL sessions so cleanup walker spans the chain.
+            owned_deps = [f["id"] for f in fixtures]
+        else:
+            owned_deps = [fixtures[0]["id"]]
+    else:
+        owned_deps = []
+
     fixtures.append({
         "id": "owned_resource",
         "kind": "resource_or_state_under_test",
-        "depends_on": [fixtures[0]["id"]] if fixtures else [],
-        "cleanup": "delete/deactivate/cancel/rollback or restore original state",
+        "depends_on": owned_deps,
+        # B92 F-CAI-06: cleanup phrased to walk back through any actor
+        "cleanup": (
+            "delete/deactivate/cancel/rollback or restore original state. "
+            "Multi-actor: reverse-traverse mutation chain "
+            "(actor-C delete → actor-B revert patch → actor-A delete)."
+            if len(owned_deps) > 1 else
+            "delete/deactivate/cancel/rollback or restore original state"
+        ),
     })
     if _meaningful(goal.get("dependencies")):
         fixtures.append({
