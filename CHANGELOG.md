@@ -1,3 +1,45 @@
+# v4.67.3 — B94 issue #197 F-CAI-09 read-only goal auto-detect
+
+Closes 1 of 2 remaining issue #197 architectural findings. Only build-gate
+proposal + Gemini TLS docs (both cross-cutting) remain — bundled into B95.
+
+## F-CAI-09 (minor) — read-only goal misclassification
+
+PrintwayV3 Phase 8.2: 52 goals classified default RCRURDR but actually
+read-only subset (list/display/dashboard with no mutation HTTP verb).
+Validator emitted 52 warnings.
+
+Fix: new `_looks_read_only(goal)` heuristic auto-detect. Triggers when:
+  - goal_type empty AND goal_class empty (don't override declarations)
+  - title matches read-only verb cue (list/display/view/render/browse/
+    filter/search/sort/dashboard/summary/overview/report/export-view/
+    inspect/empty-state/error-state)
+  - AND title has NO mutation verb cue (create/update/delete/approve/...)
+  - AND mutation_evidence has no HTTP mutation verb (POST/PUT/PATCH/DELETE)
+
+`_stages_for_goal` dispatch now consults `_looks_read_only` between
+explicit goal_type lookup and HTTP-verb inference. Marker
+`_b94_readonly_autodetected: True` set on goal for diagnostic aggregation.
+Summary surfaces `readonly_autodetected_count`.
+
+## Tests
+
+`tests/test_batch94_readonly_autodetect.py` — 14 cases:
+  - Heuristic: list / display / filter / dashboard-summary / mutation-not /
+    mixed-mutation-wins / explicit-goal-class-skips / POST-in-evidence-blocks /
+    neutral-title-no-detect
+  - _stages_for_goal dispatch: uses read-only set / explicit type wins /
+    autodetect marker tagged
+  - Summary aggregates count
+  - Mirror parity
+
+## Deferred (final)
+
+  Build-gate proposal (live FE-BE coherence) → B95
+  Gemini CLI TLS docs → B95
+
+---
+
 # v4.67.2 — B93 issue #197 F-CAI-07 decision coverage propagation
 
 Closes 1 of 3 remaining issue #197 architectural findings.

@@ -87,16 +87,83 @@ GOAL_CLASS_STAGES: dict[str, tuple[str, ...]] = {
 }
 
 
+# B94 v4.67.3 (issue #197 F-CAI-09): read-only goal keyword cues. Used to
+# auto-detect read-only goals when `goal_type` not declared explicitly.
+# PrintwayV3 Phase 8.2: 52 goals classified RCRURDR but actually read-only
+# subset (list/display/dashboard with no mutation hints). Auto-detect
+# coerces stages to read-only when title leads with these verbs AND no
+# mutation HTTP verb appears in evidence.
+_READONLY_TITLE_RE = re.compile(
+    r"\b("
+    r"list|display|show|view|render|render the|browse|see|preview|"
+    r"filter|search|sort|paginate|count|tally|dashboard|summary|"
+    r"overview|report|export\s+view|read|fetch|query|inspect|"
+    r"validate.*display|verify.*shown|empty\s+state|error\s+state"
+    r")\b",
+    re.IGNORECASE,
+)
+_MUTATION_TITLE_RE = re.compile(
+    r"\b("
+    r"create|created|creating|add|adding|insert|register|submit|save|"
+    r"update|updating|edit|editing|modify|change|patch|put|"
+    r"delete|deleting|remove|archive|cancel|deactivate|disable|"
+    r"approve|reject|invite|revoke|reset|rollback|"
+    r"upload|import|sync|trigger|publish|send"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_read_only(goal: dict[str, Any]) -> bool:
+    """B94 v4.67.3 (issue #197 F-CAI-09): heuristic auto-detect for
+    read-only goals when `goal_type` is empty/absent.
+
+    Returns True when:
+      - title matches read-only verb cue (list/display/dashboard/etc.)
+      - AND title has NO mutation verb cue
+      - AND mutation_evidence is empty OR has no HTTP mutation verb
+      - AND no goal_class declared (feature_chain etc. always go RCRURDR)
+    """
+    if goal.get("goal_class"):
+        return False
+    title = str(goal.get("title") or "")
+    if not title:
+        return False
+    if _MUTATION_TITLE_RE.search(title):
+        return False
+    if not _READONLY_TITLE_RE.search(title):
+        return False
+    # Check mutation_evidence has no HTTP mutation verb
+    evidence = " ".join(
+        str(goal.get(k) or "")
+        for k in ("mutation_evidence", "persistence_check")
+    ).upper()
+    has_mut_verb = (
+        "POST " in evidence or " POST" in evidence or
+        "PUT " in evidence or " PUT" in evidence or
+        "PATCH " in evidence or " PATCH" in evidence or
+        "DELETE " in evidence or " DELETE" in evidence
+    )
+    return not has_mut_verb
+
+
 def _stages_for_goal(goal: dict[str, Any]) -> tuple[str, ...]:
     """Derive lifecycle stages.
 
-    Dispatch precedence (B62-pre — audit ID-1):
+    Dispatch precedence (B62-pre — audit ID-1, B94 v4.67.3 — F-CAI-09):
       1. goal_class (NEW dispatch key — feature_chain wins over RCRURDR default)
       2. goal_type (existing dispatch — backward compatible)
-      3. HTTP verb inference from mutation_evidence (legacy fallback)
+      3. B94: read-only AUTO-DETECT from title/body when goal_type empty
+      4. HTTP verb inference from mutation_evidence (legacy fallback)
 
     Without B62-pre fix, AI setting goal_class=feature_chain produced no
     stage change because pipeline read goal_type only.
+
+    B94 v4.67.3 (issue #197 F-CAI-09): PrintwayV3 Phase 8.2 had 52 goals
+    classified default RCRURDR when actually read-only subset
+    (list/display/dashboard). Validator emitted 52 warnings. Auto-detect
+    coerces to read-only stages when title leads with read verbs and
+    evidence has no mutation HTTP verb.
     """
     # B75 v4.63.7 (issue #191 C-M4): immutable resources skip update + delete.
     # Goal authors mark `immutable: true` when the resource cannot be mutated
@@ -118,6 +185,10 @@ def _stages_for_goal(goal: dict[str, Any]) -> tuple[str, ...]:
     # so existing tests and behaviours are not broken by unrecognised types.
     if gtype:
         return REQUIRED_STAGES
+    # B94 v4.67.3: read-only auto-detect from title+evidence cues
+    if _looks_read_only(goal):
+        goal.setdefault("_b94_readonly_autodetected", True)
+        return GOAL_TYPE_STAGES.get("read-only", REQUIRED_STAGES)
     # goal_type absent — infer from HTTP verb hints in mutation_evidence
     evidence = " ".join(
         str(goal.get(k) or "")
@@ -1753,6 +1824,11 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
             },
             # B93 v4.67.2 (issue #197 F-CAI-07): decision coverage audit
             "decision_coverage_audit": decision_audit,
+            # B94 v4.67.3 (issue #197 F-CAI-09): read-only auto-detect count
+            "readonly_autodetected_count": sum(
+                1 for g in selected
+                if g.get("_b94_readonly_autodetected")
+            ),
         },
         # G5 Batch 4: root-level fixture DAG from cross-goal dependencies
         "fixture_dag": _root_fixture_dag(selected),
