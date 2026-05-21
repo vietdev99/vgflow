@@ -1219,3 +1219,14 @@ validators:
     added_in: v4.66.0
     description: 'Every apps/*/src/main.tsx that calls createRoot().render() must wrap <App /> with <I18nextProvider> or <I18nProvider> (follows App-import one hop to handle wrapper-in-App.tsx style per Phase 6 merchant-v3 reference). Closes SPA i18n binding drift root cause: a portal SPA can ship without i18n binding and pass every accept gate because no validator catches the missing wrapper. Default severity=warn during initial rollout; flip to block once all portal SPAs wrap I18nextProvider. Override: --severity warn or skip flag.'
 
+  # ──── B95 v4.68.0 — FE-BE shape coherence static heuristic (issue #197 build-gate, partial) ────
+
+  - id: fe-be-shape-coherence
+    path: scripts/validators/verify-fe-be-shape-coherence.py
+    severity: warn
+    phases_active: [build]
+    domain: code
+    runtime_target_ms: 1500
+    added_in: v4.68.0
+    description: 'Detect FE-BE response shape drift via 3 static heuristics: H1 mixed `_id` vs `id` field access (mongo/pg drift); H2 mixed `.rows` vs `.data` envelope deref (flat vs nested); H3 useParams<{X}> name not matching route :param declaration. Closes issue #197 F-ROAM-01..06 class at build time (currently caught at post-test /vg:roam). Advisory only — runtime 1-GET-per-FE-route check (full build-gate) deferred to a future batch. Override: --severity warn (default) or --severity block when ready to enforce.'
+

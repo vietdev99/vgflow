@@ -1,3 +1,83 @@
+# v4.68.0 — B95 issue #197 build-gate proposal + Gemini TLS docs
+
+Closes the final 2 cross-cutting items from issue #197. All 10 generator
+findings (B90-B94) + build-gate proposal (B95 partial) + Gemini TLS
+(B95 docs) now shipped.
+
+## Build-gate proposal — partial (advisory static heuristic)
+
+Issue #197 surfaced 6 FE bugs (F-ROAM-01..06) that shipped through
+`/vg:build` PASS because no FE-BE shape coherence check existed.
+Examples: FE `_id` vs BE `id`, FE `.rows` vs BE flat array, FE flat
+envelope vs BE nested envelope, route param `:id` vs
+`useParams<{blueprintId}>`.
+
+Ships `scripts/validators/verify-fe-be-shape-coherence.py` — static
+AST-lite scanner with 3 heuristics:
+  - **H1** — mixed `_id` and `id` field access in same file (mongo/pg drift)
+  - **H2** — mixed `.rows` and `.data` envelope deref (flat vs nested)
+  - **H3** — `useParams<{X}>` name mismatched with route `:param`
+    declaration in same file
+
+Severity `warn` advisory in v4.68.0. Operator wires into
+`/vg:build:close.md` or `/vg:accept:gates.md` when ready to enforce.
+
+Full runtime per-FE-route GET check + response shape diff (the original
+issue proposal) deferred — needs dev server + project-wide route map.
+Static heuristic catches highest-frequency patterns at build time.
+
+Registry entry `fe-be-shape-coherence` added with `phases_active: [build]`
+domain `code` `runtime_target_ms: 1500`.
+
+## Gemini CLI TLS docs
+
+Ships `docs/tooling/gemini-cli-tls-troubleshooting.md`. Closes
+`self-signed certificate in certificate chain` failure on
+`cloudcode-pa.googleapis.com` when behind corporate / VPN /
+TLS-intercepting proxy. Documents:
+
+  1. Recommended — `NODE_EXTRA_CA_CERTS=/path/corp-root-ca.pem`
+  2. Insecure — `NODE_TLS_REJECT_UNAUTHORIZED=0` (with override-debt
+     logging directive)
+  3. Future — pinned `--ca-bundle` flag if/when Gemini CLI adds it
+  4. Persistence — `~/.bashrc` export OR `~/.claude/settings.json` env
+
+Includes verification snippet (Node `https.get` against `cloudcode-pa`).
+
+## Tests
+
+`tests/test_batch95_fe_be_coherence.py` — 12 cases:
+  - H1: mixed `_id`/`id` detected, only-`id` clean
+  - H2: mixed `.rows`/`.data` envelope detected
+  - H3: useParams name mismatch detected, matched clean
+  - Severity gate: warn-exit-0, block-exit-1
+  - Empty repo PASS
+  - Registry has entry with v4.68.0 + warn
+  - Gemini TLS doc has key tokens
+  - Mirror parity ×2
+
+## Issue #197 status — all 10 findings + cross-cutting CLOSED
+
+| Finding | Batch | Tag |
+|---------|-------|-----|
+| F-CAI-05 — placeholder pollution | B90 | v4.66.1 |
+| F-CAI-08 — silent goal skip | B90 | v4.66.1 |
+| F-CAI-01 — RCRURDR anchoring | B91 | v4.67.0 |
+| F-CAI-03 — empty assertions audit | B91 | v4.67.0 |
+| F-CAI-04 — endpoint freshness | B91 | v4.67.0 |
+| F-CAI-10 — endpoint=null pass-through | B91 | v4.67.0 |
+| F-CAI-02 — multi-actor RBAC | B92 | v4.67.1 |
+| F-CAI-06 — fixture DAG cross-owner | B92 | v4.67.1 |
+| F-CAI-07 — decision coverage | B93 | v4.67.2 |
+| F-CAI-09 — read-only auto-detect | B94 | v4.67.3 |
+| Build-gate (static heuristic) | B95 | v4.68.0 |
+| Gemini TLS docs | B95 | v4.68.0 |
+
+Build-gate full runtime check + decision_refs gate flip to BLOCK
+(currently `warn`) → future batches once dogfood phases backfill.
+
+---
+
 # v4.67.3 — B94 issue #197 F-CAI-09 read-only goal auto-detect
 
 Closes 1 of 2 remaining issue #197 architectural findings. Only build-gate
