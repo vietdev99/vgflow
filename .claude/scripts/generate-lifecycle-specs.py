@@ -908,18 +908,92 @@ def _parse_api_contracts(phase_dir: Path) -> list[dict[str, str]]:
     return list(found.values())
 
 
+_ENTITY_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9_-]+")
+
+
+def _extract_entity_slugs(goal: dict[str, Any]) -> set[str]:
+    """B91 v4.67.0 (issue #197 F-CAI-01): derive entity slugs to anchor
+    endpoint matching. Sources, in order of trust:
+
+      1. goal.primary_endpoints[].path — path segments after `/api/v1/<scope>/`
+         OR `/admin/` (strip resource id placeholders like `:id`, `{id}`).
+      2. goal.title — first 2-3 lowercase tokens that look like resource names.
+      3. goal.mutation_evidence + persistence_check noun phrases.
+
+    Returns a set of candidate slugs (lowercased). Used by `_bind_endpoint`
+    to filter contract candidates to those whose path overlaps with at least
+    one slug — eliminating G-001 (topup review) emitting bindings for
+    `/admin/payment-gateways` or `/admin/legal-entities`.
+    """
+    slugs: set[str] = set()
+    for ep in (goal.get("primary_endpoints") or []):
+        if not isinstance(ep, dict):
+            continue
+        path = str(ep.get("path") or "").lower()
+        for seg in path.split("/"):
+            if not seg or seg in {"api", "v1", "admin", "auth", "public"}:
+                continue
+            # Drop placeholder tokens
+            if seg.startswith(":") or seg.startswith("{"):
+                continue
+            if _ENTITY_SLUG_RE.fullmatch(seg):
+                slugs.add(seg)
+    # Fallback: title-derived slugs
+    if not slugs:
+        title = str(goal.get("title") or "").lower()
+        for word in re.findall(r"[a-z][a-z0-9_-]{2,}", title)[:6]:
+            if word in {"the", "list", "view", "page", "screen", "filter",
+                        "create", "delete", "update", "review", "approve",
+                        "search", "show", "display", "and", "with"}:
+                continue
+            slugs.add(word)
+    return slugs
+
+
+def _normalize_contract_path(path: str, contract_paths: set[str]) -> str:
+    """B91 v4.67.0 (issue #197 F-CAI-04): tolerant path normalization.
+
+    If `path` not in `contract_paths` but a known prefix variant is
+    (e.g. `/admin/credits` ↔ `/api/v1/admin/credits`), return the
+    contract-side variant. Otherwise return path unchanged.
+
+    Common stale-prefix patterns observed in PrintwayV3 Phase 8.2:
+      bare:        /admin/...        → contracts ship /api/v1/admin/...
+      versioned:   /api/v1/admin/... → contracts may ship bare during dev
+    """
+    if path in contract_paths:
+        return path
+    candidates = [
+        f"/api/v1{path}" if path.startswith("/admin/") else None,
+        path.replace("/api/v1", "", 1) if path.startswith("/api/v1/admin/") else None,
+        f"/api/v1{path}" if path.startswith("/auth/") else None,
+    ]
+    for c in candidates:
+        if c and c in contract_paths:
+            return c
+    return path
+
+
 def _bind_endpoint(stage: str, goal: dict[str, Any], contracts: list[dict[str, str]]) -> dict[str, str] | None:
     """Match stage to a contract endpoint via heuristic on stage verb + goal text.
 
     B74 v4.63.6 (issue #191 C-M1 / C-M5): record diagnostic on goal when
-    fallback path is taken (means stage couldn't match a goal-specific
-    endpoint, only verb-fallback). Caller surfaces the count for warning
-    after emission. Path validation guards against drifted/stale contracts:
-    if `goal.primary_endpoints[i].path` is set but NOT present in
-    `contracts`, log + skip that endpoint (don't propagate phantom path).
+    fallback path is taken.
+
+    B91 v4.67.0 (issue #197 F-CAI-01 + F-CAI-04 + F-CAI-10):
+      - F-CAI-01 fix: drop verb-only fallback that pulled unrelated mutations.
+        Replace with entity-slug anchored filter. Goals whose entity slugs
+        don't overlap any candidate path → return None (with telemetry tag).
+        Previously G-001 (topup review) got bindings for unrelated
+        payment-gateway PATCH + bank-account DELETE because contracts list
+        contained them and goal had `update`/`delete` stages.
+      - F-CAI-04 fix: tolerant prefix normalization. `goal.primary_endpoints`
+        path of `/admin/credits` resolves to contract `/api/v1/admin/credits`.
+      - F-CAI-10 fix: when contracts list empty, fall back to goal's own
+        primary_endpoints (per stage verb) instead of returning None for
+        every step. Preserves declared endpoints even when API-CONTRACTS.md
+        unparseable.
     """
-    if not contracts:
-        return None
     verb_map: dict[str, tuple[str, ...]] = {
         "create": ("POST",),
         "read_before": ("GET",),
@@ -932,30 +1006,67 @@ def _bind_endpoint(stage: str, goal: dict[str, Any], contracts: list[dict[str, s
     candidates_methods = verb_map.get(stage, ())
     if not candidates_methods:
         return None
+
+    # B91 F-CAI-10: when contracts empty, fall back to goal's own primary_endpoints
+    if not contracts:
+        for ep in (goal.get("primary_endpoints") or []):
+            if not isinstance(ep, dict):
+                continue
+            ep_method = str(ep.get("method") or "").upper()
+            ep_path = str(ep.get("path") or "")
+            if ep_method in candidates_methods and ep_path:
+                goal.setdefault("_b91_endpoint_contracts_empty_count", 0)
+                goal["_b91_endpoint_contracts_empty_count"] += 1
+                return {"method": ep_method, "path": ep_path}
+        return None
+
     contract_paths_set = {c["path"] for c in contracts}
-    # First: try match in mutation_evidence + dependencies + persistence_check text
-    haystack = " ".join(str(goal.get(k) or "") for k in
-                        ("mutation_evidence", "persistence_check", "dependencies", "title"))
-    for c in contracts:
-        if c["method"] in candidates_methods and c["path"] in haystack:
-            return {"method": c["method"], "path": c["path"]}
-    # Second: explicit primary_endpoints[] on goal if path is known in contracts.
+    entity_slugs = _extract_entity_slugs(goal)
+
+    def _path_anchored(path: str) -> bool:
+        """Path must contain ≥1 entity slug from the goal."""
+        if not entity_slugs:
+            return True  # no slugs → can't filter; accept anything (legacy behavior)
+        path_lower = path.lower()
+        return any(slug in path_lower for slug in entity_slugs)
+
+    # First: explicit primary_endpoints[] on goal (normalized) — highest trust.
     for ep in (goal.get("primary_endpoints") or []):
         if not isinstance(ep, dict):
             continue
         ep_method = str(ep.get("method") or "").upper()
         ep_path = str(ep.get("path") or "")
-        if ep_method in candidates_methods and ep_path in contract_paths_set:
-            return {"method": ep_method, "path": ep_path}
-    # Fallback: first contract entry whose method matches.
-    # B74: tag the goal so caller can surface the count of fallback-bindings
-    # as a warning (the user's complaint was 200/200 endpoint=null which
-    # implies BOTH "no match found" AND the fallback path was empty).
+        if ep_method not in candidates_methods or not ep_path:
+            continue
+        normalized = _normalize_contract_path(ep_path, contract_paths_set)
+        if normalized in contract_paths_set:
+            return {"method": ep_method, "path": normalized}
+    # Second: contract matches in text haystack, anchored by entity slugs.
+    haystack = " ".join(str(goal.get(k) or "") for k in
+                        ("mutation_evidence", "persistence_check",
+                         "dependencies", "title"))
     for c in contracts:
-        if c["method"] in candidates_methods:
-            goal.setdefault("_b74_endpoint_fallback_count", 0)
-            goal["_b74_endpoint_fallback_count"] += 1
+        if c["method"] not in candidates_methods:
+            continue
+        if c["path"] not in haystack:
+            continue
+        if not _path_anchored(c["path"]):
+            continue
+        return {"method": c["method"], "path": c["path"]}
+    # Third: entity-slug anchored scan of all contracts (no haystack required).
+    for c in contracts:
+        if c["method"] not in candidates_methods:
+            continue
+        if _path_anchored(c["path"]):
+            goal.setdefault("_b91_endpoint_slug_fallback_count", 0)
+            goal["_b91_endpoint_slug_fallback_count"] += 1
             return {"method": c["method"], "path": c["path"]}
+    # B91 F-CAI-01: drop unconstrained verb-only fallback (was line 954-958
+    # pre-B91). Returning None here preserves entity-anchor invariant —
+    # rather than emitting a binding to an unrelated resource. Caller's
+    # _b91_endpoint_unmatched_count tracks the gap for diagnostics.
+    goal.setdefault("_b91_endpoint_unmatched_count", 0)
+    goal["_b91_endpoint_unmatched_count"] += 1
     return None
 
 
@@ -1375,6 +1486,36 @@ def _find_phase_dir(phase: str, explicit: str | None) -> Path:
     raise SystemExit(f"phase is ambiguous: {phase}: {', '.join(p.name for p in matches)}")
 
 
+def _audit_source_assertions(goals: list[dict[str, Any]]) -> dict[str, Any]:
+    """B91 v4.67.0 (issue #197 F-CAI-03): audit goals for empty source
+    assertion fields. Mutation goals require non-empty mutation_evidence +
+    persistence_check; without these, read_after_* stages assert against
+    empty contract → specs cannot verify side effects.
+
+    Returns dict with `count`, `by_field`, `goal_ids` (first 20).
+    Mutation goals only (read-only goals don't need persistence_check).
+    """
+    empty_evidence: list[str] = []
+    empty_persistence: list[str] = []
+    for g in goals:
+        gtype = str(g.get("goal_type") or "").lower()
+        if gtype == "read-only":
+            continue
+        # Mutation-class goals only
+        if not (_needs_lifecycle(g) and gtype in {"mutation", "multi-actor", "workflow", ""}):
+            continue
+        if not _meaningful(g.get("mutation_evidence")):
+            empty_evidence.append(str(g.get("id") or "?"))
+        if not _meaningful(g.get("persistence_check")):
+            empty_persistence.append(str(g.get("id") or "?"))
+    return {
+        "empty_mutation_evidence_count": len(empty_evidence),
+        "empty_persistence_check_count": len(empty_persistence),
+        "empty_mutation_evidence_goals": empty_evidence[:20],
+        "empty_persistence_check_goals": empty_persistence[:20],
+    }
+
+
 def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
     # B90 v4.66.1 (issue #197 F-CAI-08): track silently-dropped goals so
     # caller can warn instead of leaking 6 dropped goals as PrintwayV3
@@ -1384,6 +1525,8 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
     heading_counts = _count_goal_headings(phase_dir)
     contracts = _parse_api_contracts(phase_dir)
     decisions = _parse_context_decisions(phase_dir)
+    # B91 v4.67.0 (issue #197 F-CAI-03): source assertion audit before spec gen
+    source_audit = _audit_source_assertions(goals)
     selected = [goal for goal in goals if include_readonly or _needs_lifecycle(goal)]
     specs = {goal["id"]: _goal_spec(goal, contracts, decisions) for goal in selected}
     return {
@@ -1406,6 +1549,25 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
             "heading_counts": heading_counts,
             "goals_dropped": dropped,
             "goals_dropped_count": len(dropped),
+            # B91 v4.67.0 (issue #197 F-CAI-03): empty assertion audit
+            "source_assertion_audit": source_audit,
+            # B91 v4.67.0 (issue #197 F-CAI-01 + F-CAI-10): endpoint binding
+            # diagnostics. Counts of fallback paths surfaced per-goal via
+            # `_b91_*` tags; aggregate here for operator warning.
+            "endpoint_binding_audit": {
+                "slug_fallback_total": sum(
+                    g.get("_b91_endpoint_slug_fallback_count", 0)
+                    for g in selected
+                ),
+                "unmatched_total": sum(
+                    g.get("_b91_endpoint_unmatched_count", 0)
+                    for g in selected
+                ),
+                "contracts_empty_fallback_total": sum(
+                    g.get("_b91_endpoint_contracts_empty_count", 0)
+                    for g in selected
+                ),
+            },
         },
         # G5 Batch 4: root-level fixture DAG from cross-goal dependencies
         "fixture_dag": _root_fixture_dag(selected),
@@ -1461,6 +1623,32 @@ def main() -> int:
         for d in summary.get("goals_dropped", [])[:10]:
             print(f"  - source={d.get('source')} reason={d.get('reason')}",
                   file=sys.stderr)
+    # B91 v4.67.0 (issue #197 F-CAI-03): warn on empty source assertions
+    sa = summary.get("source_assertion_audit", {})
+    if sa.get("empty_mutation_evidence_count") or sa.get("empty_persistence_check_count"):
+        print(
+            f"⚠ source assertion gaps — "
+            f"empty mutation_evidence: {sa.get('empty_mutation_evidence_count')} goals, "
+            f"empty persistence_check: {sa.get('empty_persistence_check_count')} goals. "
+            f"read_after_* stages will assert against empty contract.",
+            file=sys.stderr,
+        )
+        for gid in sa.get("empty_mutation_evidence_goals", [])[:5]:
+            print(f"  - {gid}: empty mutation_evidence", file=sys.stderr)
+        for gid in sa.get("empty_persistence_check_goals", [])[:5]:
+            print(f"  - {gid}: empty persistence_check", file=sys.stderr)
+    # B91 v4.67.0 (issue #197 F-CAI-01 / F-CAI-10): warn on endpoint binding gaps
+    eba = summary.get("endpoint_binding_audit", {})
+    if eba.get("unmatched_total") or eba.get("slug_fallback_total"):
+        print(
+            f"⚠ endpoint binding diagnostics — "
+            f"unmatched={eba.get('unmatched_total')} "
+            f"slug_fallback={eba.get('slug_fallback_total')} "
+            f"contracts_empty_fallback={eba.get('contracts_empty_fallback_total')}. "
+            f"Unmatched stages have endpoint=null (entity-anchor invariant — "
+            f"avoids cross-resource pollution per B91 F-CAI-01).",
+            file=sys.stderr,
+        )
     return 0
 
 

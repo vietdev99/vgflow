@@ -1,3 +1,94 @@
+# v4.67.0 — B91 issue #197 generator correctness (F-CAI-01 + F-CAI-03 + F-CAI-04 + F-CAI-10)
+
+Continues from v4.66.1 B90 (F-CAI-05 + F-CAI-08 shipped). B91 closes 4 of
+8 remaining architectural findings. 4 still open (F-CAI-02, 06, 07, 09)
++ 2 cross-cutting (build-gate, Gemini TLS) — tracked for B92-B95.
+
+## F-CAI-01 (critical) — RCRURDR semantic anchoring
+
+Pre-B91 `_bind_endpoint` had unconstrained verb-only fallback:
+"first contract entry whose method matches" → for G-001 (topup review,
+read-only) the `update`/`delete` stages picked unrelated PATCH/DELETE
+contracts like `/payment-gateways/{id}` or `/legal-entities/.../bank-accounts/{id}`.
+178/200 goals on PrintwayV3 Phase 8.2 affected.
+
+Fix:
+- New `_extract_entity_slugs(goal)` derives slugs from
+  `primary_endpoints[*].path` (filter `api`, `v1`, `admin`, `auth`,
+  `public`, placeholder `:id`/`{id}`) with title-fallback (filter stopwords).
+- `_bind_endpoint` requires resolved candidate path to contain ≥1 entity
+  slug. Goals with no slug overlap → return None (no cross-resource
+  binding). Diagnostic counter `_b91_endpoint_unmatched_count` tracks gap.
+
+## F-CAI-04 (major) — endpoint declarations fresh
+
+Stale `primary_endpoints` paths used bare `/admin/X` while contracts ship
+`/api/v1/admin/X` (or vice versa during dev). Pre-B91: no match → fell
+back to wrong contract.
+
+Fix: new `_normalize_contract_path(path, contract_paths)` tolerant
+resolver. Tries `/api/v1{path}` for bare prefixes + `path - /api/v1` for
+versioned-mismatch contracts. Returns the contract-side variant on
+success, unchanged on miss.
+
+## F-CAI-10 (minor) — endpoint=null pass-through
+
+Pre-B91: empty contracts list (API-CONTRACTS.md unparseable) → every
+step `endpoint=null`. PrintwayV3 Phase 8.2: 1192/1192 steps null because
+generator's API-CONTRACTS regex missed a layout variant.
+
+Fix: when contracts empty, fall back to goal's own `primary_endpoints[]`
+filtered by stage verb. Preserves declared endpoints. Diagnostic counter
+`_b91_endpoint_contracts_empty_count` records the gap so operator knows
+the contracts file wasn't parsed.
+
+## F-CAI-03 (major) — empty source assertions audit
+
+Pre-B91: 137 mutation goals had empty `mutation_evidence` +
+`persistence_check`. `read_after_*` stages asserted against empty
+contract. Specs couldn't verify wallet credit, audit log, branch
+persistence, correlation evidence.
+
+Fix: new `_audit_source_assertions(goals)`. Mutation-class goals
+(`goal_type` in `{mutation, multi-actor, workflow}` or empty) require
+non-empty `mutation_evidence` + `persistence_check`. Read-only excluded.
+Summary surfaces `empty_mutation_evidence_count`,
+`empty_persistence_check_count`, plus first 20 goal IDs per category.
+`main()` emits stderr warning + first 5 examples per category. Advisory
+(not BLOCK) — flips to blocking gate in B92+ once dogfood phases
+backfill missing assertions.
+
+## Summary additions
+
+`payload["summary"]` now includes:
+  - `heading_counts` (B90)
+  - `goals_dropped`, `goals_dropped_count` (B90)
+  - `source_assertion_audit` (B91 F-CAI-03)
+  - `endpoint_binding_audit` (B91 F-CAI-01/F-CAI-10)
+    - `slug_fallback_total`, `unmatched_total`, `contracts_empty_fallback_total`
+
+## Test coverage
+
+`tests/test_batch91_generator_correctness.py` — 15 cases (entity slug
+extractor, title fallback, cross-resource pollution drop, path
+normalize both directions, behavioral binding, contracts-empty fallback,
+audit shape, summary fields, mirror parity).
+
+`tests/test_batch74_test_spec_generator_defects.py` — 2 tests updated to
+reflect B91 entity-anchor invariant (verb-only fallback dropped). 14/14
+pre-existing pass.
+
+## Deferred — still in issue #197 OPEN
+
+  F-CAI-02: Multi-actor RBAC binding → B92
+  F-CAI-06: Disconnected fixture DAG → B92
+  F-CAI-07: Decision coverage gate → B93
+  F-CAI-09: Read-only goal auto-detect → B94
+  Build-gate proposal → B95 (needs RFC)
+  Gemini CLI TLS → B95 docs
+
+---
+
 # v4.66.1 — B90 issue #197 partial fix (F-CAI-05 + F-CAI-08)
 
 User dogfood report (PrintwayV3 `/vg:roam 8.2` + `/vg:test-spec --regen`,

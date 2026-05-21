@@ -190,9 +190,16 @@ def test_b74_cm5_primary_endpoint_in_contracts_used(lifecycle_mod):
 
 
 def test_b74_cm5_primary_endpoint_not_in_contracts_skipped(lifecycle_mod):
-    """If goal claims a path NOT in contracts (stale/drifted), don't propagate phantom."""
+    """If goal claims a path NOT in contracts (stale/drifted), don't propagate phantom.
+
+    B91 v4.67.0 (issue #197 F-CAI-01) update: previously fell through to
+    verb-fallback (first POST in contracts) — which is the cross-resource
+    pollution pattern. B91 entity-anchor invariant: when goal.primary_endpoints
+    have no contract match AND no other goal slug overlaps any contract path,
+    return None instead of binding to unrelated resource.
+    """
     goal = {
-        "title": "Drifted",
+        "title": "Drifted-OLD_PATH",
         "primary_endpoints": [{"method": "POST", "path": "/api/v1/OLD_PATH"}],
     }
     contracts = [
@@ -200,23 +207,30 @@ def test_b74_cm5_primary_endpoint_not_in_contracts_skipped(lifecycle_mod):
         {"method": "POST", "path": "/api/v1/admin/finance/topup"},
     ]
     result = lifecycle_mod._bind_endpoint("create", goal, contracts)
-    # Falls through to verb-fallback (first POST in contracts).
-    assert result is not None
-    assert result["path"] != "/api/v1/OLD_PATH"
-    # Goal annotated with fallback diagnostic.
-    assert goal.get("_b74_endpoint_fallback_count", 0) >= 1
+    # B91: entity slugs from title (drifted, old_path) don't overlap any
+    # contract path → unmatched, returns None. Diagnostic tag captures gap.
+    assert result is None
+    assert goal.get("_b91_endpoint_unmatched_count", 0) >= 1
 
 
 def test_b74_cm1_fallback_path_records_diagnostic(lifecycle_mod):
-    """When haystack + primary_endpoints both miss, fallback records count on goal."""
+    """When haystack + primary_endpoints both miss, B91 returns None instead
+    of unconstrained verb-fallback. Diagnostic counter still records gap.
+
+    B91 v4.67.0 (issue #197 F-CAI-01) update: previously emitted first
+    POST in contracts (auth/login) for sparse goal "Sparse goal" wanting
+    "create" — that's exactly the cross-resource pollution F-CAI-01 reports.
+    Now: no slug overlap → None. _b91_endpoint_unmatched_count counts.
+    """
     goal = {"title": "Sparse goal", "mutation_evidence": "", "persistence_check": "",
             "dependencies": ""}
     contracts = [
         {"method": "POST", "path": "/api/v1/auth/login"},
     ]
     result = lifecycle_mod._bind_endpoint("create", goal, contracts)
-    assert result == {"method": "POST", "path": "/api/v1/auth/login"}
-    assert goal.get("_b74_endpoint_fallback_count") == 1
+    # Title "sparse goal" → entity slug "sparse" → not in /api/v1/auth/login
+    assert result is None
+    assert goal.get("_b91_endpoint_unmatched_count") == 1
 
 
 def test_b74_cm5_no_contracts_returns_none(lifecycle_mod):
