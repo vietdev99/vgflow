@@ -290,7 +290,19 @@ def _entrypoint_hints(spec: dict[str, Any], surfaces: dict[str, Any], profile: s
         matched_added += 1
     strategy = execution_strategy(profile)
     if not hints:
-        hints.append(f"derive {strategy['entrypoint_kind']} from built implementation and TEST-GOALS")
+        # B90 v4.66.1 (issue #197 F-CAI-05): previously emitted a literal
+        # natural-language fallback ("derive browser route from built
+        # implementation and TEST-GOALS") that AI codegen subagents never
+        # substituted → 58 goals on PrintwayV3 Phase 8.2 carried the literal
+        # placeholder string into final specs. Switch to an unambiguous
+        # `__TBD__:` marker so downstream codegen + validators can detect
+        # and BLOCK unresolved entrypoints. Format remains advisory text for
+        # AI consumption but is machine-checkable.
+        hints.append(
+            f"__TBD__: resolve {strategy['entrypoint_kind']} from built "
+            f"implementation + TEST-GOALS body (no API/route hint surfaced "
+            f"by static analysis)"
+        )
     seen: set[str] = set()
     unique: list[str] = []
     for hint in hints:
@@ -299,6 +311,16 @@ def _entrypoint_hints(spec: dict[str, Any], surfaces: dict[str, Any], profile: s
         seen.add(hint)
         unique.append(hint)
     return unique
+
+
+# B90 v4.66.1 (issue #197 F-CAI-05): TBD-marker detection helper for
+# downstream validators / codegen sweeps. Returns True when any execution
+# plan entrypoint still carries an unresolved `__TBD__:` marker.
+def has_unresolved_tbd(entrypoints: list[Any]) -> bool:
+    return any(
+        isinstance(e, str) and e.startswith("__TBD__:")
+        for e in entrypoints or []
+    )
 
 def baseline_execution_plan(goal_id: str, spec: dict[str, Any], profile: str, surfaces: dict[str, Any]) -> dict[str, Any]:
     strategy = execution_strategy(profile)

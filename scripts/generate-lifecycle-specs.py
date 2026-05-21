@@ -356,7 +356,8 @@ def _parse_goal_block(text: str, source: Path) -> dict[str, Any] | None:
     }
 
 
-def _parse_goals(phase_dir: Path) -> list[dict[str, Any]]:
+def _parse_goals(phase_dir: Path,
+                 dropped_log: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     """B75 v4.63.7 (issue #191 C-M8): merge BOTH TEST-GOALS/G-*.md (split) AND
     TEST-GOALS.md (flat) sources. Dedup by goal id, split-dir wins when both
     present (split files are the canonical source-of-truth post-Batch-9; the
@@ -365,6 +366,12 @@ def _parse_goals(phase_dir: Path) -> list[dict[str, Any]]:
     Previously: split dir = ANY match → flat file was IGNORED. Caused
     G-201..G-226 to be dropped in Phase 8.2 (split dir had G-001..G-200,
     flat had G-001..G-226). 74 CONTEXT.md decisions absent from coverage.
+
+    B90 v4.66.1 (issue #197 F-CAI-08): when `_parse_goal_block` returns None
+    (heading regex match fails OR id field missing), record diagnostic in
+    `dropped_log` so caller can report which goals were silently skipped.
+    Previously: silent drop. PrintwayV3 Phase 8.2 had 206 headings → 200
+    emitted; the 6 missing (G-221..G-226) were dropped without warning.
     """
     goals_by_id: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -379,6 +386,11 @@ def _parse_goals(phase_dir: Path) -> list[dict[str, Any]]:
                 if gid not in goals_by_id:
                     order.append(gid)
                 goals_by_id[gid] = goal
+            elif dropped_log is not None:
+                dropped_log.append({
+                    "source": str(path),
+                    "reason": "split-file heading regex match failed OR id field missing",
+                })
 
     # 2. Flat TEST-GOALS.md (merge; only ADD missing goals — split-dir wins
     # for duplicates so per-goal split semantics are preserved).
@@ -400,8 +412,32 @@ def _parse_goals(phase_dir: Path) -> list[dict[str, Any]]:
                     order.append(gid)
                     goals_by_id[gid] = goal
                 # else: split-dir version already wins — skip flat.
+            elif dropped_log is not None:
+                dropped_log.append({
+                    "source": f"{flat_path}#{gid_raw}",
+                    "reason": "flat-file goal block parse failed (body present but heading regex did not match _parse_goal_block patterns)",
+                })
 
     return [goals_by_id[gid] for gid in order]
+
+
+def _count_goal_headings(phase_dir: Path) -> dict[str, int]:
+    """B90 v4.66.1 (issue #197 F-CAI-08): count raw `## G-` headings in
+    TEST-GOALS.md + `# G-` headings in TEST-GOALS/G-*.md split files.
+    Caller compares to parsed-goal count to detect silent drops.
+    """
+    counts = {"split_files": 0, "flat_headings": 0, "flat_files_exists": 0}
+    split_dir = phase_dir / "TEST-GOALS"
+    if split_dir.is_dir():
+        counts["split_files"] = len(list(split_dir.glob("G-*.md")))
+    flat_path = phase_dir / "TEST-GOALS.md"
+    if flat_path.is_file():
+        counts["flat_files_exists"] = 1
+        text = _read(flat_path)
+        counts["flat_headings"] = len(re.findall(
+            r"^##\s+(?:Goal\s+)?G-[\w.-]+", text, re.MULTILINE
+        ))
+    return counts
 
 
 def _combined(goal: dict[str, Any]) -> str:
@@ -1340,7 +1376,12 @@ def _find_phase_dir(phase: str, explicit: str | None) -> Path:
 
 
 def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
-    goals = _parse_goals(phase_dir)
+    # B90 v4.66.1 (issue #197 F-CAI-08): track silently-dropped goals so
+    # caller can warn instead of leaking 6 dropped goals as PrintwayV3
+    # Phase 8.2 did (206 headings → 200 emitted, silent miss).
+    dropped: list[dict[str, str]] = []
+    goals = _parse_goals(phase_dir, dropped_log=dropped)
+    heading_counts = _count_goal_headings(phase_dir)
     contracts = _parse_api_contracts(phase_dir)
     decisions = _parse_context_decisions(phase_dir)
     selected = [goal for goal in goals if include_readonly or _needs_lifecycle(goal)]
@@ -1361,6 +1402,10 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
             "goals_seen": len(goals),
             "goals_emitted": len(specs),
             "include_readonly": include_readonly,
+            # B90 F-CAI-08 diagnostics: raw heading counts + dropped log
+            "heading_counts": heading_counts,
+            "goals_dropped": dropped,
+            "goals_dropped_count": len(dropped),
         },
         # G5 Batch 4: root-level fixture DAG from cross-goal dependencies
         "fixture_dag": _root_fixture_dag(selected),
@@ -1399,6 +1444,23 @@ def main() -> int:
     else:
         action = "would write" if args.dry_run else "wrote"
         print(f"{action} {out_path} ({summary['goals_emitted']}/{summary['goals_seen']} lifecycle goals)")
+    # B90 v4.66.1 (issue #197 F-CAI-08): surface silently-dropped goals to
+    # stderr so operator catches the miss instead of shipping with sparse
+    # coverage. Header-count comparison flags drift between TEST-GOALS.md
+    # heading rows and `_parse_goal_block` accepted rows.
+    dropped_count = summary.get("goals_dropped_count", 0)
+    heading_counts = summary.get("heading_counts", {})
+    expected_min = heading_counts.get("split_files", 0) + heading_counts.get("flat_headings", 0)
+    if dropped_count or (expected_min and summary["goals_seen"] < expected_min):
+        print(
+            f"⚠ goal parse drift detected — "
+            f"heading_counts={heading_counts} parsed={summary['goals_seen']} "
+            f"dropped={dropped_count}.",
+            file=sys.stderr,
+        )
+        for d in summary.get("goals_dropped", [])[:10]:
+            print(f"  - source={d.get('source')} reason={d.get('reason')}",
+                  file=sys.stderr)
     return 0
 
 

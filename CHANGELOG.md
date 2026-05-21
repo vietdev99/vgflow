@@ -1,3 +1,70 @@
+# v4.66.1 — B90 issue #197 partial fix (F-CAI-05 + F-CAI-08)
+
+User dogfood report (PrintwayV3 `/vg:roam 8.2` + `/vg:test-spec --regen`,
+2026-05-20). Issue #197 surfaced 10 structural gaps in test-spec generator
+flow + build-gate proposal + Gemini CLI TLS. B90 fixes 2 of 10 bug-level
+findings. 8 remaining + cross-cutting items deferred — need architectural
+work beyond single-session scope.
+
+## F-CAI-05 (major) — execution-plan entrypoint pollution
+
+`scripts/test_spec_ai_expander.py:293` no-route-hint fallback emitted a
+natural-language string ("derive browser route from built implementation
+and TEST-GOALS") that downstream codegen never substituted. PrintwayV3
+Phase 8.2: 58 goals carried the literal placeholder into final specs.
+
+Fix: emit unambiguous `__TBD__:` marker. Format remains advisory text for
+AI consumption but is machine-checkable. New helper
+`has_unresolved_tbd(entrypoints)` returns True when any entrypoint still
+carries the marker — downstream codegen + validators can BLOCK on
+unresolved markers.
+
+## F-CAI-08 (major) — goal coverage shortfall (silent skip)
+
+`scripts/generate-lifecycle-specs.py:_parse_goals()` dropped goals
+silently when `_parse_goal_block()` returned None (heading regex mismatch
+OR missing `id` field). PrintwayV3 Phase 8.2: TEST-GOALS.md had 206
+headings, LIFECYCLE-SPECS emitted only 200. G-221..G-226 dropped without
+warning. 74 CONTEXT.md decisions absent from coverage.
+
+Fix:
+- New `_count_goal_headings(phase_dir)` helper returns raw heading
+  counts from split dir + flat file (independent of parse success).
+- `_parse_goals()` now accepts `dropped_log: list[dict[str, str]] | None`
+  to capture parse failures with source + reason.
+- `generate()` summary gains `heading_counts`, `goals_dropped`,
+  `goals_dropped_count` fields.
+- `main()` emits stderr warning on drift: heading count > parsed count.
+  Lists first 10 dropped sources with reasons.
+
+## Deferred to future batches (architectural)
+
+| ID | Finding | Why deferred |
+|----|---------|--------------|
+| F-CAI-01 | RCRURDR semantic anchoring | needs goal-surface→endpoint matcher rewrite |
+| F-CAI-02 | multi-actor RBAC binding | needs actor/permission registry |
+| F-CAI-03 | empty source assertions | needs goal frontmatter linter + validation gate |
+| F-CAI-04 | stale endpoint declarations | needs API-CONTRACTS.md→spec sync at generator entry |
+| F-CAI-06 | disconnected fixture DAG (multi-actor) | needs DAG builder rewrite across resource owners |
+| F-CAI-07 | decision coverage below gate | needs decision_refs propagation through generator |
+| F-CAI-09 | read-only goal misclassification | needs goal_type auto-detect from text |
+| F-CAI-10 | endpoint=null pass-through | needs binding propagation audit |
+
+Plus cross-cutting:
+- Build-gate proposal — live FE-BE coherence check at `/vg:build` post-exec
+- Gemini CLI TLS — docs-only (NODE_EXTRA_CA_CERTS / corporate cert chain)
+
+## Tests
+
+`tests/test_batch90_generator_audit.py` — 11 cases:
+  - F-CAI-05: marker in source, helper exists, helper detects mixed/empty
+    inputs, expander emits marker on no-route fallback
+  - F-CAI-08: count helper exists, dropped_log signature, main warning,
+    behavioral count_headings, malformed split captured in drop log
+  - Mirror parity ×2
+
+---
+
 # v4.66.0 — PR #196 spa-i18n-provider + B89 mirror/tests/regex fix
 
 Minor bump: PR #196 (vietnhprintway) added a new validator catching SPA
