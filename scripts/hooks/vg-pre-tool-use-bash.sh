@@ -1037,15 +1037,76 @@ PY
 )"
 fi
 
+# B96 v4.68.1 — soft-directive mode for tasklist sync gate.
+# Previously: any sync drift → hard block exit 2 → run-complete loop trap.
+# User report (2026-05-21): "Run-complete bị block ở latest_marked_step=5_complete
+# status=pending không refresh. Recover bằng /vg:doctor recovery hoặc
+# vg-orchestrator run-abort --reason 'tasklist gate loop' rồi re-emit run-start".
+# Fix: first N detections emit clear AI directive on stderr + telemetry event
+# but exit 0 (allow tool call to proceed so AI can issue corrective TodoWrite
+# in the SAME bash command pipeline if needed). After threshold, fall back to
+# hard block. Counter resets when sync_check_result=ok next iteration.
+_sync_retry_file=".vg/runs/${run_id}/.tasklist-sync-retry-count"
+_sync_soft_threshold="${VG_TASKLIST_SYNC_SOFT_LIMIT:-2}"
+_sync_retry_count=0
+if [ -f "$_sync_retry_file" ]; then
+  _sync_retry_count=$(cat "$_sync_retry_file" 2>/dev/null || echo 0)
+  case "$_sync_retry_count" in
+    ''|*[!0-9]*) _sync_retry_count=0 ;;
+  esac
+fi
+
+_emit_sync_directive() {
+  local kind="$1" detail="$2"
+  _sync_retry_count=$((_sync_retry_count + 1))
+  mkdir -p "$(dirname "$_sync_retry_file")" 2>/dev/null
+  echo "$_sync_retry_count" > "$_sync_retry_file" 2>/dev/null
+  local instruction
+  case "$kind" in
+    sync_stale)
+      instruction="Tasklist UI stale after mark-step. AI MUST call TodoWrite NOW to mark the latest completed step as 'completed' and next pending step as 'in_progress', then re-run \`vg-orchestrator tasklist-projected --adapter auto\`."
+      ;;
+    sync_status_invalid)
+      instruction="TodoWrite did not mark latest completed step (${detail}). AI MUST call TodoWrite with that step status='completed', preserve all other entries, then re-run \`vg-orchestrator tasklist-projected --adapter auto\`. Do NOT call run-complete yet — refresh evidence first."
+      ;;
+    *)
+      instruction="Tasklist sync gap detected (${detail}). AI MUST refresh TodoWrite + tasklist-projected."
+      ;;
+  esac
+  # Yellow warn color (\033[33m) — softer than orange error. 3-line compact.
+  printf "\033[33mPreToolUse-tasklist: %s (soft directive %d/%d)\033[0m\n→ %s\n→ Hard-block after %d unresolved attempts.\n" \
+    "$kind" "$_sync_retry_count" "$_sync_soft_threshold" "$instruction" "$_sync_soft_threshold" >&2
+  # Telemetry event (best-effort)
+  if [ -n "$command_from_run" ]; then
+    local event_type="${command_from_run/vg:/}.tasklist_sync_directive_emitted"
+    CLAUDE_SESSION_ID="${session_id}" python3 .claude/scripts/vg-orchestrator emit-event \
+      "$event_type" --actor hook --outcome WARN \
+      --payload "{\"run_id\":\"${run_id}\",\"kind\":\"${kind}\",\"attempt\":${_sync_retry_count},\"threshold\":${_sync_soft_threshold}}" \
+      >/dev/null 2>&1 || true
+  fi
+}
+
 case "$tasklist_sync_check_result" in
-  ok) ;;
+  ok)
+    # B96: reset retry counter on clean sync — AI corrected the drift.
+    [ -f "$_sync_retry_file" ] && rm -f "$_sync_retry_file" 2>/dev/null
+    ;;
   sync_stale*)
     detail="${tasklist_sync_check_result#sync_stale|}"
-    emit_block "task UI is stale after latest mark-step (${detail}). Update TodoWrite/update_plan from tasklist-contract.json, then re-run tasklist-projected before continuing."
+    if [ "$_sync_retry_count" -lt "$_sync_soft_threshold" ]; then
+      _emit_sync_directive "sync_stale" "$detail"
+      # Exit 0 — allow tool call. AI's next call should be the corrective TodoWrite.
+      exit 0
+    fi
+    emit_block "task UI is stale after latest mark-step (${detail}). Soft directive ignored ${_sync_retry_count}× — escalating to hard block. Update TodoWrite/update_plan from tasklist-contract.json, then re-run tasklist-projected before continuing."
     ;;
   sync_status_invalid*)
     detail="${tasklist_sync_check_result#sync_status_invalid|}"
-    emit_block "TodoWrite did not mark the latest completed step as completed (${detail}). Re-run TodoWrite with that sub-step completed, next sub-step in_progress, then re-run tasklist-projected."
+    if [ "$_sync_retry_count" -lt "$_sync_soft_threshold" ]; then
+      _emit_sync_directive "sync_status_invalid" "$detail"
+      exit 0
+    fi
+    emit_block "TodoWrite did not mark the latest completed step as completed (${detail}). Soft directive ignored ${_sync_retry_count}× — escalating to hard block. Re-run TodoWrite with that sub-step completed, next sub-step in_progress, then re-run tasklist-projected."
     ;;
   sync_unreadable*)
     detail="${tasklist_sync_check_result#sync_unreadable|}"

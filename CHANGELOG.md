@@ -1,3 +1,89 @@
+# v4.68.1 — B96 soft-directive mode for tasklist sync gate
+
+User report (2026-05-21):
+
+> "Run-complete bị block ở latest_marked_step=5_complete status=pending
+> không refresh. Recover bằng /vg:doctor recovery hoặc vg-orchestrator
+> run-abort --reason 'tasklist gate loop' rồi re-emit run-start nếu cần."
+
+## Root cause
+
+Pre-B96: `scripts/hooks/vg-pre-tool-use-bash.sh:1040-1055` fired
+immediate `emit_block` (exit 2) on:
+  - `sync_stale` — TodoWrite UI hasn't refreshed since latest mark-step
+  - `sync_status_invalid` — TodoWrite shows step pending but events.db has
+    step.marked for it
+
+AI had no chance to self-correct in same bash flow → repeated block on
+every subsequent bash call → user forced into `/vg:doctor recovery` or
+`run-abort` to escape the loop.
+
+## Fix — 2-strike soft directive
+
+First N detections (default 2, env `VG_TASKLIST_SYNC_SOFT_LIMIT`):
+  - Emit AI directive on stderr in YELLOW (warn) — softer than orange (error)
+  - Include explicit corrective action (TodoWrite syntax + which step)
+  - Mention attempt count + hard-block threshold so AI knows budget
+  - Emit `<cmd>.tasklist_sync_directive_emitted` telemetry event
+  - **Exit 0** — allow current tool call to proceed
+
+After threshold N:
+  - Fall back to current `emit_block` (exit 2 hard block)
+  - Block message mentions "soft directive ignored N×" so AI knows
+    why escalation triggered
+
+## Counter persistence
+
+`.vg/runs/<run_id>/.tasklist-sync-retry-count` per-run file.
+Incremented on each soft directive. Reset to 0 (file removed) when
+`sync_check_result=ok` next iteration — i.e. AI self-corrected and
+sync caught up.
+
+## Soft directive content
+
+For `sync_stale`:
+```
+Tasklist UI stale after mark-step. AI MUST call TodoWrite NOW to mark
+the latest completed step as 'completed' and next pending step as
+'in_progress', then re-run `vg-orchestrator tasklist-projected --adapter auto`.
+```
+
+For `sync_status_invalid`:
+```
+TodoWrite did not mark latest completed step (<detail>). AI MUST call
+TodoWrite with that step status='completed', preserve all other entries,
+then re-run `vg-orchestrator tasklist-projected --adapter auto`. Do NOT
+call run-complete yet — refresh evidence first.
+```
+
+## Tests
+
+`tests/test_batch96_tasklist_sync_soft_directive.py` — 11 cases:
+  - Helper defined + B96 marker present
+  - Retry counter file path + env override + default threshold
+  - sync_stale branch wraps emit_block in soft check (exit 0 first)
+  - sync_status_invalid branch same
+  - ok branch resets counter (rm -f counter file)
+  - Hard-block escalation message mentions "escalating"
+  - Soft directive uses yellow color, not orange
+  - Telemetry event emitted
+  - Directive explains corrective action
+  - Mirror parity
+
+## Override
+
+If you actually WANT immediate hard block (no soft directive):
+```bash
+export VG_TASKLIST_SYNC_SOFT_LIMIT=0
+```
+
+If you want more attempts before hard block:
+```bash
+export VG_TASKLIST_SYNC_SOFT_LIMIT=5
+```
+
+---
+
 # v4.68.0 — B95 issue #197 build-gate proposal + Gemini TLS docs
 
 Closes the final 2 cross-cutting items from issue #197. All 10 generator
