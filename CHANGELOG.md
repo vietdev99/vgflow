@@ -1,3 +1,77 @@
+# v4.69.3 — B100 issue #203 missing subagents in install
+
+User report: 4 subagents referenced by VG skills don't exist in
+`~/.claude/agents/` after install:
+  - vg-test-goal-verifier — /vg:test STEP 4
+  - vg-test-fixer — /vg:test STEP 5
+  - vg-test-codegen — /vg:test-spec STEP 4
+  - vg-reflector — /vg:accept Section 13.5
+
+Each skill HARD-GATE says "MUST spawn subagent — DO NOT run inline".
+Missing subagent → skill blocked or fell to general-purpose fallback
+(drops contract guarantees, 96.5% inline-skip rate per Codex review).
+
+## Root cause
+
+`install.sh:160` did `cp "$SCRIPT_DIR/agents/"*.md` — catches top-level
+single-file agents (vg-planner.md, vg-plan-checker.md) but misses ALL
+directory-form subagents:
+  - vg-test-goal-verifier/SKILL.md
+  - vg-test-fixer/SKILL.md
+  - vg-test-codegen/SKILL.md
+  - vg-blueprint-contracts/SKILL.md
+  - vg-blueprint-fe-contracts/SKILL.md
+  - vg-blueprint-planner/SKILL.md
+  - vg-blueprint-workflows/SKILL.md
+  - vg-build-post-executor/SKILL.md
+  - vg-build-task-executor/SKILL.md
+  - vg-accept-cleanup/SKILL.md
+  - vg-accept-uat-builder/SKILL.md
+  - vg-field-test-analyzer/SKILL.md
+
+`bin/vg-cli-dispatcher.sh` had NO `refresh_global_claude_agents()`
+function at all — `sync|update` and `install` subcommands never
+refreshed `~/.claude/agents/`. Only the project-local `install.sh`
+deploy path touched agents, and it had the same .md-only bug.
+
+(Note: vg-reflector is a SKILL — lives under `skills/`, deployed via
+the skills install loop. Not in scope for B100.)
+
+## Fix
+
+`install.sh`:
+- Added directory-walking loop. For each `agents/*/` subdir with
+  `SKILL.md`, copies to `~/.claude/agents/<name>/`. Logs split counts.
+
+`bin/vg-cli-dispatcher.sh`:
+- New `refresh_global_claude_agents()` function — copies top-level
+  *.md + walks subagent dirs from `~/.vgflow/agents/` to
+  `~/.claude/agents/`.
+- Wired into both `install` (line 478) and `sync|update` (line 520).
+
+After upgrade:
+```bash
+~/.vgflow/sync.sh   # or `vg install` again
+```
+should print:
+```
+vgflow: refreshed ~/.claude/agents (15 agents: 2 top-level + 13 subagent dirs)
+```
+
+## Tests
+
+`tests/test_batch100_subagent_install.py` — 8 cases:
+  - install.sh walks subagent dirs + checks SKILL.md + has B100 marker
+  - install.sh preserves top-level *.md copy (backward compat)
+  - install.sh logs split counts (md vs dir)
+  - dispatcher has refresh_global_claude_agents fn
+  - dispatcher calls refresh from both install + sync paths
+  - dispatcher fn walks subagent dirs (mindepth/maxdepth find)
+  - install.sh mirror parity
+  - source repo has required subagent dirs (vg-test-*) with SKILL.md
+
+---
+
 # v4.69.2 — B99 issue #199 UAT VN i18n false-positive
 
 User report: `/vg:accept` STEP 4b validator

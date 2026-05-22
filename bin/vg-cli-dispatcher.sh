@@ -310,6 +310,42 @@ refresh_global_claude_commands() {
   _vg_link_dir "$src" "$dst" "Claude commands"
 }
 
+
+# B100 v4.69.3 (issue #203): refresh global Claude agents — both top-level
+# *.md (vg-planner, vg-plan-checker) AND subagent dirs (vg-test-*, vg-build-*,
+# vg-blueprint-*, vg-accept-*, vg-field-test-analyzer/). Pre-B100 dispatcher
+# had no agent refresh fn → ~/.claude/agents/ never updated by sync → subagent
+# dirs missing → /vg:test STEP 4/5 + /vg:test-spec STEP 4_codegen blocked.
+refresh_global_claude_agents() {
+  local src="${HOME}/.vgflow/agents"
+  local dst="${HOME}/.claude/agents"
+  if [ ! -d "$src" ]; then
+    src="${VG_HOME}/agents"
+  fi
+  if [ ! -d "$src" ]; then
+    echo "vgflow: warning: VG agent source missing (${src}); skipping agent refresh" >&2
+    return 0
+  fi
+  mkdir -p "$dst"
+  local md_count=0
+  local dir_count=0
+  # Top-level *.md (single-file agents)
+  for f in "$src"/*.md; do
+    [ -f "$f" ] || continue
+    cp "$f" "$dst/" 2>/dev/null && md_count=$((md_count + 1))
+  done
+  # Subagent dirs (each containing SKILL.md)
+  while IFS= read -r agent_dir; do
+    [ -f "$agent_dir/SKILL.md" ] || continue
+    local name
+    name="$(basename "$agent_dir")"
+    mkdir -p "$dst/$name"
+    cp -R "$agent_dir"/. "$dst/$name/" 2>/dev/null && dir_count=$((dir_count + 1))
+  done < <(find "$src" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  local total=$((md_count + dir_count))
+  echo "vgflow: refreshed ~/.claude/agents (${total} agents: ${md_count} top-level + ${dir_count} subagent dirs)"
+}
+
 codex_config_path() {
   local path="$1"
   if command -v cygpath >/dev/null 2>&1; then
@@ -440,6 +476,7 @@ case "$cmd" in
     refresh_global_cli_link
     refresh_global_orchestrator_cli
     refresh_global_claude_commands
+    refresh_global_claude_agents
     refresh_global_codex
     install_global_codex_hooks
     repair_playwright_mcp
@@ -482,6 +519,7 @@ case "$cmd" in
     refresh_global_cli_link
     refresh_global_orchestrator_cli
     refresh_global_claude_commands
+    refresh_global_claude_agents
     refresh_global_codex
     install_global_codex_hooks
     repair_playwright_mcp
