@@ -1,3 +1,20 @@
+# v4.69.5 — B102 test fixture fix (B98 test_b98_fix_skips_target_exists)
+
+CI Test workflow failed on Linux for v4.69.1+ tags due to a wrong-fixture
+test in B98 suite. Test seeded `get-api-{id}:id.md` expecting it to rename
+to `get-api-id-id.md`. Actual suggested-rename strips ONLY reserved
+chars `[:<>"|?*]`, keeps braces → target was `get-api-{id}-id.md`. No
+collision with seeded `get-api-id-id.md` → rename succeeded → 0 failed
+→ assertion `len(failed) == 1` failed.
+
+Fix: seed test inputs that actually collide. Source files
+`get-api-:id.md` (offender, renames to `get-api-id.md` after `:` strip
++ double-hyphen collapse) AND `get-api-id.md` (collision target).
+
+No production code change. Test-only.
+
+---
+
 # v4.69.4 — B101 issue #198 override-resolve YAML format trio
 
 User report (sig 937529b6): `/vg:override-resolve OD-30179 OD-30180

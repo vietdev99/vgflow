@@ -153,10 +153,16 @@ def test_b98_fix_renames_via_os_rename(tmp_path: Path) -> None:
 
 @_REQUIRES_POSIX
 def test_b98_fix_skips_target_exists(tmp_path: Path) -> None:
-    """If suggested_rename collides with existing file → skip + record reason."""
+    """If suggested_rename collides with existing file → skip + record reason.
+
+    Suggested-rename strips ONLY reserved chars `[:<>"|?*]`. Braces `{}` and
+    other safe chars are preserved. So `get-api-:id.md` renames to
+    `get-api--id.md` → collapsed to `get-api-id.md`. Collision seed must
+    match that exact target.
+    """
     contracts_dir = _seed_contracts(tmp_path, [
-        "get-api-{id}:id.md",          # would rename to get-api-id-id.md
-        "get-api-id-id.md",            # already exists — collision
+        "get-api-:id.md",       # rename target: get-api-id.md
+        "get-api-id.md",        # collision
     ])
     proc = _run(tmp_path, "--fix")
     out = json.loads(proc.stdout)
