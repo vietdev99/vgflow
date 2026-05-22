@@ -1,3 +1,45 @@
+# v4.69.2 — B99 issue #199 UAT VN i18n false-positive
+
+User report: `/vg:accept` STEP 4b validator
+`verify-uat-strings-no-hardcode.py` (D-18) flagged 30+ VN literal
+tokens as i18n leak — "Truy" "cập" "Điều" "hướng" "Tiền" "điều" "kiện"
+"Hành" "đợi" — even though these came via legitimate `{{uat_*}}`
+interpolation from `narration-strings.yaml`.
+
+## Root cause
+
+Validator scanned the RENDERED `UAT-NARRATIVE.md`, not the template.
+After interpolation, `{{uat_entry_label}}` became literal "Truy cập"
+(VN value). Backward natural-text regex caught those as hardcoded
+literals → BLOCK exit 1.
+
+## Fix
+
+Validator now subtracts known narration values BEFORE backward scan:
+
+- New `_collect_narration_values(narration)` flattens all locale
+  values (vi/en/ja/ko/fr/de/es/zh) from `narration-strings.yaml`
+- `_strip_for_backward(text, narration_values=...)` removes those
+  values from cleaned text before regex pass
+- Longer values processed first so "Tiền điều kiện dữ liệu" subtracted
+  before "điều kiện" — avoids partial-shadow gaps leaving "Tiền"
+  exposed
+- Anything remaining = actual hardcoded literal (true violation)
+
+Backward compatible — passing no `narration_values` behaves pre-B99.
+
+## Tests
+
+`tests/test_batch99_uat_i18n_false_positive.py` — 9 cases:
+  - `_collect_narration_values`: flattens locales, handles empty,
+    skips non-dict bodies
+  - `_strip_for_backward`: subtracts narration values, overlapping
+    substrings, long-value-first ordering, preserves true hardcode,
+    empty-list backward-compat
+  - Mirror parity
+
+---
+
 # v4.69.1 — B98 issue #204 Windows colon paths
 
 User report (2026-05-22, sig f1e0de01, severity HIGH):

@@ -119,14 +119,43 @@ def _read_locale() -> str:
     return "vi"
 
 
-def _strip_for_backward(text: str) -> str:
+def _strip_for_backward(text: str, narration_values: list[str] | None = None) -> str:
     """Remove markdown/html/interpolation noise so backward scan sees only
-    plain prose."""
+    plain prose.
+
+    B99 v4.69.2 (issue #199): when called on RENDERED UAT-NARRATIVE.md, any
+    `{{uat_*}}` interpolation has already been replaced by the locale value
+    from narration-strings.yaml. Pre-B99, the backward scan caught those
+    locale values as hardcoded literals — 30+ false positives blocked
+    /vg:accept step 4b. Fix: subtract all known narration values from the
+    cleaned text BEFORE the natural-text scan. Anything that remains is
+    actual hardcoded literal (true violation).
+    """
     cleaned = text
     for pat in MD_STRIP_PATTERNS:
         cleaned = pat.sub(" ", cleaned)
     cleaned = ANY_INTERP_RE.sub(" ", cleaned)
+    # B99 v4.69.2: scrub interpolated narration values from rendered output
+    if narration_values:
+        # Process longer values first so a longer string isn't shadowed by a
+        # shorter substring (e.g. "Tiền điều kiện" before "điều kiện")
+        for val in sorted(narration_values, key=len, reverse=True):
+            if val and len(val) >= 2:
+                cleaned = cleaned.replace(val, " ")
     return cleaned
+
+
+def _collect_narration_values(narration: dict) -> list[str]:
+    """B99 v4.69.2: flatten all locale values from narration-strings.yaml
+    into a single list. Used by `_strip_for_backward` to subtract legit
+    interpolated content from backward scan input."""
+    values: list[str] = []
+    for key, body in narration.items():
+        if isinstance(body, dict):
+            for loc_val in body.values():
+                if isinstance(loc_val, str) and loc_val.strip():
+                    values.append(loc_val.strip())
+    return values
 
 
 def main() -> None:
@@ -199,7 +228,13 @@ def main() -> None:
                     ))
 
             # Backward check
-            cleaned = _strip_for_backward(text)
+            # B99 v4.69.2 (issue #199): rendered narrative already has {{uat_*}}
+            # replaced by locale values from narration-strings.yaml. Subtract
+            # those known values before scanning for hardcoded literals — else
+            # validator flags VN labels as i18n leaks when they came via legit
+            # interpolation.
+            narration_values = _collect_narration_values(narration)
+            cleaned = _strip_for_backward(text, narration_values=narration_values)
             for m in NATURAL_TEXT_RE.finditer(cleaned):
                 token = m.group(0)
                 if token in BACKWARD_EXEMPT or token.lower() in BACKWARD_EXEMPT:
