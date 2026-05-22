@@ -40,15 +40,34 @@ MIRROR = REPO_ROOT / ".claude" / "scripts" / "hooks" / "_vg_tasklist_evidence_pa
 # ---------------------------------------------------------------------------
 
 def test_b80_taskid_camelcase_present_in_helper() -> None:
-    """Source-level: `tr.get("taskId")` must be checked before snake_case."""
+    """Source-level: camelCase ``taskId`` must be probed before snake_case.
+
+    Post-B105 (#198) the lookup moved into the dedicated
+    ``_resolve_tool_response_task_id`` helper, but the ordering invariant
+    still holds — flat camelCase wins over the snake_case legacy fallback
+    so a value-bearing ``taskId`` is never shadowed by an empty
+    ``task_id``.
+    """
     body = HELPER.read_text(encoding="utf-8")
-    assert 'tr.get("taskId")' in body, "camelCase taskId lookup missing"
-    # Order matters — taskId first so we don't shadow with empty snake_case.
-    idx_camel = body.index('tr.get("taskId")')
-    idx_snake = body.index('tr.get("task_id")')
-    assert idx_camel < idx_snake, (
-        "taskId must be probed before task_id so legacy fallback doesn't shadow"
+    # The new helper enumerates the probe order in a single tuple literal.
+    # Accept either the original inline probe OR the post-B105 tuple form.
+    inline_present = 'tr.get("taskId")' in body
+    tuple_present = '"taskId", "task_id"' in body
+    assert inline_present or tuple_present, (
+        "camelCase taskId lookup missing from both inline + tuple forms"
     )
+    if inline_present:
+        idx_camel = body.index('tr.get("taskId")')
+        idx_snake = body.index('tr.get("task_id")')
+        assert idx_camel < idx_snake, (
+            "taskId must be probed before task_id (inline form)"
+        )
+    else:
+        idx_camel = body.index('"taskId"')
+        idx_snake = body.index('"task_id"')
+        assert idx_camel < idx_snake, (
+            "taskId must be listed before task_id in the probe tuple"
+        )
 
 
 def test_b80_taskid_behavioral(tmp_path: Path) -> None:

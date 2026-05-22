@@ -1,3 +1,67 @@
+# v4.69.6 — B105 issue #198 TaskCreate/TaskUpdate taskId text fallback
+
+Dogfood session PrintwayV3 `/vg:build 8.2.2` 2026-05-22 hit a hard wall
+at STEP 1.6 (`create_task_tracker`). The `tasklist-projected` PreToolUse
+gate refused to clear with `latest_marked_status='pending'` even though
+the AI had marked the most recent TaskCreate as `completed`.
+
+Root cause: B80 (#195) assumed Claude Code's `TaskCreate` tool_response
+always carries the new task id under either flat `taskId` (camelCase)
+or `task_id` / `id` (legacy). On the runtime where this manifested,
+neither shape was populated — the id appeared **only** inside
+`tool_response.content[*].text` as a human-readable
+``"Task #25 created successfully …"`` confirmation line. Every trace
+`create` row therefore landed with `task_id=""`, every subsequent
+`TaskUpdate` failed to pair against its create row, status stayed
+`pending` forever, and the gate fired even on correctly-formed
+hierarchical projections.
+
+## Fix
+
+`scripts/hooks/_vg_tasklist_evidence_payload.py` gains a dedicated
+`_resolve_tool_response_task_id(tool_response, kind)` helper that
+probes, in this order:
+
+1. Flat dict keys `taskId` → `task_id` → `id` → `toolUseId`
+   (preserves B80 invariant — camelCase still wins).
+2. `tool_response.content[*].text` regex parse:
+   `Task #(\d+) created` for the create path,
+   `task #(\d+)` for the update path.
+3. Other text-bearing dict keys (`output` / `text` / `result` / `message`).
+4. `tool_response` itself when it is a plain string.
+
+`TaskUpdate` branch additionally falls back to the same resolver when
+`tool_input.taskId` is empty — some runtimes echo the id in the
+update's `tool_response` text but omit it from the input dict.
+
+When no id is discoverable anywhere, the create row still lands
+(subject-only) so the matcher's tolerant content-search fallback keeps
+working — regression bound covered by
+`test_b105_no_taskid_anywhere_writes_subject_only`.
+
+## Tests
+
+`tests/test_b105_taskid_text_fallback.py` — 6 cases:
+
+- `test_b105_content_list_text_yields_taskid` — array-of-text response shape.
+- `test_b105_plain_string_response_yields_taskid` — bare string response.
+- `test_b105_camelcase_still_wins_over_text` — probe order invariant.
+- `test_b105_taskupdate_text_fallback_pairs_status` — end-to-end
+  create→update pairing with both ids in text only.
+- `test_b105_no_taskid_anywhere_writes_subject_only` — defensive write.
+- `test_b105_helper_mirror_byte_identical` — `scripts/` ↔ `.claude/scripts/` parity.
+
+`tests/test_batch80_taskid_and_threshold.py::test_b80_taskid_camelcase_present_in_helper`
+updated to accept the post-B105 tuple form of the probe while keeping
+the same ordering invariant (camelCase before snake_case).
+
+## Mirror
+
+`.claude/scripts/hooks/_vg_tasklist_evidence_payload.py` regenerated
+to byte-identical.
+
+---
+
 # v4.69.5 — B102 test fixture fix (B98 test_b98_fix_skips_target_exists)
 
 CI Test workflow failed on Linux for v4.69.1+ tags due to a wrong-fixture

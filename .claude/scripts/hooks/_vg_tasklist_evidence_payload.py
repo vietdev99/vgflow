@@ -25,10 +25,79 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+_CREATE_TEXT_RE = re.compile(r"Task\s+#?(\d+)\s+created", re.IGNORECASE)
+_UPDATE_TEXT_RE = re.compile(r"task\s+#?(\d+)", re.IGNORECASE)
+
+
+def _extract_task_id_from_text(text: str, kind: str) -> str:
+    """Return the trailing task id parsed from a tool_response text blob.
+
+    The Claude Code TaskCreate / TaskUpdate tool surfaces don't always
+    populate a structured ``taskId`` / ``task_id`` / ``id`` field on
+    ``tool_response``. They DO consistently print a human-readable
+    confirmation like::
+
+        "Task #25 created successfully: ↳ 0_gate_integrity_precheck …"
+        "Updated task #25 status"
+
+    Parse that pattern as a last-resort fallback so the trace can still
+    pair create/update events for status reconstruction.
+    """
+    if not isinstance(text, str) or not text:
+        return ""
+    pattern = _CREATE_TEXT_RE if kind == "create" else _UPDATE_TEXT_RE
+    matches = pattern.findall(text)
+    if not matches:
+        return ""
+    return str(matches[-1])
+
+
+def _resolve_tool_response_task_id(tool_response, kind: str) -> str:
+    """Resolve a stable task id from ``tool_response`` across known shapes.
+
+    Probe order (first non-empty wins):
+      1. Flat dict keys: ``taskId`` (camelCase, B80) → ``task_id`` (snake)
+         → ``id`` → ``toolUseId``.
+      2. ``content`` list: each entry's ``text`` field is searched with the
+         create/update regex.
+      3. Other text-bearing dict keys (``output`` / ``text`` / ``result`` /
+         ``message``).
+      4. ``tool_response`` itself when it is a plain string.
+
+    Returns an empty string when no id was discoverable — the caller still
+    writes a trace record (subject-only) so the create event isn't lost.
+    """
+    if isinstance(tool_response, dict):
+        for key in ("taskId", "task_id", "id", "toolUseId"):
+            value = tool_response.get(key)
+            if value:
+                return str(value)
+        content = tool_response.get("content")
+        if isinstance(content, list):
+            for entry in content:
+                if not isinstance(entry, dict):
+                    continue
+                tid = _extract_task_id_from_text(
+                    str(entry.get("text") or ""), kind,
+                )
+                if tid:
+                    return tid
+        for key in ("output", "text", "result", "message"):
+            tid = _extract_task_id_from_text(
+                str(tool_response.get(key) or ""), kind,
+            )
+            if tid:
+                return tid
+    elif isinstance(tool_response, str):
+        return _extract_task_id_from_text(tool_response, kind)
+    return ""
 
 
 def main() -> int:
@@ -57,20 +126,22 @@ def main() -> int:
     elif tool_name == "TaskCreate":
         tool_input = hook_input.get("tool_input", {}) or {}
         subject = (tool_input.get("subject") or "").strip()
-        task_id = ""
-        tr = hook_input.get("tool_response") or hook_input.get("tool_result") or {}
-        if isinstance(tr, dict):
-            # B80 issue PR#195: Claude TaskCreate tool_response field is
-            # camelCase `taskId`. Old check for snake_case `task_id` always
-            # missed → trace records `task_id=""` → later TaskUpdate cannot
-            # pair against create row → status stays "pending" → false-positive
-            # tasklist-projected gate fire.
-            task_id = str(
-                tr.get("taskId")
-                or tr.get("task_id")
-                or tr.get("id")
-                or ""
-            )
+        # B105 (#198): later Claude Code runtimes expose the task id ONLY
+        # through tool_response.content[*].text (e.g. "Task #25 created
+        # successfully: …") — neither the flat camelCase `taskId` (B80)
+        # nor any snake_case sibling carries the value any more. Probe
+        # every known shape via the dedicated resolver so the create
+        # event always carries a stable id; TaskUpdate can then pair
+        # against it and patch the in_progress/completed status. Without
+        # this, every create row lands in `items_no_id` and status
+        # reconstruction stays "pending" forever — the exact bug that
+        # blocks /vg:build STEP 1.6 (PrintwayV3 dogfood 2026-05-22).
+        tr = (
+            hook_input.get("tool_response")
+            or hook_input.get("tool_result")
+            or {}
+        )
+        task_id = _resolve_tool_response_task_id(tr, "create")
         if subject:
             trace_path.parent.mkdir(parents=True, exist_ok=True)
             with trace_path.open("a", encoding="utf-8") as f:
@@ -82,7 +153,18 @@ def main() -> int:
                 }) + "\n")
     elif tool_name == "TaskUpdate":
         tool_input = hook_input.get("tool_input", {}) or {}
-        upd_id = str(tool_input.get("taskId") or "")
+        upd_id = str(tool_input.get("taskId") or tool_input.get("task_id") or "")
+        if not upd_id:
+            # B105 fallback (#198): tool_response often echoes the id in
+            # text form even when tool_input.taskId is camelCase-empty on
+            # certain runtimes. Parse the same regex used for TaskCreate
+            # so update events still pair with their create row.
+            tr_upd = (
+                hook_input.get("tool_response")
+                or hook_input.get("tool_result")
+                or {}
+            )
+            upd_id = _resolve_tool_response_task_id(tr_upd, "update")
         upd_status = str(tool_input.get("status") or "")
         if upd_id and upd_status and trace_path.exists():
             trace_path.parent.mkdir(parents=True, exist_ok=True)
