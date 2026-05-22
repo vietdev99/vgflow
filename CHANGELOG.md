@@ -1,3 +1,66 @@
+# v4.69.1 — B98 issue #204 Windows colon paths
+
+User report (2026-05-22, sig f1e0de01, severity HIGH):
+
+> "Windows git refuses checkout/pull these files because core.protectNTFS=true
+> (default since git 2.21) blocks reserved chars on NTFS, including colon.
+> Repro on Windows: git clone -> error: invalid path
+> get-api-vphase-{id}:id-pdf.md (x16 files). Working tree corrupt, pull
+> aborts."
+
+## Root cause
+
+`agents/vg-blueprint-contracts/SKILL.md:76-77` spec said strip path params
+(`:id` → `id`). Implementation drifted — `:` from path templates (`:id`,
+`:payment_id`) leaked into per-endpoint markdown filenames. macOS/Linux
+silently accept + push upstream. Windows git refuses any clone/pull/
+checkout of those files. Cross-platform collaboration broken on every
+phase using path params with `:`.
+
+## Fix
+
+New `scripts/validators/verify-api-contract-filenames.py` — scans
+`**/API-CONTRACTS/*` for filenames matching `[:<>"|?*]` (Windows
+core.protectNTFS reserved set).
+
+  - Default severity=block, phases [blueprint, accept]
+  - `--fix` flag renames each offender via `git mv` (preserves history)
+    or `os.rename` fallback when no git repo
+  - Suggested rename: replace each reserved char with `-`, collapse
+    double-hyphens, strip trailing hyphens before extension
+
+Registry entry `api-contract-filenames` v4.69.1.
+
+`agents/vg-blueprint-contracts/SKILL.md` slug rules expanded with
+explicit forbidden char list + 3 example renames showing colon strip
+(`:id` → `id`, `{id}` → `id`, nested templates).
+
+## Recovery for existing repos
+
+```bash
+python scripts/validators/verify-api-contract-filenames.py --fix
+git commit -m "fix(windows): rename API-CONTRACTS/ files to strip Windows-reserved chars"
+git push
+```
+
+Subsequent Windows clones succeed.
+
+## Tests
+
+`tests/test_batch98_api_contract_filenames.py` — 15 cases (7 platform-
+agnostic, 8 skipped on Windows because OS refuses to create reserved-char
+filenames — that's exactly the bug):
+  - Detection: colon, multiple offenders, other reserved chars, double-
+    hyphen collapse
+  - --fix flag: os.rename path, target-exists collision handling
+  - Severity gate: warn (exit 0), block (exit 1)
+  - Empty dir + clean filenames pass
+  - Registry entry present
+  - SKILL.md updated with forbidden char list
+  - 3× mirror parity (validator, registry, skill)
+
+---
+
 # v4.69.0 — B97 issue #200+#201+#202 goal_class trio
 
 Closes 3 tightly coupled issues from PrintwayV3 Phase 8.2 R3 dogfood.

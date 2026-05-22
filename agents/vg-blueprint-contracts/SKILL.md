@@ -73,8 +73,17 @@ Each output file MUST contain `<!-- vg-binding: <id> -->` comments matching `mus
 2. Read CONTEXT.md, INTERFACE-STANDARDS template.
 3. Derive endpoints from PLAN tasks. For EACH endpoint:
    - Write `<phase_dir>/API-CONTRACTS/{method}-{path-slug}.md` with 4-block format.
-   - path-slug = lowercase, hyphens, strip leading slash, strip path params:
-     `POST /api/v1/sites/:id` → `post-api-v1-sites-id`
+   - path-slug = lowercase, hyphens, strip leading slash, strip path params.
+     CRITICAL: filename MUST NOT contain `:` `<` `>` `"` `|` `?` `*` (Windows
+     reserved chars — git refuses checkout under core.protectNTFS).
+     Replace `{X}` and `:X` with literal `X` (no surrounding braces or colon):
+       `POST /api/v1/sites/:id`              → `post-api-v1-sites-id`
+       `GET /api/v1/admin/{id}/pdf`          → `get-api-v1-admin-id-pdf`
+       `POST /api/v1/admin/{id}/payments/:payment_id/reverse` →
+         `post-api-v1-admin-id-payments-payment_id-reverse`
+     Validator `scripts/validators/verify-api-contract-filenames.py` BLOCKS
+     filenames with reserved chars at blueprint close. Run with `--fix`
+     to auto-rename via `git mv`.
 4. Write `<phase_dir>/API-CONTRACTS/index.md` (Layer 2 — endpoint table grouped by resource).
 5. Concat `API-CONTRACTS/index.md` + all `API-CONTRACTS/{method}-*.md` →
    `<phase_dir>/API-CONTRACTS.md` (Layer 3 legacy).
