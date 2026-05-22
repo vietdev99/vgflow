@@ -126,6 +126,138 @@ PY
   fi
 }
 
+# B101 v4.69.4 (issue #198) — port `override_resolve_by_id` from the .md
+# documentation into .sh so the helper is actually sourceable. Pre-B101,
+# `/vg:override-resolve` sourced `_shared/override-debt.md` (markdown,
+# not bash) → silently ignored via `|| true` → bash `command not found`
+# when calling override_resolve_by_id → skill exited 0 with row unchanged.
+#
+# Also fixes status-name mismatch: pre-B101 status check accepted only
+# "OPEN" (markdown table format). YAML block format writes "active" lower-
+# case. Now accepts both case-insensitively (handled inside the function
+# via `.lower() in ('active', 'open')` check) and skill Step 1 grep
+# stays generic.
+#
+# Usage:
+#   override_resolve_by_id DEBT_ID STATUS REASON
+#     STATUS: RESOLVED | WONT_FIX
+#     DEBT_ID matches: DEBT-YYYYMMDDHHMMSS-PID | OD-NNN | BF-YYYYMMDDHHMMSS-PID
+#   Emits override_resolved telemetry. Prints emitted event_id to stdout.
+#
+# Batch invocation: caller iterates IDs in a loop; this function handles ONE
+# ID per call (matches single-emit telemetry semantics).
+override_resolve_by_id() {
+  local debt_id="$1" new_status="$2" reason="$3"
+  local register="${CONFIG_DEBT_REGISTER_PATH:-${PLANNING_DIR}/OVERRIDE-DEBT.md}"
+  [ -f "$register" ] || { echo "override_resolve_by_id: register not found: $register" >&2; return 1; }
+  [ -z "$debt_id" ] && { echo "override_resolve_by_id: debt_id required" >&2; return 1; }
+  [ -z "$reason" ] && { echo "override_resolve_by_id: reason required" >&2; return 1; }
+  case "$new_status" in
+    RESOLVED|WONT_FIX) ;;
+    *) echo "override_resolve_by_id: invalid status '$new_status' (use RESOLVED or WONT_FIX)" >&2; return 1 ;;
+  esac
+
+  # Emit telemetry first so we can write event_id back into the row
+  local event_id="manual-${new_status,,}-$(date -u +%Y%m%d%H%M%S)"
+  local payload
+  payload=$(${PYTHON_BIN:-python3} -c "import json,sys; print(json.dumps({'status':sys.argv[1],'reason':sys.argv[2],'debt_id':sys.argv[3],'manual':True}))" \
+    "$new_status" "$reason" "$debt_id" 2>/dev/null || echo "{}")
+  if type -t emit_telemetry_v2 >/dev/null 2>&1; then
+    local emitted
+    emitted=$(emit_telemetry_v2 "override_resolved" "" "" "" "PASS" "$payload" 2>/dev/null | tail -n1)
+    [ -n "$emitted" ] && event_id="$emitted"
+  fi
+
+  # Patch the matching row. Register has TWO coexisting formats:
+  #   - Markdown table:  | DEBT-YYYYMMDDHHMMSS-PID | sev | ph | step | flag | reason | ts | OPEN | gid | rbe | legacy |
+  #   - YAML block:      `- id: OD-NNN\n  ...\n  status: active\n`
+  # Detect by ID prefix and mutate accordingly.
+  ${PYTHON_BIN:-python3} - "$register" "$debt_id" "$new_status" "$event_id" "$reason" <<'PY' || return 1
+import re, sys
+from datetime import datetime, timezone
+from pathlib import Path
+register, target_id, new_status, event_id, reason = sys.argv[1:6]
+p = Path(register)
+text = p.read_text(encoding='utf-8')
+lines = text.splitlines()
+
+is_yaml_id = bool(re.match(r'^(OD-\d+|BF-\d+-\d+)$', target_id))
+
+if is_yaml_id:
+    # YAML block format. Find `- id: OD-NNN`, update its status sub-key.
+    out, matched, found_any = [], 0, False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped == f'- id: {target_id}':
+            found_any = True
+            # Block runs from this `- id:` to next `- ` at same indent or EOF.
+            block = [line]
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j]
+                if re.match(r'^- ', nxt):
+                    break
+                block.append(nxt)
+                j += 1
+            status_idx = None
+            for k, bl in enumerate(block):
+                if re.match(r'^\s*status:', bl):
+                    status_idx = k
+                    break
+            if status_idx is None:
+                out.extend(block); i = j; continue
+            current = block[status_idx].split(':', 1)[1].strip()
+            # Accept both "active" (YAML canonical) and "OPEN" (table canonical)
+            if current.lower() in ('active', 'open'):
+                indent = re.match(r'^(\s*)', block[status_idx]).group(1)
+                ts_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                safe_reason = reason.replace('"', "'").replace('\n', ' ')
+                block[status_idx] = f"{indent}status: {new_status}"
+                block[status_idx+1:status_idx+1] = [
+                    f"{indent}resolved_at: {ts_iso}",
+                    f"{indent}resolved_event_id: {event_id}",
+                    f'{indent}resolution_reason: "{safe_reason}"',
+                ]
+                matched += 1
+            out.extend(block)
+            i = j
+        else:
+            out.append(line)
+            i += 1
+else:
+    # Markdown table format (legacy DEBT-... IDs).
+    row_re = re.compile(
+        r'^\|\s*(DEBT-\d+-\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*(OPEN|RESOLVED|WONT_FIX)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|'
+    )
+    out, matched, found_any = [], 0, False
+    for line in lines:
+        m = row_re.match(line)
+        if not m:
+            out.append(line); continue
+        did, sev, ph, step, flag, reason_old, ts, status, gid, rbe, legacy = [g.strip() for g in m.groups()]
+        if did == target_id:
+            found_any = True
+            if status == 'OPEN':
+                merged_reason = f"{reason_old} || {new_status.lower()}: {reason}"
+                out.append(f"| {did} | {sev} | {ph} | {step} | {flag} | {merged_reason} | {ts} | {new_status} | {gid} | {event_id} | {legacy or 'false'} |")
+                matched += 1
+                continue
+        out.append(line)
+
+p.write_text('\n'.join(out) + ('\n' if out else ''), encoding='utf-8')
+if not found_any:
+    print(f"override_resolve_by_id: DEBT-ID not found: {target_id}", file=sys.stderr); sys.exit(2)
+if matched == 0:
+    print(f"override_resolve_by_id: {target_id} already resolved (not OPEN/active) — no change", file=sys.stderr); sys.exit(3)
+print(f"override_resolve_by_id: {target_id} -> {new_status} (event {event_id})", file=sys.stderr)
+PY
+
+  echo "$event_id"
+}
+
+
 # v2.6.1 (2026-04-26) — auto-resolve helper for re-run-based correlation.
 # When a review/test command runs CLEAN (no overrides this phase), prior
 # phases' overrides for the same gate_id can auto-resolve.

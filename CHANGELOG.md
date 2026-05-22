@@ -1,3 +1,79 @@
+# v4.69.4 — B101 issue #198 override-resolve YAML format trio
+
+User report (sig 937529b6): `/vg:override-resolve OD-30179 OD-30180
+--status=RESOLVED` exits 0 silently, rows unchanged. Three coupled bugs
+in the slash command + helper.
+
+## Bug 1 — override_resolve_by_id never sourceable
+
+`commands/vg/_shared/override-debt.md:224` documented the function as
+canonical YAML/table-agnostic helper. But the actual file was a
+markdown doc (with `.md` extension) — bash CAN'T source markdown
+headers as shell code. The slash command did:
+
+```
+source .claude/commands/vg/_shared/override-debt.md 2>/dev/null || true
+```
+
+Errors silently swallowed via `|| true` → function NEVER defined →
+later call to `override_resolve_by_id` produced `command not found`
+also silently swallowed → exit 0 with no register mutation.
+
+**Fix:** ported `override_resolve_by_id` function (full Python block
++ telemetry emit + YAML/table branching) into runnable
+`commands/vg/_shared/lib/override-debt.sh`. Slash command now sources
+the `.sh` (line 38 + 220).
+
+## Bug 2 — status "OPEN" vs "active" mismatch
+
+Markdown table format uses `OPEN`. YAML block format (orchestrator
+CLI canonical) uses `active`. Pre-B101 skill Step 1 did
+`grep | awk -F'|'` extracting column 9 — works for table, returns
+EMPTY for YAML. Then `"" != "OPEN"` → false-success message "đã ở
+trạng thái (empty)" → silent exit 0.
+
+**Fix:** per-ID status detection branches on prefix. `OD-` / `BF-`
+parsed via `awk` between `- id: <id>` and next entry. Normalized to
+lowercase, accepts both `open` AND `active`. Function inside .sh also
+checks `current.lower() in ('active', 'open')`.
+
+## Bug 3 — No batch mode
+
+Pre-B101 took only first matched DEBT-ID per invocation. Real sessions
+batch IDs (e.g. `OD-30179 OD-30180`) — second ID silently dropped.
+
+**Fix:** skill accepts multiple IDs via
+`grep -oE '(DEBT-...|OD-...|BF-...)'` (no `head -n1`). Iterates over
+`PROCESS` array in Step 3. Tracks `RESOLVED_COUNT`, `SKIPPED[]`,
+`FAILED[]`. Exit non-zero only when any ID failed.
+
+## Tests
+
+`tests/test_batch101_override_resolve_yaml.py` — 12 cases (8 generic,
+4 skipped on Windows because MSYS Git Bash mangles `export` in
+`bash -c` arg conversion; Linux CI runs all 12):
+  - Source-level: lib defines fn, accepts active status, slash sources
+    .sh, supports batch IDs, YAML format check, Step 3 loop
+  - Bash exec: function sourceable, YAML block flips to RESOLVED, error
+    on unknown ID, no-change when already resolved
+  - Mirror parity for .sh + slash command
+
+## Recovery for stuck OD-NNN rows
+
+```bash
+~/.vgflow/sync.sh   # pick up B101
+# Single ID:
+/vg:override-resolve OD-30180 --reason='cleanup'
+# Batch:
+/vg:override-resolve OD-30179 OD-30180 --reason='cleanup'
+```
+
+YAML rows with `status: active` now correctly flip to
+`status: RESOLVED` with `resolved_at`, `resolved_event_id`, and
+`resolution_reason` fields written.
+
+---
+
 # v4.69.3 — B100 issue #203 missing subagents in install
 
 User report: 4 subagents referenced by VG skills don't exist in
