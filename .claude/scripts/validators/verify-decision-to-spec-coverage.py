@@ -63,7 +63,15 @@ def _spec_files(phase_dir: Path) -> list[Path]:
         specs = data.get("playwright_specs") or data.get("specs") or []
         out: list[Path] = []
         for entry in specs:
-            path = entry.get("path") if isinstance(entry, dict) else str(entry)
+            # B97 v4.69.0 (issue #202): writer uses `spec_file` (per
+            # generate-deep-test-specs.py + vg-test-codegen subagent + light-path
+            # writers), but reader pre-B97 only checked `path` → no specs ever
+            # matched → fallback glob fired → BLOCK in strict mode. Accept any
+            # of the documented field names with `spec_file` first (canonical).
+            if isinstance(entry, dict):
+                path = entry.get("spec_file") or entry.get("path") or entry.get("file")
+            else:
+                path = str(entry)
             if not path:
                 continue
             p = Path(path)

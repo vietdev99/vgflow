@@ -87,6 +87,37 @@ GOAL_CLASS_STAGES: dict[str, tuple[str, ...]] = {
 }
 
 
+# B97 v4.69.0 (issue #200): generator-validator alignment. Pre-B97,
+# generator passed goal_class through verbatim from TEST-GOALS markdown.
+# Many goal authors omitted the field for non-mutation goals → validator
+# defaulted to full RCRURDR → 85 of 206 goals BLOCKED with stage-missing.
+# Fix: when goal_class blank but stage-set is determinable, infer it.
+def _infer_goal_class(stages: tuple[str, ...]) -> str:
+    """Reverse-map emitted stage set → canonical goal_class enum.
+
+    Returns empty string when stages don't match any known shape (caller
+    should leave goal_class blank rather than guess).
+    """
+    s = tuple(stages)
+    # Exact match against known stage tuples
+    if s == GOAL_TYPE_STAGES["read-only"]:
+        return "readonly"
+    if s == GOAL_TYPE_STAGES["create-only"]:
+        return "create-only"
+    if s == GOAL_TYPE_STAGES["update-only"]:
+        return "update-only"
+    if s == GOAL_TYPE_STAGES["delete-only"]:
+        return "delete-only"
+    if s == FEATURE_CHAIN_STAGES:
+        return "feature_chain"
+    if s == REQUIRED_STAGES:
+        return "mutation"
+    # Immutable-resource shape (B75: read_before, create, read_after_create only)
+    if s == ("read_before", "create", "read_after_create"):
+        return "create-only"
+    return ""
+
+
 # B94 v4.67.3 (issue #197 F-CAI-09): read-only goal keyword cues. Used to
 # auto-detect read-only goals when `goal_type` not declared explicitly.
 # PrintwayV3 Phase 8.2: 52 goals classified RCRURDR but actually read-only
@@ -1669,6 +1700,20 @@ def _goal_spec(
     _contracts = contracts or []
     _decisions = decisions or {}
     decision_refs = _goal_decision_refs(goal, _decisions)
+    # B97 v4.69.0 (issue #200): infer goal_class from emitted stages
+    # when authors omitted the field. Eliminates 85/206 RCRURDR mismatch
+    # BLOCK on PrintwayV3 Phase 8.2 R3.
+    emitted_stages = _stages_for_goal(goal)
+    declared_class = (goal.get("goal_class") or "").strip().lower()
+    if declared_class:
+        effective_goal_class = declared_class
+        _b97_inferred = False
+    else:
+        inferred = _infer_goal_class(emitted_stages)
+        effective_goal_class = inferred
+        _b97_inferred = bool(inferred)
+        if _b97_inferred:
+            goal.setdefault("_b97_goal_class_inferred", inferred)
     return {
         "title": goal["title"],
         "priority": goal.get("priority") or "important",
@@ -1703,12 +1748,21 @@ def _goal_spec(
         # test.each(variants). Without this, chain_steps die at the producer.
         "chain_steps": goal.get("chain_steps") or [],
         "enables": goal.get("enables") or [],
-        "goal_class": goal.get("goal_class") or "",
+        # B97 v4.69.0 (issue #200): emit effective goal_class (declared or
+        # inferred). Pre-B97 emitted "" when authors omitted → downstream
+        # validator dispatched to default RCRURDR → false-positive BLOCK.
+        "goal_class": effective_goal_class,
         "cleanup": [
             {"target": fixture["id"], "action": fixture["cleanup"]}
             for fixture in reversed(fixture_dag)
         ],
-        "generator_note": "Generated from phase docs; executable tests must bind TS-XX to this goal and implement these steps. Edge cases + negative specs MUST be rendered as test.each([...]) variants. B65a: chain_steps + enables now persisted for feature_chain goals.",
+        "generator_note": (
+            "Generated from phase docs; executable tests must bind TS-XX to this "
+            "goal and implement these steps. Edge cases + negative specs MUST be "
+            "rendered as test.each([...]) variants. B65a: chain_steps + enables "
+            "now persisted for feature_chain goals."
+            + (f" | B97-inferred goal_class: {effective_goal_class}" if _b97_inferred else "")
+        ),
     }
 
 
@@ -1828,6 +1882,11 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
             "readonly_autodetected_count": sum(
                 1 for g in selected
                 if g.get("_b94_readonly_autodetected")
+            ),
+            # B97 v4.69.0 (issue #200): goal_class inference count
+            "goal_class_inferred_count": sum(
+                1 for g in selected
+                if g.get("_b97_goal_class_inferred")
             ),
         },
         # G5 Batch 4: root-level fixture DAG from cross-goal dependencies

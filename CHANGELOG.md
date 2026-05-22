@@ -1,3 +1,57 @@
+# v4.69.0 — B97 issue #200+#201+#202 goal_class trio
+
+Closes 3 tightly coupled issues from PrintwayV3 Phase 8.2 R3 dogfood.
+
+## #200 (medium) — generator infers goal_class when blank
+
+206 goals emitted. 85 had stage-shape ≠ full RCRURDR but `goal_class`
+field was blank because TEST-GOALS.md authors omitted the key.
+Downstream validator defaulted to RCRURDR contract → 85
+`lifecycle_stage_missing` evidences → step BLOCK.
+
+Fix: `_infer_goal_class(stages)` reverse-maps emitted stage tuple →
+canonical enum (readonly, create-only, update-only, delete-only,
+mutation, feature_chain). `_goal_spec` consults declared field first,
+infers when blank, emits `effective_goal_class`. Tags
+`_b97_goal_class_inferred` for audit + appends
+"B97-inferred goal_class: <value>" to `generator_note`. Summary surfaces
+`goal_class_inferred_count`.
+
+## #201 (medium) — validator respects explicit goal_class
+
+`verify-lifecycle-spec-depth.py:400` enforced full RCRURDR (7 stages)
+for ANY goal whose evidence non-empty OR SIDE_EFFECT_WORD_RE matched
+(catches "approve|reject|update|delete|create..." — fires on read-only
+titles like "Approve queue page renders").
+
+Fix:
+- New `REQUIRED_STAGES_BY_CLASS` map: readonly→1, create-only→3,
+  update-only→3, delete-only→3
+- New `_required_stages_for(goal)` helper returns per-class subset when
+  goal_class declares non-mutation, else full RCRURDR
+- Validator uses subset for missing-stage check; emits new evidence type
+  `class_stages_missing` (not `rcrurdr_stages_missing`) when class-specific
+
+## #202 (low) — coverage validator accepts spec_file field
+
+Writer (generate-deep-test-specs.py + vg-test-codegen subagent + light
+manifest writers) emits `playwright_specs[].spec_file`. Reader pre-B97
+only checked `entry.get("path")` → None → fallback glob → BLOCK.
+
+Fix: one-liner accept `spec_file` (canonical) OR `path` OR `file`.
+
+## Tests
+
+`tests/test_batch97_goal_class_trio.py` — 19 cases:
+  - #200: 7× infer cases + spec emits inferred + preserves declared +
+    summary aggregates count
+  - #201: per-class lookup + fallback to full RCRURDR + unknown class
+    fallback + needs_lifecycle still validates class subset
+  - #202: spec_file field accepted + path field backward-compat
+  - 3× mirror parity
+
+---
+
 # v4.68.1 — B96 soft-directive mode for tasklist sync gate
 
 User report (2026-05-21):

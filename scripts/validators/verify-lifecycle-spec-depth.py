@@ -206,9 +206,45 @@ def _combined(goal: dict[str, Any]) -> str:
     ))
 
 
+# B97 v4.69.0 (issue #201): per-class required stage subset. Pre-B97
+# validator enforced full RCRURDR for ANY goal whose evidence was
+# meaningful OR SIDE_EFFECT_WORD_RE matched (catches "approve|reject|
+# update|delete..." in titles like "Approve queue page renders" — which
+# is read-only). Result: 3-stage create-only goals flagged as missing
+# update/delete stages → BLOCK. Fix: when goal_class declares non-mutation
+# subset, use its declared required-stage subset instead of full RCRURDR.
+REQUIRED_STAGES_BY_CLASS: dict[str, tuple[str, ...]] = {
+    "readonly":    ("read_before",),
+    "read-only":   ("read_before",),
+    "create-only": ("read_before", "create", "read_after_create"),
+    "update-only": ("read_before", "update", "read_after_update"),
+    "delete-only": ("read_before", "delete", "read_after_delete"),
+}
+
+
+def _required_stages_for(goal: dict[str, Any]) -> tuple[str, ...]:
+    """B97 v4.69.0: explicit goal_class enum dictates required stage subset.
+
+    Returns the stage tuple the validator should enforce for `goal`. Falls
+    back to full RCRURDR when goal_class blank/unknown or declares a
+    mutation-class value.
+    """
+    gc = str(goal.get("goal_class") or "").lower().strip()
+    if gc in REQUIRED_STAGES_BY_CLASS:
+        return REQUIRED_STAGES_BY_CLASS[gc]
+    return REQUIRED_STAGES
+
+
 def _needs_lifecycle(goal: dict[str, Any]) -> bool:
     goal_type = str(goal.get("goal_type") or "").lower()
     goal_class = str(goal.get("goal_class") or "").lower()
+    # B97 v4.69.0 (issue #201): respect explicit non-mutation goal_class.
+    # When AI/author declares readonly/create-only/update-only/delete-only,
+    # validator should NOT escalate to full RCRURDR check via word-match.
+    # Goal still gets per-class required-stage enforcement via
+    # _required_stages_for, just not the global REQUIRED_STAGES path.
+    if goal_class in {"readonly", "read-only", "create-only", "update-only", "delete-only"}:
+        return True  # still validated, but per-class subset (see _required_stages_for)
     if goal_type in {"mutation", "multi-actor", "workflow"}:
         return True
     if goal_class in {"mutation", "crud", "workflow", "multi-actor"}:
@@ -397,15 +433,25 @@ def main() -> None:
                     args.severity,
                 )
 
-            missing = [stage for stage in REQUIRED_STAGES if stage not in _stage_names(spec)]
+            # B97 v4.69.0 (issue #201): use per-class required subset when
+            # explicit goal_class declares non-mutation. Pre-B97 always used
+            # full RCRURDR → false positive on 3-stage create-only goals.
+            required = _required_stages_for(goal)
+            missing = [stage for stage in required if stage not in _stage_names(spec)]
             if missing:
+                gc = str(goal.get("goal_class") or "").lower().strip()
+                ev_type = "rcrurdr_stages_missing" if required == REQUIRED_STAGES else "class_stages_missing"
                 _add(
                     out,
                     Evidence(
-                        type="rcrurdr_stages_missing",
-                        message=f"{goal_id}: lifecycle spec missing RCRURDR stages: {', '.join(missing)}",
+                        type=ev_type,
+                        message=(
+                            f"{goal_id}: lifecycle spec missing "
+                            f"{'RCRURDR' if required == REQUIRED_STAGES else gc} "
+                            f"stages: {', '.join(missing)}"
+                        ),
                         file=str(lifecycle_path),
-                        expected=", ".join(REQUIRED_STAGES),
+                        expected=", ".join(required),
                     ),
                     args.severity,
                 )
