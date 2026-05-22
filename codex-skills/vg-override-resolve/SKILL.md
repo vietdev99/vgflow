@@ -184,7 +184,12 @@ Prefer the clean re-run path (`/vg:build --gaps-only`, `/vg:review`, `/vg:test`)
 set -euo pipefail
 source .claude/commands/vg/_shared/config-loader.md 2>/dev/null || true
 source .claude/commands/vg/_shared/telemetry.md 2>/dev/null || true
-source .claude/commands/vg/_shared/override-debt.md 2>/dev/null || true
+# B101 v4.69.4 (issue #198): source the runnable .sh, NOT the markdown .md.
+# Pre-B101 sourced .md → bash silently ignored markdown headers (via
+# `|| true`) → override_resolve_by_id was NEVER defined → command not found
+# silently swallowed → row stayed status=active. The .md is doc-only per
+# its own line-8 warning. The runnable bash lives in lib/override-debt.sh.
+source .claude/commands/vg/_shared/lib/override-debt.sh 2>/dev/null || true
 export VG_CURRENT_COMMAND="vg:override-resolve"
 telemetry_init 2>/dev/null || true
 
@@ -193,16 +198,18 @@ ARGS="$ARGUMENTS"
 #   DEBT-YYYYMMDDHHMMSS-PID  — legacy markdown-table format
 #   OD-NNN                    — orchestrator CLI YAML format
 #   BF-YYYYMMDDHHMMSS-PID    — run-backfill YAML format (issue #21)
-# Slash command accepts all three. The downstream override_resolve_by_id
-# helper detects format from the ID prefix and mutates the right rows.
-DEBT_ID=$(echo "$ARGS" | grep -oE '(DEBT-[0-9]+-[0-9]+|OD-[0-9]+|BF-[0-9]+-[0-9]+)' | head -n1)
+#
+# B101 v4.69.4 (issue #198 batch mode): accept MULTIPLE DEBT-IDs. Real
+# resolve sessions batch IDs like `OD-30179 OD-30180`. Pre-B101 took only
+# the first match → second ID silently dropped.
+DEBT_IDS=$(echo "$ARGS" | grep -oE '(DEBT-[0-9]+-[0-9]+|OD-[0-9]+|BF-[0-9]+-[0-9]+)')
 REASON=$(echo "$ARGS" | grep -oE -- "--reason='[^']+'" | sed "s/--reason='//; s/'$//")
 WONT_FIX=false
 [[ "$ARGS" =~ --wont-fix ]] && WONT_FIX=true
 
 # Validate inputs
-if [ -z "$DEBT_ID" ]; then
-  echo "⛔ Thiếu DEBT-ID. Usage: /vg:override-resolve <DEBT-...|OD-NNN|BF-...> --reason='...' [--wont-fix]"
+if [ -z "$DEBT_IDS" ]; then
+  echo "⛔ Thiếu DEBT-ID. Usage: /vg:override-resolve <DEBT-...|OD-NNN|BF-...> [<id-2> ...] --reason='...' [--wont-fix]"
   exit 1
 fi
 if [ -z "$REASON" ]; then
@@ -216,17 +223,42 @@ if [ ! -f "$REGISTER" ]; then
   exit 1
 fi
 
-# Validate DEBT-ID exists in register
-if ! grep -qF "$DEBT_ID" "$REGISTER"; then
-  echo "⛔ Không tìm thấy DEBT-ID '${DEBT_ID}' trong ${REGISTER}."
-  echo "   Chạy /vg:progress hoặc xem trực tiếp register để tra DEBT-ID hợp lệ."
-  exit 1
-fi
+# B101: status check now accepts both "OPEN" (markdown table) AND "active"
+# (YAML block). Pre-B101 awk-on-pipe only worked for table format; YAML
+# rows produce empty CURRENT_STATUS → false negative "đã ở trạng thái ()".
+# New check: per ID, grep for status line inside the row's block, normalize.
+SKIPPED=()
+PROCESS=()
+for DEBT_ID in $DEBT_IDS; do
+  if ! grep -qF "$DEBT_ID" "$REGISTER"; then
+    echo "⛔ Không tìm thấy DEBT-ID '${DEBT_ID}' trong ${REGISTER}."
+    SKIPPED+=("$DEBT_ID:not_found")
+    continue
+  fi
+  # Detect format + extract current status case-insensitively
+  if [[ "$DEBT_ID" =~ ^(OD-|BF-) ]]; then
+    # YAML block — grep `status:` line between `- id: <id>` and next `- ` or EOF
+    CURRENT_STATUS=$(awk -v id="- id: $DEBT_ID" '
+      $0 == id {found=1; next}
+      found && /^- / {exit}
+      found && /^[[:space:]]*status:/ {sub(/^[[:space:]]*status:[[:space:]]*/, ""); print; exit}
+    ' "$REGISTER")
+  else
+    # Markdown table — pipe column 9 is status
+    CURRENT_STATUS=$(grep -F "$DEBT_ID" "$REGISTER" | head -n1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$9); print $9}')
+  fi
+  # Normalize to compare canonically
+  CURRENT_LC=$(echo "$CURRENT_STATUS" | tr '[:upper:]' '[:lower:]' | xargs)
+  if [ "$CURRENT_LC" != "open" ] && [ "$CURRENT_LC" != "active" ]; then
+    echo "ℹ ${DEBT_ID} đã ở trạng thái ${CURRENT_STATUS:-<empty>} — không cần resolve lại."
+    SKIPPED+=("$DEBT_ID:already_${CURRENT_LC}")
+    continue
+  fi
+  PROCESS+=("$DEBT_ID")
+done
 
-# Check current status — WONT_FIX/RESOLVED is a no-op
-CURRENT_STATUS=$(grep -F "$DEBT_ID" "$REGISTER" | head -n1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$9); print $9}')
-if [ "$CURRENT_STATUS" != "OPEN" ]; then
-  echo "ℹ ${DEBT_ID} đã ở trạng thái ${CURRENT_STATUS} (không phải OPEN) — không cần giải quyết (resolve) lại."
+if [ ${#PROCESS[@]} -eq 0 ]; then
+  echo "ℹ No DEBT-IDs to process (all already resolved or not found)."
   exit 0
 fi
 ```
@@ -236,12 +268,14 @@ fi
 If `--wont-fix`, halt and use **AskUserQuestion** to force deliberate human confirmation — WONT_FIX is permanent; it means "we never plan to fix this." The audit trail depends on this prompt being honest.
 
 ```
-question: "Đánh dấu ${DEBT_ID} là WONT_FIX (từ chối sửa vĩnh viễn)?
+question: "Đánh dấu ${PROCESS[*]} là WONT_FIX (từ chối sửa vĩnh viễn)?
 
   Lý do: ${REASON}
 
   WONT_FIX nghĩa là override (bỏ qua) này KHÔNG bao giờ được giải quyết (resolve) —
-  ví dụ phase scaffolding cố ý không viết test. Chọn 'Cancel' nếu muốn dùng clean re-run path."
+  ví dụ phase scaffolding cố ý không viết test. Chọn 'Cancel' nếu muốn dùng clean re-run path.
+
+  B101: nếu đa-ID, cùng một status được áp dụng cho tất cả."
 options:
   - "Yes, mark wont-fix"  → proceed
   - "Cancel"              → abort with exit 0
@@ -249,22 +283,35 @@ options:
 
 Skip this step if `--wont-fix` not set (default RESOLVED path proceeds without prompt — clean resolution is lower risk).
 
-## Step 3: Call override_resolve_by_id
+## Step 3: Call override_resolve_by_id (B101: batch loop)
 
 ```bash
 STATUS="RESOLVED"
 [ "$WONT_FIX" = "true" ] && STATUS="WONT_FIX"
 
-EVENT_ID=$(override_resolve_by_id "$DEBT_ID" "$STATUS" "$REASON") || {
-  echo "⛔ override_resolve_by_id thất bại. Kiểm tra stderr ở trên."
-  exit 1
-}
+RESOLVED_COUNT=0
+FAILED=()
+for DEBT_ID in "${PROCESS[@]}"; do
+  EVENT_ID=$(override_resolve_by_id "$DEBT_ID" "$STATUS" "$REASON") || {
+    echo "⛔ override_resolve_by_id thất bại cho ${DEBT_ID}. Kiểm tra stderr ở trên."
+    FAILED+=("$DEBT_ID")
+    continue
+  }
+  RESOLVED_COUNT=$((RESOLVED_COUNT + 1))
+  echo "✓ ${DEBT_ID} → ${STATUS} (event ${EVENT_ID})"
+done
 
 echo ""
-echo "✓ ${DEBT_ID} → ${STATUS}"
-echo "   Lý do (reason): ${REASON}"
-echo "   Telemetry event: ${EVENT_ID}"
-echo "   Register: ${REGISTER}"
+echo "Lý do (reason): ${REASON}"
+echo "Register: ${REGISTER}"
+echo "Resolved: ${RESOLVED_COUNT}/${#PROCESS[@]}"
+if [ ${#SKIPPED[@]} -gt 0 ]; then
+  echo "Skipped: ${SKIPPED[*]}"
+fi
+if [ ${#FAILED[@]} -gt 0 ]; then
+  echo "Failed: ${FAILED[*]}"
+  exit 1
+fi
 echo ""
 if [ "$STATUS" = "WONT_FIX" ]; then
   echo "→ /vg:accept sẽ không còn block entry này. Audit trail đã ghi nhận quyết định permanent."
@@ -319,7 +366,8 @@ if [[ "${ARGUMENTS}" =~ --deploy-method=([a-zA-Z0-9_-]+) ]]; then
     2>/dev/null || true
 
   # Log override-debt entry for audit trail
-  source .claude/commands/vg/_shared/override-debt.md 2>/dev/null || true
+  # B101 v4.69.4: source the .sh (runnable), not the .md (doc-only)
+  source .claude/commands/vg/_shared/lib/override-debt.sh 2>/dev/null || true
   type -t log_override_debt >/dev/null 2>&1 && \
     log_override_debt "deploy-method-change" "${PHASE_NUMBER:-global}" \
       "${NEW_METHOD}: ${REASON_DEPLOY}" "${PHASE_DIR:-.}" || true
