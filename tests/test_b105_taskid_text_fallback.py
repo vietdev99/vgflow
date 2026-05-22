@@ -94,6 +94,61 @@ def test_b105_plain_string_response_yields_taskid(tmp_path: Path) -> None:
     assert rec["task_id"] == "42"
 
 
+def test_b105_1_nested_task_id_probed(tmp_path: Path) -> None:
+    """B105.1 (#198 follow-up): tool_response.task.id is probed.
+
+    PrintwayV3 dogfood 2026-05-22 second-pass investigation showed the
+    Claude Code runtime nests the id under a `task` object — the flat
+    keys + text regex were not enough. Probe the nested shape too.
+    """
+    contract_path = tmp_path / "contract.json"
+    contract_path.write_text(json.dumps({"checklists": [], "projection_items": []}),
+                             encoding="utf-8")
+    (tmp_path / ".vg" / "runs" / "test-run").mkdir(parents=True)
+
+    hook_input = {
+        "tool_name": "TaskCreate",
+        "tool_input": {"subject": "Nested"},
+        "tool_response": {"task": {"id": "61", "subject": "Nested"}},
+    }
+    proc = subprocess.run(
+        [sys.executable, str(HELPER), str(contract_path), "test-run"],
+        cwd=tmp_path,
+        env={**os.environ, "VG_HOOK_INPUT": json.dumps(hook_input)},
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0
+    trace = tmp_path / ".vg" / "runs" / "test-run" / ".taskcreate-trace.jsonl"
+    rec = json.loads(trace.read_text(encoding="utf-8").strip())
+    assert rec["task_id"] == "61", (
+        f"nested tool_response.task.id should be picked up; got {rec['task_id']!r}"
+    )
+
+
+def test_b105_1_nested_taskid_camelcase(tmp_path: Path) -> None:
+    """Nested probe accepts both ``id`` and ``taskId`` inside ``task``."""
+    contract_path = tmp_path / "contract.json"
+    contract_path.write_text(json.dumps({"checklists": [], "projection_items": []}),
+                             encoding="utf-8")
+    (tmp_path / ".vg" / "runs" / "test-run").mkdir(parents=True)
+
+    hook_input = {
+        "tool_name": "TaskCreate",
+        "tool_input": {"subject": "Nested camel"},
+        "tool_response": {"task": {"taskId": "T-nest-7"}},
+    }
+    proc = subprocess.run(
+        [sys.executable, str(HELPER), str(contract_path), "test-run"],
+        cwd=tmp_path,
+        env={**os.environ, "VG_HOOK_INPUT": json.dumps(hook_input)},
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0
+    trace = tmp_path / ".vg" / "runs" / "test-run" / ".taskcreate-trace.jsonl"
+    rec = json.loads(trace.read_text(encoding="utf-8").strip())
+    assert rec["task_id"] == "T-nest-7"
+
+
 def test_b105_camelcase_still_wins_over_text(tmp_path: Path) -> None:
     """Flat camelCase ``taskId`` MUST still be probed before the regex fallback."""
     contract_path = tmp_path / "contract.json"
