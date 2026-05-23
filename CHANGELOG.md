@@ -1,3 +1,70 @@
+# v4.70.1 — B107 semantic verify-spec-stage-coverage (Codex postmortem rec #2)
+
+Closes Codex postmortem 2026-05-23 recommendation #2 — pre-B107 the
+validator only checked TOKEN PRESENCE (e.g. `waitForResponse` exists
+somewhere). Shallow specs that called waitForResponse on UNRELATED
+endpoints, never asserted status<400, or skipped success/error locators
+still passed. Top 25-35% UAT bugs leaked through `/vg:test`.
+
+## Semantic gates added
+
+`scripts/validators/verify-spec-stage-coverage.py` reads B106's
+`network_assertion` + `success_assertion` metadata per step. For each
+mutation step it requires the spec to:
+
+1. **Endpoint binding** — `waitForResponse` / `page.on('response')` /
+   `waitForRequest` followed within 400 chars by the declared endpoint
+   path. `{var}` + `:var` placeholders treated as wildcards.
+2. **Concrete status check** — `.status() < 400` OR `toBeLessThan(400)`
+   OR `toBe(2xx)`. Bare `waitForResponse` no longer sufficient.
+3. **Error locator (when on_4xx_5xx_must_render_error_toast)** —
+   `[role=alert]`, `data-testid*=error`, `.error-banner/toast/message`,
+   `getByRole('alert')`, etc. Closes "4xx silently swallowed" class.
+4. **Navigation assertion (when expect_navigation_to set)** —
+   `waitForURL` / `waitForNavigation` / `toHaveURL` referencing the
+   declared path. Closes "redirect broken" class.
+5. **Success locator (when success_assertion without nav)** —
+   `[role=status]`, `data-testid*=success`, `.success-banner/toast`,
+   `getByRole('status')`, etc. Closes "missing success feedback" class.
+
+Findings surface under `<stage>__semantic` keys so reporting cleanly
+separates Batch 23 shallow checks from B107 semantic gates.
+
+## Tests
+
+`tests/test_batch107_semantic_spec_coverage.py` — 9 cases:
+- waitForResponse unbound to endpoint → FAIL
+- waitForResponse bound + status + error-locator → PASS
+- Missing status<400 assertion → FAIL
+- Missing error locator → FAIL
+- Navigation assertion missing when declared → FAIL
+- Navigation present + all required → PASS
+- success_assertion without nav requires success-locator → FAIL
+- Steps without B106 metadata don't get __semantic findings
+- Mirror parity
+
+## Recovery / rollout
+
+```bash
+~/.vgflow/sync.sh   # pick up B107
+# Regen test-specs to populate B106 metadata first:
+/vg:test-spec <phase> --regen
+# Then verify semantic coverage:
+python scripts/validators/verify-spec-stage-coverage.py \
+  --phase-dir .vg/phases/<id> --json
+```
+
+Existing wiring in /vg:test-spec preflight + /vg:test runtime still
+uses the same validator (now semantic). No new wiring needed.
+
+## Pending Codex recommendation #3
+
+B108 v4.70.2 — live route shape diff for FE consumers (promote B95
+advisory to enforcing; issue safe GET per FE route, diff envelope vs
+FE-dereferenced fields). Codex est. 10-18% additional UAT bugs catch.
+
+---
+
 # v4.70.0 — B106 UAT bug root-cause + 2 pre-UAT FE form-submit gates
 
 User report (2026-05-23): sau `/vg:build` + `/vg:test` PASS, UAT step
