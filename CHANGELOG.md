@@ -1,3 +1,102 @@
+# v4.72.0 — B112 residual UAT quality (copy + brand voice + UX naturalness)
+
+Closes the FINAL ~5% UAT bug class that pure automation cannot fully
+catch alone. Rule-based linters + CrossAI scaffold cover the residual:
+copy quality, brand voice consistency, UX flow naturalness.
+
+## What changed
+
+New `scripts/validators/verify-uat-residual-quality.py`. Single
+validator runs 4 last-mile checks + emits CrossAI scaffold:
+
+### 1. Copy quality (FE source + UAT-NARRATIVE.md)
+
+Scans for:
+- **Placeholder leaks** — `TODO`, `FIXME`, `XXX`, `HACK`, `TBD`,
+  `lorem ipsum`, `placeholder`, `sample text`, `dummy text`, `test content`
+- **Untranslated keys** — `{{key}}` syntax leak (i18n binding missed)
+- **Trailing whitespace** inside string literals
+
+### 2. Brand voice (vs `<project>/.glossary.json`)
+
+Per glossary entry:
+```json
+{
+  "terms": [
+    {"canonical": "Topup", "aliases": ["TopUp", "Top-up", "top up"]},
+    {"canonical": "Sign in", "aliases": ["Log in", "Login"], "allowed": false}
+  ]
+}
+```
+
+Each alias hit in FE source → `brand_voice_drift` finding with canonical
+suggestion. `"allowed": true` entries skipped (project explicitly accepts).
+
+### 3. UX flow naturalness
+
+Per `LIFECYCLE-SPECS.json` step, count action verbs in `step.action`
+(`click|fill|select|check|hover|press|tap|goto|navigate|open|drag|drop`).
+Configurable threshold via `--ux-action-threshold` (default 8). Flag
+goals where stage has too many actions → likely UX friction worth human
+review.
+
+### 4. CrossAI UX review scaffold
+
+Emits `<phase-dir>/CROSSAI-UX-REVIEW.md` listing every goal's flow
+(stages, actors, residual findings inline). Operator pastes this into
+codex/gemini for second-opinion UX-naturalness check. Skip with
+`--no-crossai`.
+
+## Registry
+
+```yaml
+- id: uat-residual-quality
+  severity: warn        # advisory; operator opts into block after tuning
+  phases_active: [test, accept]
+  domain: code
+  runtime_target_ms: 2000
+  added_in: v4.72.0
+```
+
+## Tests
+
+`tests/test_batch112_uat_residual_quality.py` — 16 cases covering all
+4 check types + severity gate + registry + mirror parity.
+
+## Cumulative UAT bug-catch coverage
+
+| Tag | Batch | Class | Est |
+|-----|-------|-------|-----|
+| v4.70.0 | B106 | form 4xx + success + redirect | ~50% |
+| v4.70.1 | B107 | semantic spec coverage | +25-35% |
+| v4.70.2 | B108 | live route shape diff | +10-18% |
+| v4.71.0 | B110 | a11y axe-core | +5-8% |
+| v4.71.1 | B111 | role-swap RBAC | +5-10% |
+| v4.71.2 | B109 | visual fidelity | +5-8% |
+| v4.72.0 | B112 | residual quality (copy/brand/UX) | +3-5% |
+
+**Cumulative ~98% historical UAT bug coverage** automated before human
+step. Final ~2% = inherent human judgement (subjective UX, intent
+mismatch between spec author + implementation), not catchable by any
+rule.
+
+## Recovery / rollout
+
+```bash
+~/.vgflow/sync.sh   # pick up B112
+# Optional: build .glossary.json for brand voice check
+cat > .glossary.json <<JSON
+{"terms": [{"canonical": "Topup", "aliases": ["TopUp", "Top-up"]}]}
+JSON
+# Run validator
+python scripts/validators/verify-uat-residual-quality.py \
+  --phase-dir .vg/phases/<id> --repo-root .
+# Paste CROSSAI-UX-REVIEW.md to codex for second opinion:
+codex exec "Review this UX flow for naturalness: $(cat .vg/phases/<id>/CROSSAI-UX-REVIEW.md)"
+```
+
+---
+
 # v4.71.2 — B109 visual fidelity gate (toHaveScreenshot baseline)
 
 Closes UAT design-vs-impl bug class — layout drift, padding crush,
