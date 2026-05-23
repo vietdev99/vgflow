@@ -1,3 +1,47 @@
+# v4.72.1 — B105.1 nested tool_response.task.id probe (PR #206)
+
+Follow-up to B105 (#205). PrintwayV3 dogfood instrumentation showed
+TaskCreate trace STILL recorded `task_id=""` after B105 ship. Second-
+pass dump revealed the Claude Code runtime nests the id under a `task`
+object:
+
+```json
+{
+  "tool_name": "TaskCreate",
+  "tool_input": {"subject": "…"},
+  "tool_response": {"task": {"id": "61", "subject": "…"}}
+}
+```
+
+Neither B80 flat keys nor B105 text regex covered this shape. Every
+TaskCreate landed in `items_no_id`. TaskUpdate could not pair.
+
+## Fix
+
+`_resolve_tool_response_task_id` gains a nested probe between the
+flat-key step and the text-regex step:
+
+```python
+nested_task = tool_response.get("task")
+if isinstance(nested_task, dict):
+    for key in ("id", "taskId", "task_id"):
+        value = nested_task.get(key)
+        if value:
+            return str(value)
+```
+
+Verified live against Claude Code runtime — next TaskCreate trace row
+carried `task_id="62"`, `tasklist-projected` gate cleared,
+`/vg:build 8.2.2` STEP 1 preflight completed.
+
+## Tests
+
+`tests/test_b105_taskid_text_fallback.py` gains 2 cases:
+- `test_b105_1_nested_task_id_probed` — exact shape from dogfood payload
+- `test_b105_1_nested_taskid_camelcase` — accepts `id` and `taskId` inside `task` object
+
+---
+
 # v4.72.0 — B112 residual UAT quality (copy + brand voice + UX naturalness)
 
 Closes the FINAL ~5% UAT bug class that pure automation cannot fully
