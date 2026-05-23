@@ -1219,6 +1219,17 @@ validators:
     added_in: v4.66.0
     description: 'Every apps/*/src/main.tsx that calls createRoot().render() must wrap <App /> with <I18nextProvider> or <I18nProvider> (follows App-import one hop to handle wrapper-in-App.tsx style per Phase 6 merchant-v3 reference). Closes SPA i18n binding drift root cause: a portal SPA can ship without i18n binding and pass every accept gate because no validator catches the missing wrapper. Default severity=warn during initial rollout; flip to block once all portal SPAs wrap I18nextProvider. Override: --severity warn or skip flag.'
 
+  # ──── B111 v4.71.1 — role-swap multi-actor replay coverage ────
+
+  - id: role-swap-coverage
+    path: scripts/validators/verify-role-swap-coverage.py
+    severity: warn
+    phases_active: [test, accept]
+    domain: code
+    runtime_target_ms: 1000
+    added_in: v4.71.1
+    description: 'Verify multi-actor goals have role-swap evidence in generated Playwright specs. Pre-B111 codegen ran whole spec as first actor only — role-B branches (admin approval, viewer 403, conditional visibility) never executed. Requires browser.newContext / loginAs(<actor>) / contextFor(<actor>) / logout+login per goal with role_swap_assertion metadata.'
+
   # ──── B110 v4.71.0 — a11y axe-core coverage gate ────
 
   - id: a11y-coverage

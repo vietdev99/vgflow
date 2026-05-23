@@ -1664,6 +1664,55 @@ _A11Y_STAGES = frozenset({
 })
 
 
+# B111 v4.71.1 — role-swap multi-actor replay. When a goal declares ≥2
+# actors (via _infer_actors_v2 OR explicit actor_workflow), each mutation
+# stage assigned to actor B must be preceded by a role-swap step:
+# either close the actor-A context + open actor-B context, OR call a
+# `loginAs(roleB)` fixture. Without this codegen runs the whole spec as
+# the FIRST actor → role-B-only branches never execute.
+
+def _build_role_swap_assertion(
+    stage: str,
+    goal: dict[str, Any],
+    actor_id: str,
+    actors: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """B111: when goal has multiple actors AND current step's actor differs
+    from prior context, emit role-swap metadata. Codegen translates to
+    `await loginAs('<actor>')` OR `await context.close(); ctx = await
+    browser.newContext(...)`.
+
+    Triggered for stages that perform user-visible actions (mutation +
+    interaction) when there's a multi-actor workflow. Single-actor goals
+    → returns None.
+    """
+    if len(actors) < 2:
+        return None
+    # Only emit on actionable stages — skip read_before stages which
+    # codegen typically runs once at fixture setup
+    if stage not in {
+        "create", "update", "delete",
+        "read_after_create", "read_after_update", "read_after_delete",
+        "visibility_check", "interaction_chain",
+        "cascade_check", "archive_visibility_check",
+    }:
+        return None
+    if not actor_id:
+        return None
+    actor_ids = [a["id"] for a in actors]
+    return {
+        "kind": "role_swap",
+        "active_actor": actor_id,
+        "actors_in_workflow": actor_ids,
+        "swap_strategy": (
+            "preferred: dedicated browser context per actor via "
+            "`browser.newContext()` + `loginAs(<actor>)`. Acceptable: "
+            "single context + logout/login between actors."
+        ),
+        "fixture_hint": f"loginAs('{actor_id}') OR contextFor('{actor_id}')",
+    }
+
+
 def _build_a11y_assertion(stage: str, goal: dict[str, Any]) -> dict[str, Any] | None:
     """B110: inject a11y assertion metadata for render-bearing stages.
 
@@ -1729,6 +1778,7 @@ def _step(
     contracts: list[dict[str, str]] | None = None,
     decisions: dict[str, dict[str, str]] | None = None,
     decision_refs: list[str] | None = None,
+    actors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     title = goal["title"]
     mutation_evidence = goal.get("mutation_evidence") or "created resource id, state transition, response envelope, or emitted event from TEST-GOALS"
@@ -1838,6 +1888,12 @@ def _step(
         step["a11y_assertion"] = a11y_assertion
         goal.setdefault("_b110_a11y_assertion_count", 0)
         goal["_b110_a11y_assertion_count"] += 1
+    # B111 v4.71.1: role-swap metadata for multi-actor goals
+    role_swap = _build_role_swap_assertion(stage, goal, actor_id, actors or [])
+    if role_swap:
+        step["role_swap_assertion"] = role_swap
+        goal.setdefault("_b111_role_swap_count", 0)
+        goal["_b111_role_swap_count"] += 1
     return step
 
 
@@ -1899,7 +1955,7 @@ def _goal_spec(
         "preconditions": _preconditions(goal),
         "decision_refs": decision_refs,
         "steps": [
-            _step(stage, goal, _stage_actor(stage, goal, actors), _contracts, _decisions, decision_refs)
+            _step(stage, goal, _stage_actor(stage, goal, actors), _contracts, _decisions, decision_refs, actors)
             for stage in _stages_for_goal(goal)
         ],
         # G6: artifact_capture reflects goal.artifact_kind
@@ -2078,6 +2134,16 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
                 "goals_with_a11y_check": sum(
                     1 for g in selected
                     if g.get("_b110_a11y_assertion_count", 0) > 0
+                ),
+            },
+            # B111 v4.71.1: role-swap coverage audit
+            "role_swap_coverage_audit": {
+                "role_swap_assertion_total": sum(
+                    g.get("_b111_role_swap_count", 0) for g in selected
+                ),
+                "multi_actor_goals_with_swap": sum(
+                    1 for g in selected
+                    if g.get("_b111_role_swap_count", 0) > 0
                 ),
             },
         },

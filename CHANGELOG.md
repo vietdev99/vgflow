@@ -1,3 +1,69 @@
+# v4.71.1 — B111 role-swap multi-actor replay coverage
+
+Closes UAT RBAC + conditional-visibility bug class. Pre-B111 codegen ran
+whole spec as the FIRST actor; role-B-only branches (admin approval,
+viewer 403, conditional field visibility) never executed.
+
+## Changes
+
+**Generator** (`scripts/generate-lifecycle-specs.py`):
+- New `_build_role_swap_assertion(stage, goal, actor_id, actors)` helper.
+  Triggers only when `len(actors) >= 2` AND stage is actionable
+  (create/update/delete/read_after_*/visibility_*/interaction_chain/
+  cascade_check/archive_visibility_check).
+- `_step()` now accepts `actors` kwarg; injects `role_swap_assertion`
+  field per matching stage.
+- Per-goal counter `_b111_role_swap_count`.
+- Summary surfaces `role_swap_coverage_audit`:
+  - `role_swap_assertion_total`
+  - `multi_actor_goals_with_swap`
+
+**Codegen subagent** (`agents/vg-test-codegen/SKILL.md`):
+- New rule 5c — when step carries `role_swap_assertion`, emit:
+  ```typescript
+  import { loginAs } from './utils/auth';
+  const approverCtx = await browser.newContext();
+  const approverPage = await approverCtx.newPage();
+  await loginAs(approverPage, 'approver');
+  ```
+- Acceptable: single-context logout+login between actors.
+
+**Validator** (`scripts/validators/verify-role-swap-coverage.py`):
+- Reads B111 metadata. Per goal with `role_swap_assertion`, requires
+  spec to contain at least one of: `browser.newContext()`, `loginAs(...
+  'actor'...)`, `contextFor(... 'actor'...)`, logout+login chain.
+- When loginAs/contextFor pattern matched, also verifies ALL declared
+  actors are exercised (missing-actor finding).
+- `_LOGIN_AS_RE` tolerates arg-order variations: `loginAs('admin')`,
+  `loginAs(page, 'admin')`, `loginAs({role: 'admin'})`.
+- Severity warn initially. Flip block after fixture surface in
+  apps/<app>/e2e/utils/ stabilized.
+
+**Registry**: `role-swap-coverage` entry. phases=[test, accept].
+
+## Tests
+
+`tests/test_batch111_role_swap_coverage.py` — 14 cases:
+- Generator: single actor → no swap, multi-actor create gets swap,
+  read_before stage no swap, _step injection, summary aggregate
+- Validator: block no swap mechanism, pass with loginAs (multi-arg),
+  block missing actor, logout+login pattern acceptable, skip single-actor
+- Codegen skill has B111 directive, registry entry, mirror parity
+
+## All UAT bug-catch trilogy + 3 deferred classes now shipped
+
+| Tag | Class | Coverage est |
+|-----|-------|--------------|
+| v4.70.0 B106 | form 4xx + success + redirect | ~50% |
+| v4.70.1 B107 | semantic spec coverage | +25-35% |
+| v4.70.2 B108 | live route shape diff | +10-18% |
+| v4.71.0 B110 | a11y axe-core | +5-8% |
+| v4.71.1 B111 | role-swap RBAC | +5-10% |
+
+Pending B109 (visual fidelity) ships next.
+
+---
+
 # v4.71.0 — B110 a11y axe-core coverage gate
 
 Closes UAT a11y bug class: missing ARIA labels, low color contrast,

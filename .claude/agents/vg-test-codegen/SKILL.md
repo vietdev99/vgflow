@@ -210,6 +210,23 @@ Validate with `verify-filter-test-coverage.py --phase ${PHASE_NUMBER}`.
    `verify-fe-form-submit-coverage.py` BLOCKS at `/vg:test` STEP 3.5
    when any mutation goal's generated spec lacks these assertions.
 
+5c. **B111 v4.71.1 — role-swap (per `role_swap_assertion` step field):**
+
+   When a step has `role_swap_assertion`, the spec MUST swap actor context
+   before performing the action. Preferred form:
+   ```typescript
+   import { loginAs, contextFor } from './utils/auth';
+   // Stage assigned to actor 'approver':
+   const approverCtx = await browser.newContext();
+   const approverPage = await approverCtx.newPage();
+   await loginAs(approverPage, 'approver');
+   await approverPage.goto('/admin/topups/pending');
+   await approverPage.getByRole('button', { name: 'Approve' }).click();
+   ```
+   Acceptable: single-context with logout+login between actors.
+   Validator `verify-role-swap-coverage.py` BLOCKS when multi-actor goal
+   spec has no `newContext()` / `loginAs(<actor>)` / `contextFor(<actor>)`.
+
 5b. **B110 v4.71.0 — a11y assertion (per `a11y_assertion` step field):**
 
    When a step in LIFECYCLE-SPECS.json carries `a11y_assertion`, emit:
