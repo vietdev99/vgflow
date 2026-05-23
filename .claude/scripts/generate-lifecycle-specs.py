@@ -1646,6 +1646,46 @@ def _build_network_assertion(stage: str, endpoint: dict[str, str] | None) -> dic
     }
 
 
+# B110 v4.71.0 (UAT bug catch trilogy — accessibility branch):
+# Inject `a11y_assertion` metadata for stages that exercise rendered UI.
+# Codegen subagent reads this and emits `AxeBuilder({page}).analyze()` +
+# critical/serious filter. Catches missing ARIA labels, color contrast,
+# focus visibility, keyboard nav, screen-reader announcements.
+_A11Y_STAGES = frozenset({
+    "render_initial",
+    "accessibility",
+    "interaction_filter",
+    "interaction_sort",
+    "interaction_paginate",
+    "read_after_create",
+    "read_after_update",
+    "visibility_check",
+    "interaction_chain",
+})
+
+
+def _build_a11y_assertion(stage: str, goal: dict[str, Any]) -> dict[str, Any] | None:
+    """B110: inject a11y assertion metadata for render-bearing stages.
+
+    Returns None when stage doesn't render UI (mutation-only without
+    follow-up read) or when CONTEXT.md declares `a11y_waiver: true`.
+    """
+    if stage not in _A11Y_STAGES:
+        return None
+    # Per-goal opt-out via `a11y_waiver: true` in goal frontmatter
+    if str(goal.get("a11y_waiver") or "").lower() in ("true", "yes", "1"):
+        return None
+    return {
+        "kind": "axe_core_scan",
+        "block_levels": ["critical", "serious"],
+        "include_levels_in_report": ["critical", "serious", "moderate"],
+        "rule_allowlist_path": "axe-allowlist.json",  # optional per-app file
+        "selectors_focus": (
+            "main, [role=main], form, [role=dialog], [role=alert]"
+        ),
+    }
+
+
 def _build_success_assertion(stage: str, goal: dict[str, Any]) -> dict[str, Any] | None:
     """B106 Gate 2: inject success-message + navigation assertion metadata
     for mutation stages. Parses goal.mutation_evidence + success_criteria for
@@ -1792,6 +1832,12 @@ def _step(
         step["success_assertion"] = success_assertion
         goal.setdefault("_b106_success_assertion_count", 0)
         goal["_b106_success_assertion_count"] += 1
+    # B110 v4.71.0: a11y assertion for render-bearing stages
+    a11y_assertion = _build_a11y_assertion(stage, goal)
+    if a11y_assertion:
+        step["a11y_assertion"] = a11y_assertion
+        goal.setdefault("_b110_a11y_assertion_count", 0)
+        goal["_b110_a11y_assertion_count"] += 1
     return step
 
 
@@ -2022,6 +2068,16 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
                 "mutation_goals_with_success_check": sum(
                     1 for g in selected
                     if g.get("_b106_success_assertion_count", 0) > 0
+                ),
+            },
+            # B110 v4.71.0: a11y coverage audit
+            "a11y_coverage_audit": {
+                "a11y_assertion_total": sum(
+                    g.get("_b110_a11y_assertion_count", 0) for g in selected
+                ),
+                "goals_with_a11y_check": sum(
+                    1 for g in selected
+                    if g.get("_b110_a11y_assertion_count", 0) > 0
                 ),
             },
         },

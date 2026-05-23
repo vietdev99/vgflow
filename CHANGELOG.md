@@ -1,3 +1,73 @@
+# v4.71.0 — B110 a11y axe-core coverage gate
+
+Closes UAT a11y bug class: missing ARIA labels, low color contrast,
+broken keyboard nav, form input not bound to label, screen-reader
+announcements empty. Pre-B110 the `accessibility` stage in lifecycle
+specs was OPTIONAL — codegen routinely skipped it. No validator
+required axe-core invocation. UAT phase = first time these violations
+surfaced.
+
+## Changes
+
+**Generator** (`scripts/generate-lifecycle-specs.py`):
+- New `_build_a11y_assertion(stage, goal)` helper. Returns metadata for
+  render-bearing stages (render_initial, accessibility, interaction_*,
+  read_after_create/update, visibility_check, interaction_chain).
+- Skips when CONTEXT.md goal frontmatter has `a11y_waiver: true`.
+- `_step()` injects `a11y_assertion` field per matching stage.
+- Per-goal counter `_b110_a11y_assertion_count` for diagnostics.
+- Summary surfaces `a11y_coverage_audit`:
+  - `a11y_assertion_total`
+  - `goals_with_a11y_check`
+
+**Codegen subagent** (`agents/vg-test-codegen/SKILL.md`):
+- New rule 5b directive — when step carries `a11y_assertion`, emit:
+  ```typescript
+  import { AxeBuilder } from '@axe-core/playwright';
+  const results = await new AxeBuilder({ page })
+    .include(['main', '[role=main]', 'form', '[role=dialog]'])
+    .analyze();
+  const critical = results.violations.filter(
+    v => v.impact === 'critical' || v.impact === 'serious'
+  );
+  expect(critical).toEqual([]);
+  ```
+- Optional per-app `axe-allowlist.json` skips known-issue rules.
+
+**Validator** (`scripts/validators/verify-a11y-coverage.py`):
+- Reads B110 metadata. Per goal with `a11y_assertion` step, requires
+  spec to contain:
+  - axe-core import (`@axe-core/playwright` OR `axe-playwright`)
+  - Scan call (`new AxeBuilder({page})` OR `injectAxe`/`checkA11y`)
+  - Assertion on violations (`toHaveNoViolations`/`toEqual([])`/length<=0)
+- Severity warn initially. Operator flips to block once per-app
+  allowlist tuned.
+
+**Registry**: `a11y-coverage` entry. phases=[test, accept]. domain=code.
+runtime_target_ms=1500.
+
+## Tests
+
+`tests/test_batch110_a11y_coverage.py` — 17 cases:
+- Generator: stage filter (render_initial gets a11y, create stage
+  skipped), waiver respect, read_after_create gets a11y, _step
+  injection, summary aggregate
+- Validator: block missing import, pass with full axe, block missing
+  assertion, skip goals without metadata, warn severity exit 0
+- Codegen skill has B110 directive, registry entry, 4× mirror parity
+
+## Recovery / rollout
+
+```bash
+~/.vgflow/sync.sh   # pick up B110
+npm install --save-dev @axe-core/playwright   # in apps/<app>/
+/vg:test-spec <phase> --regen   # generator populates a11y_assertion
+# Optional per-app allowlist:
+echo '{"rules":["color-contrast"]}' > apps/admin/axe-allowlist.json
+```
+
+---
+
 # v4.70.2 — B108 live route shape diff (Codex postmortem rec #3)
 
 Closes final Codex postmortem 2026-05-23 recommendation. Catches "empty

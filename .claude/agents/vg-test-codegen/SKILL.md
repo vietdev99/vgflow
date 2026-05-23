@@ -210,6 +210,25 @@ Validate with `verify-filter-test-coverage.py --phase ${PHASE_NUMBER}`.
    `verify-fe-form-submit-coverage.py` BLOCKS at `/vg:test` STEP 3.5
    when any mutation goal's generated spec lacks these assertions.
 
+5b. **B110 v4.71.0 — a11y assertion (per `a11y_assertion` step field):**
+
+   When a step in LIFECYCLE-SPECS.json carries `a11y_assertion`, emit:
+   ```typescript
+   import { AxeBuilder } from '@axe-core/playwright';
+   // ... after page render / interaction:
+   const results = await new AxeBuilder({ page })
+     .include(['main', '[role=main]', 'form', '[role=dialog]'])
+     .analyze();
+   const critical = results.violations.filter(
+     v => v.impact === 'critical' || v.impact === 'serious'
+   );
+   expect(critical).toEqual([]);
+   ```
+
+   Optional per-app `axe-allowlist.json` skips known-issue rules.
+   Validator `verify-a11y-coverage.py` BLOCKS when goal has
+   `a11y_assertion` metadata but spec lacks axe import / scan / assertion.
+
 6. **Env var credentials** — never hardcode emails/passwords. Use
    `{ROLE_UPPER}_EMAIL`, `{ROLE_UPPER}_PASSWORD`, `{ROLE_UPPER}_DOMAIN`.
 
