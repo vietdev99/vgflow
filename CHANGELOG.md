@@ -1,3 +1,78 @@
+# v4.71.2 — B109 visual fidelity gate (toHaveScreenshot baseline)
+
+Closes UAT design-vs-impl bug class — layout drift, padding crush,
+color rendering, font load failures, image broken. Pre-B109 design refs
+declared in TEST-GOALS but codegen ignored them; specs never compared
+rendered UI to baseline.
+
+## Changes
+
+**Generator** (`scripts/generate-lifecycle-specs.py`):
+- New `_extract_design_refs(goal)` — parses `design_ref:` / `design_refs:` /
+  `design:` frontmatter (inline `[a, b]` + block list forms).
+- New `_build_visual_assertion(stage, goal)` — emits per-stage metadata
+  when goal has design refs AND stage is render-bearing (render_initial,
+  read_after_*, interaction_*, empty_state, error_state_4xx,
+  loading_state, visibility_check, interaction_chain).
+- Skips on `visual_fidelity_waiver: true`.
+- `_step()` injects `visual_assertion` field with `snapshot_name`,
+  `max_diff_pixel_ratio: 0.02`, `max_diff_pixels: 100`, `threshold: 0.2`,
+  `fullPage` (true for full-render stages), `animation_strategy: disable`.
+- Summary surfaces `visual_coverage_audit`:
+  - `visual_assertion_total`
+  - `goals_with_design_ref`
+
+**Codegen subagent** (`agents/vg-test-codegen/SKILL.md`):
+- New rule 5d directive — emit Playwright screenshot baseline:
+  ```typescript
+  await expect(page).toHaveScreenshot('<snapshot_name>.png', {
+    maxDiffPixelRatio: 0.02,
+    threshold: 0.2,
+    fullPage: <visual_assertion.fullPage>,
+    animations: 'disabled',
+  });
+  ```
+  On first run Playwright generates baseline under `*-snapshots/`.
+  Commit baselines + run again to verify drift.
+
+**Validator** (`scripts/validators/verify-visual-fidelity-coverage.py`):
+- Reads B109 metadata. Per goal with `visual_assertion`, requires spec:
+  - `toHaveScreenshot(` call AND
+  - `maxDiffPixelRatio` / `maxDiffPixels` / `threshold` option
+  - Optional: `animations: 'disabled'` (advisory finding)
+- Severity warn initially. Flip block once baseline snapshots
+  committed + stable.
+
+**Registry**: `visual-fidelity-coverage` entry. phases=[test, accept].
+
+## Tests
+
+`tests/test_batch109_visual_fidelity_coverage.py` — 18 cases:
+- Design ref extraction: inline list, single string, no field
+- _build_visual_assertion: render_initial gets visual, create skipped,
+  no design_ref skipped, waiver skipped, snapshot name pattern
+- _step injection + summary aggregate
+- Validator: block no screenshot, pass with full options, missing
+  threshold finding, skip goals without metadata, warn exit 0
+- Codegen directive, registry, mirror parity
+
+## All 6 UAT bug-catch batches now shipped
+
+| Tag | Batch | Class | Coverage est |
+|-----|-------|-------|--------------|
+| v4.70.0 | B106 | form 4xx + success + redirect | ~50% |
+| v4.70.1 | B107 | semantic spec coverage | +25-35% |
+| v4.70.2 | B108 | live route shape diff | +10-18% |
+| v4.71.0 | B110 | a11y axe-core | +5-8% |
+| v4.71.1 | B111 | role-swap RBAC | +5-10% |
+| v4.71.2 | B109 | visual fidelity | +5-8% |
+
+Cumulative est. ~95% historical UAT bug coverage automated before
+human UAT step. Remaining ~5% = inherently human-judgement (copy quality,
+UX flow naturalness, brand voice).
+
+---
+
 # v4.71.1 — B111 role-swap multi-actor replay coverage
 
 Closes UAT RBAC + conditional-visibility bug class. Pre-B111 codegen ran

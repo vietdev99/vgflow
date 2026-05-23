@@ -1664,6 +1664,91 @@ _A11Y_STAGES = frozenset({
 })
 
 
+# B109 v4.71.2 — visual fidelity gate. When goal has design_ref binding
+# (Figma export, screenshot path, design-normalized manifest entry),
+# codegen MUST emit `expect(page).toHaveScreenshot()` for render-bearing
+# stages. Catches layout drift, padding crush, color rendering, font load
+# failures, image broken — top class of design-vs-impl bugs that human
+# UAT catches.
+
+def _extract_design_refs(goal: dict[str, Any]) -> list[str]:
+    """Parse goal frontmatter for design ref bindings.
+
+    Supported fields (any of):
+      - `design_ref:` — single string or list
+      - `design_refs:` — list
+      - `design:` — alias
+
+    Values may be Figma frame IDs, screenshot paths, or design-normalized
+    slugs. Validator distinguishes by extension.
+    """
+    out: list[str] = []
+    body = goal.get("body") or ""
+    for field in ("design_ref", "design_refs", "design"):
+        raw = _field(body, field).strip()
+        if not raw:
+            continue
+        if raw.startswith("[") and raw.endswith("]"):
+            for piece in raw[1:-1].split(","):
+                p = piece.strip().strip('"').strip("'")
+                if p:
+                    out.append(p)
+        else:
+            for line in raw.splitlines():
+                line = line.strip().lstrip("-").strip().strip('"').strip("'")
+                if line and not line.startswith("#"):
+                    out.append(line)
+    # Dedup
+    seen: set[str] = set()
+    result: list[str] = []
+    for r in out:
+        if r not in seen:
+            seen.add(r)
+            result.append(r)
+    return result
+
+
+_VISUAL_STAGES = frozenset({
+    "render_initial",
+    "read_after_create",
+    "read_after_update",
+    "read_after_delete",
+    "interaction_filter",
+    "interaction_sort",
+    "interaction_paginate",
+    "empty_state",
+    "error_state_4xx",
+    "loading_state",
+    "visibility_check",
+    "interaction_chain",
+})
+
+
+def _build_visual_assertion(stage: str, goal: dict[str, Any]) -> dict[str, Any] | None:
+    """B109: inject visual fidelity assertion when goal has design ref.
+
+    Returns None when stage isn't render-bearing OR goal has no design
+    refs OR `visual_fidelity_waiver: true` declared.
+    """
+    if stage not in _VISUAL_STAGES:
+        return None
+    if str(goal.get("visual_fidelity_waiver") or "").lower() in ("true", "yes", "1"):
+        return None
+    refs = _extract_design_refs(goal)
+    if not refs:
+        return None
+    return {
+        "kind": "playwright_screenshot",
+        "snapshot_name": f"{goal.get('id', 'unknown')}-{stage}",
+        "design_refs": refs,
+        "max_diff_pixel_ratio": 0.02,
+        "max_diff_pixels": 100,
+        "threshold": 0.2,
+        "fullPage": stage in {"render_initial", "empty_state", "error_state_4xx"},
+        "animation_strategy": "disable",
+    }
+
+
 # B111 v4.71.1 — role-swap multi-actor replay. When a goal declares ≥2
 # actors (via _infer_actors_v2 OR explicit actor_workflow), each mutation
 # stage assigned to actor B must be preceded by a role-swap step:
@@ -1894,6 +1979,12 @@ def _step(
         step["role_swap_assertion"] = role_swap
         goal.setdefault("_b111_role_swap_count", 0)
         goal["_b111_role_swap_count"] += 1
+    # B109 v4.71.2: visual fidelity assertion (when goal has design ref)
+    visual = _build_visual_assertion(stage, goal)
+    if visual:
+        step["visual_assertion"] = visual
+        goal.setdefault("_b109_visual_assertion_count", 0)
+        goal["_b109_visual_assertion_count"] += 1
     return step
 
 
@@ -2144,6 +2235,16 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
                 "multi_actor_goals_with_swap": sum(
                     1 for g in selected
                     if g.get("_b111_role_swap_count", 0) > 0
+                ),
+            },
+            # B109 v4.71.2: visual fidelity coverage audit
+            "visual_coverage_audit": {
+                "visual_assertion_total": sum(
+                    g.get("_b109_visual_assertion_count", 0) for g in selected
+                ),
+                "goals_with_design_ref": sum(
+                    1 for g in selected
+                    if g.get("_b109_visual_assertion_count", 0) > 0
                 ),
             },
         },

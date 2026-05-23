@@ -210,6 +210,27 @@ Validate with `verify-filter-test-coverage.py --phase ${PHASE_NUMBER}`.
    `verify-fe-form-submit-coverage.py` BLOCKS at `/vg:test` STEP 3.5
    when any mutation goal's generated spec lacks these assertions.
 
+5d. **B109 v4.71.2 — visual fidelity (per `visual_assertion` step field):**
+
+   When a step has `visual_assertion`, emit Playwright screenshot
+   baseline assertion. Disable animations + bound diff threshold so
+   diffs are reproducible:
+   ```typescript
+   await expect(page).toHaveScreenshot(
+     '<snapshot_name>.png',
+     {
+       maxDiffPixelRatio: 0.02,
+       threshold: 0.2,
+       fullPage: <visual_assertion.fullPage>,
+       animations: 'disabled',
+     }
+   );
+   ```
+   On first run Playwright generates baseline under `*-snapshots/`.
+   Commit baselines + run again to verify drift. Validator
+   `verify-visual-fidelity-coverage.py` BLOCKS when goal has
+   `visual_assertion` metadata but spec lacks `toHaveScreenshot()`.
+
 5c. **B111 v4.71.1 — role-swap (per `role_swap_assertion` step field):**
 
    When a step has `role_swap_assertion`, the spec MUST swap actor context
