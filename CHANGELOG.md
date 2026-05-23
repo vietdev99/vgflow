@@ -1,3 +1,93 @@
+# v4.70.2 — B108 live route shape diff (Codex postmortem rec #3)
+
+Closes final Codex postmortem 2026-05-23 recommendation. Catches "empty
+dropdown / list" + response-envelope drift bug classes that B95 static
+heuristic cannot detect. Codex est. additional 10-18% UAT bug catch.
+
+## What changed
+
+New `scripts/validators/verify-fe-route-shape-live.py` (stdlib only):
+
+1. **Scan FE sources** for response-deref patterns:
+   - `response.data.foo`, `res.data.bar`, `data.items[0].x`, `.rows[0].y`
+   - Identifies the response identifier + dotted field chain
+   - Strips trailing method calls (`.map`, `.filter`, `.length`, etc.)
+     so the field path stays clean
+
+2. **Identify FE API consumers** — match axios / fetch / apiClient GET
+   call sites + extract URL string literal. URL is paired with the
+   per-file deref set (heuristic — assumes consumers within same file
+   share response shape).
+
+3. **Live probe** (when `--base-url` provided) — issue safe GET against
+   live dev/staging server. Replaces `:id` / `{id}` placeholders with
+   `1`. Parses JSON response, flattens to dotted key paths.
+
+4. **Diff** — for each FE-expected field path, check if present in
+   actual response key set. Missing = drift.
+
+5. **Report** — JSON with per-route audit: file, url, status, expected
+   fields, actual key count, drift list.
+
+## Without --base-url
+
+Scan-only mode. Records consumer surface but skips live probe. CI-safe.
+
+## Registry
+
+```yaml
+- id: fe-route-shape-live
+  severity: warn          # advisory, operator opts in with --base-url
+  phases_active: [test, accept]
+  domain: runtime
+  runtime_target_ms: 30000
+  added_in: v4.70.2
+```
+
+## Tests
+
+`tests/test_batch108_fe_route_shape_live.py` — 13 cases:
+- Helper units: flatten_keys (dict + list root), diff_shape (missing +
+  match), url_pattern_to_concrete (`:id` + `{id}` placeholders)
+- FE scan: axios.get + deref captures consumer, no-consumer no-finding
+- Live probe (uses local HTTPServer fake BE):
+  - FE expects `.data.rows` but BE returns `.data.items` → FAIL
+  - FE expects `.data.rows` and BE matches → PASS
+  - severity=block exits 1 on drift
+- Registry entry + mirror parity
+
+## Operator usage
+
+```bash
+# Scan-only (no live probe):
+python scripts/validators/verify-fe-route-shape-live.py
+
+# With live probe against dev server:
+python scripts/validators/verify-fe-route-shape-live.py \
+  --base-url http://localhost:3000 \
+  --auth-header "Authorization: Bearer dev-token" \
+  --severity warn
+```
+
+## All Codex postmortem recommendations now shipped
+
+| Rec | Batch | Tag | Status |
+|-----|-------|-----|--------|
+| #1 — B106 self-fix + harden | B106.1 | v4.70.0 | shipped |
+| #2 — semantic verify-spec-stage-coverage | B107 | v4.70.1 | shipped |
+| #3 — live route shape diff | B108 | v4.70.2 | shipped |
+
+Pre-UAT FE-BE bug catch coverage (cumulative):
+- B106: form 4xx + success + redirect (~50%)
+- B107: semantic spec coverage (+25-35%)
+- B108: route shape drift (+10-18%)
+
+Combined estimated coverage: ~85% of historically reported UAT bug
+classes catchable before human UAT step. Remaining ~15% = visual /
+accessibility / conditional role-swap (deferred).
+
+---
+
 # v4.70.1 — B107 semantic verify-spec-stage-coverage (Codex postmortem rec #2)
 
 Closes Codex postmortem 2026-05-23 recommendation #2 — pre-B107 the
