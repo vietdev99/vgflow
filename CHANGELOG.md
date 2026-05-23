@@ -619,11 +619,16 @@ probes, in this order:
 
 1. Flat dict keys `taskId` → `task_id` → `id` → `toolUseId`
    (preserves B80 invariant — camelCase still wins).
-2. `tool_response.content[*].text` regex parse:
+2. Nested `tool_response.task.{id,taskId,task_id}` — the actual shape
+   observed on the Claude Code runtime in the PrintwayV3 dogfood
+   (`{"task": {"id": "61", "subject": "…"}}`). Added in B105.1 follow-up
+   after second-pass instrumentation confirmed the id never landed on a
+   flat key.
+3. `tool_response.content[*].text` regex parse:
    `Task #(\d+) created` for the create path,
    `task #(\d+)` for the update path.
-3. Other text-bearing dict keys (`output` / `text` / `result` / `message`).
-4. `tool_response` itself when it is a plain string.
+4. Other text-bearing dict keys (`output` / `text` / `result` / `message`).
+5. `tool_response` itself when it is a plain string.
 
 `TaskUpdate` branch additionally falls back to the same resolver when
 `tool_input.taskId` is empty — some runtimes echo the id in the
@@ -636,10 +641,13 @@ working — regression bound covered by
 
 ## Tests
 
-`tests/test_b105_taskid_text_fallback.py` — 6 cases:
+`tests/test_b105_taskid_text_fallback.py` — 8 cases:
 
 - `test_b105_content_list_text_yields_taskid` — array-of-text response shape.
 - `test_b105_plain_string_response_yields_taskid` — bare string response.
+- `test_b105_1_nested_task_id_probed` — `tool_response.task.id` shape
+  (the actual Claude Code runtime payload).
+- `test_b105_1_nested_taskid_camelcase` — `tool_response.task.taskId`.
 - `test_b105_camelcase_still_wins_over_text` — probe order invariant.
 - `test_b105_taskupdate_text_fallback_pairs_status` — end-to-end
   create→update pairing with both ids in text only.

@@ -79,6 +79,18 @@ def _resolve_tool_response_task_id(tool_response, kind: str) -> str:
             value = tool_response.get(key)
             if value:
                 return str(value)
+        # B105.1 (#198 follow-up): on the Claude Code runtime observed in
+        # PrintwayV3 dogfood 2026-05-22, the TaskCreate tool_response
+        # nests the id under a `task` object — e.g.
+        #   {"task": {"id": "61", "subject": "…"}}
+        # Probe that shape too so the create row carries a stable id
+        # without falling through to the regex fallback.
+        nested_task = tool_response.get("task")
+        if isinstance(nested_task, dict):
+            for key in ("id", "taskId", "task_id"):
+                value = nested_task.get(key)
+                if value:
+                    return str(value)
         content = tool_response.get("content")
         if isinstance(content, list):
             for entry in content:
