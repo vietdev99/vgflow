@@ -1,3 +1,131 @@
+# v4.70.0 — B106 UAT bug root-cause + 2 pre-UAT FE form-submit gates
+
+User report (2026-05-23): sau `/vg:build` + `/vg:test` PASS, UAT step
+tìm rất nhiều lỗi runtime FE-BE — form submit lỗi đỏ, success toast không hiện,
+redirect không xảy ra, dropdown rỗng. Pattern lặp lại nhiều phase.
+
+## Root cause (3 Explore agents + Codex postmortem cross-check)
+
+Pipeline KHÔNG stage nào exercise FE form submit thật vs BE thật trước UAT:
+
+| Stage | UI exercised | Form submit | File |
+|-------|--------------|-------------|------|
+| build/close 10+ validators | NO (static) | NO | commands/vg/_shared/build/close.md |
+| build/close PR-E truthcheck | NO (curl) | BACKEND only | close.md:445-714 |
+| build/close B95 FE-BE shape | NO (static) | NO | verify-fe-be-shape-coherence.py |
+| test/runtime curl+jq | NO | GET only | runtime.md:73-99 |
+| test smoke+flow | YES (~3 paths) | minimal happy | runtime.md |
+| test goal-verifier | replay | `read_after_*`=GET only | generate-lifecycle-specs.py:1283-1287 |
+| **UAT STEP 5** | **FIRST human submit** | **FIRST 4xx catch** | accept/interactive.md |
+
+Top UAT failure classes (~50% catchable):
+1. Form 4xx/422 silently swallowed
+2. Success message/toast missing
+3. Redirect-after-submit broken
+
+## Codex postmortem deliverables
+
+`dev-phases/uat-bug-rootcause/POSTMORTEM.html` (22KB, written by Codex CLI
+read+write mode) — independent root-cause analysis. Codex AGREED with all
+top classes + caught a B106 self-bug: original validator read `payload.get("specs")`
+but generator writes `payload["goals"]` (line 2030) → silent zero-audit on
+real phases. B106.1 patch added in this release.
+
+## Gate 1 — network response assertion (per mutation stage)
+
+`scripts/generate-lifecycle-specs.py:_step()` injects `network_assertion`
+metadata for create/update/delete stages with bound endpoint. Codegen reads
+metadata, emits Playwright:
+
+```typescript
+const respPromise = page.waitForResponse(r =>
+  r.url().includes('<endpoint_path>') && r.request().method() === '<method>');
+await page.getByRole('button', { name: /submit|save|create|approve/i }).click();
+const resp = await respPromise;
+if (resp.status() >= 400) {
+  await expect(page.locator('[role=alert], [data-testid*=error]')).toBeVisible();
+}
+expect(resp.status()).toBeLessThan(400);
+```
+
+## Gate 2 — success-message + navigation assertion
+
+Same `_step()` parses `goal.mutation_evidence` + `success_criteria` for
+keywords (success, redirect, navigate, toast, confirmation, etc.) via
+`_extract_success_signals()`. When matched, injects `success_assertion`
+with optional `expect_navigation_to` URL pattern. Codegen emits:
+
+```typescript
+// when nav URL extracted:
+await page.waitForURL(/<extracted-pattern>/, { timeout: 5000 });
+// else success-feedback path:
+await expect(page.locator('[role=status], [data-testid*=success]')).toBeVisible();
+```
+
+## Validator — verify-fe-form-submit-coverage.py
+
+New `scripts/validators/verify-fe-form-submit-coverage.py`. Scans generated
+Playwright specs against B106 metadata. Each mutation goal MUST have:
+- `page.waitForResponse` OR `page.on('response')` capture
+- Status<400 assert AND/OR error-toast assertion (4xx must render error UI)
+- Success-feedback locator OR `waitForURL` per `success_assertion` shape
+
+**B106.1 hardening (per Codex):** validator now reads BOTH `goals` (canonical
+key) AND `specs` (legacy/test) root keys. When phase has mutation goals
+declared but audit count = 0, flags as harness bug (regen needed) — not
+silent PASS.
+
+Registry: `fe-form-submit-coverage`, severity=warn, phases=[test, accept].
+Wired:
+- `commands/vg/_shared/test/runtime.md` STEP 3.5 (after smoke+flow, before
+  goal verification)
+- `commands/vg/_shared/accept/gates.md` step `3d_fe_form_submit_coverage`
+  (last automated gate before interactive UAT)
+- `agents/vg-test-codegen/SKILL.md` Step C.1 rule 5a directive
+
+## Summary surface
+
+`LIFECYCLE-SPECS.json.summary.form_submit_coverage_audit`:
+- `network_assertion_total` — count across all mutation steps
+- `success_assertion_total` — count with success/redirect keyword match
+- `mutation_goals_with_network_check`
+- `mutation_goals_with_success_check`
+
+## Tests
+
+`tests/test_batch106_fe_form_submit_gates.py` — 29 cases:
+- 12 generator (signal extract, network assertion, success assertion,
+  stage skip, summary aggregate)
+- 7 validator (PASS/FAIL paths, severity warn/block, goals-root tolerance,
+  zero-audit-with-mutation-goals diagnostic)
+- 4 wiring (registry, runtime.md, gates.md, codegen SKILL.md)
+- 6 mirror parity
+
+## Deferred (Codex recommendation #2 + #3)
+
+- Make `verify-spec-stage-coverage.py` SEMANTIC (token presence → meaning):
+  require method+endpoint-bound response predicate, concrete status assert,
+  success/error locator from lifecycle metadata, navigation assertion when
+  redirect declared. Codex est. 25-35% additional UAT bugs catch. → B107
+- Live route shape diff for FE consumers (promote B95 advisory to enforcing
+  by issuing safe GET per FE route, diff envelope vs FE deref fields).
+  Codex est. 10-18% additional UAT bugs catch. → B108
+
+## Recovery / rollout
+
+```bash
+~/.vgflow/sync.sh   # pick up B106
+# Regen phase test-specs to populate new metadata:
+/vg:test-spec <phase> --regen
+# Verify coverage:
+python scripts/validators/verify-fe-form-submit-coverage.py --phase <id>
+```
+
+Severity stays `warn` until dogfood Phase 8.2.x validates 0 false positives.
+Flip to `block` in subsequent release.
+
+---
+
 # v4.69.6 — B105 issue #198 TaskCreate/TaskUpdate taskId text fallback
 
 Dogfood session PrintwayV3 `/vg:build 8.2.2` 2026-05-22 hit a hard wall

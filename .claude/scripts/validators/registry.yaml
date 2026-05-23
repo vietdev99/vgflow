@@ -1219,6 +1219,17 @@ validators:
     added_in: v4.66.0
     description: 'Every apps/*/src/main.tsx that calls createRoot().render() must wrap <App /> with <I18nextProvider> or <I18nProvider> (follows App-import one hop to handle wrapper-in-App.tsx style per Phase 6 merchant-v3 reference). Closes SPA i18n binding drift root cause: a portal SPA can ship without i18n binding and pass every accept gate because no validator catches the missing wrapper. Default severity=warn during initial rollout; flip to block once all portal SPAs wrap I18nextProvider. Override: --severity warn or skip flag.'
 
+  # ──── B106 v4.70.0 — pre-UAT FE form-submit coverage gate (UAT bug root-cause) ────
+
+  - id: fe-form-submit-coverage
+    path: scripts/validators/verify-fe-form-submit-coverage.py
+    severity: warn
+    phases_active: [test, accept]
+    domain: code
+    runtime_target_ms: 1500
+    added_in: v4.70.0
+    description: 'Verify generated Playwright specs cover FE form submission paths (response status, error toast, success message, redirect) for every mutation goal. Closes top 50% UAT bug classes — form 4xx silently swallowed, missing success message, broken redirect — before human UAT step. Reads LIFECYCLE-SPECS.json B106 network_assertion + success_assertion metadata and scans matching Playwright specs for page.waitForResponse + error-toast/success-toast/waitForURL coverage. Severity warn initially (advisory); flip to block once dogfood validates. Override: --severity warn (default) or --severity block when ready.'
+
   # ──── B98 v4.69.1 — API-CONTRACTS filename Windows-safe gate (issue #204) ────
 
   - id: api-contract-filenames

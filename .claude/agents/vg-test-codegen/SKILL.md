@@ -174,6 +174,42 @@ Validate with `verify-filter-test-coverage.py --phase ${PHASE_NUMBER}`.
                           expect(errs.length).toBe(0)
    ```
 
+5a. **B106 v4.70.0 — pre-UAT FE form-submit coverage (per lifecycle step):**
+
+   When a step in LIFECYCLE-SPECS.json carries `network_assertion`, emit:
+   ```typescript
+   const respPromise = page.waitForResponse(r =>
+     r.url().includes('<endpoint_path>') &&
+     r.request().method() === '<endpoint_method>',
+     { timeout: 10000 });
+   await page.getByRole('button', { name: /submit|save|create|approve/i }).click();
+   const resp = await respPromise;
+   if (resp.status() >= 400) {
+     // 4xx/5xx MUST render an error toast — closes "form 4xx silently swallowed"
+     await expect(page.locator('[role=alert], [data-testid*=error], .error-banner, .form-error')).toBeVisible();
+   }
+   expect(resp.status()).toBeLessThan(400);
+   ```
+
+   When a step carries `success_assertion` with `expect_navigation_to` non-null:
+   ```typescript
+   await page.waitForURL(new RegExp('<expect_navigation_to>'), { timeout: 5000 });
+   await expect(page).toHaveURL(new RegExp('<expect_navigation_to>'));
+   ```
+
+   When `success_assertion` is set without navigation (success message path):
+   ```typescript
+   await expect(
+     page.locator('[role=status], [data-testid*=success], .success-banner, .toast-success')
+   ).toBeVisible({ timeout: 5000 });
+   ```
+
+   Pre-B106 codegen only emitted Layer 1 happy-path toast; it missed 4xx
+   error-banner detection + redirect + post-submit success-feedback. Top
+   50% of UAT bugs were in those exact paths. The validator
+   `verify-fe-form-submit-coverage.py` BLOCKS at `/vg:test` STEP 3.5
+   when any mutation goal's generated spec lacks these assertions.
+
 6. **Env var credentials** — never hardcode emails/passwords. Use
    `{ROLE_UPPER}_EMAIL`, `{ROLE_UPPER}_PASSWORD`, `{ROLE_UPPER}_DOMAIN`.
 

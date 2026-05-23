@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VGFlow UAT Runtime Bug Root Cause Postmortem</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5d6d7e;
+      --border: #d7dee8;
+      --panel: #f7f9fc;
+      --accent: #1f6f8b;
+      --risk: #8b2f1f;
+      --ok: #216e39;
+      --warn: #7a5a00;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: #ffffff;
+      line-height: 1.5;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 24px 56px;
+    }
+    h1, h2, h3 {
+      line-height: 1.2;
+      margin: 0 0 12px;
+    }
+    h1 {
+      font-size: 2rem;
+      border-bottom: 3px solid var(--accent);
+      padding-bottom: 12px;
+    }
+    h2 {
+      margin-top: 34px;
+      font-size: 1.35rem;
+    }
+    h3 {
+      margin-top: 22px;
+      font-size: 1.05rem;
+    }
+    p {
+      margin: 0 0 12px;
+    }
+    .meta {
+      color: var(--muted);
+      margin: 10px 0 24px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin: 14px 0;
+    }
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: #fff;
+    }
+    .risk { color: var(--risk); }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 20px;
+      font-size: 0.94rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #eaf1f7;
+      font-weight: 700;
+    }
+    ul, ol {
+      margin: 8px 0 16px 22px;
+      padding: 0;
+    }
+    li {
+      margin: 6px 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.9em;
+      background: #f0f3f7;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .rec {
+      border-left: 4px solid var(--accent);
+      padding-left: 14px;
+      margin-bottom: 22px;
+    }
+    .refs li {
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>VGFlow UAT Runtime Bug Root Cause Postmortem</h1>
+  <p class="meta">Scope: repo, git log, CHANGELOG, tests, commands, validators, and dogfood notes inspected on 2026-05-24. All percentages are estimates unless marked otherwise.</p>
+
+  <h2>1. Executive Summary</h2>
+  <div class="panel">
+    <p>The recurring pattern is a pipeline mismatch: VGFlow proves static structure, backend recipes, sampled UI flows, and review evidence, but it still does not guarantee that every mutation form is submitted through the frontend to the real backend with assertions on HTTP status, user feedback, redirect, option-loading XHR, and follow-up state before human UAT. The frequency ranking below is inferred from the operator report plus B106 and issue #197 dogfood notes, not from a complete UAT defect dataset <span class="warn">[UNVERIFIED frequency]</span> (<code>tests/test_batch106_fe_form_submit_gates.py:3-21</code>, <code>CHANGELOG.md:477-505</code>).</p>
+    <ol>
+      <li><strong>4xx/422 swallowed after submit</strong>: no guaranteed response status assertion or visible error path.</li>
+      <li><strong>Missing success feedback</strong>: toast/status text can be absent while tests pass.</li>
+      <li><strong>Broken post-submit redirect</strong>: navigation is not consistently asserted.</li>
+      <li><strong>Empty dropdowns/options</strong>: failed option XHRs are not first-class assertions.</li>
+      <li><strong>Role-conditional fields and FE-BE shape drift</strong>: multi-actor and response envelope mismatches still reach late runtime checks.</li>
+    </ol>
+  </div>
+
+  <h2>2. Gate Gap Analysis</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Existing gate</th>
+        <th>What it catches</th>
+        <th>What it misses</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/vg:build</code> close postmortem sanity</td>
+        <td>Telemetry, recovered commits, phase goal coverage warning, UI tree drift advisory, final graph refresh (<code>commands/vg/_shared/build/close.md:31-40</code>).</td>
+        <td>No browser submit, no real frontend serialization, no toast, redirect, or dropdown XHR assertion.</td>
+      </tr>
+      <tr>
+        <td>Build PR-E API truthcheck</td>
+        <td>Backend mutation recipes with fixtures, response shape, post-state, idempotency, and auth boundary for fixture-backed goals (<code>commands/vg/_shared/build/close.md:445-465</code>, <code>commands/vg/_shared/build/close.md:551-655</code>).</td>
+        <td>Frontend form payload assembly, disabled/conditional fields, client-side routing, visible success/error UI, and dropdown option loading.</td>
+      </tr>
+      <tr>
+        <td>Build route schema coverage and read probe</td>
+        <td>Schema attachment coverage and OpenAPI discipline; blocks regressions below threshold in non-grandfathered phases (<code>scripts/validators/verify-route-schema-coverage.py:33-42</code>, <code>commands/vg/_shared/build/close.md:356-379</code>).</td>
+        <td>Legacy baseline can tolerate the existing 99% schema gap, and the read probe explicitly treats many 4xx/5xx responses as "responding" rather than behavior failures (<code>scripts/validators/verify-route-schema-coverage.py:10-19</code>, <code>commands/vg/_shared/build/close.md:716-727</code>).</td>
+      </tr>
+      <tr>
+        <td>B95 FE-BE shape coherence</td>
+        <td>Static heuristics for id vs _id, rows vs data envelopes, and route param mismatch (<code>scripts/validators/verify-fe-be-shape-coherence.py:11-23</code>).</td>
+        <td>Warn-only by default and runtime per-FE-route GET check is explicitly deferred (<code>scripts/validators/verify-fe-be-shape-coherence.py:174-185</code>, <code>scripts/validators/registry.yaml:1246-1253</code>).</td>
+      </tr>
+      <tr>
+        <td><code>/vg:test</code> runtime contract verify</td>
+        <td>GET endpoint curl and key comparison; idempotency can test mutations if explicitly enabled (<code>commands/vg/_shared/test/runtime.md:73-99</code>, <code>commands/vg/_shared/test/runtime.md:163-180</code>).</td>
+        <td>POST/PUT/PATCH/DELETE through frontend forms by default. Idempotency is off unless configured, largely for target-pollution safety.</td>
+      </tr>
+      <tr>
+        <td><code>/vg:test</code> smoke and flow</td>
+        <td>Five sampled views, fingerprint checks, 1-2 replayed sequence steps, console errors; optional flow-runner when FLOW-SPEC exists (<code>commands/vg/_shared/test/runtime.md:333-337</code>, <code>commands/vg/_shared/test/runtime.md:447-499</code>).</td>
+        <td>Coverage is sampled. Many forms, dropdowns, role variants, redirect branches, and validation paths can be untouched.</td>
+      </tr>
+      <tr>
+        <td>Review/runtime-map CRUD evidence gates</td>
+        <td>Blocks list-only or modal-opened evidence for mutation goals; requires submit/2xx/persistence in RUNTIME-MAP-style evidence (<code>scripts/validators/verify-matrix-staleness.py:1-19</code>, <code>scripts/validators/verify-runtime-map-crud-depth.py:1-16</code>, <code>commands/vg/_shared/test/preflight.md:252-264</code>).</td>
+        <td>These gates validate review artifacts. They do not prove generated Playwright specs assert status &lt; 400, error UI, success UI, redirect, or dropdown XHR behavior.</td>
+      </tr>
+      <tr>
+        <td>Goal verifier replay</td>
+        <td>Default was flipped to per-goal replay, with baseline console/network counts and per-step checks (<code>commands/vg/_shared/test/goal-verification/overview.md:67-104</code>, <code>agents/vg-test-goal-verifier/SKILL.md:94-124</code>).</td>
+        <td>Network is checked when the recorded step has network expectations; trust-review mode can still pass READY_BEHAVIORAL goals from review evidence (<code>commands/vg/_shared/test/goal-verification/delegation.md:136-149</code>, <code>commands/vg/_shared/test/goal-verification/delegation.md:231-234</code>).</td>
+      </tr>
+      <tr>
+        <td>Codegen validation and mutation layers</td>
+        <td>Codegen output must name spec files and bindings; mutation specs must contain toast, network, and persistence patterns (<code>commands/vg/_shared/test/codegen/overview.md:160-181</code>, <code>scripts/validators/mutation-layers.py:145-164</code>).</td>
+        <td>Pattern presence is weaker than behavior. A <code>waitForResponse</code> token can exist without asserting the right endpoint, status &lt; 400, 4xx error display, or redirect (<code>scripts/validators/verify-spec-stage-coverage.py:41-68</code>).</td>
+      </tr>
+      <tr>
+        <td>B106 draft FE form-submit coverage</td>
+        <td>Intended to scan generated specs for response capture, status assertion, error toast, success feedback, and redirect coverage (<code>commands/vg/_shared/test/runtime.md:652-687</code>, <code>commands/vg/_shared/accept/gates.md:643-684</code>).</td>
+        <td>Current validator reads <code>payload.get("specs")</code>, while the generator emits <code>payload["goals"]</code>; it can audit zero goals and pass. It is also warn-only and called with <code>|| true</code> (<code>scripts/validators/verify-fe-form-submit-coverage.py:86-106</code>, <code>scripts/generate-lifecycle-specs.py:2010-2030</code>, <code>commands/vg/_shared/test/runtime.md:671-679</code>).</td>
+      </tr>
+      <tr>
+        <td>Interactive UAT</td>
+        <td>Human walks decisions/goals and chooses pass/fail/skip; final accept/reject/defer verdict (<code>commands/vg/_shared/accept/uat/interactive.md:32-56</code>, <code>commands/vg/_shared/accept/uat/interactive.md:207-219</code>).</td>
+        <td>This is the first guaranteed operator-driven runtime exercise, so the reported failures surface here.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>3. Highest-Impact Fix Recommendations</h2>
+  <div class="rec">
+    <h3>1. Finish B106 and make the static submit-coverage gate blocking</h3>
+    <p><span class="badge">ROI rank 1</span> Expected UAT bug catch: <strong>35-45%</strong> <span class="warn">[UNVERIFIED estimate]</span>. Effort: <strong>1-2 days</strong>.</p>
+    <p>Modify <code>scripts/validators/verify-fe-form-submit-coverage.py:86-106</code> to read canonical <code>LIFECYCLE-SPECS.json.goals</code>, with a legacy fallback to <code>specs</code>, and fail closed when the lifecycle file exists but neither key is present. Change <code>tests/test_batch106_fe_form_submit_gates.py:246-369</code> so fixtures use <code>goals</code>, then add one regression test that runs the validator against actual <code>generate()</code> output. Promote the runtime and accept calls from warn-only to block-or-explicit-override by changing <code>commands/vg/_shared/test/runtime.md:671-679</code> and <code>commands/vg/_shared/accept/gates.md:665-675</code>.</p>
+    <p>Also fix wiring drift: <code>scripts/vg-orchestrator/__main__.py:3973-4038</code> and <code>scripts/vg-orchestrator/__main__.py:4042-4171</code> do not include this validator, while generic dispatch builds paths from the validator stem (<code>scripts/vg-orchestrator/__main__.py:4441-4458</code>). Either add <code>verify-fe-form-submit-coverage</code> to both command lists or create an ID-to-path dispatcher. Finally, mirror the B106 codegen directive from <code>agents/vg-test-codegen/SKILL.md:177-211</code> into <code>commands/vg/_shared/test/codegen/delegation.md:403-425</code>, which still only contains the generic four-layer text.</p>
+  </div>
+
+  <div class="rec">
+    <h3>2. Add a live frontend submit replay before UAT</h3>
+    <p><span class="badge">ROI rank 2</span> Expected UAT bug catch: <strong>45-55%</strong> <span class="warn">[UNVERIFIED estimate]</span>. Effort: <strong>3-5 days</strong>.</p>
+    <p>Static spec scanning is necessary but not sufficient. Convert the B106 step at <code>commands/vg/_shared/test/runtime.md:652-687</code> into a live Playwright replay for every mutation lifecycle goal, not just a text audit. The runner should load <code>LIFECYCLE-SPECS.json.goals</code>, find create/update/delete steps with <code>network_assertion</code> and <code>success_assertion</code> injected at <code>scripts/generate-lifecycle-specs.py:1775-1795</code>, submit through the UI, assert the matched response status is &lt; 400 or an error alert is visible, assert <code>waitForURL</code> or success status visibility when expected, then perform the existing read-after proof.</p>
+    <p>Update replay instructions in <code>agents/vg-test-goal-verifier/SKILL.md:108-124</code> and <code>commands/vg/_shared/test/goal-verification/delegation.md:136-149</code> so submit/save/create/update/delete actions always wrap a response wait and record failures as hard FAILED evidence. Do not rely on the five-view smoke sample at <code>commands/vg/_shared/test/runtime.md:333-337</code> for mutation goals.</p>
+  </div>
+
+  <div class="rec">
+    <h3>3. Move schema and FE-BE shape checks from advisory to runtime truth</h3>
+    <p><span class="badge">ROI rank 3</span> Expected UAT bug catch: <strong>15-25%</strong> <span class="warn">[UNVERIFIED estimate]</span>. Effort: <strong>2-4 days</strong>.</p>
+    <p>Empty dropdowns and bogus 4xxs often start upstream: OpenAPI is too empty for valid test data and FE code consumes a different response shape than BE returns. Tighten <code>scripts/validators/verify-route-schema-coverage.py:10-19</code> and <code>commands/vg/_shared/build/close.md:360-379</code> so changed routes must provide body/query/response schemas even when legacy baselines are grandfathered. For FE-BE shape, promote the B95 validator from warn to block for changed files and add the deferred runtime 1-GET-per-FE-route check described in <code>scripts/validators/verify-fe-be-shape-coherence.py:18-23</code> and <code>scripts/validators/registry.yaml:1246-1253</code>. The existing PR-E read probe should stop treating every 4xx/5xx as "responding" for option/list endpoints that populate form controls (<code>commands/vg/_shared/build/close.md:716-727</code>).</p>
+  </div>
+
+  <h2>4. Cross-Check With Explore Findings</h2>
+  <h3>Agree - High Confidence</h3>
+  <ul>
+    <li>Explore A is correct in spirit: no existing shipped gate guarantees full FE form submission against the real backend before human UAT. Build close is static/backend-heavy, test contract verification is GET-focused, smoke is sampled, and UAT is the human runtime checklist (<code>commands/vg/_shared/build/close.md:31-40</code>, <code>commands/vg/_shared/test/runtime.md:73-99</code>, <code>commands/vg/_shared/test/runtime.md:333-337</code>, <code>commands/vg/_shared/accept/uat/interactive.md:32-56</code>).</li>
+    <li>Explore C's top classes match the repo's own B106 dogfood test doc and roam lenses: swallowed 4xx, missing success UI, redirect failure, and network/UI truth mismatch are explicitly named (<code>tests/test_batch106_fe_form_submit_gates.py:3-21</code>, <code>commands/vg/_shared/lens-prompts/lens-form-lifecycle.md:36-42</code>, <code>commands/vg/_shared/lens-prompts/lens-business-coherence.md:43-52</code>).</li>
+    <li>Explore B's historical pattern is confirmed. B90-B95 were a sequence of generator correctness and FE-BE drift fixes after PrintwayV3 issue #197; B95 says F-ROAM-01..06 shipped through build/review/test and were caught only later (<code>CHANGELOG.md:477-505</code>, <code>CHANGELOG.md:535-553</code>, <code>CHANGELOG.md:797-851</code>).</li>
+  </ul>
+
+  <h3>Disagree, Nuance, Or New Patterns</h3>
+  <ul>
+    <li><strong>Nuance:</strong> the repo is not completely blind to mutation evidence. Review and test preflight have gates for no-submit or no-2xx evidence (<code>scripts/validators/verify-matrix-staleness.py:1-19</code>, <code>scripts/validators/verify-runtime-map-crud-depth.py:1-16</code>). The recurring gap is narrower: those gates validate recorded evidence, not every generated FE form test's response status, error UI, success UI, redirect, or dropdown XHR.</li>
+    <li><strong>New pattern:</strong> B106 is an attempted fix already in the worktree, but it is not effective yet. The validator reads <code>specs</code>, tests seed <code>specs</code>, and the generator emits <code>goals</code> (<code>scripts/validators/verify-fe-form-submit-coverage.py:86-106</code>, <code>tests/test_batch106_fe_form_submit_gates.py:246-369</code>, <code>scripts/generate-lifecycle-specs.py:2010-2030</code>).</li>
+    <li><strong>New pattern:</strong> registry entries do not guarantee execution. The registry lists B106 phases as test and accept, but the orchestrator uses hardcoded <code>COMMAND_VALIDATORS</code> and path stems (<code>scripts/validators/registry.yaml:1222-1231</code>, <code>scripts/vg-orchestrator/__main__.py:3973-4038</code>, <code>scripts/vg-orchestrator/__main__.py:4042-4171</code>, <code>scripts/vg-orchestrator/__main__.py:4441-4458</code>).</li>
+    <li><strong>New pattern:</strong> codegen instructions are split. The agent skill has explicit B106 instructions, but the shared delegation prompt still has only the older generic mutation four-layer block, so operators should verify which prompt path is authoritative (<code>agents/vg-test-codegen/SKILL.md:177-211</code>, <code>commands/vg/_shared/test/codegen/delegation.md:403-425</code>).</li>
+    <li><strong>Partial disagreement:</strong> "negative_specs advisory only" is not universally true. Current delegation says edge cases must be loaded and emitted as variants, but preflight artifact consistency is advisory unless <code>--strict-artifact-consistency</code> is used (<code>commands/vg/_shared/test/codegen/delegation.md:47-58</code>, <code>commands/vg/_shared/test/preflight.md:298-315</code>).</li>
+    <li><strong>New upstream cause:</strong> route schema coverage remains a source of noisy 4xxs and empty form data because the repo documents a 99% schema gap that leaves OpenAPI mostly empty (<code>scripts/validators/verify-route-schema-coverage.py:10-19</code>, <code>scripts/validators/registry.yaml:1191-1198</code>).</li>
+  </ul>
+
+  <h2>5. References</h2>
+  <ul class="refs">
+    <li>Build static close and PR-E: <code>commands/vg/_shared/build/close.md:31-40</code>, <code>commands/vg/_shared/build/close.md:445-465</code>, <code>commands/vg/_shared/build/close.md:551-655</code>, <code>commands/vg/_shared/build/close.md:716-727</code>.</li>
+    <li>Test runtime and replay: <code>commands/vg/_shared/test/runtime.md:73-99</code>, <code>commands/vg/_shared/test/runtime.md:163-180</code>, <code>commands/vg/_shared/test/runtime.md:333-337</code>, <code>commands/vg/_shared/test/runtime.md:447-499</code>, <code>commands/vg/_shared/test/runtime.md:652-687</code>.</li>
+    <li>Goal verification: <code>commands/vg/_shared/test/goal-verification/overview.md:67-104</code>, <code>commands/vg/_shared/test/goal-verification/delegation.md:136-149</code>, <code>commands/vg/_shared/test/goal-verification/delegation.md:231-234</code>, <code>agents/vg-test-goal-verifier/SKILL.md:94-124</code>.</li>
+    <li>Codegen and validators: <code>commands/vg/_shared/test/codegen/overview.md:160-181</code>, <code>commands/vg/_shared/test/codegen/delegation.md:47-58</code>, <code>commands/vg/_shared/test/codegen/delegation.md:403-425</code>, <code>scripts/validators/mutation-layers.py:145-164</code>, <code>scripts/validators/verify-spec-stage-coverage.py:41-68</code>.</li>
+    <li>B106 draft: <code>scripts/generate-lifecycle-specs.py:1578-1683</code>, <code>scripts/generate-lifecycle-specs.py:1775-1795</code>, <code>scripts/generate-lifecycle-specs.py:2010-2030</code>, <code>scripts/validators/verify-fe-form-submit-coverage.py:86-106</code>, <code>tests/test_batch106_fe_form_submit_gates.py:1-43</code>, <code>tests/test_batch106_fe_form_submit_gates.py:246-369</code>.</li>
+    <li>Registry and dispatch: <code>scripts/validators/registry.yaml:1191-1198</code>, <code>scripts/validators/registry.yaml:1222-1231</code>, <code>scripts/validators/registry.yaml:1246-1253</code>, <code>scripts/vg-orchestrator/__main__.py:3973-4038</code>, <code>scripts/vg-orchestrator/__main__.py:4042-4171</code>, <code>scripts/vg-orchestrator/__main__.py:4441-4458</code>, <code>scripts/validators/register-validator.py:150-154</code>.</li>
+    <li>Historical dogfood and issue #197: <code>CHANGELOG.md:477-505</code>, <code>CHANGELOG.md:535-553</code>, <code>CHANGELOG.md:645-687</code>, <code>CHANGELOG.md:712-764</code>, <code>CHANGELOG.md:797-851</code>, <code>tests/test_batch90_generator_audit.py:1-47</code>.</li>
+    <li>Roam and UAT: <code>commands/vg/roam.md:76-83</code>, <code>commands/vg/_shared/roam/aggregate-analyze.md:77-100</code>, <code>scripts/roam-analyze.py:1-11</code>, <code>scripts/roam-analyze.py:62-80</code>, <code>commands/vg/_shared/accept/uat/narrative.md:19-28</code>, <code>commands/vg/_shared/accept/uat/interactive.md:32-56</code>, <code>commands/vg/_shared/accept/uat/interactive.md:207-219</code>.</li>
+  </ul>
+</main>
+</body>
+</html>

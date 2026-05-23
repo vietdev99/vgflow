@@ -646,3 +646,43 @@ Display:
 
 After ALL active step markers touched (per-profile set), return to entry
 SKILL.md → STEP 4 (goal verification + codegen).
+
+---
+
+## STEP 3.5 — Pre-UAT FE form-submit coverage gate (B106 v4.70.0)
+
+Closes top 50% UAT bug classes (form 4xx silently swallowed, missing
+success-toast, broken redirect) BEFORE human UAT step. Reads B106
+`network_assertion` + `success_assertion` metadata from LIFECYCLE-SPECS.json
+and verifies generated Playwright specs cover those assertions. Severity
+`warn` advisory until dogfood validates → flips to `block`.
+
+```bash
+PHASE_DIR_ENV="${PHASE_DIR:-}"
+[ -n "$PHASE_DIR_ENV" ] || PHASE_DIR_ENV="$(pwd)/.vg/phases/${PHASE_NUMBER}"
+FE_FORM_CHECK=""
+for CAND in \
+    ".claude/scripts/validators/verify-fe-form-submit-coverage.py" \
+    "${VG_SCRIPT_ROOT:-}/validators/verify-fe-form-submit-coverage.py" \
+    "${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-fe-form-submit-coverage.py"; do
+  [ -f "$CAND" ] && FE_FORM_CHECK="$CAND" && break
+done
+if [ -n "$FE_FORM_CHECK" ]; then
+  FE_FORM_RESULT=$("${PYTHON_BIN:-python3}" "$FE_FORM_CHECK" \
+    --phase-dir "$PHASE_DIR_ENV" --severity warn 2>/dev/null || true)
+  echo "$FE_FORM_RESULT" > "${PHASE_DIR_ENV}/fe-form-submit-coverage.json" 2>/dev/null || true
+  STATUS=$(echo "$FE_FORM_RESULT" | "${PYTHON_BIN:-python3}" -c \
+    "import json,sys; print(json.load(sys.stdin).get('status','ERROR'))" 2>/dev/null || echo "ERROR")
+  case "$STATUS" in
+    PASS) echo "✓ FE form-submit coverage: PASS (B106)" ;;
+    FAIL)
+      echo "⚠ FE form-submit coverage: gaps (advisory, B106). See ${PHASE_DIR_ENV}/fe-form-submit-coverage.json"
+      echo "$FE_FORM_RESULT" | "${PYTHON_BIN:-python3}" -c \
+        "import json,sys; d=json.load(sys.stdin); [print(f\"  - {a['goal_id']}: {len(a['findings'])} finding(s)\") for a in d.get('audits',[]) if a.get('findings')]" 2>/dev/null || true
+      ;;
+    *) echo "· FE form-submit coverage: skipped (no LIFECYCLE-SPECS or specs to audit)" ;;
+  esac
+else
+  echo "· FE form-submit coverage: validator not on this install (B106 not yet synced)"
+fi
+```

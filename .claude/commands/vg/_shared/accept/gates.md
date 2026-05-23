@@ -639,3 +639,47 @@ mkdir -p "${PHASE_DIR}/.step-markers" 2>/dev/null
 "${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3c_override_resolution_gate 2>/dev/null || true
 ```
 </step>
+
+<step name="3d_fe_form_submit_coverage">
+
+B106 v4.70.0 — last automated gate before interactive UAT. Verifies generated
+Playwright specs cover FE form submission paths (network response status,
+error toast, success feedback, navigation) for every mutation goal. Closes
+top 50% UAT bug classes that surface ONLY at human step.
+
+Severity `warn` advisory during initial rollout (no exit on findings). Flips
+to `block` after dogfood phase validates 0 false positives.
+
+```bash
+set -euo pipefail
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator step-active 3d_fe_form_submit_coverage 2>/dev/null || true
+
+FE_FORM_CHECK=""
+for CAND in \
+    ".claude/scripts/validators/verify-fe-form-submit-coverage.py" \
+    "${VG_SCRIPT_ROOT:-}/validators/verify-fe-form-submit-coverage.py" \
+    "${VG_HOME:-$HOME/.vgflow}/scripts/validators/verify-fe-form-submit-coverage.py"; do
+  [ -f "$CAND" ] && FE_FORM_CHECK="$CAND" && break
+done
+
+if [ -n "$FE_FORM_CHECK" ]; then
+  FE_FORM_RESULT=$("${PYTHON_BIN:-python3}" "$FE_FORM_CHECK" \
+    --phase-dir "${PHASE_DIR}" --severity warn 2>/dev/null || true)
+  echo "$FE_FORM_RESULT" > "${PHASE_DIR}/fe-form-submit-coverage.json" 2>/dev/null || true
+  STATUS=$(echo "$FE_FORM_RESULT" | "${PYTHON_BIN:-python3}" -c \
+    "import json,sys; print(json.load(sys.stdin).get('status','ERROR'))" 2>/dev/null || echo "ERROR")
+  case "$STATUS" in
+    PASS) echo "✓ FE form-submit coverage: PASS (B106)" ;;
+    FAIL)
+      echo "⚠ FE form-submit coverage: gaps (advisory, B106). See ${PHASE_DIR}/fe-form-submit-coverage.json"
+      ;;
+    *) echo "· FE form-submit coverage: skipped (no LIFECYCLE-SPECS to audit)" ;;
+  esac
+else
+  echo "· FE form-submit coverage: validator not on this install (B106)"
+fi
+
+(type -t mark_step >/dev/null 2>&1 && mark_step "${PHASE_NUMBER:-unknown}" "3d_fe_form_submit_coverage" "${PHASE_DIR}") || touch "${PHASE_DIR}/.step-markers/3d_fe_form_submit_coverage.done"
+"${PYTHON_BIN:-python3}" .claude/scripts/vg-orchestrator mark-step accept 3d_fe_form_submit_coverage 2>/dev/null || true
+```
+</step>

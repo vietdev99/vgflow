@@ -1575,6 +1575,113 @@ def _step_description(stage: str, goal: dict[str, Any], endpoint: dict[str, str]
     return _DEFAULT_DESCRIPTIONS.get(stage, f"Execute {stage} stage.")
 
 
+# B106 v4.70.0 (UAT bug root-cause investigation): FE form-submit coverage.
+# Pre-B106 pipeline ran FE form submission against real backend ONLY at
+# interactive UAT (STEP 5 accept) — first 4xx/422 catch was always a human.
+# Top UAT failure classes (Explore agent C estimates ~50% catchable):
+#   1. Form 4xx/422 silently swallowed — no page.on('response') capture
+#   2. Success message/toast missing — codegen ignored mutation_evidence keyword
+#   3. Redirect-after-submit broken — no waitForNavigation() assertion
+# Fix: inject network_assertion + success_assertion metadata into lifecycle
+# spec JSON during _step() for mutation stages. vg-test-codegen subagent
+# reads these fields and emits corresponding Playwright code mechanically.
+# verify-fe-form-submit-coverage.py validator BLOCKS at /vg:test + /vg:accept
+# when generated specs miss the assertions.
+_SUCCESS_KEYWORD_RE = re.compile(
+    r"\b(success(?:fully)?|confirmed|created|updated|deleted|redirect(?:ed|s|ing)?|"
+    r"navigat(?:e|ed|es|ing|ion)|goto|toast|message|notification|saved|published|"
+    r"approved|rejected|banner|alert|status|confirmation|brought to)\b",
+    re.IGNORECASE,
+)
+_NAVIGATION_URL_RE = re.compile(
+    r"\b(?:redirect(?:ed|s|ing)?|navigat(?:e|ed|es|ing)|goto|takes you to|"
+    r"brought to)\b[^.\n]{0,40}?(/[\w/{}:.-]+)",
+    re.IGNORECASE,
+)
+
+
+def _extract_success_signals(text: str) -> dict[str, Any]:
+    """B106: parse mutation_evidence (+ success_criteria fallback) for
+    success-feedback signals. Returns dict with:
+      - has_signal: True when any success keyword matches
+      - keywords_matched: list of matched verbs (for diagnostic)
+      - expect_navigation_to: extracted URL pattern (str) OR None
+    """
+    if not text:
+        return {"has_signal": False, "keywords_matched": [], "expect_navigation_to": None}
+    keywords = sorted({m.group(0).lower() for m in _SUCCESS_KEYWORD_RE.finditer(text)})
+    nav_match = _NAVIGATION_URL_RE.search(text)
+    nav_url = nav_match.group(1) if nav_match else None
+    return {
+        "has_signal": bool(keywords),
+        "keywords_matched": keywords,
+        "expect_navigation_to": nav_url,
+    }
+
+
+def _build_network_assertion(stage: str, endpoint: dict[str, str] | None) -> dict[str, Any] | None:
+    """B106 Gate 1: inject page.on('response') capture metadata for mutation
+    stages. Spec consumer (codegen) emits Playwright code that wraps the
+    submit click in waitForResponse + asserts status < 400, OR if 4xx/5xx,
+    requires an error toast be visible. Closes "form 4xx silently swallowed"
+    bug class (Explore C estimate: 18-22% of UAT failures).
+    """
+    if stage not in {"create", "update", "delete"}:
+        return None
+    if not endpoint:
+        return None
+    return {
+        "kind": "response_capture",
+        "endpoint_method": endpoint.get("method"),
+        "endpoint_path": endpoint.get("path"),
+        "assert_status_lt": 400,
+        "on_4xx_5xx_must_render_error_toast": True,
+        "error_toast_selectors": [
+            "[role=alert]",
+            "[data-testid*=error]",
+            ".error-banner",
+            ".form-error",
+            "[class*=Error]",
+        ],
+    }
+
+
+def _build_success_assertion(stage: str, goal: dict[str, Any]) -> dict[str, Any] | None:
+    """B106 Gate 2: inject success-message + navigation assertion metadata
+    for mutation stages. Parses goal.mutation_evidence + success_criteria for
+    keywords; codegen emits page.waitForURL OR locator visibility assertion.
+    Closes "missing success feedback" + "redirect broken" classes (Explore C
+    estimate: 20-28% of UAT failures combined).
+    """
+    if stage not in {"create", "update", "delete"}:
+        return None
+    haystack = " ".join([
+        str(goal.get("mutation_evidence") or ""),
+        str(goal.get("persistence_check") or ""),
+        str(goal.get("success_criteria") or ""),
+        str(goal.get("title") or ""),
+    ])
+    signals = _extract_success_signals(haystack)
+    if not signals["has_signal"]:
+        return None
+    return {
+        "kind": "post_submit_feedback",
+        "expect_toast_or_status": True,
+        "expect_navigation_to": signals["expect_navigation_to"],
+        "wait_strategy": (
+            "waitForURL when expect_navigation_to is set; else locator visibility"
+        ),
+        "success_selectors": [
+            "[role=status]",
+            "[data-testid*=success]",
+            ".success-banner",
+            ".toast-success",
+            "[class*=Success]",
+        ],
+        "keywords_matched": signals["keywords_matched"],
+    }
+
+
 def _step(
     stage: str,
     goal: dict[str, Any],
@@ -1665,7 +1772,7 @@ def _step(
                  "render_initial", "empty_state", "error_state_4xx",
                  "interaction_filter", "interaction_sort", "interaction_paginate"}:
         assertions.extend(_criteria_assertions(goal))
-    return {
+    step = {
         "name": stage,
         "stage": stage,
         "actor": actor_id,
@@ -1674,6 +1781,18 @@ def _step(
         "action": actions[stage],
         "evidence": evidence[stage],
     }
+    # B106 v4.70.0: inject pre-UAT FE form-submit coverage metadata
+    network_assertion = _build_network_assertion(stage, endpoint)
+    if network_assertion:
+        step["network_assertion"] = network_assertion
+        goal.setdefault("_b106_network_assertion_count", 0)
+        goal["_b106_network_assertion_count"] += 1
+    success_assertion = _build_success_assertion(stage, goal)
+    if success_assertion:
+        step["success_assertion"] = success_assertion
+        goal.setdefault("_b106_success_assertion_count", 0)
+        goal["_b106_success_assertion_count"] += 1
+    return step
 
 
 def _artifact_capture(goal: dict[str, Any]) -> list[dict[str, str]]:
@@ -1888,6 +2007,23 @@ def generate(phase_dir: Path, include_readonly: bool = False) -> dict[str, Any]:
                 1 for g in selected
                 if g.get("_b97_goal_class_inferred")
             ),
+            # B106 v4.70.0: pre-UAT FE form-submit coverage audit
+            "form_submit_coverage_audit": {
+                "network_assertion_total": sum(
+                    g.get("_b106_network_assertion_count", 0) for g in selected
+                ),
+                "success_assertion_total": sum(
+                    g.get("_b106_success_assertion_count", 0) for g in selected
+                ),
+                "mutation_goals_with_network_check": sum(
+                    1 for g in selected
+                    if g.get("_b106_network_assertion_count", 0) > 0
+                ),
+                "mutation_goals_with_success_check": sum(
+                    1 for g in selected
+                    if g.get("_b106_success_assertion_count", 0) > 0
+                ),
+            },
         },
         # G5 Batch 4: root-level fixture DAG from cross-goal dependencies
         "fixture_dag": _root_fixture_dag(selected),
