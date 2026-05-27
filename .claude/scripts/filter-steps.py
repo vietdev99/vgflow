@@ -143,41 +143,19 @@ def parse_steps(text: str):
         yield name, profile_set, mode_set
 
 
-def parse_steps_from_frontmatter(text: str):
-    """Fallback parser for slim entry SKILL.md format (no <step> XML tags).
-
-    Reads runtime_contract.must_touch_markers from YAML frontmatter. Each entry is:
-      - bare string "name"                                → universal step
-      - {name: "x", profile: "web-*,..."}                 → profile-gated step
-      - {name: "x", required_unless_flag: "--skip-foo"}   → optional step (returned regardless;
-                                                              caller deals with skip)
-
-    Returns list of (name, profile_set | None, mode_set | None) — same shape as parse_steps.
-    """
+def _extract_frontmatter_text(text: str):
+    """Return the YAML frontmatter body (between the leading --- fences), or None."""
     if not text.startswith("---\n"):
-        return []
+        return None
     try:
         end = text.index("\n---\n", 4)
     except ValueError:
-        return []
-    fm_text = text[4:end]
-    try:
-        import yaml  # PyYAML
-    except ImportError:
-        return []
-    try:
-        fm = yaml.safe_load(fm_text)
-    except yaml.YAMLError:
-        return []
-    if not isinstance(fm, dict):
-        return []
-    contract = fm.get("runtime_contract", {})
-    if not isinstance(contract, dict):
-        return []
-    markers = contract.get("must_touch_markers", [])
-    if not isinstance(markers, list):
-        return []
+        return None
+    return text[4:end]
 
+
+def _markers_to_steps(markers):
+    """Convert a parsed must_touch_markers list into (name, profile_set, mode_set) tuples."""
     out = []
     for entry in markers:
         if isinstance(entry, str):
@@ -194,6 +172,121 @@ def parse_steps_from_frontmatter(text: str):
                 profile_set = None
             out.append((name, profile_set, None))
     return out
+
+
+def _parse_markers_without_yaml(fm_text: str):
+    """Line-based fallback for must_touch_markers when PyYAML is unavailable.
+
+    PyYAML is an optional dependency; on hosts without it, the previous code
+    silently returned [] (ImportError swallowed), so reference-based command
+    files (no <step> XML tags) parsed to 0 steps → emit-tasklist hard-fails →
+    the whole scope/blueprint/test/accept pipeline blocks. This fallback parses
+    the limited YAML subset VG frontmatter actually uses:
+
+        must_touch_markers:           # at any indent (nested or top-level)
+          - "bare_name"
+          - name: "step_x"
+            profile: "web-*,cli-tool"
+            severity: "warn"
+
+    Returns a list of dicts compatible with _markers_to_steps().
+    """
+    lines = fm_text.split("\n")
+    key_indent = None
+    start = None
+    for i, ln in enumerate(lines):
+        m = re.match(r"^(\s*)must_touch_markers:\s*$", ln)
+        if m:
+            key_indent = len(m.group(1))
+            start = i + 1
+            break
+    if start is None:
+        return []
+
+    markers = []
+    i, n = start, len(lines)
+    while i < n:
+        ln = lines[i]
+        if ln.strip() == "" or ln.lstrip().startswith("#"):
+            i += 1
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        if indent <= key_indent:
+            break  # dedented out of the must_touch_markers block
+        stripped = ln.strip()
+        if not stripped.startswith("- "):
+            i += 1
+            continue
+        item = stripped[2:].strip()
+        bare = re.match(r"""^["']?([A-Za-z0-9_./*-]+)["']?\s*$""", item)
+        kv = re.match(r"""^name:\s*["']?([^"'\s]+)["']?\s*$""", item)
+        if kv:
+            entry = {"name": kv.group(1)}
+            item_indent = indent
+            j = i + 1
+            while j < n:
+                sub = lines[j]
+                if sub.strip() == "" or sub.lstrip().startswith("#"):
+                    j += 1
+                    continue
+                sub_indent = len(sub) - len(sub.lstrip())
+                if sub_indent <= item_indent:
+                    break
+                pm = re.match(r"""^\s*profile:\s*["']?([^"']+?)["']?\s*$""", sub)
+                if pm:
+                    entry["profile"] = pm.group(1).strip()
+                j += 1
+            markers.append(entry)
+            i = j
+            continue
+        if bare:
+            markers.append(bare.group(1))
+        i += 1
+    return markers
+
+
+def parse_steps_from_frontmatter(text: str):
+    """Fallback parser for slim entry SKILL.md format (no <step> XML tags).
+
+    Reads runtime_contract.must_touch_markers (or a top-level must_touch_markers)
+    from YAML frontmatter. Each entry is:
+      - bare string "name"                                → universal step
+      - {name: "x", profile: "web-*,..."}                 → profile-gated step
+      - {name: "x", required_unless_flag: "--skip-foo"}   → optional step (returned regardless;
+                                                              caller deals with skip)
+
+    Returns list of (name, profile_set | None, mode_set | None) — same shape as parse_steps.
+
+    PyYAML is optional: when it is missing or the body fails to parse, a
+    line-based fallback (_parse_markers_without_yaml) is used so command files
+    that rely solely on frontmatter markers still project a tasklist.
+    """
+    fm_text = _extract_frontmatter_text(text)
+    if fm_text is None:
+        return []
+
+    try:
+        import yaml  # PyYAML (optional)
+    except ImportError:
+        return _markers_to_steps(_parse_markers_without_yaml(fm_text))
+
+    try:
+        fm = yaml.safe_load(fm_text)
+    except yaml.YAMLError:
+        return _markers_to_steps(_parse_markers_without_yaml(fm_text))
+
+    if not isinstance(fm, dict):
+        return []
+    contract = fm.get("runtime_contract", {})
+    markers = None
+    if isinstance(contract, dict):
+        markers = contract.get("must_touch_markers")
+    if markers is None:
+        # Tolerate a top-level must_touch_markers (not nested under runtime_contract).
+        markers = fm.get("must_touch_markers")
+    if not isinstance(markers, list):
+        return []
+    return _markers_to_steps(markers)
 
 
 def filter_for_profile(steps, profile: str, mode=None):
