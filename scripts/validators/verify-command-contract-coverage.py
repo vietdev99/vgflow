@@ -57,7 +57,7 @@ EXPECTED_OBSERVATION_ONLY = frozenset({
 # skill file found that isn't in EXPECTED_OBSERVATION_ONLY.
 KNOWN_MUTATING = frozenset({
     # Already had contract (v2.5.1):
-    "specs", "scope", "blueprint", "build", "review", "test", "accept",
+    "specs", "scope", "blueprint", "build", "review", "test-spec", "test", "accept",
     # Phase J backfill targets:
     "project", "roadmap", "amend", "learn", "phase", "next", "recover",
     "sync", "update", "reapply-patches", "bootstrap", "override-resolve",

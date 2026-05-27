@@ -1,3 +1,49 @@
+# v4.72.2 — B113 pipeline drift fix + PR #207 PyYAML fallback
+
+## B113 — review→test pipeline drift (test-spec step missing)
+
+User report (2026-05-28): `/vg:next` + progress UI suggested `/vg:test`
+immediately after `/vg:review`, skipping `/vg:test-spec`. Orchestrator
+`_PIPELINE_FLIP_MAP` (scripts/vg-orchestrator/__main__.py:1424-1425)
+correctly chained `review → test-spec → test` (B69 fix), but downstream
+artifact-step-detectors and pipeline narrative strings carried stale
+7-element arrays omitting `test-spec`.
+
+Surfaces fixed:
+- `scripts/vg-progress.py` — 4 step_order arrays + next_cmd_map +
+  artifact detection (LIFECYCLE-SPECS.json + CODEGEN-MANIFEST.json
+  proves test-spec ran)
+- `commands/vg/phase.md` — Valid step names list
+- `agents/vg-planner.md` — V5 pipeline narrative
+- `scripts/hooks/vg-meta-skill.md` — Pipeline commands list
+- `scripts/validators/verify-command-contract-coverage.py` —
+  KNOWN_MUTATING frozenset
+
+Mirrors patched in `.claude/`.
+
+Tests: `tests/test_batch113_pipeline_test_spec_step.py` — 15 cases
+covering step_order arrays, next_cmd_map, artifact detection (done/
+in_progress/pending), review-done-then-test-spec-pending → next=/vg:test-spec,
++ 5 surface checks + 5 mirror parity.
+
+## PR #207 — filter-steps PyYAML fallback (merged)
+
+`filter-steps.py` silently swallowed PyYAML ImportError → 0 markers
+parsed from reference-based skills (scope/blueprint/test/accept) on
+hosts without PyYAML → emit-tasklist hard-failed → entire pipeline
+blocked. Fix: line-based fallback for the limited YAML subset VG
+frontmatter uses. PyYAML still preferred when present.
+
+Author: @ljfe2021. Verified locally:
+- with PyYAML: blueprint.md → 31 steps (unchanged)
+- without PyYAML (mocked ImportError): blueprint.md → 31 steps (was 0)
+- profile gating retained
+
+Tests: PR didn't ship tests but author included before/after table.
+Smoke verified locally.
+
+---
+
 # v4.72.1 — B105.1 nested tool_response.task.id probe (PR #206)
 
 Follow-up to B105 (#205). PrintwayV3 dogfood instrumentation showed

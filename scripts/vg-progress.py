@@ -199,6 +199,11 @@ def scan_phase(phase_dir: Path) -> dict[str, Any]:
         "goal_matrix": (phase_dir / "GOAL-COVERAGE-MATRIX.md").exists(),
         "sandbox": any_match(phase_dir, ["SANDBOX-TEST.md", "*SANDBOX-TEST.md"]),
         "uat": any_match(phase_dir, ["UAT.md", "*UAT.md", "*HUMAN-UAT*.md"]),
+        # B113 v4.72.2: test-spec is its own pipeline step (orchestrator
+        # step_key=test-spec). Lifecycle specs JSON + codegen manifest are
+        # the artifacts proving /vg:test-spec ran.
+        "lifecycle_specs": (phase_dir / "LIFECYCLE-SPECS.json").exists(),
+        "codegen_manifest": (phase_dir / "CODEGEN-MANIFEST.json").exists(),
         "pipeline_state": (phase_dir / "PIPELINE-STATE.json").exists(),
     }
 
@@ -231,7 +236,7 @@ def scan_phase(phase_dir: Path) -> dict[str, Any]:
     _apply_monotonic(steps)
 
     # --- Determine current step + next command ---
-    step_order = ["specs", "scope", "blueprint", "build", "review", "test", "accept"]
+    step_order = ["specs", "scope", "blueprint", "build", "review", "test-spec", "test", "accept"]
     done_count = sum(1 for s in step_order if steps[s]["status"] == "done")
     current = next((s for s in step_order if steps[s]["status"] not in ("done", "skipped")), None)
 
@@ -248,12 +253,17 @@ def scan_phase(phase_dir: Path) -> dict[str, Any]:
         label = "IN_PROGRESS"
 
     # Next command from current step
+    # B113 v4.72.2: test-spec slot between review and test (matches
+    # orchestrator _PIPELINE_FLIP_MAP). Prior arrays skipped test-spec →
+    # /vg:next suggested vg:test immediately after vg:review, losing the
+    # codegen step.
     next_cmd_map = {
         "specs": f"/vg:specs {phase_num}",
         "scope": f"/vg:scope {phase_num}",
         "blueprint": f"/vg:blueprint {phase_num}",
         "build": f"/vg:build {phase_num}",
         "review": f"/vg:review {phase_num}",
+        "test-spec": f"/vg:test-spec {phase_num}",
         "test": f"/vg:test {phase_num}",
         "accept": f"/vg:accept {phase_num}",
     }
@@ -278,7 +288,7 @@ def scan_phase(phase_dir: Path) -> dict[str, Any]:
 def _apply_monotonic(steps: dict[str, dict]) -> None:
     """If step N is done, promote all steps < N to done (invariant: phase
     couldn't reach step N otherwise). Source is upgraded to 'inferred'."""
-    order = ["specs", "scope", "blueprint", "build", "review", "test", "accept"]
+    order = ["specs", "scope", "blueprint", "build", "review", "test-spec", "test", "accept"]
     last_done = -1
     for i, s in enumerate(order):
         if steps[s]["status"] == "done":
@@ -309,7 +319,7 @@ def compute_steps(
     compute artifact-based status for every step first, then let any state
     entry override on a per-step basis. Missing entries fall back to artifact.
     """
-    step_order = ["specs", "scope", "blueprint", "build", "review", "test", "accept"]
+    step_order = ["specs", "scope", "blueprint", "build", "review", "test-spec", "test", "accept"]
 
     artifact_result = _compute_artifact_steps(artifacts, content)
 
@@ -385,7 +395,17 @@ def _compute_artifact_steps(
     else:
         result["review"] = mk("pending", "⬜")
 
-    # Step 5: test — sandbox verdict
+    # Step 5: test-spec — LIFECYCLE-SPECS.json + CODEGEN-MANIFEST.json
+    # B113 v4.72.2: surface test-spec as its own step (was hidden — caused
+    # /vg:next + progress to skip from review directly to test).
+    if artifacts.get("lifecycle_specs") and artifacts.get("codegen_manifest"):
+        result["test-spec"] = mk("done", "✅")
+    elif artifacts.get("lifecycle_specs") or artifacts.get("codegen_manifest"):
+        result["test-spec"] = mk("in_progress", "🔄", "partial — regen pending")
+    else:
+        result["test-spec"] = mk("pending", "⬜")
+
+    # Step 6: test — sandbox verdict
     sb = content["sandbox"]
     if sb == "PASSED":
         result["test"] = mk("done", "✅")
@@ -472,7 +492,7 @@ def main() -> int:
         for p in phases:
             pipeline = " → ".join(
                 f"{p['steps'][s]['icon']} {s}"
-                for s in ["specs", "scope", "blueprint", "build", "review", "test", "accept"]
+                for s in ["specs", "scope", "blueprint", "build", "review", "test-spec", "test", "accept"]
             )
             print(f"Phase {p['phase']}: {p['name']}   [{p['done_count']}/7]  {p['label']}")
             print(f"  Pipeline: {pipeline}")

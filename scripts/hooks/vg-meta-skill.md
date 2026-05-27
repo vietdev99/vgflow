@@ -65,7 +65,7 @@ will refuse run-complete if any vg.block.fired is unpaired with vg.block.handled
 
 ## Pipeline commands governed by VGFlow
 
-project, roadmap, specs, scope, blueprint, build, review, test, accept
+project, roadmap, specs, scope, blueprint, build, review, test-spec, test, accept
 
 When the user invokes `/vg:<cmd>`, follow the slim entry SKILL.md exactly.
 Read references when instructed. Spawn subagents (using tool name `Agent`,
