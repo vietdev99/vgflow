@@ -189,7 +189,7 @@ Parse `$ARGUMENTS`:
 - Optional `--from={step}` → `START_STEP` (default: auto-detect)
 - Optional `--auto` → auto-advance mode
 
-Valid step names: `specs`, `scope`, `blueprint`, `build`, `review`, `test`, `accept`
+Valid step names: `specs`, `scope`, `blueprint`, `build`, `review`, `test-spec`, `test`, `accept`
 
 Resolve `PHASE_DIR` from `PHASE_ARG`:
 ```bash
