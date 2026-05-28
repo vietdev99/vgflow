@@ -137,8 +137,25 @@ def main() -> int:
                     else:
                         items_no_id.append(entry)
                 elif act == "update":
-                    if tid in items_by_id and rec.get("status"):
-                        items_by_id[tid]["status"] = rec["status"]
+                    if tid in items_by_id:
+                        if rec.get("status"):
+                            items_by_id[tid]["status"] = rec["status"]
+                        # B113b fix: apply subject rename + re-resolve
+                        # step_id/match_class against contract so the new
+                        # title (e.g. corrected to match checklist) lands
+                        # in the snapshot, not the stale create-time label.
+                        if rec.get("subject"):
+                            new_subject = rec["subject"]
+                            new_id, new_class = _resolve_label(
+                                new_subject, tid
+                            )
+                            items_by_id[tid]["content"] = new_subject
+                            items_by_id[tid]["id"] = new_id
+                            items_by_id[tid]["match_class"] = new_class
+                elif act == "delete":
+                    # B113b fix: drop deleted task so coverage check
+                    # doesn't carry dangling unresolved IDs forever.
+                    items_by_id.pop(tid, None)
             todos = list(items_by_id.values()) + items_no_id
 
     if not todos:
