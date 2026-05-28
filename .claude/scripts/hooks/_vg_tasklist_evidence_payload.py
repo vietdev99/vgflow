@@ -178,14 +178,31 @@ def main() -> int:
             )
             upd_id = _resolve_tool_response_task_id(tr_upd, "update")
         upd_status = str(tool_input.get("status") or "")
-        if upd_id and upd_status and trace_path.exists():
+        upd_subject = (tool_input.get("subject") or "").strip()
+        # B113b fix: previously TaskUpdate only persisted `status` to trace,
+        # losing subject renames + delete events. Symptom: tasklist coverage
+        # check stays unresolved forever when AI renames a group title or
+        # deletes a task (e.g., delete+recreate to match contract titles).
+        # Now: status="deleted" → action="delete" (reader removes row);
+        # subject present → action="update" with subject (reader overwrites).
+        if upd_id and trace_path.exists():
             trace_path.parent.mkdir(parents=True, exist_ok=True)
             with trace_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "action": "update",
-                    "task_id": upd_id,
-                    "status": upd_status,
-                }) + "\n")
+                if upd_status == "deleted":
+                    f.write(json.dumps({
+                        "action": "delete",
+                        "task_id": upd_id,
+                    }) + "\n")
+                elif upd_status or upd_subject:
+                    record: dict = {
+                        "action": "update",
+                        "task_id": upd_id,
+                    }
+                    if upd_status:
+                        record["status"] = upd_status
+                    if upd_subject:
+                        record["subject"] = upd_subject
+                    f.write(json.dumps(record) + "\n")
     # else: unknown tool — leave trace untouched
 
     # Reconstruct todos[] from trace when this is a TaskCreate/TaskUpdate
@@ -214,8 +231,17 @@ def main() -> int:
                     else:
                         items_no_id.append(entry)
                 elif act == "update":
-                    if tid in items_by_id and rec.get("status"):
-                        items_by_id[tid]["status"] = rec["status"]
+                    if tid in items_by_id:
+                        if rec.get("status"):
+                            items_by_id[tid]["status"] = rec["status"]
+                        # B113b fix: apply subject rename so coverage check
+                        # sees the latest title matching contract checklist.
+                        if rec.get("subject"):
+                            items_by_id[tid]["content"] = rec["subject"]
+                elif act == "delete":
+                    # B113b fix: drop deleted task so snapshot doesn't carry
+                    # dangling unresolved entries forever.
+                    items_by_id.pop(tid, None)
         todos = list(items_by_id.values()) + items_no_id
 
     checklists = contract.get("checklists", [])

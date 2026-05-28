@@ -1,3 +1,50 @@
+# v4.72.3 — PR #208 mirror sync (tasklist trace subject+delete)
+
+PR #208 merged @ljfe2021's fix for `.taskcreate-trace.jsonl` missing 2
+action paths:
+- Subject renames (TaskUpdate with `tool_input.subject`)
+- Deletes (TaskUpdate with `status=deleted`)
+
+## User-reported symptom (Phase 7.17.1)
+
+Rename task group header to match contract checklist title OR
+delete+recreate task → `tasklist-projected` snapshot still has OLD
+title (rename ignored) OR stale row (delete ignored). Coverage check
+reports `unresolved` forever. 5 consecutive `PreToolUse-tasklist:
+tasklist coverage incomplete — missing=...` blocks per session, no
+recovery path via vg-orchestrator alone. User forced to bypass.
+
+## Fix (PR #208)
+
+**`scripts/hooks/_vg_tasklist_evidence_payload.py`** (writer):
+- TaskUpdate branch: `status="deleted"` → emit `{action: delete,
+  task_id}`. Otherwise include `subject` in update record when
+  `tool_input.subject` non-empty.
+- Reader: apply `subject` overwrite on update; new `delete` branch
+  removes row from `items_by_id`.
+
+**`scripts/hooks/_vg_tasklist_snapshot_input.py`** (snapshot consumer):
+- Mirror reader logic. On rename, re-resolve `id` + `match_class`
+  against contract → new label maps to its proper checklist step_id
+  (was staying `unresolved` with stale normalized id).
+
+Additive schema — legacy update records without subject still treated
+as status-only, existing traces remain readable.
+
+## This release
+
+PR #208 patched only `scripts/`. v4.72.3 syncs `.claude/` mirror.
+2 mirror-parity tests now pass (B80 + B105).
+
+## Verified
+
+`tests/test_b105_taskid_text_fallback.py` 8/8 ✅
+`tests/test_batch80_taskid_and_threshold.py` 8/8 ✅
+`tests/test_batch77_*` + `tests/test_batch84_*` + `tests/test_batch96_*` ✅
+Total 42 passed + 2 skipped.
+
+---
+
 # v4.72.2 — B113 pipeline drift fix + PR #207 PyYAML fallback
 
 ## B113 — review→test pipeline drift (test-spec step missing)
