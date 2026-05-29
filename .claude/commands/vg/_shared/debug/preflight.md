@@ -8,7 +8,7 @@
 
 Parse `$ARGUMENTS`:
 - First quoted string: bug description (required UNLESS `--resume` or empty-args resume picker triggers)
-- Optional flags: `--phase=<N>`, `--no-amend-trigger`, `--from-error-log=<path>`, `--from-uat-feedback="<text>"`, `--resume=<debug-id>`, `--isolate`
+- Optional flags: `--phase=<N>`, `--no-amend-trigger`, `--from-error-log=<path>`, `--from-uat-feedback="<text>"`, `--resume=<debug-id>`, `--isolate`, `--race` (B115 — enable multi-hypothesis race)
 
 ### 0a — Active-session resume check (gsd:debug feature ported)
 

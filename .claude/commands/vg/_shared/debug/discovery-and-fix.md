@@ -10,7 +10,27 @@
 mkdir -p "${DEBUG_DIR}/discovery"
 ```
 
-Branch on `$BUG_TYPE`:
+### B115 fast-path — parallel discovery fan-out
+
+For `static`, `runtime_ui`, `network`, `infra` bug types, run discovery
+tasks (grep chunks / curl URLs / log tails / config snapshots) in parallel
+via `debug_parallel.discovery`. Wall-clock saving vs sequential is logged.
+
+```bash
+"${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_parallel.py discovery \
+  --bug-type "$BUG_TYPE" \
+  --bug-desc "$BUG_DESC" \
+  --debug-dir "$DEBUG_DIR" \
+  --timeout 30 \
+  > "${DEBUG_DIR}/discovery/parallel-summary.json" 2>/dev/null
+
+# Surface speedup
+SPEEDUP=$("${PYTHON_BIN:-python3}" -c "import json; d=json.load(open('${DEBUG_DIR}/discovery/parallel-summary.json')); print(d.get('speedup',1))")
+echo "▸ B115 parallel discovery: ${SPEEDUP}x speedup over sequential"
+```
+
+Branch on `$BUG_TYPE` for type-specific supplementary discovery (legacy
+serial path retained as fallback / augmentation):
 
 ### static → code grep + read + related-error scan (B114)
 ```bash
@@ -161,7 +181,44 @@ else
 fi
 ```
 
-### Inline hypothesize + fix (default)
+### B115 multi-hypothesis race (opt-in via --race flag OR low-risk static bugs)
+
+When `--race` flag set OR `BUG_TYPE=static` (low-risk file edit, safe to
+parallel-attempt), generate top-3 hypotheses, encode each as a verifier
+command, race them via `debug_parallel.race`. First exit-0 wins.
+
+Each hypothesis spec must include a **verifier command** (typecheck, curl,
+pytest narrow scope) that exits 0 iff the hypothesis fix actually works.
+Race only runs verifiers, not destructive edits — fixes still atomic per
+winner.
+
+```bash
+if [ "$RACE_MODE" = "true" ] || [ "$BUG_TYPE" = "static" ]; then
+  # Write specs JSON (AI generates per-hypothesis verifier)
+  cat > "${DEBUG_DIR}/race-specs.json" <<EOF
+[
+  {"id":"H1","description":"<hypothesis 1>","cmd":["bash","-c","<verifier 1>"]},
+  {"id":"H2","description":"<hypothesis 2>","cmd":["bash","-c","<verifier 2>"]},
+  {"id":"H3","description":"<hypothesis 3>","cmd":["bash","-c","<verifier 3>"]}
+]
+EOF
+  "${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_parallel.py race \
+    --specs-json "${DEBUG_DIR}/race-specs.json" \
+    --debug-dir "$DEBUG_DIR" \
+    --timeout 120 \
+    > "${DEBUG_DIR}/race-result.json"
+
+  WINNER=$("${PYTHON_BIN:-python3}" -c "import json; d=json.load(open('${DEBUG_DIR}/race-result.json')); print(d.get('winner') or '')")
+  if [ -n "$WINNER" ]; then
+    echo "▸ B115 race winner: $WINNER"
+    # Proceed to apply winner's fix as the chosen hypothesis
+  else
+    echo "▸ B115 race: no winner — fall back to inline single hypothesis"
+  fi
+fi
+```
+
+### Inline hypothesize + fix (default, also fallback when race finds no winner)
 
 Based on discovery findings, generate **3-5 ranked hypotheses** for root cause. Pick top hypothesis, apply fix.
 

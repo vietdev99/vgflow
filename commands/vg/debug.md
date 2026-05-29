@@ -1,7 +1,7 @@
 ---
 name: vg:debug
 description: Targeted bug-fix loop — analyze description, classify, fix, verify with user (no full review sweep)
-argument-hint: '"<bug description>" [--phase=<N>] [--no-amend-trigger] [--resume=<debug-id>] [--isolate]'
+argument-hint: '"<bug description>" [--phase=<N>] [--no-amend-trigger] [--resume=<debug-id>] [--isolate] [--race]'
 allowed-tools:
   - Read
   - Write
