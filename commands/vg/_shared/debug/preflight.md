@@ -39,12 +39,30 @@ if [ -n "$RESUME_ID" ]; then
   # Skip to step 2 (already classified, just continue iterating)
   RESUMED=true
 elif [ -z "$BUG_DESC" ] && [ -n "$ACTIVE_SESSIONS" ]; then
-  # No description + active sessions exist: offer pick
-  echo "▸ Active debug sessions:"
-  echo "$ACTIVE_SESSIONS" | awk -F'|' '{ printf "  %d) %s — %s (iter %s)\n", NR, $1, $2, $3 }'
+  # B116 ranked picker: score sessions by recency × iter × symptom similarity
+  echo "▸ Active debug sessions (B116 ranked):"
+  "${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_session.py rank \
+    --sessions-dir .vg/debug --symptom "" --top-n 5 \
+    | "${PYTHON_BIN:-python3}" -c "
+import json, sys
+data = json.load(sys.stdin)
+for i, c in enumerate(data, 1):
+    dup_tag = ' [DUP]' if c['is_duplicate_of_current'] else ''
+    print(f\"  {i}) {c['debug_id']} — {c['description']} (iter {c['iter_count']}, score {c['score']}){dup_tag}\")
+"
   # AskUserQuestion: "Resume which session, or [N]ew?" — N starts fresh
-  # If user picks number → set RESUME_ID, re-enter resume branch
-  # If user picks "new" → require new description (loop AskUserQuestion for it)
+fi
+
+# B116 duplicate detection: if user gives description but symptom matches
+# active session, recommend resume instead of new
+if [ -n "$BUG_DESC" ] && [ -z "$RESUME_ID" ]; then
+  DUP_ID=$("${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_session.py dup \
+    --sessions-dir .vg/debug --description "$BUG_DESC" 2>/dev/null || true)
+  if [ -n "$DUP_ID" ]; then
+    echo "▸ B116 duplicate detected: symptom matches existing session ${DUP_ID}"
+    # AskUserQuestion: "Resume ${DUP_ID} or start fresh?"
+    # If user picks resume → RESUME_ID=$DUP_ID
+  fi
 fi
 ```
 

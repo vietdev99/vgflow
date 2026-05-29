@@ -37,7 +37,29 @@ EOF
 fi
 ```
 
-### Loop AskUserQuestion
+### B116 silent auto-continue check
+
+Before triggering AskUserQuestion, check if this iteration qualifies for
+silent skip (high confidence + verify passed + early iteration):
+
+```bash
+SILENT_OK=$("${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_session.py silent \
+  --confidence "$CONFIDENCE" \
+  $([ "$VERIFY_PASSED" = "true" ] && echo "--verify-passed") \
+  --iter "$ITER" 2>/dev/null)
+
+if [ "$SILENT_OK" = "true" ]; then
+  echo "▸ B116 silent-continue: confidence ${CONFIDENCE}%, verify passed, iter ${ITER} → skipping prompt"
+  echo "**Status:** SILENT_PASS at iteration ${ITER}" >> "${DEBUG_DIR}/DEBUG-LOG.md"
+  USER_CHOICE="fixed"
+  # Skip to step 4_complete
+else
+  # Fall through to AskUserQuestion below
+  :
+fi
+```
+
+### Loop AskUserQuestion (only if silent-continue did NOT trigger)
 
 ```
 AskUserQuestion:
