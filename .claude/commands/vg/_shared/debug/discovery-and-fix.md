@@ -12,7 +12,7 @@ mkdir -p "${DEBUG_DIR}/discovery"
 
 Branch on `$BUG_TYPE`:
 
-### static → code grep + read
+### static → code grep + read + related-error scan (B114)
 ```bash
 # Extract keywords from description
 KEYWORDS=$(echo "$BUG_DESC" | grep -oE '[a-zA-Z][a-zA-Z0-9_-]{3,}' | sort -u | head -10)
@@ -20,6 +20,28 @@ for kw in $KEYWORDS; do
   grep -rn "$kw" apps/ packages/ --include="*.ts" --include="*.tsx" 2>/dev/null | head -5 \
     >> "${DEBUG_DIR}/discovery/grep-results.txt"
 done
+
+# B114: stack-trace hash scan for "same error elsewhere"
+if echo "$BUG_DESC" | grep -qE '\bat \S+:[0-9]+'; then
+  STACK_HASH=$(echo "$BUG_DESC" | "${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_probe.py hash 2>/dev/null)
+  if [ -n "$STACK_HASH" ]; then
+    "${PYTHON_BIN:-python3}" - <<EOF > "${DEBUG_DIR}/discovery/related-errors.json"
+import json, os, sys
+sys.path.insert(0, ".claude/scripts/lib")
+from debug_probe import scan_related_errors, discover_log_paths
+from pathlib import Path
+repo = Path(".")
+logs = discover_log_paths(repo)
+matches = scan_related_errors("$STACK_HASH", logs)
+print(json.dumps(matches, indent=2))
+EOF
+  fi
+fi
+
+# B114: incorporate graphify neighbors (if file written by preflight)
+if [ -f "${DEBUG_DIR}/graphify_neighbors.json" ]; then
+  cp "${DEBUG_DIR}/graphify_neighbors.json" "${DEBUG_DIR}/discovery/graphify_neighbors.json"
+fi
 ```
 
 ### runtime_ui → browser MCP via vg-debug-ui-discovery subagent
@@ -37,6 +59,13 @@ fi
 # Heuristic: extract URL path from bug description, default "unknown"
 SUSPECTED_ROUTE=$(echo "$BUG_DESC" | grep -oE '/[a-zA-Z0-9_/-]+' | head -1)
 [ -z "$SUSPECTED_ROUTE" ] && SUSPECTED_ROUTE="unknown"
+
+# B114: probe sibling routes if preflight wrote sibling_routes.json
+SIBLING_ROUTES=""
+if [ -f "${DEBUG_DIR}/sibling_routes.json" ]; then
+  SIBLING_ROUTES=$(cat "${DEBUG_DIR}/sibling_routes.json")
+  echo "▸ B114 cross-symptom probe: also testing siblings ${SIBLING_ROUTES}"
+fi
 
 # Read base URL from config (sandbox env preferred)
 BASE_URL=$(python3 scripts/lib/vg-config-extract.py "env.sandbox.base_url" 2>/dev/null || echo "http://localhost:3000")

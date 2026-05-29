@@ -69,48 +69,64 @@ mkdir -p "$DEBUG_DIR"
   --step debug.0_parse_and_classify --actor orchestrator --outcome INFO
 ```
 
-**Classify bug type** (deterministic keyword + structure heuristic, no AI subagent for speed):
+**Classify bug type** (B114 v4.73.0 — token+confidence scoring via `scripts/lib/debug_classifier.py`):
 
 | Type | Detection signal | Discovery method |
 |---|---|---|
 | `static` | Stack trace mentions specific file/line; keywords: typo, null check, undefined, off-by-one | grep + read affected file |
-| `runtime_ui` | Mentions: click, render, modal, page, layout, tab, button. Has URL path | Browser MCP (or fallback) |
-| `network` | Mentions: 4xx, 5xx, status code, timeout, CORS, ERR_CONNECTION | curl + log inspect |
+| `runtime_ui` | Mentions: click, render, modal, page, layout, tab, button. Has URL path | Browser MCP (or fallback) + sibling-route probe |
+| `network` | Mentions: 4xx, 5xx, status code, timeout, CORS, ERR_CONNECTION | curl + log inspect + related-error scan |
 | `infra` | Mentions: env var, config, deploy, restart, port, daemon | vg.config.md + .env inspect |
 | `spec_gap` | Mentions: "không có", "missing feature", "tính năng", "chưa có UI for X" | Read SPECS/CONTEXT/PLAN to confirm; if confirmed → auto-amend |
 | `ambiguous` | Confidence < 80% | AskUserQuestion to clarify |
 
 ```bash
-# Heuristic classification
+# B114: classifier with confidence scoring + evidence trail
 BUG_DESC="${ARGUMENTS}"  # cleaned
-BUG_TYPE="ambiguous"
-CONFIDENCE=0
+CLASSIFIER_OUT="${DEBUG_DIR}/classifier.json"
 
-# UI signals
-if echo "$BUG_DESC" | grep -qiE '(click|render|modal|tab|layout|button|form|page|/[a-z-]+|crash khi|không hiển thị)'; then
-  BUG_TYPE="runtime_ui"; CONFIDENCE=85
-fi
-# Network signals (override UI if status code mentioned)
-if echo "$BUG_DESC" | grep -qiE '\b(4[0-9]{2}|5[0-9]{2}|timeout|ERR_CONNECTION|CORS|fetch failed)\b'; then
-  BUG_TYPE="network"; CONFIDENCE=90
-fi
-# Infra signals
-if echo "$BUG_DESC" | grep -qiE '\b(env var|\.env|config|deploy|restart|port [0-9]+|pm2|daemon)\b'; then
-  BUG_TYPE="infra"; CONFIDENCE=85
-fi
-# Static code signals (stack trace markers)
-if echo "$BUG_DESC" | grep -qiE '(at .*:\d+|TypeError|ReferenceError|undefined is not|null is not)'; then
-  BUG_TYPE="static"; CONFIDENCE=90
-fi
-# Spec gap signals
-if echo "$BUG_DESC" | grep -qiE '(không có|missing feature|tính năng .* chưa|cần thêm|should support|wishful|nowhere)'; then
-  BUG_TYPE="spec_gap"; CONFIDENCE=70
-fi
+"${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_classifier.py "$BUG_DESC" \
+  > "$CLASSIFIER_OUT" 2>/dev/null
+CLASSIFIER_EXIT=$?
+
+BUG_TYPE=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open('${CLASSIFIER_OUT}')); print(d['bug_type'])")
+CONFIDENCE=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open('${CLASSIFIER_OUT}')); print(d['confidence'])")
+NEEDS_CLARIF=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open('${CLASSIFIER_OUT}')); print(str(d.get('needs_clarification',False)).lower())")
+PROBE_SIBLINGS=$("${PYTHON_BIN:-python3}" -c "import json,sys; d=json.load(open('${CLASSIFIER_OUT}')); print(str(d.get('probe_siblings_enabled',False)).lower())")
 
 echo "Bug classified: ${BUG_TYPE} (confidence ${CONFIDENCE}%)"
+
+# B114: surface alternates if close call
+ALTS=$("${PYTHON_BIN:-python3}" -c "
+import json
+d=json.load(open('${CLASSIFIER_OUT}'))
+alts=d.get('alternates',[])
+if alts:
+    print(', '.join(f\"{a['type']}({a['confidence']}%)\" for a in alts[:2]))
+")
+[ -n "$ALTS" ] && echo "  alternates: ${ALTS}"
 ```
 
-**If confidence < 80% → AskUserQuestion** with options matching detected types + "other".
+**If `NEEDS_CLARIF == "true"` → AskUserQuestion** with options matching `bug_type` + each alternate from `classifier.json` + "other".
+
+**B114 — Cross-symptom probe (runtime_ui + network only):**
+
+If `PROBE_SIBLINGS == "true"`, expand discovery to sibling routes BEFORE Step 1:
+
+```bash
+SUSPECTED_ROUTE=$(echo "$BUG_DESC" | grep -oE '/[a-zA-Z0-9_/-]+' | head -1)
+if [ -n "$SUSPECTED_ROUTE" ] && [ "$PROBE_SIBLINGS" = "true" ]; then
+  SIBLINGS=$("${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_probe.py expand "$SUSPECTED_ROUTE" 2>/dev/null)
+  echo "Sibling routes to probe: $SIBLINGS" >> "${DEBUG_DIR}/DEBUG-LOG.md"
+  echo "$SIBLINGS" > "${DEBUG_DIR}/sibling_routes.json"
+fi
+
+# Graphify integration (graceful — empty if graph absent)
+GRAPHIFY_NEIGHBORS=$("${PYTHON_BIN:-python3}" .claude/scripts/lib/debug_probe.py graphify "$BUG_DESC" 2>/dev/null)
+if [ -n "$GRAPHIFY_NEIGHBORS" ] && [ "$GRAPHIFY_NEIGHBORS" != "[]" ]; then
+  echo "$GRAPHIFY_NEIGHBORS" > "${DEBUG_DIR}/graphify_neighbors.json"
+fi
+```
 
 ```bash
 # Emit classified event
