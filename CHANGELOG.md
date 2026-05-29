@@ -1,3 +1,82 @@
+# v4.73.0 — /vg:debug upgrade trilogy (B114 + B115 + B116)
+
+User asked: "có thể nâng cấp vg debug để nó thông minh hơn. nó có thể
+tìm rộng hơn những lỗi mà người dùng mô tả, code nhanh hơn, và xử lý
+gọn gàng hơn không?"
+
+Three batches shipped one tag.
+
+## B114 — Broader bug net
+
+`scripts/lib/debug_classifier.py` replaces inline bash regex classifier
+with token+confidence scoring. Per-type weighted signals + evidence trail
++ alternates list + needs_clarification flag. Top vs second-place gap
+< 8 with no dominant signal → confidence demoted -20.
+
+`scripts/lib/debug_probe.py`:
+- `expand_sibling_routes(/campaigns)` scans `apps/*/src/{pages,app}` +
+  `packages/*/routes` for sibling cohort → cross-symptom probe surfaces
+  "same bug different route" pattern.
+- `graphify_neighbors()` — optional. If `graphify-out/graph.json`
+  exists, runs `graphify query "<symptom>" --budget 800`. Graceful empty
+  fallback when graph absent.
+- `stack_trace_hash(stack)` + `scan_related_errors(hash, log_paths)` —
+  top-frame fingerprint for "this stack also seen in production logs"
+  detection.
+
+Wired into preflight.md classifier block + discovery-and-fix.md.
+
+## B115 — Faster code
+
+`scripts/lib/debug_parallel.py`:
+- `parallel_discovery()` — fans out grep chunks + curl URLs + log tails +
+  config snapshots via ThreadPoolExecutor (max 4 workers, 30s timeout).
+  Reports wall_clock vs sequential_estimate + speedup factor.
+- `race_hypotheses()` — spawns N verifier subprocesses, first exit-0
+  wins, others SIGTERM. 120s default timeout.
+
+New `--race` flag on /vg:debug entry (or auto-triggered for static
+bugs). Discovery Step 1 runs parallel by default for static/UI/network/
+infra types.
+
+ROI: median session 5min → ~1.5min wall-clock on static + UI bugs.
+
+## B116 — Cleaner handling
+
+`scripts/lib/debug_session.py`:
+- `symptom_hash()` — SHA256 of normalized tokens (stopword-filtered,
+  order-invariant).
+- `rank_resume_candidates()` — scored ordering: recency × iter_count ×
+  Jaccard symptom similarity. Duplicates get +0.5 boost.
+- `detect_duplicate_session()` — hash-match OR ≥80% token overlap →
+  recommend resume over new session.
+- `should_silent_continue()` — gates Step 3 AskUserQuestion skip when
+  confidence ≥ 90 AND verify_passed AND iter ≤ 2.
+- `batch_checkpoints()` — merges same-reason checkpoints within 60s
+  window into single combined prompt.
+
+Wired into preflight (empty-args picker now ranked, description-given
+runs dup detector) + verify-and-close (SILENT_OK pre-check before
+AskUserQuestion).
+
+ROI: -50% AskUserQuestion calls + ranked picker eliminates manual scan
++ duplicate symptom auto-resumes.
+
+## Tests
+
+- `tests/test_batch114_debug_smarter_classifier.py` — 28 cases
+- `tests/test_batch115_debug_parallel.py` — 17 + 2 Win32-skipped
+- `tests/test_batch116_debug_cleaner.py` — 25 cases
+
+Total 70 cases for v4.73.0. Combined with B113 still green.
+
+## Mirror parity
+
+All 4 new scripts + 4 modified markdowns mirrored to `.claude/`.
+Codex skill regen ran clean — no drift.
+
+---
+
 # v4.72.3 — PR #208 mirror sync (tasklist trace subject+delete)
 
 PR #208 merged @ljfe2021's fix for `.taskcreate-trace.jsonl` missing 2
