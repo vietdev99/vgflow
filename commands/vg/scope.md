@@ -152,6 +152,8 @@ Tool name is `Agent`, NOT `Task` (Codex correction #1).
 | "Spawn Task() như cũ" | Tool name is `Agent`, not `Task` (Codex correction #1) |
 | "Per-decision split overkill" | UX baseline R1 — blueprint already consumes via vg-load.sh; missing = build context overflow |
 | "Sẵn ngữ cảnh, sinh luôn API-CONTRACTS / TEST-GOALS / PLAN cho nhanh" | Rule 4: scope = DISCUSSION only. Sinh artifact đó là job của /vg:blueprint — write từ scope = lệch contract, blueprint sẽ overwrite gây mất công |
+| "NARRATIVE.md là summary thừa, bỏ qua STEP 4.5" | Narrative bắt FLOW-level misunderstanding (decisions-trace chỉ bắt sentence-level). Non-gated nên không hook chặn — nhưng vẫn phải sinh best-effort |
+| "Cho blueprint đọc NARRATIVE.md làm context cho nhanh" | CẤM. NARRATIVE.md non-authoritative — đọc body làm planning input = second source of truth, drift với CONTEXT.md. Blueprint chỉ đọc `status` frontmatter cho warning |
 
 ## Steps (7 checklist groups — wired into native tasklist via emit-tasklist.py CHECKLIST_DEFS["vg:scope"])
 
@@ -198,6 +200,16 @@ Read `_shared/scope/artifact-write.md` and follow it exactly.
 Atomic group commit: writes CONTEXT.md (Layer 3 flat) + CONTEXT/D-NN.md
 per decision (Layer 1) + CONTEXT/index.md (Layer 2) + DISCUSSION-LOG.md
 (append-only). MUST emit `2_artifact_generation` step marker.
+
+### STEP 4.5 — narrative (NON-GATED, best-effort) — comprehension only
+Read `_shared/scope/narrative.md` and follow it exactly.
+Generates `NARRATIVE.md` — a human-language phase story (actors, business
+flows, behaviors) so the operator recognizes the phase BEFORE blueprint.
+**NON-AUTHORITATIVE:** blueprint never reads its body as planning input.
+This step has NO marker, NO must_write, NO telemetry contract — if it fails,
+scope still completes. It deliberately stays out of runtime_contract so it
+cannot retro-break contract-pins of already-scoped phases. Skips on
+non-feature profiles and `scope.narrative.enabled=false`.
 
 ### STEP 5 — completeness validation
 Read `_shared/scope/completeness-validation.md` and follow it exactly.

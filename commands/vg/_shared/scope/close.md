@@ -50,6 +50,10 @@ git add "${PHASE_DIR}/CONTEXT.md" \
 [ -f "${PHASE_DIR}/.contract-pins.json" ] && git add "${PHASE_DIR}/.contract-pins.json"
 [ -f "${PHASE_DIR}/DEPLOY-STATE.json" ] && git add "${PHASE_DIR}/DEPLOY-STATE.json"
 [ -f "${PHASE_DIR}/TEST-STRATEGY.md" ] && git add "${PHASE_DIR}/TEST-STRATEGY.md"
+# NARRATIVE.md (STEP 4.5, non-authoritative comprehension artifact) — commit
+# if present. Conditional: non-feature profiles + narrative-disabled phases
+# never write it.
+[ -f "${PHASE_DIR}/NARRATIVE.md" ] && git add "${PHASE_DIR}/NARRATIVE.md"
 
 git commit -m "scope(${PHASE_NUMBER}): ${DECISION_COUNT} decisions, ${ENDPOINT_COUNT} endpoints, ${TEST_SCENARIO_COUNT} test scenarios"
 ```

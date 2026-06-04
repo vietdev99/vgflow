@@ -1,3 +1,57 @@
+# v4.73.1 — NARRATIVE.md: human-language phase story (scope → blueprint)
+
+User asked: "tôi muốn ở giữa công đoạn scope và blueprint sẽ có 1 flow nhằm
+mô tả lại mục đích của phase bằng ngôn ngữ loài người, tiếng việt... giúp
+user hiểu phase vừa scope xong có những gì, luồng nghiệp vụ, hành vi ra sao."
+
+Discussed Claude + Codex. Codex flagged the critical risk in the first
+placement draft (new scope marker retro-breaks contract-pins of already-scoped
+phases). Converged on: generate inside /vg:scope, NO marker/contract change,
+non-authoritative, soft-warn at blueprint.
+
+## What ships
+
+`commands/vg/_shared/scope/narrative.md` (NEW) — STEP 4.5 of /vg:scope.
+Generates `${PHASE_DIR}/NARRATIVE.md`: a Vietnamese human-language phase story
+(Actors → Business flows → Behaviors → Out-of-scope) from CONTEXT.md +
+DISCUSSION-LOG.md. Runs after artifact-write, before completeness.
+
+**Deliberately NON-GATED:** no `must_touch_marker`, no `must_write`, no
+`must_emit_telemetry` added to scope.md. If generation fails, scope still
+completes. This is the key design choice — adding a scope marker would
+retroactively invalidate contract-pins of every phase scoped before this
+change. The step is plain instruction text; the Stop hook never sees it.
+
+**NON-AUTHORITATIVE (`authoritative: false` frontmatter):** blueprint never
+reads NARRATIVE.md body as planning input — only the `status` field for a soft
+warning. CONTEXT.md stays the single source of truth. Comprehension artifact,
+not contract.
+
+## Behavior
+
+- `commands/vg/scope.md` — STEP 4.5 ref between artifact-write and
+  completeness + 2 Red Flag rows (don't skip / don't feed to blueprint as
+  source). No runtime_contract change.
+- `commands/vg/_shared/scope/close.md` — git-adds NARRATIVE.md if present
+  (conditional, like DEPLOY-STATE.json).
+- `commands/vg/_shared/blueprint/preflight.md` — 2_verify_prerequisites
+  WARNs (never blocks) if NARRATIVE.md missing or `status: unreviewed`.
+  Auto-chain continues. Emits `blueprint.started_with_unreviewed_narrative`.
+- `--auto`/`--non-interactive`: generate with `status: unreviewed`, no prompt.
+- Edit loop never re-runs the 5 discussion rounds — regenerates only the
+  narrative prose. Real scope errors route to `/vg:scope N --deepen=D-XX`.
+- Config opt-out: `scope.narrative.enabled: false`.
+
+## Anti-skip (friction, not gate)
+
+`PIPELINE-STATE.narrative_review.status` + best-effort telemetry
+(`narrative.generated/reviewed/edited/skipped`). Future: /vg:health +
+milestone-summary surfacing (not in this batch).
+
+Spec: `docs/plans/2026-06-04-narrative-stage.md`.
+
+---
+
 # v4.73.0 — /vg:debug upgrade trilogy (B114 + B115 + B116)
 
 User asked: "có thể nâng cấp vg debug để nó thông minh hơn. nó có thể

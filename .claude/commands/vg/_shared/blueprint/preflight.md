@@ -435,6 +435,25 @@ if [ "$needs_context" = "true" ] && [ ! -f "${PHASES_DIR}/${phase_dir}/CONTEXT.m
   exit 1
 fi
 
+# NARRATIVE.md soft check (non-authoritative comprehension artifact from
+# scope STEP 4.5). WARN only — NEVER block, NEVER read its body. Reads only
+# the `status` frontmatter. Auto-chain continues regardless.
+NARRATIVE_FILE="${PHASES_DIR}/${phase_dir}/NARRATIVE.md"
+if [ "$needs_context" = "true" ]; then
+  if [ ! -f "$NARRATIVE_FILE" ]; then
+    echo "⚠ NARRATIVE.md chưa có cho Phase ${PHASE_NUMBER} (câu chuyện nghiệp vụ bằng tiếng người)."
+    echo "  Không bắt buộc — chỉ giúp xác nhận hiểu đúng phase. Chạy lại /vg:scope ${PHASE_NUMBER} nếu muốn sinh."
+  else
+    NARR_STATUS=$(grep -m1 -E '^status:' "$NARRATIVE_FILE" 2>/dev/null | awk '{print $2}')
+    if [ "${NARR_STATUS}" = "unreviewed" ] || [ "${NARR_STATUS}" = "skipped" ]; then
+      echo "⚠ NARRATIVE.md trạng thái '${NARR_STATUS}' — bạn chưa xác nhận câu chuyện nghiệp vụ của phase này."
+      echo "  Blueprint vẫn chạy tiếp (CONTEXT.md là nguồn duy nhất). Mở ${NARRATIVE_FILE} để đọc nếu cần."
+      vg-orchestrator emit-event blueprint.started_with_unreviewed_narrative \
+        --payload "{\"phase\":\"${PHASE_NUMBER}\",\"status\":\"${NARR_STATUS}\"}" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
 # For non-feature profiles, skip scope and contracts generation.
 if [ "$PHASE_PROFILE" != "feature" ]; then
   echo "ℹ Blueprint profile-aware mode: PHASE_PROFILE=${PHASE_PROFILE} — bỏ qua sub-steps 2b, 2b5, 2b7."
