@@ -1,3 +1,51 @@
+# v4.74.0 — Claude Fable 5 integration (parent + CrossAI lanes)
+
+User asked: "làm sao để kết hợp model fable 5 với workflow này" (code thay
+opus/sonnet ở bước code).
+
+Fable 5 (Anthropic, released 2026-06-09) — Mythos-class code-specialist,
+SWE-Bench Pro 80.3% vs Opus 4.8 69.2%, model id `claude-fable-5`.
+
+## Key finding: 3 model paths, Fable reaches 2
+
+VGFlow wires models via 3 distinct paths. Verified live:
+
+| Path | Mechanism | Fable 5 | Steps |
+|---|---|---|---|
+| #1 parent/session | session model | ✅ launch-time | scope, blueprint orch, narrative, accept, review orch |
+| #2 spawned subagent | `Agent(model=...)` | ❌ enum-locked | build executor/debugger, planner, test_codegen |
+| #3 CLI-pipe | `claude --model X` | ⚠ needs account access | CrossAI lane |
+
+**Path #2 is blocked at the harness, not VGFlow:** `Agent(model="claude-fable-5")`
+→ `InputValidationError: expected one of "sonnet"|"opus"|"haiku"`. Setting
+`models.executor: "claude-fable-5"` would break build. Left at sonnet until
+Claude Code opens the Agent enum.
+
+**Path #3 gated by account:** `claude --model claude-fable-5` on the dev CLI
+returns "may not exist or you may not have access". So the crossai_clis Claude
+lane stays `--model sonnet` (always works) with an inline comment + verify
+command showing how to flip to fable once access lands. Hardcoding fable
+before verifying would fail the lane on every CrossAI run.
+
+## What ships
+
+- `templates/vg/vg.config.template.md` (+ .claude mirror):
+  - `models:` block — comment warning that custom ids (fable) break the
+    Agent-spawn path; do NOT set executor: claude-fable-5.
+  - `crossai_clis` Claude lane — kept sonnet + upgrade-when-verified comment.
+- `docs/guides/fable-5-integration.md` (NEW) — the 3 paths, which steps use
+  which, session-model recommendation for code-heavy reasoning (scope /
+  blueprint think / narrative / review), why build executor stays sonnet,
+  verify commands.
+
+## How to use Fable 5 today (no code change)
+
+Launch the session on Fable 5 → scope, blueprint orchestration, NARRATIVE.md
+(STEP 4.5), review, accept all run on it via the parent model (path #1).
+That covers the code-heavy reasoning surface without touching config.
+
+---
+
 # v4.73.1 — NARRATIVE.md: human-language phase story (scope → blueprint)
 
 User asked: "tôi muốn ở giữa công đoạn scope và blueprint sẽ có 1 flow nhằm
