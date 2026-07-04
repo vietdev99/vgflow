@@ -227,7 +227,7 @@ crossai_clis:
     command: 'cat {context} | codex exec "{prompt}"'
     label: "Codex configured model"
   - name: "Gemini"
-    command: 'cat {context} | gemini -m gemini-3.1-pro-preview -p "{prompt}" --yolo'
+    command: 'cat {context} | agy --model "Gemini 3.1 Pro (High)" -p "{prompt}" --print-timeout 10m --dangerously-skip-permissions'
     label: "Gemini Pro High 3.1"
   - name: "Claude"
     command: 'cat {context} | claude --model sonnet -p "{prompt}"'

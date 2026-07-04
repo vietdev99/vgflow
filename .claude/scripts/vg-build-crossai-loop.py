@@ -285,14 +285,30 @@ def invoke_codex(brief_text: str, output_path: Path) -> int:
 
 
 def invoke_gemini(brief_text: str, output_path: Path) -> int:
-    """Gemini CLI — read prompt from stdin to avoid Windows argv limit."""
+    """Second-CLI adversary — read prompt from stdin to avoid Windows argv limit.
+
+    Prefers Antigravity CLI (`agy`, Gemini 3.1 Pro backend) since the standalone
+    `gemini` CLI is deprecated for individual accounts (June 18, 2026). Falls back
+    to `gemini` only if `agy` is absent. Env override: VG_CROSSAI_SECOND_CLI = agy | gemini.
+    """
     import shutil
-    gemini_bin = shutil.which("gemini") or "gemini"
-    # Gemini -p reads from stdin when given "-"; fall back to file redirect via stdin
-    cmd = [
-        gemini_bin,
-        "--model", "gemini-3-pro-preview",
-    ]
+    pref = os.environ.get("VG_CROSSAI_SECOND_CLI", "").strip().lower()
+    agy_bin = shutil.which("agy")
+    gemini_bin = shutil.which("gemini")
+
+    if pref == "gemini" and gemini_bin:
+        cmd = [gemini_bin, "--model", "gemini-3-pro-preview"]
+    elif agy_bin and pref != "gemini":
+        cmd = [
+            agy_bin, "--print",
+            "--model", os.environ.get("VG_AGY_MODEL", "Gemini 3.1 Pro (High)"),
+            "--dangerously-skip-permissions",
+        ]
+    elif gemini_bin:
+        cmd = [gemini_bin, "--model", "gemini-3-pro-preview"]
+    else:
+        output_path.write_text("no second CLI (agy/gemini) installed", encoding="utf-8")
+        return 127
     try:
         r = subprocess.run(
             cmd, input=brief_text, capture_output=True,
@@ -308,7 +324,7 @@ def invoke_gemini(brief_text: str, output_path: Path) -> int:
         output_path.write_text("TIMEOUT", encoding="utf-8")
         return 124
     except FileNotFoundError:
-        output_path.write_text("gemini CLI not installed", encoding="utf-8")
+        output_path.write_text("second CLI (agy/gemini) not installed", encoding="utf-8")
         return 127
     except Exception as e:
         output_path.write_text(f"ERROR: {e}", encoding="utf-8")
