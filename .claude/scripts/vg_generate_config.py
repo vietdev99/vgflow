@@ -132,7 +132,7 @@ def render_crossai_clis(team_size: str) -> str:
     else:
         clis = [
             ("Codex", 'cat {context} | codex exec "{prompt}"', "Codex configured model"),
-            ("Gemini", 'cat {context} | gemini -m gemini-3.1-pro-preview -p "{prompt}" --yolo', "Gemini Pro High 3.1"),
+            ("Gemini", 'cat {context} | agy --model "Gemini 3.1 Pro (High)" -p "{prompt}" --print-timeout 10m --dangerously-skip-permissions', "Gemini Pro High 3.1"),
             ("Claude", 'cat {context} | claude --model sonnet -p "{prompt}"', "Claude Sonnet 4.6"),
         ]
     lines = ["crossai_clis:"]

@@ -1,3 +1,42 @@
+# v4.74.1 — Gemini CLI → Antigravity CLI (agy) migration
+
+Google deprecated the standalone `gemini` CLI for individual accounts on
+June 18, 2026 ("This client is no longer supported for Gemini Code Assist
+for individuals") and replaced it with Antigravity CLI (`agy`,
+https://antigravity.google). Every VGFlow surface that shelled out to
+`gemini -m … --yolo` broke with IneligibleTierError, degrading CrossAI
+council to Codex-only (deadlock dogfound in PrintwayV3 Phase 5.1).
+
+## What ships
+
+- `invoke_gemini()` in `scripts/vg-build-crossai-loop.py` now prefers `agy`
+  (`--print --model "Gemini 3.1 Pro (High)" --dangerously-skip-permissions`),
+  falls back to legacy `gemini` if `agy` absent. Env overrides:
+  `VG_CROSSAI_SECOND_CLI=agy|gemini`, `VG_AGY_MODEL=<model name>`.
+- All doc/template invocations migrated `gemini -m … --yolo` →
+  `agy --model "…" -p … --print-timeout 10m --dangerously-skip-permissions`:
+  - `skills/vg-crossai/SKILL.md` (+ codex-skills + .claude mirrors)
+  - `commands/vg/_shared/crossai-invoke.md` (+ .claude mirror)
+  - `commands/vg/_shared/roam/spawn-executors.md` (+ .claude mirror) —
+    roam executor uses "Gemini 3.5 Flash (Medium)" (cheap tier for scripted role)
+  - `scripts/vg_generate_config.py` (+ .claude mirror) — generated crossai_clis
+  - `vg.config.template.md` (root + templates/vg + .claude/templates mirrors)
+
+## Syntax mapping
+
+| gemini CLI | agy |
+|---|---|
+| `gemini -m gemini-3.1-pro-preview -p "…"` | `agy --model "Gemini 3.1 Pro (High)" -p "…"` |
+| `--yolo` | `--dangerously-skip-permissions` |
+| (no timeout flag) | `--print-timeout 10m` (default 5m) |
+
+Model names contain spaces/parens — always quote. `agy models` lists tiers
+(Gemini 3.5 Flash Low/Medium/High, Gemini 3.1 Pro Low/High, plus Claude and
+GPT-OSS backends). Stdin pipe (`cat ctx | agy -p …`) verified working.
+
+Existing projects: re-run `/vg:project --init-only` to regenerate
+`crossai_clis`, or hand-edit `.vg/config.md` Gemini lane.
+
 # v4.74.0 — Claude Fable 5 integration (parent + CrossAI lanes)
 
 User asked: "làm sao để kết hợp model fable 5 với workflow này" (code thay

@@ -100,7 +100,7 @@ if [ "$ROAM_MODE" = "spawn" ]; then
   # Resolve CLI command per model
   declare -A CLI_CMD_FOR_MODEL
   CLI_CMD_FOR_MODEL[codex]='cat "{brief}" | codex exec --full-auto'
-  CLI_CMD_FOR_MODEL[gemini]='cat "{brief}" | gemini -m gemini-2.5-pro -p "follow brief verbatim, output JSONL only" --yolo'
+  CLI_CMD_FOR_MODEL[gemini]='cat "{brief}" | agy --model "Gemini 3.5 Flash (Medium)" -p "follow brief verbatim, output JSONL only" --print-timeout 10m --dangerously-skip-permissions'
 
   declare -a PIDS
   for MODEL_DIR in "${ROAM_MODEL_DIRS[@]}"; do

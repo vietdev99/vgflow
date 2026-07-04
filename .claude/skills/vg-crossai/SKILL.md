@@ -118,7 +118,7 @@ codex exec "$(cat {context_file})" > {output_path} 2>&1 &
 
 **Gemini (Pro High 3.1):**
 ```bash
-cat {context_file} | gemini -m gemini-2.5-pro -p "{prompt}" --yolo > {output_path} 2>&1 &
+cat {context_file} | agy --model "Gemini 3.1 Pro (High)" -p "{prompt}" --print-timeout 10m --dangerously-skip-permissions > {output_path} 2>&1 &
 ```
 
 **Claude (Sonnet 4.6):**
@@ -138,7 +138,7 @@ mkdir -p "$OUTPUT_DIR"
 codex exec "$(cat $CONTEXT_FILE)" > "$OUTPUT_DIR/codex.out" 2>&1 &
 PID_CODEX=$!
 
-cat "$CONTEXT_FILE" | gemini -m gemini-2.5-pro -p "$PROMPT" --yolo > "$OUTPUT_DIR/gemini.out" 2>&1 &
+cat "$CONTEXT_FILE" | agy --model "Gemini 3.1 Pro (High)" -p "$PROMPT" --print-timeout 10m --dangerously-skip-permissions > "$OUTPUT_DIR/gemini.out" 2>&1 &
 PID_GEMINI=$!
 
 cat "$CONTEXT_FILE" | claude --model sonnet -p "$PROMPT" > "$OUTPUT_DIR/claude.out" 2>&1 &
