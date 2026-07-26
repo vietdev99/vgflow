@@ -105,6 +105,15 @@ models:
   test_codegen: "sonnet"    # test step — generate Playwright from specs
   # Note: scope, accept, review orchestration use parent model (no agent spawn)
   # Note: CrossAI uses external CLIs (crossai_clis section), not this config
+  #
+  # ⚠ Fable 5 / custom model ids: these keys feed `Agent(model=...)` for SPAWNED
+  # subagents. The Claude Code Agent tool enum is currently locked to
+  # sonnet|opus|haiku and REJECTS claude-fable-5 (InputValidationError). So
+  # setting e.g. executor: "claude-fable-5" here will BREAK build (every wave
+  # spawn fails) until the harness opens the enum. To use Fable 5 on
+  # code-heavy work TODAY, run the whole session on Fable 5 (parent model) —
+  # scope, blueprint orchestration, narrative, review run on the parent.
+  # See docs/guides/fable-5-integration.md.
 
 # === Worktree Port Offsets ===
 # Each worktree uses base_port + offset to avoid collisions
@@ -223,6 +232,15 @@ crossai_clis:
   - name: "Claude"
     command: 'cat {context} | claude --model opus -p "{prompt}"'
     label: "Claude Opus 5 (1M)"
+    # ➜ Fable 5 upgrade (when available): change --model to claude-fable-5.
+    # Fable 5 (released 2026-06-09) — Mythos-class code-specialist
+    # (SWE-Bench Pro 80.3% vs Opus 4.8 69.2%). The CLI-pipe lane accepts the
+    # full API model id (NOT enum-locked like the Agent-tool spawn path), so
+    # the only gate here is whether your `claude` CLI + account resolve the id.
+    # VERIFY FIRST before switching — a CLI without access fails this lane on
+    # every CrossAI run:
+    #   echo ping | claude --model claude-fable-5 -p "reply OK"
+    # If that returns OK, set: command: 'cat {context} | claude --model claude-fable-5 -p "{prompt}"'
 
 # === Budget floor (v2.68.0 C6) ===
 # Per-phase cost cap in USD. When the budget tracker (scripts/vg-budget-tracker.py)
