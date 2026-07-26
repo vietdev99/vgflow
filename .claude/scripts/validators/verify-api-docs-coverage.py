@@ -81,6 +81,15 @@ def main() -> None:
         sections = parse_contract_sections(contracts_path)
         entries = parse_api_docs_entries(docs_path)
         require_error_handling = _interface_standards_requires_error_handling(docs_path)
+        # Backend-only / 0-endpoint phases (e.g. worker + schema + migration
+        # remediation) legitimately have no HTTP endpoint sections in
+        # API-CONTRACTS.md. When the contract declares zero endpoints there is
+        # nothing to cross-check — the API-DOCS.md narrative stub is sufficient.
+        # Only demand machine-readable entries when the contract actually
+        # declares endpoints to document.
+        if not sections:
+            out.note = "no endpoint sections in API-CONTRACTS.md (backend-only phase) — coverage N/A"
+            emit_and_exit(out)
         if not entries:
             out.add(Evidence(
                 type="api_docs_no_entries",

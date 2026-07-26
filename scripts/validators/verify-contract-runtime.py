@@ -288,6 +288,23 @@ def main() -> None:
 
         endpoints = parse_contract_endpoints(contracts_path)
         if not endpoints:
+            # Backend-only / 0-endpoint phases (worker + schema + migration
+            # remediation) legitimately ship an API-CONTRACTS.md that documents
+            # INTERNAL service/worker interfaces and explicitly declares zero
+            # HTTP endpoints. That is NOT format drift — there is nothing to
+            # phantom-check. Detect the declaration and PASS instead of BLOCK.
+            try:
+                _ctext = contracts_path.read_text(encoding="utf-8", errors="ignore").lower()
+            except OSError:
+                _ctext = ""
+            _declares_no_http = (
+                "no new http api surface" in _ctext
+                or "endpoints noted: 0" in _ctext
+                or "0 endpoints" in _ctext
+                or "web-backend-only" in _ctext
+            )
+            if _declares_no_http:
+                emit_and_exit(out)
             # FAIL CLOSED (v2.45 PR fix/fail-closed-validators): API-CONTRACTS.md
             # exists but no `## METHOD /path` / `### METHOD /path` headers parsed.
             # Previously WARN — passed silently when contract format drifted.
