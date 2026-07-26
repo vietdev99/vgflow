@@ -122,18 +122,18 @@ def _stack_from_framework(fw: str) -> str:
 def render_crossai_clis(team_size: str) -> str:
     if team_size == "solo":
         clis = [
-            ("Claude", 'cat {context} | claude --model sonnet -p "{prompt}"', "Claude Sonnet 4.6"),
+            ("Claude", 'cat {context} | claude --model opus -p "{prompt}"', "Claude Opus 5 (1M)"),
         ]
     elif team_size in ("2-5",):
         clis = [
             ("Codex", 'cat {context} | codex exec "{prompt}"', "Codex configured model"),
-            ("Claude", 'cat {context} | claude --model sonnet -p "{prompt}"', "Claude Sonnet 4.6"),
+            ("Claude", 'cat {context} | claude --model opus -p "{prompt}"', "Claude Opus 5 (1M)"),
         ]
     else:
         clis = [
             ("Codex", 'cat {context} | codex exec "{prompt}"', "Codex configured model"),
-            ("Gemini", 'cat {context} | gemini -m gemini-3.1-pro-preview -p "{prompt}" --yolo', "Gemini Pro High 3.1"),
-            ("Claude", 'cat {context} | claude --model sonnet -p "{prompt}"', "Claude Sonnet 4.6"),
+            ("Gemini", 'cat {context} | agy --model "Gemini 3.1 Pro (High)" -p "{prompt}" --print-timeout 10m --dangerously-skip-permissions', "Gemini Pro High 3.1"),
+            ("Claude", 'cat {context} | claude --model opus -p "{prompt}"', "Claude Opus 5 (1M)"),
         ]
     lines = ["crossai_clis:"]
     for name, cmd, label in clis:

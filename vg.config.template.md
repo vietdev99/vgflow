@@ -218,11 +218,11 @@ crossai_clis:
     command: 'cat {context} | codex exec "{prompt}"'
     label: "Codex configured model"
   - name: "Gemini"
-    command: 'cat {context} | gemini -m gemini-3.1-pro-preview -p "{prompt}" --yolo'
+    command: 'cat {context} | agy --model "Gemini 3.1 Pro (High)" -p "{prompt}" --print-timeout 10m --dangerously-skip-permissions'
     label: "Gemini Pro High 3.1"
   - name: "Claude"
-    command: 'cat {context} | claude --model sonnet -p "{prompt}"'
-    label: "Claude Sonnet 4.6"
+    command: 'cat {context} | claude --model opus -p "{prompt}"'
+    label: "Claude Opus 5 (1M)"
 
 # === Budget floor (v2.68.0 C6) ===
 # Per-phase cost cap in USD. When the budget tracker (scripts/vg-budget-tracker.py)
