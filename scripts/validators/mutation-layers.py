@@ -63,6 +63,10 @@ TOAST_PATTERNS = [
     r"toHaveText\s*\(\s*/(?:success|saved|created)",
     # Config-agnostic role/variant fallback
     r"role\s*=\s*['\"]status['\"]",
+    # page.locator('[role=status], [data-testid*=success], .success-banner')
+    # form (PrintwayV3 dogfound 2026-07-16) — codegen emits CSS-attr locators
+    # not getByRole for the toast/success assertion.
+    r"locator\s*\(\s*['\"`][^'\"`]*(?:role=[\"']?status|data-testid\*?=[\"']?success|success-banner|toast-success)",
 ]
 
 # Layer 2: Network settle — request fully completed before asserting
@@ -74,6 +78,9 @@ NETWORK_PATTERNS = [
     r"await\s+apiCall",
     # Some projects export helpers (keep flexible)
     r"waitForApiSettle\s*\(",
+    # API-contract specs assert the response status directly.
+    r"\.status\(\)\s*\)?\.?(?:toBeLessThan|toBe)\s*\(\s*(?:400|2\d\d)",
+    r"expect\s*\([^)]*\.status\(\)",
 ]
 
 # Layer 3: Persist verify — reload or navigate back, value still present
@@ -86,6 +93,12 @@ PERSIST_PATTERNS = [
     # if spec does initial getByText(X) then clicks edit, the persist
     # layer is the SECOND getByText(X) reading from server-refreshed data
     r"persistVerify\s*\(",
+    # API-contract specs (no rendered UI — discovery-only phases) verify
+    # persistence by RE-READING the server: request.get/fetch after the
+    # mutation. PrintwayV3 dogfound 2026-07-16 (P6.1 API-level lifecycle
+    # specs). Recognize a follow-up GET as the persist layer.
+    r"request\.get\s*\(",
+    r"\.get\s*\(\s*apiUrl",
 ]
 
 
@@ -153,13 +166,39 @@ def _scan_spec(path: Path) -> list[dict]:
         has_network = any(re.search(p, body, re.IGNORECASE) for p in NETWORK_PATTERNS)
         has_persist = any(re.search(p, body, re.IGNORECASE) for p in PERSIST_PATTERNS)
 
+        # API-contract vs DOM-mutation classification (PrintwayV3 dogfound
+        # 2026-07-16). A test that drives the mutation via Playwright's
+        # request context (request.post/put/patch/delete or an apiUrl() call)
+        # and NEVER touches page.click/fill/getByRole is an API-level spec:
+        # there is NO rendered UI, so a DOM "toast" is impossible and MUST NOT
+        # be required. For those, the success feedback layer = asserting the
+        # response status/body, which is already covered by the network layer.
+        # DOM specs keep the full toast+network+persist requirement.
+        # Negative/edge mutation tests (PrintwayV3 dogfound 2026-07-16): a test
+        # that EXPECTS the mutation to be REJECTED (asserts 4xx, an error-code
+        # envelope, or is test.skip) has NO saved state — persist/toast/network
+        # success-layers are semantically N/A. Detect and exempt.
+        is_negative = bool(
+            re.search(r"toBe(?:GreaterThanOrEqual)?\s*\(\s*4\d\d\s*\)", body)
+            or re.search(r"status\(\)\s*\)?\.?toBe\s*\(\s*4\d\d", body)
+            or re.search(r"\b(?:FORBIDDEN|TEAM_DEACTIVATED|STALE_ASSIGNMENT_STATE|STORE_ALREADY_ASSIGNED|MEMBER_INVITED|VALIDATION_FAILED|CONFLICT|_DENIED|NOT_FOUND|UNAUTHORIZED)\b", body)
+            or re.search(r"toBeGreaterThanOrEqual\s*\(\s*400", body)
+            or re.search(r"test\.skip\s*\(\s*true", body)
+        )
+
+        is_api_level = bool(
+            re.search(r"request\.(?:post|put|patch|delete)\s*\(", body, re.IGNORECASE)
+            or re.search(r"\.(?:post|put|patch|delete)\s*\(\s*apiUrl", body, re.IGNORECASE)
+        ) and not re.search(r"page\.(?:click|fill|getByRole|getByText|goto)\s*\(", body, re.IGNORECASE)
+
         missing: list[str] = []
-        if not has_toast:
-            missing.append("toast")
-        if not has_network:
-            missing.append("network")
-        if not has_persist:
-            missing.append("persist")
+        if not is_negative:
+            if not has_toast and not is_api_level:
+                missing.append("toast")
+            if not has_network:
+                missing.append("network")
+            if not has_persist:
+                missing.append("persist")
 
         if missing:
             violations.append({
@@ -171,26 +210,42 @@ def _scan_spec(path: Path) -> list[dict]:
     return violations
 
 
-def _collect_specs(phase_dir: Path | None, cli_override: bool) -> list[Path]:
+def _collect_specs(
+    phase_dir: Path | None,
+    cli_override: bool,
+    phase: str | None = None,
+) -> list[Path]:
     """Look at the phase generated tests dir + e2e dir.
 
-    Priority order:
-      1. PHASE_DIR/generated-tests/ (if exists — codegen output)
-      2. apps/web/e2e/ (standard Playwright location)
-      3. apps/*/e2e/ (monorepo generic)
-      4. tests/e2e/ (fallback)
+    PHASE-SCOPING (PrintwayV3 dogfound 2026-07-16): previously globbed the
+    ENTIRE apps/*/e2e + tests/e2e tree regardless of --phase, so a phase with
+    clean specs was BLOCKed by pre-existing shallow specs from OTHER phases
+    (6.1 blocked by apps/web/e2e/generated/{3.2,6,4.7}). When `phase` is known,
+    restrict e2e candidates to files whose path has a segment == phase, or a
+    `<phase>-`/`<phase>.` filename prefix. Full-tree only when phase is None.
     """
     candidates: list[Path] = []
     if phase_dir:
         gen = phase_dir / "generated-tests"
         if gen.is_dir():
             candidates += list(gen.rglob("*.spec.ts"))
-    # Include e2e dir always — hand-written tests live there
+        candidates += list(phase_dir.rglob("*.spec.ts"))
+
+    def _matches_phase(p: Path) -> bool:
+        if not phase:
+            return True
+        pl = phase.lower()
+        if pl in {s.lower() for s in p.parts}:
+            return True
+        name = p.name.lower()
+        return name.startswith(pl + "-") or name.startswith(pl + ".")
+
     for pat in ("apps/web/e2e", "apps/*/e2e", "tests/e2e"):
         for d in REPO_ROOT.glob(pat):
             if d.is_dir():
-                candidates += list(d.rglob("*.spec.ts"))
-    # Dedupe
+                for f in d.rglob("*.spec.ts"):
+                    if _matches_phase(f):
+                        candidates.append(f)
     seen: set[Path] = set()
     uniq: list[Path] = []
     for c in candidates:
@@ -216,7 +271,7 @@ def main() -> None:
     out = Output(validator="mutation-layers")
     with timer(out):
         phase_dir = find_phase_dir(args.phase)
-        specs = _collect_specs(phase_dir, args.allow_missing)
+        specs = _collect_specs(phase_dir, args.allow_missing, args.phase)
         if not specs:
             emit_and_exit(out)
 

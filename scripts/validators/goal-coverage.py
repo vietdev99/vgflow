@@ -36,6 +36,12 @@ GOAL_RE = re.compile(
 STRATEGY_RE = re.compile(r"verification_strategy:\s*(\w+)", re.IGNORECASE)
 DEPENDS_RE = re.compile(r"depends_on_phase:\s*(\S+)", re.IGNORECASE)
 TS_BINDING_RE = re.compile(r"binds_to:\s*(TS-\d+(?:,\s*TS-\d+)*)", re.IGNORECASE)
+# vg-test-codegen emits `vg-binding: {phase}.G-NN` markers inside generated
+# .spec.ts files (NOT binds_to:TS-XX which codegen never produces). A goal is
+# covered when a spec file carries a vg-binding marker naming that goal id.
+# Dogfound P4.7 amend#6 (2026-07-05): 64 goals flagged unbound at accept even
+# though 10 real specs existed — validator only knew TS-XX + Implemented-by.
+VG_BINDING_RE = re.compile(r"vg-binding:\s*[\w.]*?\b(G-\d+)\b", re.IGNORECASE)
 # Legacy format: goals declare implementation via "Implemented by:" with .spec.ts filenames
 IMPL_BY_RE = re.compile(r"\*\*Implemented\s+by:\*\*", re.IGNORECASE)
 # Match test artifacts across: *.spec.ts/js, *.test.ts/py, smoke-*.sh
@@ -96,6 +102,27 @@ def find_ts_refs(scan_globs: list[str]) -> set[str]:
     return found
 
 
+def find_vg_binding_goals(scan_globs: list[str]) -> set[str]:
+    """Collect goal ids named by `vg-binding: {phase}.G-NN` markers in specs.
+
+    vg-test-codegen writes these markers into generated .spec.ts files. A goal
+    whose id shows up here has an executable spec bound to it, even without a
+    TS-XX marker or an `Implemented by:` line.
+    """
+    found = set()
+    for gp in scan_globs:
+        for f in Path(REPO_ROOT).glob(gp):
+            if not f.is_file():
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for m in VG_BINDING_RE.finditer(text):
+                found.add(m.group(1).upper())
+    return found
+
+
 def phase_in_roadmap(phase: str) -> bool:
     if not ROADMAP.exists():
         return False
@@ -149,6 +176,12 @@ def main() -> None:
             f".vg/phases/{args.phase}-*/SANDBOX-TEST*.md",
         ]
         ts_refs = find_ts_refs(test_globs)
+        # vg-binding markers — scan the same spec globs plus the lifecycle dir
+        # where /vg:test-spec codegen lands per-goal specs.
+        vg_binding_goals = find_vg_binding_goals(test_globs + [
+            "tests/e2e/**/*.spec.ts",
+            "tests/e2e/**/*.ts",
+        ])
         existing_spec_files = set()
         for gp in test_globs + [
             "scripts/**/*.sh",
@@ -176,7 +209,10 @@ def main() -> None:
                     deferred_missing_target.append(f"{g['id']} → {target}")
                 continue
 
-            # automated: must have TS-XX binding covered OR a .spec.ts file that exists
+            # automated: covered by ANY of —
+            #   (1) TS-XX binding + a spec referencing that TS-XX
+            #   (2) legacy `Implemented by:` .spec.ts filename that exists
+            #   (3) vg-binding: {phase}.G-NN marker in a spec (codegen default)
             has_ts_binding = bool(g["binds_to"])
             has_impl_specs = bool(g["impl_specs"])
 
@@ -188,8 +224,9 @@ def main() -> None:
                     spec in existing_spec_files for spec in g["impl_specs"]
                 )
             )
+            covered_by_vg_binding = g["id"].upper() in vg_binding_goals
 
-            if not (covered_by_ts or covered_by_spec):
+            if not (covered_by_ts or covered_by_spec or covered_by_vg_binding):
                 detail = (
                     ",".join(g["binds_to"]) if has_ts_binding
                     else (",".join(g["impl_specs"]) if has_impl_specs
@@ -202,7 +239,7 @@ def main() -> None:
                 type="goal_unbound",
                 message=f"{len(unbound_automated)} automated goals not bound to any test file",
                 actual=", ".join(unbound_automated[:10]),
-                fix_hint="Each automated goal MUST have 'binds_to: TS-XX' + test file references that TS-XX.",
+                fix_hint="Each automated goal MUST be bound: 'binds_to: TS-XX' + spec referencing TS-XX, OR '**Implemented by:** <file>.spec.ts', OR a spec carrying 'vg-binding: {phase}.G-NN' (codegen default).",
             ))
 
         if deferred_missing_target:

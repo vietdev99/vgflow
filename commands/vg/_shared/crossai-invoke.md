@@ -91,8 +91,8 @@ mkdir -p "$OUTPUT_DIR"
 # Read CLIs from config
 # config.crossai_clis = [
 #   { name: "codex", command: "codex exec --skip-git-repo-check --config sandbox_mode=read-only {prompt}", label: "Codex configured model" },
-#   { name: "gemini", command: "cat '{context}' | gemini -m gemini-2.5-pro -p {prompt} --yolo", label: "Gemini Pro High 3.1" },
-#   { name: "claude", command: "cat '{context}' | claude --model sonnet -p {prompt}", label: "Claude Sonnet 4.6" }
+#   { name: "gemini", command: "cat '{context}' | agy --model \"Gemini 3.1 Pro (High)\" -p {prompt} --print-timeout 10m --dangerously-skip-permissions", label: "Gemini Pro High 3.1" },
+#   { name: "claude", command: "cat '{context}' | claude --model opus -p {prompt}", label: "Claude Opus 5 (1M)" }
 # ]
 #
 # Issue #149 (v2.66.0): {context} is wrapped in single quotes so workspace

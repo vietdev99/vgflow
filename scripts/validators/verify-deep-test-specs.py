@@ -75,6 +75,14 @@ CREATE_ONLY_STAGES = ("read_before", "create", "read_after_create")
 UPDATE_ONLY_STAGES = ("read_before", "update", "read_after_update")
 DELETE_ONLY_STAGES = ("read_before", "delete", "read_after_delete")
 
+# B-dogfood (PrintwayV3 P9 2026-07-01): read-family stage-sets. MUST mirror
+# generate-lifecycle-specs.py + test_spec_ai_expander.py + verify-lifecycle-spec-depth.py.
+READ_HYDRATE_STAGES = ("read_before", "render_initial", "hydrate_authed", "hydrate_anon", "error_state_4xx", "accessibility")
+READ_SSR_SEO_STAGES = ("read_before", "render_initial", "seo_metadata", "revalidate_signed", "revalidate_tampered", "error_state_4xx")
+INFRA_BOOT_STAGES = ("read_before", "boot_start", "health_check", "idempotent_restart", "graceful_drain")
+NAVIGATION_STAGES = ("read_before", "render_initial", "nav_active_state", "deep_link_reload", "back_restore", "accessibility")
+AUTH_ROUTE_STAGES = ("read_before", "unauth_redirect", "login_returnurl", "authed_access", "logout_clears")
+
 # Map goal_class / goal_type → expected stage set.
 # Lookup order in _expected_stages_for_spec():
 #   1. goal_class (B62-pre dispatch precedence)
@@ -84,6 +92,21 @@ GOAL_CLASS_STAGE_SETS = {
     "feature_chain": FEATURE_CHAIN_STAGES,
     "post_create_cascade": FEATURE_CHAIN_STAGES,  # alias per B62-pre
     "readonly": READONLY_STAGES,
+    # B66 (PrintwayV3 P4.7 dogfood 2026-06-07): generate-lifecycle-specs.py emits
+    # goal_class in {create-only,update-only,delete-only,read-only} for partial-
+    # lifecycle goals (FK-restrict-delete, stale-version PATCH). Validator only
+    # mapped feature_chain/readonly; when goal_type=multi-actor (absent from
+    # GOAL_TYPE_STAGE_SETS) dispatch fell through to default RCRURDR -> false
+    # BLOCK on legit delete-only goals. Mirror the partial sets here.
+    "read-only": READONLY_STAGES,
+    "create-only": CREATE_ONLY_STAGES,
+    "update-only": UPDATE_ONLY_STAGES,
+    "delete-only": DELETE_ONLY_STAGES,
+    "read-hydrate": READ_HYDRATE_STAGES,
+    "read-ssr-seo": READ_SSR_SEO_STAGES,
+    "infra-boot": INFRA_BOOT_STAGES,
+    "navigation": NAVIGATION_STAGES,
+    "auth-route": AUTH_ROUTE_STAGES,
 }
 
 GOAL_TYPE_STAGE_SETS = {
@@ -91,6 +114,11 @@ GOAL_TYPE_STAGE_SETS = {
     "create-only": CREATE_ONLY_STAGES,
     "update-only": UPDATE_ONLY_STAGES,
     "delete-only": DELETE_ONLY_STAGES,
+    "read-hydrate": READ_HYDRATE_STAGES,
+    "read-ssr-seo": READ_SSR_SEO_STAGES,
+    "infra-boot": INFRA_BOOT_STAGES,
+    "navigation": NAVIGATION_STAGES,
+    "auth-route": AUTH_ROUTE_STAGES,
 }
 
 

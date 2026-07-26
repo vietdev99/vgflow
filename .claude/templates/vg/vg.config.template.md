@@ -227,11 +227,11 @@ crossai_clis:
     command: 'cat {context} | codex exec "{prompt}"'
     label: "Codex configured model"
   - name: "Gemini"
-    command: 'cat {context} | gemini -m gemini-3.1-pro-preview -p "{prompt}" --yolo'
+    command: 'cat {context} | agy --model "Gemini 3.1 Pro (High)" -p "{prompt}" --print-timeout 10m --dangerously-skip-permissions'
     label: "Gemini Pro High 3.1"
   - name: "Claude"
-    command: 'cat {context} | claude --model sonnet -p "{prompt}"'
-    label: "Claude Sonnet 4.6"
+    command: 'cat {context} | claude --model opus -p "{prompt}"'
+    label: "Claude Opus 5 (1M)"
     # ➜ Fable 5 upgrade (when available): change --model to claude-fable-5.
     # Fable 5 (released 2026-06-09) — Mythos-class code-specialist
     # (SWE-Bench Pro 80.3% vs Opus 4.8 69.2%). The CLI-pipe lane accepts the

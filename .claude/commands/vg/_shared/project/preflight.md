@@ -10,6 +10,41 @@ DRAFT_FILE="${PLANNING_DIR}/.project-draft.json"
 ARCHIVE_DIR="${PLANNING_DIR}/.archive"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
+# --- Symlink-safe config path (v4.73.1) ---
+# A project may consolidate the dual config layout (.vg/config.md +
+# .claude/vg.config.md) into ONE real file plus a symlink, e.g.
+#   .claude/vg.config.md -> ../.vg/config.md
+# Two writers downstream would otherwise act on the SYMLINK, not its target:
+#   * update-modes.md      → mv "$CONFIG_FILE" "$BACKUP_DIR/vg.config.md.pre-rewrite"
+#   * first-time-rounds.md → mv "${CONFIG_FILE}.staged" "$CONFIG_FILE"
+# The first moves the link away; the second then drops a plain file in its
+# place. Net effect: symlink gone, and the dual-config drift it existed to
+# prevent silently returns. Resolve to the real path up front so every write
+# lands on the canonical file and the link survives --rewrite.
+CONFIG_LINK_PATH=""
+if [ -L "$CONFIG_FILE" ]; then
+  CONFIG_LINK_PATH="$CONFIG_FILE"
+  # os.path.realpath resolves even a dangling link, so this is safe to call
+  # before we know whether the target exists.
+  CONFIG_REAL=$(${PYTHON_BIN} -c "
+import os, sys
+real = os.path.realpath(sys.argv[1])
+# realpath (not abspath) on the root too: on macOS /tmp is itself a symlink to
+# /private/tmp, and mixing the two forms makes relpath escape with '..'.
+root = os.path.realpath(sys.argv[2])
+rel = os.path.relpath(real, root)
+# Stay repo-relative when possible so downstream 'git add' remains in-repo.
+print(real if rel.startswith(os.pardir) else rel)
+" "$CONFIG_FILE" "${REPO_ROOT:-$(pwd)}" 2>/dev/null)
+  if [ -n "$CONFIG_REAL" ]; then
+    CONFIG_FILE="$CONFIG_REAL"
+    echo "🔗 .claude/vg.config.md is a symlink — config writes redirected to: ${CONFIG_FILE}"
+  else
+    echo "⚠ .claude/vg.config.md is a symlink but its target could not be resolved."
+    echo "  Continuing with the link path; verify the symlink after this command."
+  fi
+fi
+
 mkdir -p "$PLANNING_DIR"
 
 # Mode flags (mutually exclusive)

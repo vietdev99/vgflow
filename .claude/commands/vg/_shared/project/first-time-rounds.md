@@ -522,6 +522,25 @@ mv "${CONFIG_FILE}.staged"     "$CONFIG_FILE"
 # Remove draft
 rm -f "$DRAFT_FILE"
 
+# --- Symlink self-heal (v4.73.1) ---
+# preflight.md redirected $CONFIG_FILE to the real file when
+# .claude/vg.config.md is a symlink, so the promote above wrote the canonical
+# target and the link should be untouched. Verify, and rebuild the link if any
+# writer replaced it with a plain file — otherwise the dual-config drift the
+# symlink prevents would silently return.
+if [ -n "${CONFIG_LINK_PATH:-}" ] && [ "$CONFIG_LINK_PATH" != "$CONFIG_FILE" ]; then
+  if [ ! -L "$CONFIG_LINK_PATH" ]; then
+    LINK_TARGET=$(${PYTHON_BIN} -c "
+import os, sys
+print(os.path.relpath(os.path.abspath(sys.argv[1]), os.path.dirname(os.path.abspath(sys.argv[2]))))
+" "$CONFIG_FILE" "$CONFIG_LINK_PATH")
+    rm -f "$CONFIG_LINK_PATH"
+    ln -s "$LINK_TARGET" "$CONFIG_LINK_PATH"
+    echo "🔗 Rebuilt config symlink: ${CONFIG_LINK_PATH} -> ${LINK_TARGET}"
+  fi
+  git add "$CONFIG_LINK_PATH"
+fi
+
 # Commit
 git add "$PROJECT_FILE" "$FOUNDATION_FILE" "$CONFIG_FILE"
 [ -f "$STP_FILE" ] && git add "$STP_FILE"
