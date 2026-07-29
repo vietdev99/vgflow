@@ -44,6 +44,25 @@ Artifact sources (delegated subagent reads):
 | F    | `${PHASE_DIR}/build-state.log` (mobile-*)         | KEEP-FLAT | Latest `mobile-gate-N` per id |
 | F    | `${PHASE_DIR}/mobile-security/report.md`          | KEEP-FLAT | Severity counts (CRITICAL/HIGH/MEDIUM/LOW) |
 
+## Freshness contract (stale-read guard)
+
+READ EVERY ARTIFACT FRESH FROM DISK — never a cached snapshot from earlier in
+the session, and prefer a direct `sed`/`grep` re-read over any pre-warmed
+`vg-load` index if the two disagree. Dogfound P4.7 amend#6 (2026-07-05): the
+builder emitted a checklist scoped to a PRIOR amendment (amend#4 goals G-50..58)
+even though the current CONTEXT/TEST-GOALS/GOAL-COVERAGE-MATRIX on disk carried
+the amend#6 decisions (D-60/61/62) + goals (G-59..68). Guard:
+
+1. First: read TEST-GOALS.md frontmatter `goal_count` + the phase_name/amendment
+   line. Cross-check against the `## G-NN` headings you actually find. If they
+   disagree, RE-READ (the vg-load index may be stale after a fresh amendment).
+2. If the caller's prompt names an amendment/scope (e.g. "Amendment #6, goals
+   G-59..G-68"), the checklist you build MUST cover those ids. If your parse
+   surfaces a different goal range, you read a stale artifact — re-read before
+   emitting.
+3. Section counts in your returned JSON MUST match the sections you actually
+   wrote to disk.
+
 ## Workflow inside subagent
 
 1. Read input capsule (env vars set by main agent in prompt).

@@ -49,7 +49,11 @@ FE_DESC_HINT_RE = re.compile(
 
 def count_fe_tasks(plan_text: str) -> tuple[int, list[str]]:
     """Return (count, examples). Splits PLAN by `### Task N` and checks each."""
-    task_blocks = re.split(r"(?m)^### Task \d+", plan_text)
+    # Accept both heading levels. The planner emits `## Task NN` in the 3-layer
+    # split PLAN (index.md + task-NN.md concatenated), while older flat plans
+    # used `### Task N`. Matching only h3 silently yielded zero blocks, so the
+    # "backend-only phase spawned FE tasks" arm never fired for split plans.
+    task_blocks = re.split(r"(?m)^#{2,3} Task \d+", plan_text)
     fe_tasks = []
     for i, block in enumerate(task_blocks[1:], 1):
         if FE_PATH_RE.search(block):

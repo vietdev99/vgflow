@@ -60,9 +60,13 @@ ARTIFACT_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# B98: `admin` removed — it is a SINGLE role, the opposite of a multi-actor
+# signal. Pre-B98 every admin-only goal ("admin opens page X") tripped this
+# regex and was wrongly required to declare >=2 actors. Genuine multi-actor
+# (admin impersonates merchant) still matches via `impersonat`/`owner`/etc.
 MULTI_ACTOR_WORD_RE = re.compile(
     r"\b("
-    r"multi[-\s]?actor|owner|invitee|inviter|admin|approver|reviewer|"
+    r"multi[-\s]?actor|owner|invitee|inviter|approver|reviewer|"
     r"second\s+user|another\s+user|role\s+switch|impersonat|oauth"
     r")\b",
     re.IGNORECASE,
@@ -219,10 +223,16 @@ REQUIRED_STAGES_BY_CLASS: dict[str, tuple[str, ...]] = {
     "create-only": ("read_before", "create", "read_after_create"),
     "update-only": ("read_before", "update", "read_after_update"),
     "delete-only": ("read_before", "delete", "read_after_delete"),
+    # B-dogfood (PrintwayV3 P9 2026-07-01): read-family min-required subsets.
+    "read-hydrate": ("read_before", "render_initial"),
+    "read-ssr-seo": ("read_before", "render_initial"),
+    "infra-boot":   ("read_before", "boot_start"),
+    "navigation":   ("read_before", "render_initial"),
+    "auth-route":   ("read_before", "unauth_redirect"),
 }
 
 
-def _required_stages_for(goal: dict[str, Any]) -> tuple[str, ...]:
+def _required_stages_for(goal: dict[str, Any], spec: dict[str, Any] | None = None) -> tuple[str, ...]:
     """B97 v4.69.0: explicit goal_class enum dictates required stage subset.
 
     Returns the stage tuple the validator should enforce for `goal`. Falls
@@ -230,6 +240,15 @@ def _required_stages_for(goal: dict[str, Any]) -> tuple[str, ...]:
     mutation-class value.
     """
     gc = str(goal.get("goal_class") or "").lower().strip()
+    # B98: the lifecycle SPEC is the authoritative contract. When the
+    # goal-side goal_class is blank (TEST-GOALS commonly omits it), fall back
+    # to the spec's declared goal_class before defaulting to full RCRURDR.
+    # Pre-B98 read goal-only -> readonly render specs wrongly required
+    # create/update/delete stages.
+    if gc not in REQUIRED_STAGES_BY_CLASS and spec is not None:
+        spec_gc = str(spec.get("goal_class") or "").lower().strip()
+        if spec_gc in REQUIRED_STAGES_BY_CLASS:
+            gc = spec_gc
     if gc in REQUIRED_STAGES_BY_CLASS:
         return REQUIRED_STAGES_BY_CLASS[gc]
     return REQUIRED_STAGES
@@ -436,7 +455,7 @@ def main() -> None:
             # B97 v4.69.0 (issue #201): use per-class required subset when
             # explicit goal_class declares non-mutation. Pre-B97 always used
             # full RCRURDR → false positive on 3-stage create-only goals.
-            required = _required_stages_for(goal)
+            required = _required_stages_for(goal, spec)
             missing = [stage for stage in required if stage not in _stage_names(spec)]
             if missing:
                 gc = str(goal.get("goal_class") or "").lower().strip()

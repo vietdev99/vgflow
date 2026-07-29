@@ -276,12 +276,31 @@ def main() -> None:
         decisions = parse_decisions(context)
         if decisions:
             decision_ids = {d["id"] for d in decisions}
+            # Decisions already signed off in a prior accepted {phase}-UAT.md
+            # are settled — an amendment accept must not re-flag them for
+            # scope-branching (dogfound P4.7 amend#6: D-11/30/32/35/53/54 from
+            # earlier cycles re-flagged on incidental words like "choice"/"fork"
+            # even though 4.7-UAT.md accepted them). Only NEW decisions can have
+            # a genuinely-unaddressed branch.
+            accepted_ids: set[str] = set()
+            for uat in phase_dir.glob("*UAT*.md"):
+                try:
+                    utext = uat.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                if not re.search(r"verdict:\s*ACCEPTED", utext, re.IGNORECASE):
+                    continue
+                for m in re.finditer(r"\bD-(\d+(?:\.\d+)?)\b", utext):
+                    accepted_ids.add(m.group(1))
             branching_unresolved = []
             for d in decisions:
                 body_lower = d["body"].lower()
                 if not BRANCHING_KW_RE.search(d["body"]):
                     continue
                 if FINALIZED_RE.search(d["body"]):
+                    continue
+                # skip decisions already accepted in a prior UAT sign-off
+                if d["id"] in accepted_ids or d["id"].split(".")[-1] in accepted_ids:
                     continue
                 # Look for sub-decisions D-XX.Y where XX = this decision's id
                 base_id = d["id"].split(".")[0]

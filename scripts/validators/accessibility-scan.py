@@ -203,12 +203,40 @@ def _matches_any_glob(rel_path: str, globs: list[str]) -> bool:
     return False
 
 
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_JSX_COMMENT_RE = re.compile(r"\{\s*/\*.*?\*/\s*\}", re.DOTALL)
+
+
+def _mask_comments(text: str) -> str:
+    """Blank out comment bodies, preserving length and newlines.
+
+    The scanners below are plain regexes over raw source, so a comment that
+    merely MENTIONS markup was reported as real markup — e.g. a line reading
+    `// public scope so the storefront <img> can load the mockup` was flagged
+    img-missing-alt. Replacing comment characters with spaces (never removing
+    them) keeps every byte offset and line number intact, so `_line_of` and the
+    snippets stay correct.
+    """
+
+    def blank(m: "re.Match[str]") -> str:
+        return "".join("\n" if ch == "\n" else " " for ch in m.group(0))
+
+    for rx in (_JSX_COMMENT_RE, _BLOCK_COMMENT_RE, _LINE_COMMENT_RE):
+        text = rx.sub(blank, text)
+    return text
+
+
 def _scan_file(path: Path) -> list[dict]:
     """Return violation dicts: {rule, severity, line, snippet}."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
+
+    # Comments are not markup. Masking keeps offsets stable so line numbers and
+    # snippets below remain accurate.
+    text = _mask_comments(text)
 
     findings: list[dict] = []
 
