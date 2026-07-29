@@ -88,7 +88,12 @@ def _parse_variant_table(body: str) -> list[dict]:
     {variant_id, expected_outcome, priority, raw_row}."""
     variants = []
     # Match markdown table rows containing variant_id pattern
-    for m in re.finditer(r"^\|\s*(G-\d+-[a-z]\d+)\s*\|(.+?)\|", body, re.MULTILINE):
+    # Capture the WHOLE row. The previous non-greedy `(.+?)\|` stopped at the
+    # second pipe, so `cells` never held more than 2 entries and neither
+    # `priority` nor `expected_outcome` could ever be found in a table wider
+    # than 2 columns — every multi-column EDGE-CASES file failed regardless of
+    # content.
+    for m in re.finditer(r"^\|\s*(G-\d+-[a-z]\d+)\s*\|.+$", body, re.MULTILINE):
         variant_id = m.group(1).strip()
         cells = [c.strip() for c in m.group(0).split("|")[1:-1]]
         # cells: [variant_id, input/scenario, expected_outcome, priority]
